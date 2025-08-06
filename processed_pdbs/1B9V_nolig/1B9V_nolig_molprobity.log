@@ -1,0 +1,22 @@
+
+============================== Collecting inputs ==============================
+
+Symmetry information was not found, putting molecule in P1 box.
+
+                   ----------Processing PDB file(s)----------                  
+
+
+  Symmetric amino acids flipped
+    Residue "A PHE  337": "CD1" <-> "CD2" "CE1" <-> "CE2" "HD1" <-> "HD2" "HE1" <-> "HE2"
+  Time to flip residues: 0.00s
+
+  Monomer Library directory:
+    "e:\phenix\lib\site-packages\chem_data\mon_lib"
+  Total number of atoms: 5979
+  Number of models: 1
+  Model: ""
+    Number of chains: 1
+    Chain: "A"
+      Number of atoms: 5979
+      Number of conformers: 1
+      Conformer: ""

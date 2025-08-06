@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1HPX_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\1HPX\KNI_B900.pdbqt
+center_x = 5.510
+center_y = -1.648
+center_z = 14.363
+size_x = 30.000
+size_y = 30.000
+size_z = 30.000
+num_modes = 3
+energy_range = 3
+exhaustiveness = 4
+out = E:/PythonProject/protein_automation\docked\1HPX\stage2\KNI_B900_stage2.pdbqt
+cpu = 2

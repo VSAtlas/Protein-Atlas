@@ -1,0 +1,24 @@
+@<TRIPOS>MOLECULE
+E:\PythonProject\protein_automation\processed_pdbs\1J1Z\1J1Z_cleaned_ligands\ASP_A530.pdb
+ 9 7 0 0 0
+SMALL
+GASTEIGER
+
+@<TRIPOS>ATOM
+      1  N          3.2150   54.5660   62.7930 N.3   530  ASP530      0.0000
+      2 CA          3.7100   53.2770   62.2170 Ca    530  ASP530      0.0000
+      3  C          5.2350   53.0930   62.3810 C.2   530  ASP530      0.0000
+      4  O          5.8410   53.8560   63.1630 O.co2 530  ASP530      0.0000
+      5  CB         3.2740   53.2210   60.7360 C.3   530  ASP530      0.0000
+      6  CG         3.9180   54.2600   59.7870 C.2   530  ASP530      0.0000
+      7  OD1        4.7640   55.0760   60.2270 O.co2 530  ASP530      0.0000
+      8  OD2        3.5620   54.2500   58.5770 O.co2 530  ASP530      0.0000
+      9  OXT        5.7920   52.2060   61.7160 O.co2 530  ASP530      0.0000
+@<TRIPOS>BOND
+     1     8     6   ar
+     2     6     7   ar
+     3     6     5    1
+     4     9     3   ar
+     5     2     3    1
+     6     2     1    1
+     7     3     4   ar

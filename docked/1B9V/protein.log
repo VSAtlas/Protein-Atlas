@@ -1,0 +1,520 @@
+2025-08-05 21:10:10,019 - INFO - Processing protein: 1B9V.pdb
+2025-08-05 21:10:10,019 - INFO - Normalized PDB ID: 1B9V
+2025-08-05 21:10:10,028 - INFO - Extracted 2 ligands to E:\PythonProject\protein_automation\processed_pdbs\1B9V\1B9V_cleaned_ligands
+2025-08-05 21:10:19,558 - INFO - Preparing receptor PDBQT with charges: E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1B9V_NOLIG.pdbqt
+2025-08-05 21:10:25,370 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\4GT3\warned\ATP_A402.mol2
+2025-08-05 21:10:25,370 - INFO - 
+Starting stage1 with 8 ligands...
+2025-08-05 21:10:25,371 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\MES_A211_stage1.pdbqt
+2025-08-05 21:10:25,372 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\MES_B211_stage1.pdbqt
+2025-08-05 21:10:25,373 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\NAG_A467_stage1.pdbqt
+2025-08-05 21:10:25,374 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\RA2_A468_stage1.pdbqt
+2025-08-05 21:10:25,376 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A401_stage1.pdbqt
+2025-08-05 21:10:25,377 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A405_stage1.pdbqt
+2025-08-05 21:10:25,378 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A406_stage1.pdbqt
+2025-08-05 21:10:25,379 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\PEG_A407_stage1.pdbqt
+2025-08-05 21:10:29,560 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 100.2601499571816, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:29,670 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 100.13282069639699, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:29,725 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 97.44420028262583, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:30,186 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 99.39271000357033, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:31,704 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.37743860454252, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:31,995 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.48344688559298, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:32,035 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 97.3591883589377, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:38,845 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.2790021660495, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:10:38,846 - WARNING - No valid ligands in stage1. Attempting fallback recentering...
+2025-08-05 21:10:38,887 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-05 21:10:38,887 - INFO - 
+Starting stage2 with 8 ligands...
+2025-08-05 21:10:38,888 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\MES_A211_stage2.pdbqt
+2025-08-05 21:10:38,889 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\MES_B211_stage2.pdbqt
+2025-08-05 21:10:38,891 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\NAG_A467_stage2.pdbqt
+2025-08-05 21:10:38,892 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\RA2_A468_stage2.pdbqt
+2025-08-05 21:10:38,893 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A401_stage2.pdbqt
+2025-08-05 21:10:38,894 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A405_stage2.pdbqt
+2025-08-05 21:10:38,896 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A406_stage2.pdbqt
+2025-08-05 21:10:38,900 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\PEG_A407_stage2.pdbqt
+2025-08-05 21:10:44,690 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': 54.9531732750712, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:10:44,936 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': 47.446719644249384, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:10:46,089 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': 48.5998267692386, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:10:46,290 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': 52.69701753420207, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:10:48,472 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': 54.443680634211354, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:10:51,128 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': 63.87235343245151, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:10:53,108 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': 62.54959032639623, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:11:01,264 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': 52.96867651735317, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-05 21:11:01,265 - WARNING - No valid ligands in stage2. Attempting fallback recentering...
+2025-08-05 21:11:01,306 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-05 21:11:01,306 - INFO - 
+Starting stage3 with 8 ligands...
+2025-08-05 21:11:01,306 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\MES_A211_stage3.pdbqt
+2025-08-05 21:11:01,308 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\MES_B211_stage3.pdbqt
+2025-08-05 21:11:01,309 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\NAG_A467_stage3.pdbqt
+2025-08-05 21:11:01,310 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\RA2_A468_stage3.pdbqt
+2025-08-05 21:11:01,311 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A401_stage3.pdbqt
+2025-08-05 21:11:01,312 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A405_stage3.pdbqt
+2025-08-05 21:11:01,314 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A406_stage3.pdbqt
+2025-08-05 21:11:01,315 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\PEG_A407_stage3.pdbqt
+2025-08-05 21:11:09,922 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 48.5991530398457, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:10,349 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 50.75822348222174, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:15,028 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 50.65692021822011, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:15,077 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.44599971569908, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:17,377 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 49.2726756164583, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:19,560 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.27560314558214, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:22,205 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 50.92592160636453, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:35,726 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 49.74975963200531, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:35,727 - WARNING - No valid ligands in stage3. Attempting fallback recentering...
+2025-08-05 21:11:35,771 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-05 21:11:35,771 - INFO - 
+Starting stage4 with 8 ligands...
+2025-08-05 21:11:35,772 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\MES_A211_stage4.pdbqt
+2025-08-05 21:11:35,773 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\MES_B211_stage4.pdbqt
+2025-08-05 21:11:35,774 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\NAG_A467_stage4.pdbqt
+2025-08-05 21:11:35,775 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\RA2_A468_stage4.pdbqt
+2025-08-05 21:11:35,776 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\GOL_A401_stage4.pdbqt
+2025-08-05 21:11:35,777 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\GOL_A405_stage4.pdbqt
+2025-08-05 21:11:35,779 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\GOL_A406_stage4.pdbqt
+2025-08-05 21:11:35,780 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage4\PEG_A407_stage4.pdbqt
+2025-08-05 21:11:46,201 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 32.734572474859526, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:46,425 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 30.49933816181861, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:51,094 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 30.330706829239983, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:51,268 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 33.46351581774754, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:54,914 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 28.56196976358061, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:11:58,146 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 31.059538917837177, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:12:03,507 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 33.12349603677181, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:12:19,704 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 32.24799466349882, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:12:19,704 - WARNING - No valid ligands in stage4. Attempting fallback recentering...
+2025-08-05 21:12:19,752 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-05 21:12:19,752 - INFO - 
+Starting stage5 with 8 ligands...
+2025-08-05 21:12:19,753 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\MES_A211_stage5.pdbqt
+2025-08-05 21:12:19,754 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\MES_B211_stage5.pdbqt
+2025-08-05 21:12:19,755 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\NAG_A467_stage5.pdbqt
+2025-08-05 21:12:19,756 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\RA2_A468_stage5.pdbqt
+2025-08-05 21:12:19,758 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\GOL_A401_stage5.pdbqt
+2025-08-05 21:12:19,759 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\GOL_A405_stage5.pdbqt
+2025-08-05 21:12:19,760 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\GOL_A406_stage5.pdbqt
+2025-08-05 21:12:19,762 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage5\PEG_A407_stage5.pdbqt
+2025-08-05 21:12:44,491 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 17.18968047864821, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:12:45,438 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 14.175283411926957, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:12:53,470 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 19.84271200159863, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:12:53,655 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 17.447383283815498, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:13:04,852 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 20.75165622155075, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:13:10,111 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 17.4716053835595, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:13:25,270 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 17.19392500288212, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:14:04,982 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 15.274556206528636, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-05 21:14:04,982 - INFO - 
+Final pose validation pass on last stage ligands
+2025-08-05 21:51:22,911 - INFO - Processing protein: 1B9V.pdb
+2025-08-05 21:51:22,911 - INFO - Normalized PDB ID: 1B9V
+2025-08-05 21:51:22,920 - INFO - Extracted 2 ligands to E:\PythonProject\protein_automation\processed_pdbs\1B9V\1B9V_cleaned_ligands
+2025-08-06 11:33:11,146 - INFO - Processing protein: 1B9V.pdb
+2025-08-06 11:33:11,146 - INFO - Normalized PDB ID: 1B9V
+2025-08-06 11:33:11,156 - INFO - Extracted 2 ligands to E:\PythonProject\protein_automation\processed_pdbs\1B9V\1B9V_cleaned_ligands
+2025-08-06 11:33:20,643 - INFO - Preparing receptor PDBQT with charges: E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1B9V_NOLIG.pdbqt
+2025-08-06 11:33:25,583 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0001.mol2
+2025-08-06 11:33:25,584 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0002.mol2
+2025-08-06 11:33:25,585 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0003.mol2
+2025-08-06 11:33:25,587 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0005.mol2
+2025-08-06 11:33:25,588 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0006.mol2
+2025-08-06 11:33:25,588 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0007.mol2
+2025-08-06 11:33:25,589 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0008.mol2
+2025-08-06 11:33:25,590 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0009.mol2
+2025-08-06 11:33:25,591 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0010.mol2
+2025-08-06 11:33:25,592 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0011.mol2
+2025-08-06 11:33:25,592 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0012.mol2
+2025-08-06 11:33:25,593 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0013.mol2
+2025-08-06 11:33:25,593 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0014.mol2
+2025-08-06 11:33:25,594 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0015.mol2
+2025-08-06 11:33:25,595 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0016.mol2
+2025-08-06 11:33:25,596 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0017.mol2
+2025-08-06 11:33:25,597 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0018.mol2
+2025-08-06 11:33:25,598 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0019.mol2
+2025-08-06 11:33:25,599 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0020.mol2
+2025-08-06 11:33:25,599 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0021.mol2
+2025-08-06 11:33:25,600 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0022.mol2
+2025-08-06 11:33:25,601 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0023.mol2
+2025-08-06 11:33:25,602 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0024.mol2
+2025-08-06 11:33:25,603 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0025.mol2
+2025-08-06 11:33:25,604 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0026.mol2
+2025-08-06 11:33:25,605 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0027.mol2
+2025-08-06 11:33:25,605 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0028.mol2
+2025-08-06 11:33:25,606 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0029.mol2
+2025-08-06 11:33:25,607 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0030.mol2
+2025-08-06 11:33:25,608 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0031.mol2
+2025-08-06 11:33:25,608 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0032.mol2
+2025-08-06 11:33:25,609 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0033.mol2
+2025-08-06 11:33:25,610 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0034.mol2
+2025-08-06 11:33:25,611 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0035.mol2
+2025-08-06 11:33:25,611 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0036.mol2
+2025-08-06 11:33:25,612 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0037.mol2
+2025-08-06 11:33:25,613 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0038.mol2
+2025-08-06 11:33:25,613 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0039.mol2
+2025-08-06 11:33:25,614 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0040.mol2
+2025-08-06 11:33:25,615 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0041.mol2
+2025-08-06 11:33:25,616 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0042.mol2
+2025-08-06 11:33:25,617 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0043.mol2
+2025-08-06 11:33:25,619 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0045.mol2
+2025-08-06 11:33:25,620 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0046.mol2
+2025-08-06 11:33:25,621 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0047.mol2
+2025-08-06 11:33:25,622 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0048.mol2
+2025-08-06 11:33:25,623 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0049.mol2
+2025-08-06 11:33:25,623 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0050.mol2
+2025-08-06 11:33:25,624 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0051.mol2
+2025-08-06 11:33:25,625 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0052.mol2
+2025-08-06 11:33:25,627 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0054.mol2
+2025-08-06 11:33:25,628 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0055.mol2
+2025-08-06 11:33:25,628 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0056.mol2
+2025-08-06 11:33:25,631 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0059.mol2
+2025-08-06 11:33:25,631 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0060.mol2
+2025-08-06 11:33:25,632 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0061.mol2
+2025-08-06 11:33:25,633 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0062.mol2
+2025-08-06 11:33:25,633 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0063.mol2
+2025-08-06 11:33:25,634 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0064.mol2
+2025-08-06 11:33:25,635 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0065.mol2
+2025-08-06 11:33:25,636 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0066.mol2
+2025-08-06 11:33:25,637 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0067.mol2
+2025-08-06 11:33:25,638 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0069.mol2
+2025-08-06 11:33:25,639 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0070.mol2
+2025-08-06 11:33:25,640 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0071.mol2
+2025-08-06 11:33:25,641 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0072.mol2
+2025-08-06 11:33:25,641 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0073.mol2
+2025-08-06 11:33:25,642 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0074.mol2
+2025-08-06 11:33:25,643 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0075.mol2
+2025-08-06 11:33:25,646 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0078.mol2
+2025-08-06 11:33:25,647 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0079.mol2
+2025-08-06 11:33:25,648 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0080.mol2
+2025-08-06 11:33:25,649 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0081.mol2
+2025-08-06 11:33:25,650 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0082.mol2
+2025-08-06 11:33:25,650 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0083.mol2
+2025-08-06 11:33:25,651 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0084.mol2
+2025-08-06 11:33:25,652 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0085.mol2
+2025-08-06 11:33:25,653 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0087.mol2
+2025-08-06 11:33:25,654 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0088.mol2
+2025-08-06 11:33:25,655 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0089.mol2
+2025-08-06 11:33:25,656 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0090.mol2
+2025-08-06 11:33:25,657 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0091.mol2
+2025-08-06 11:33:25,657 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0092.mol2
+2025-08-06 11:33:25,659 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0094.mol2
+2025-08-06 11:33:25,660 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0095.mol2
+2025-08-06 11:33:25,660 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0096.mol2
+2025-08-06 11:33:25,661 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0097.mol2
+2025-08-06 11:33:25,662 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0098.mol2
+2025-08-06 11:33:25,662 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0099.mol2
+2025-08-06 11:33:25,663 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0100.mol2
+2025-08-06 11:33:25,664 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0101.mol2
+2025-08-06 11:33:25,673 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\4GT3\warned\ATP_A402.mol2
+2025-08-06 11:33:25,673 - INFO - 
+Starting stage1 with 18 ligands...
+2025-08-06 11:33:25,673 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0004_stage1.pdbqt
+2025-08-06 11:33:25,675 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0044_stage1.pdbqt
+2025-08-06 11:33:25,676 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0053_stage1.pdbqt
+2025-08-06 11:33:25,677 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0057_stage1.pdbqt
+2025-08-06 11:33:25,679 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0058_stage1.pdbqt
+2025-08-06 11:33:25,680 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0068_stage1.pdbqt
+2025-08-06 11:33:25,681 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0076_stage1.pdbqt
+2025-08-06 11:33:25,683 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0077_stage1.pdbqt
+2025-08-06 11:33:25,685 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0086_stage1.pdbqt
+2025-08-06 11:33:25,686 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0093_stage1.pdbqt
+2025-08-06 11:33:25,688 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\MES_A211_stage1.pdbqt
+2025-08-06 11:33:25,689 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\MES_B211_stage1.pdbqt
+2025-08-06 11:33:25,689 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\NAG_A467_stage1.pdbqt
+2025-08-06 11:33:25,690 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\RA2_A468_stage1.pdbqt
+2025-08-06 11:33:25,691 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A401_stage1.pdbqt
+2025-08-06 11:33:25,692 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A405_stage1.pdbqt
+2025-08-06 11:33:25,693 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A406_stage1.pdbqt
+2025-08-06 11:33:25,693 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\PEG_A407_stage1.pdbqt
+2025-08-06 11:33:40,697 - INFO - fda_0093.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.05254215046989, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:33:41,325 - INFO - fda_0077.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.04181040712501, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:33:41,475 - INFO - fda_0068.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.94404417768791, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:33:47,365 - INFO - fda_0057.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.97174265499223, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:33:54,566 - INFO - fda_0058.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.0851248972379, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:33:57,639 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 90.82997202068391, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:04,478 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 95.6138392594831, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:04,880 - INFO - fda_0086.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.40148191308391, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:13,074 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.74638711091633, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:13,902 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 90.93526399767352, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:16,621 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.25807707178987, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:17,420 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 98.53945287385663, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:20,012 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 98.97952279061202, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:21,596 - INFO - fda_0053.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 91.25328737938811, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:30,711 - INFO - fda_0044.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 90.5739600419896, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:48,640 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.1449224604984, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:34:58,734 - INFO - fda_0004.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 90.87880660416593, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:35:04,659 - INFO - fda_0076.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.31540746948211, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:35:04,659 - WARNING - No valid ligands in stage1. Attempting fallback recentering...
+2025-08-06 11:35:04,704 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-06 11:35:04,704 - INFO - 
+Starting stage2 with 18 ligands...
+2025-08-06 11:35:04,705 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0004_stage2.pdbqt
+2025-08-06 11:35:04,706 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0044_stage2.pdbqt
+2025-08-06 11:35:04,708 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0053_stage2.pdbqt
+2025-08-06 11:35:04,709 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0057_stage2.pdbqt
+2025-08-06 11:35:04,710 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0058_stage2.pdbqt
+2025-08-06 11:35:04,711 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0068_stage2.pdbqt
+2025-08-06 11:35:04,713 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0076_stage2.pdbqt
+2025-08-06 11:35:04,715 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0077_stage2.pdbqt
+2025-08-06 11:35:04,718 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0086_stage2.pdbqt
+2025-08-06 11:35:04,720 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0093_stage2.pdbqt
+2025-08-06 11:35:04,722 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\MES_A211_stage2.pdbqt
+2025-08-06 11:35:04,723 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\MES_B211_stage2.pdbqt
+2025-08-06 11:35:04,724 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\NAG_A467_stage2.pdbqt
+2025-08-06 11:35:04,725 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\RA2_A468_stage2.pdbqt
+2025-08-06 11:35:04,725 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A401_stage2.pdbqt
+2025-08-06 11:35:04,726 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A405_stage2.pdbqt
+2025-08-06 11:35:04,727 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A406_stage2.pdbqt
+2025-08-06 11:35:04,728 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\PEG_A407_stage2.pdbqt
+2025-08-06 11:35:09,860 - INFO - fda_0068.pdbqt validation: {'valid': False, 'distance_to_surface': 47.17473502840265, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:35:28,180 - INFO - fda_0077.pdbqt validation: {'valid': False, 'distance_to_surface': 45.47334877705841, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:35:36,567 - INFO - fda_0093.pdbqt validation: {'valid': False, 'distance_to_surface': 45.06466794507644, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:35:59,461 - INFO - fda_0057.pdbqt validation: {'valid': False, 'distance_to_surface': 48.30679584696132, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:08,428 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': 45.521534091021145, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:14,919 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': 44.11807526400035, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:22,616 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': 43.55412086129164, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:23,895 - INFO - fda_0086.pdbqt validation: {'valid': False, 'distance_to_surface': 45.25972072384009, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:30,308 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': 48.82985517078666, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:37,590 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': 49.43832271628963, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:39,829 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': 41.61990779663021, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:36:46,886 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': 40.305931486569065, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:37:07,154 - INFO - fda_0058.pdbqt validation: {'valid': False, 'distance_to_surface': 44.333413155316606, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:37:21,007 - INFO - fda_0053.pdbqt validation: {'valid': False, 'distance_to_surface': 44.71618191438084, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:37:37,033 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': 43.75685520007122, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:37:47,840 - INFO - fda_0076.pdbqt validation: {'valid': False, 'distance_to_surface': 46.416030388218246, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:38:15,934 - INFO - fda_0044.pdbqt validation: {'valid': False, 'distance_to_surface': 47.389488634084245, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:40:12,298 - INFO - fda_0004.pdbqt validation: {'valid': False, 'distance_to_surface': 52.13082761667994, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 11:40:12,298 - WARNING - No valid ligands in stage2. Attempting fallback recentering...
+2025-08-06 11:40:12,346 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-06 11:40:12,346 - INFO - 
+Starting stage3 with 18 ligands...
+2025-08-06 11:40:12,347 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0004_stage3.pdbqt
+2025-08-06 11:40:12,348 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0044_stage3.pdbqt
+2025-08-06 11:40:12,349 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0053_stage3.pdbqt
+2025-08-06 11:40:12,350 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0057_stage3.pdbqt
+2025-08-06 11:40:12,351 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0058_stage3.pdbqt
+2025-08-06 11:40:12,352 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0068_stage3.pdbqt
+2025-08-06 11:40:12,354 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0076_stage3.pdbqt
+2025-08-06 11:40:12,356 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0077_stage3.pdbqt
+2025-08-06 11:40:12,357 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0086_stage3.pdbqt
+2025-08-06 11:40:12,359 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0093_stage3.pdbqt
+2025-08-06 11:40:12,363 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\MES_A211_stage3.pdbqt
+2025-08-06 11:40:12,364 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\MES_B211_stage3.pdbqt
+2025-08-06 11:40:12,365 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\NAG_A467_stage3.pdbqt
+2025-08-06 11:40:12,365 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\RA2_A468_stage3.pdbqt
+2025-08-06 11:40:12,366 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A401_stage3.pdbqt
+2025-08-06 11:40:12,367 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A405_stage3.pdbqt
+2025-08-06 11:40:12,367 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A406_stage3.pdbqt
+2025-08-06 11:40:12,368 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\PEG_A407_stage3.pdbqt
+2025-08-06 11:40:26,234 - INFO - fda_0068.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.55902913793587, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:41:01,198 - INFO - fda_0077.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 50.06346483420268, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:41:04,368 - INFO - fda_0093.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 52.3545319412606, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:41:27,038 - INFO - fda_0057.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 50.53839843148764, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:42:11,117 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 52.50726692512921, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:42:12,146 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 52.12896694575019, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:42:40,662 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 53.78770252487873, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:42:44,137 - INFO - fda_0058.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.61387318644361, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:42:53,633 - INFO - fda_0086.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.50297725165462, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:42:59,187 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.51358505573544, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:43:07,422 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 52.657291552542915, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:43:09,781 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.547560077366036, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:43:19,255 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 53.67131044739957, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:43:34,310 - INFO - fda_0053.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 52.03078181933923, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:44:42,185 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 50.7622713776746, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:45:24,112 - INFO - fda_0044.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.3838835374545, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:45:31,585 - INFO - fda_0076.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 51.5922307750631, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:47:22,529 - INFO - fda_0004.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 53.14106230465261, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 11:47:22,529 - INFO - 
+Final pose validation pass on last stage ligands
+2025-08-06 14:22:49,282 - INFO - Processing protein: 1B9V.pdb
+2025-08-06 14:22:49,282 - INFO - Normalized PDB ID: 1B9V
+2025-08-06 14:22:49,291 - INFO - Extracted 2 ligands to E:\PythonProject\protein_automation\processed_pdbs\1B9V\1B9V_cleaned_ligands
+2025-08-06 14:22:58,359 - INFO - Preparing receptor PDBQT with charges: E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1B9V_NOLIG.pdbqt
+2025-08-06 14:23:03,995 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0001.mol2
+2025-08-06 14:23:03,997 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0002.mol2
+2025-08-06 14:23:03,998 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0003.mol2
+2025-08-06 14:23:04,002 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0005.mol2
+2025-08-06 14:23:04,003 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0006.mol2
+2025-08-06 14:23:04,004 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0007.mol2
+2025-08-06 14:23:04,006 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0008.mol2
+2025-08-06 14:23:04,007 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0009.mol2
+2025-08-06 14:23:04,008 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0010.mol2
+2025-08-06 14:23:04,009 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0011.mol2
+2025-08-06 14:23:04,010 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0012.mol2
+2025-08-06 14:23:04,011 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0013.mol2
+2025-08-06 14:23:04,012 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0014.mol2
+2025-08-06 14:23:04,013 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0015.mol2
+2025-08-06 14:23:04,014 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0016.mol2
+2025-08-06 14:23:04,018 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0017.mol2
+2025-08-06 14:23:04,020 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0018.mol2
+2025-08-06 14:23:04,023 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0019.mol2
+2025-08-06 14:23:04,026 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0020.mol2
+2025-08-06 14:23:04,028 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0021.mol2
+2025-08-06 14:23:04,029 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0022.mol2
+2025-08-06 14:23:04,030 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0023.mol2
+2025-08-06 14:23:04,032 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0024.mol2
+2025-08-06 14:23:04,033 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0025.mol2
+2025-08-06 14:23:04,035 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0026.mol2
+2025-08-06 14:23:04,036 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0027.mol2
+2025-08-06 14:23:04,037 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0028.mol2
+2025-08-06 14:23:04,038 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0029.mol2
+2025-08-06 14:23:04,038 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0030.mol2
+2025-08-06 14:23:04,040 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0031.mol2
+2025-08-06 14:23:04,041 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0032.mol2
+2025-08-06 14:23:04,042 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0033.mol2
+2025-08-06 14:23:04,043 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0034.mol2
+2025-08-06 14:23:04,044 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0035.mol2
+2025-08-06 14:23:04,045 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0036.mol2
+2025-08-06 14:23:04,045 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0037.mol2
+2025-08-06 14:23:04,046 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0038.mol2
+2025-08-06 14:23:04,047 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0039.mol2
+2025-08-06 14:23:04,048 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0040.mol2
+2025-08-06 14:23:04,050 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0041.mol2
+2025-08-06 14:23:04,051 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0042.mol2
+2025-08-06 14:23:04,052 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0043.mol2
+2025-08-06 14:23:04,056 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0045.mol2
+2025-08-06 14:23:04,057 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0046.mol2
+2025-08-06 14:23:04,059 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0047.mol2
+2025-08-06 14:23:04,060 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0048.mol2
+2025-08-06 14:23:04,062 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0049.mol2
+2025-08-06 14:23:04,063 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0050.mol2
+2025-08-06 14:23:04,064 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0051.mol2
+2025-08-06 14:23:04,065 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0052.mol2
+2025-08-06 14:23:04,068 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0054.mol2
+2025-08-06 14:23:04,069 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0055.mol2
+2025-08-06 14:23:04,070 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0056.mol2
+2025-08-06 14:23:04,073 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0059.mol2
+2025-08-06 14:23:04,074 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0060.mol2
+2025-08-06 14:23:04,074 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0061.mol2
+2025-08-06 14:23:04,075 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0062.mol2
+2025-08-06 14:23:04,076 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0063.mol2
+2025-08-06 14:23:04,077 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0064.mol2
+2025-08-06 14:23:04,077 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0065.mol2
+2025-08-06 14:23:04,078 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0066.mol2
+2025-08-06 14:23:04,080 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0067.mol2
+2025-08-06 14:23:04,082 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0069.mol2
+2025-08-06 14:23:04,083 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0070.mol2
+2025-08-06 14:23:04,084 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0071.mol2
+2025-08-06 14:23:04,085 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0072.mol2
+2025-08-06 14:23:04,086 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0073.mol2
+2025-08-06 14:23:04,087 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0074.mol2
+2025-08-06 14:23:04,088 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0075.mol2
+2025-08-06 14:23:04,091 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0078.mol2
+2025-08-06 14:23:04,092 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0079.mol2
+2025-08-06 14:23:04,092 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0080.mol2
+2025-08-06 14:23:04,093 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0081.mol2
+2025-08-06 14:23:04,094 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0082.mol2
+2025-08-06 14:23:04,095 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0083.mol2
+2025-08-06 14:23:04,096 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0084.mol2
+2025-08-06 14:23:04,097 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0085.mol2
+2025-08-06 14:23:04,098 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0087.mol2
+2025-08-06 14:23:04,099 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0088.mol2
+2025-08-06 14:23:04,100 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0089.mol2
+2025-08-06 14:23:04,101 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0090.mol2
+2025-08-06 14:23:04,102 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0091.mol2
+2025-08-06 14:23:04,103 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0092.mol2
+2025-08-06 14:23:04,104 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0094.mol2
+2025-08-06 14:23:04,105 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0095.mol2
+2025-08-06 14:23:04,106 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0096.mol2
+2025-08-06 14:23:04,106 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0097.mol2
+2025-08-06 14:23:04,107 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0098.mol2
+2025-08-06 14:23:04,108 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0099.mol2
+2025-08-06 14:23:04,109 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0100.mol2
+2025-08-06 14:23:04,109 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\fda_0101.mol2
+2025-08-06 14:23:04,123 - WARNING - RDKit failed to load: E:\PythonProject\protein_automation\ligands_mol2\4GT3\warned\ATP_A402.mol2
+2025-08-06 14:23:04,124 - INFO - 
+Starting stage1 with 18 ligands...
+2025-08-06 14:23:04,125 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0004_stage1.pdbqt
+2025-08-06 14:23:04,127 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0044_stage1.pdbqt
+2025-08-06 14:23:04,128 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0053_stage1.pdbqt
+2025-08-06 14:23:04,129 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0057_stage1.pdbqt
+2025-08-06 14:23:04,131 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0058_stage1.pdbqt
+2025-08-06 14:23:04,132 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0068_stage1.pdbqt
+2025-08-06 14:23:04,134 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0076_stage1.pdbqt
+2025-08-06 14:23:04,137 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0077_stage1.pdbqt
+2025-08-06 14:23:04,144 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0086_stage1.pdbqt
+2025-08-06 14:23:04,146 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\fda_0093_stage1.pdbqt
+2025-08-06 14:23:04,168 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\MES_A211_stage1.pdbqt
+2025-08-06 14:23:04,169 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\MES_B211_stage1.pdbqt
+2025-08-06 14:23:04,169 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\NAG_A467_stage1.pdbqt
+2025-08-06 14:23:04,170 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\RA2_A468_stage1.pdbqt
+2025-08-06 14:23:04,171 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A401_stage1.pdbqt
+2025-08-06 14:23:04,172 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A405_stage1.pdbqt
+2025-08-06 14:23:04,173 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\GOL_A406_stage1.pdbqt
+2025-08-06 14:23:04,173 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage1\PEG_A407_stage1.pdbqt
+2025-08-06 14:23:18,306 - INFO - fda_0093.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.14059126170947, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:18,858 - INFO - fda_0077.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.09364800900077, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:21,598 - INFO - fda_0068.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.97331477672464, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:23,792 - INFO - fda_0057.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.11881417756028, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:34,499 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.35406522529074, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:36,277 - INFO - fda_0058.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.07652808502502, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:40,654 - INFO - fda_0086.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.41626759567043, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:45,101 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 98.57291532690127, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:52,627 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 92.78494553320066, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:53,689 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.38565217975919, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:55,424 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 99.70135337440958, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:23:56,953 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 99.66685187929279, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:24:00,016 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 97.15689394823531, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:24:01,685 - INFO - fda_0053.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 91.17064613283678, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:24:06,331 - INFO - fda_0044.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 90.78364877616151, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:24:12,837 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 88.9290347955236, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:24:36,042 - INFO - fda_0076.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.391191190676, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:24:36,773 - INFO - fda_0004.pdbqt validation: {'valid': False, 'distance_to_surface': None, 'distance_to_pocket': 89.6887482096791, 'clash_count': None, 'reason': 'Too far from pocket centroid (> 4.5 Å)'}
+2025-08-06 14:24:36,773 - WARNING - No valid ligands in stage1. Attempting fallback recentering...
+2025-08-06 14:24:36,816 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-06 14:24:36,816 - INFO - 
+Starting stage2 with 18 ligands...
+2025-08-06 14:24:36,817 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0004_stage2.pdbqt
+2025-08-06 14:24:36,818 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0044_stage2.pdbqt
+2025-08-06 14:24:36,819 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0053_stage2.pdbqt
+2025-08-06 14:24:36,820 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0057_stage2.pdbqt
+2025-08-06 14:24:36,822 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0058_stage2.pdbqt
+2025-08-06 14:24:36,823 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0068_stage2.pdbqt
+2025-08-06 14:24:36,824 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0076_stage2.pdbqt
+2025-08-06 14:24:36,826 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0077_stage2.pdbqt
+2025-08-06 14:24:36,827 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0086_stage2.pdbqt
+2025-08-06 14:24:36,829 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\fda_0093_stage2.pdbqt
+2025-08-06 14:24:36,831 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\MES_A211_stage2.pdbqt
+2025-08-06 14:24:36,832 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\MES_B211_stage2.pdbqt
+2025-08-06 14:24:36,833 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\NAG_A467_stage2.pdbqt
+2025-08-06 14:24:36,833 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\RA2_A468_stage2.pdbqt
+2025-08-06 14:24:36,834 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A401_stage2.pdbqt
+2025-08-06 14:24:36,835 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A405_stage2.pdbqt
+2025-08-06 14:24:36,836 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\GOL_A406_stage2.pdbqt
+2025-08-06 14:24:36,839 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage2\PEG_A407_stage2.pdbqt
+2025-08-06 14:24:41,462 - INFO - fda_0068.pdbqt validation: {'valid': False, 'distance_to_surface': 59.158356442686944, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:25:01,204 - INFO - fda_0077.pdbqt validation: {'valid': False, 'distance_to_surface': 42.03829313851836, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:25:09,636 - INFO - fda_0093.pdbqt validation: {'valid': False, 'distance_to_surface': 43.03399369103453, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:25:25,907 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': 45.7485167519123, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:25:29,662 - INFO - fda_0057.pdbqt validation: {'valid': False, 'distance_to_surface': 48.914446219905216, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:25:44,640 - INFO - MES_A211.pdbqt validation: {'valid': False, 'distance_to_surface': 53.07223919338622, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:25:46,354 - INFO - fda_0086.pdbqt validation: {'valid': False, 'distance_to_surface': 58.33754613454357, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:00,544 - INFO - GOL_A406.pdbqt validation: {'valid': False, 'distance_to_surface': 53.18903379457085, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:05,054 - INFO - GOL_A401.pdbqt validation: {'valid': False, 'distance_to_surface': 52.68857759514865, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:06,605 - INFO - GOL_A405.pdbqt validation: {'valid': False, 'distance_to_surface': 46.95453471178263, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:16,852 - INFO - fda_0058.pdbqt validation: {'valid': False, 'distance_to_surface': 45.26491074773041, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:20,978 - INFO - PEG_A407.pdbqt validation: {'valid': False, 'distance_to_surface': 49.29830108634577, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:22,773 - INFO - NAG_A467.pdbqt validation: {'valid': False, 'distance_to_surface': 54.277321544085055, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:44,950 - INFO - RA2_A468.pdbqt validation: {'valid': False, 'distance_to_surface': 42.75079910364249, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:26:45,639 - INFO - fda_0053.pdbqt validation: {'valid': False, 'distance_to_surface': 51.07833024874638, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:27:12,720 - INFO - fda_0076.pdbqt validation: {'valid': False, 'distance_to_surface': 47.003508315869354, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:27:31,917 - INFO - fda_0044.pdbqt validation: {'valid': False, 'distance_to_surface': 47.33220143834427, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-06 14:27:33,639 - WARNING - No score found for fda_0004.pdbqt
+2025-08-06 14:27:33,640 - WARNING - No valid ligands in stage2. Attempting fallback recentering...
+2025-08-06 14:27:33,689 - INFO - Recentered using ligand GOL_A401 — validation passed.
+2025-08-06 14:27:33,689 - INFO - 
+Starting stage3 with 18 ligands...
+2025-08-06 14:27:33,690 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0004_stage3.pdbqt
+2025-08-06 14:27:33,691 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0044_stage3.pdbqt
+2025-08-06 14:27:33,692 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0053_stage3.pdbqt
+2025-08-06 14:27:33,693 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0057_stage3.pdbqt
+2025-08-06 14:27:33,694 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0058_stage3.pdbqt
+2025-08-06 14:27:33,696 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0068_stage3.pdbqt
+2025-08-06 14:27:33,698 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0076_stage3.pdbqt
+2025-08-06 14:27:33,700 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0077_stage3.pdbqt
+2025-08-06 14:27:33,702 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0086_stage3.pdbqt
+2025-08-06 14:27:33,704 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\fda_0093_stage3.pdbqt
+2025-08-06 14:27:33,707 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\MES_A211_stage3.pdbqt
+2025-08-06 14:27:33,708 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\MES_B211_stage3.pdbqt
+2025-08-06 14:27:33,709 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\NAG_A467_stage3.pdbqt
+2025-08-06 14:27:33,710 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\RA2_A468_stage3.pdbqt
+2025-08-06 14:27:33,713 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A401_stage3.pdbqt
+2025-08-06 14:27:33,715 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A405_stage3.pdbqt
+2025-08-06 14:27:33,716 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\GOL_A406_stage3.pdbqt
+2025-08-06 14:27:33,717 - INFO - Docked ligand saved to: E:/PythonProject/protein_automation\docked\1B9V\stage3\PEG_A407_stage3.pdbqt

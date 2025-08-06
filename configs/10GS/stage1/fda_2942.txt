@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\10GS_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\fda_2942.pdbqt
+center_x = 15.996
+center_y = 11.846
+center_z = 16.768
+size_x = 40.000
+size_y = 40.000
+size_z = 40.000
+num_modes = 5
+energy_range = 4
+exhaustiveness = 8
+out = E:/PythonProject/protein_automation\docked\10GS\stage1\fda_2942_stage1.pdbqt
+cpu = 2

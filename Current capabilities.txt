@@ -1,0 +1,18 @@
+1 input loading and config parsing
+2 protein cleaning and molprobity validation 
+3 removing waters
+4 adding hydrogens and optimizing h bonds
+5 active site detection + identify site via ligand
+6 docking WITH stages *NOTE NEED TO ADD 3D when compute available
+7 pose validation
+8 ligand filtering and prep *NOTE NEED TO ADD 3D when compute available
+9 output score reporting
+10 delete alternative conformations 
+add missing loops and residues
+assign correct protonation states
+dock crystallized ligands as a contrl 
+adding charges
+
+NEED for scientific reliability:
+remove/keep cofactors
+Consider pKa-aware preprocessing PropKa or PDB2PQR

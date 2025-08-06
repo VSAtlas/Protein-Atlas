@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\10GS_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\1B9V\RA2_A468.pdbqt
+center_x = 1.000
+center_y = 14.362
+center_z = 12.085
+size_x = 40.000
+size_y = 40.000
+size_z = 40.000
+num_modes = 20
+energy_range = 9
+exhaustiveness = 20
+out = E:/PythonProject/protein_automation\docked\10GS\stage5\RA2_A468_stage5.pdbqt
+cpu = 2

@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1LAF_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\1LAF\ARG_E240.pdbqt
+center_x = 21.154
+center_y = 57.779
+center_z = 47.513
+size_x = 14.000
+size_y = 14.000
+size_z = 14.000
+num_modes = 1
+energy_range = 2
+exhaustiveness = 2
+out = E:/PythonProject/protein_automation\docked\1LAF\stage1\ARG_E240_stage1.pdbqt
+cpu = 2

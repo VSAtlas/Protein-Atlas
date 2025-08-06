@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\6BD4_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\6BD4\OLC_A1102.pdbqt
+center_x = -18.197
+center_y = 10.634
+center_z = -13.061
+size_x = 30.000
+size_y = 30.000
+size_z = 30.000
+num_modes = 1
+energy_range = 2
+exhaustiveness = 2
+out = E:/PythonProject/protein_automation\docked\6BD4\stage1\OLC_A1102_stage1.pdbqt
+cpu = 2

@@ -1,0 +1,13 @@
+receptor = 2HYY_receptor.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\fda_0001.pdbqt
+center_x = 14.251
+center_y = 15.283
+center_z = 17.632
+size_x = 20.899
+size_y = 18.566
+size_z = 13.798
+num_modes = 1
+energy_range = 2
+exhaustiveness = 2
+out = E:\PythonProject\protein_automation\docked\2HYY\stage1\fda_0001_stage1.pdbqt
+cpu = 1

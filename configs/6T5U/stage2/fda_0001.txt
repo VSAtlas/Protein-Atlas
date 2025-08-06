@@ -1,0 +1,13 @@
+receptor = 6T5U_receptor.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\fda_0001.pdbqt
+center_x = 10.194
+center_y = 3.197
+center_z = -34.639
+size_x = 14.159
+size_y = 16.120
+size_z = 11.710
+num_modes = 3
+energy_range = 3
+exhaustiveness = 4
+out = E:\PythonProject\protein_automation\docked\6T5U\stage2\fda_0001_stage2.pdbqt
+cpu = 1

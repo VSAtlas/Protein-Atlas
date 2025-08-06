@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\4GT3_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\4GT3\PEG_A407.pdbqt
+center_x = 1.000
+center_y = 5.437
+center_z = 12.608
+size_x = 40.000
+size_y = 40.000
+size_z = 40.000
+num_modes = 3
+energy_range = 3
+exhaustiveness = 4
+out = E:/PythonProject/protein_automation\docked\4GT3\stage2\PEG_A407_stage2.pdbqt
+cpu = 2

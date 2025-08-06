@@ -1,0 +1,21 @@
+project {
+  project_id = input_pdbs
+  directory = C:\Users\micha\PycharmProjects\PythonProject\protein \
+              automation\input_pdbs
+  last_modified = 1753143714.8
+  job_count = 0
+  best_r_free = None
+  default_file {
+    file_name = None
+    program_name = None
+    file_type = None
+    file_description = None
+  }
+  sequence_file = None
+  user_comments = None
+  always_add_hydrogens = False
+  use_phaser_fast_mode = False
+  citation = None
+  group_id = None
+  cached_output_dir = None
+}

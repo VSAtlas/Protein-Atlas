@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1A6Z_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\4GT3\GOL_A406.pdbqt
+center_x = 10.665
+center_y = 44.038
+center_z = 8.861
+size_x = 40.000
+size_y = 40.000
+size_z = 40.000
+num_modes = 5
+energy_range = 4
+exhaustiveness = 8
+out = E:/PythonProject/protein_automation\docked\1A6Z\stage1\GOL_A406_stage1.pdbqt
+cpu = 2

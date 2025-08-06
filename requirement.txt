@@ -1,0 +1,10 @@
+java 17
+python 3.10
+
+phenix-1.21.2
+p2rank 2.5
+
+AutoDock Vina
+openbabel 3.1.1
+
+miniconda3

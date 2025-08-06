@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1B9V_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\fda_0004.pdbqt
+center_x = 1.000
+center_y = 18.418
+center_z = -0.870
+size_x = 39.000
+size_y = 39.000
+size_z = 39.000
+num_modes = 9
+energy_range = 6
+exhaustiveness = 8
+out = E:/PythonProject/protein_automation\docked\1B9V\stage4\fda_0004_stage4.pdbqt
+cpu = 2

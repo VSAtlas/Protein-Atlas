@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1OHR_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\1OHR\1UN_A201.pdbqt
+center_x = 5.266
+center_y = -1.683
+center_z = 14.209
+size_x = 30.000
+size_y = 30.000
+size_z = 30.000
+num_modes = 1
+energy_range = 2
+exhaustiveness = 2
+out = E:/PythonProject/protein_automation\docked\1OHR\stage1\1UN_A201_stage1.pdbqt
+cpu = 2

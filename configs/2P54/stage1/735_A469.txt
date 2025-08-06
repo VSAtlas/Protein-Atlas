@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\2P54_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\2P54\735_A469.pdbqt
+center_x = 15.206
+center_y = 37.477
+center_z = 27.011
+size_x = 30.000
+size_y = 30.000
+size_z = 30.000
+num_modes = 1
+energy_range = 2
+exhaustiveness = 2
+out = E:/PythonProject/protein_automation\docked\2P54\stage1\735_A469_stage1.pdbqt
+cpu = 2

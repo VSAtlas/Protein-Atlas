@@ -1,0 +1,22 @@
+DNA -> alphafold -> prepped protein
+
+implement screening from one ligand across the genome
+
+data screening of processed ligands which identifies if a ligand interacts with multiple proteins
+
+installation exe
+
+clean up some of the folders
+
+include a library of prepped proteins which might be common to screen (to save future compute power)
+
+build installer that installs every piece of software (may need permission to do this)
+
+build crowdsourcing compute
+
+make function to delete new files
+
+KNOWN ISSUES:
+config reading and writing does not work
+currently the extracted ligands are being docked in all 5 stages, this is wasteful or compute, could be better if they only ran
+during the final stage

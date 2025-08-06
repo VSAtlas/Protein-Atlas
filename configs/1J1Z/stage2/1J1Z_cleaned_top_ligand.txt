@@ -1,0 +1,13 @@
+receptor = E:\PythonProject\protein_automation\pdbqts\1J1Z.pdbqt
+ligand = E:\PythonProject\protein_automation\processed_pdbs\1J1Z\1J1Z_prepped_ligands\1J1Z_cleaned_top_ligand.pdbqt
+center_x = -32.978
+center_y = 59.013
+center_z = 21.502
+size_x = 13.189
+size_y = 14.763
+size_z = 12.114
+num_modes = 3
+energy_range = 3
+exhaustiveness = 4
+out = E:\PythonProject\protein_automation\docked\1J1Z\stage2\1J1Z_cleaned_top_ligand_stage2.pdbqt
+cpu = 1

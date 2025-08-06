@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1GPK_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\1GPK\NAG_A1536.pdbqt
+center_x = 2.183
+center_y = 64.948
+center_z = 67.105
+size_x = 30.000
+size_y = 30.000
+size_z = 30.000
+num_modes = 1
+energy_range = 2
+exhaustiveness = 2
+out = E:/PythonProject/protein_automation\docked\1GPK\stage1\NAG_A1536_stage1.pdbqt
+cpu = 2

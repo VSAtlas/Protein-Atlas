@@ -1,0 +1,35 @@
+PROTEIN_DIR = E:/PythonProject/protein_automation/pdbqts
+LIGAND_DIR = E:/PythonProject/protein_automation/input_ligands
+LIGAND_EXTRACTED_DIR = E:/PythonProject/protein_automation/extracted_ligands
+LIGANDS_MOL2_DIR = E:/PythonProject/protein_automation/ligands_mol2
+OUTPUT_LIGANDS_DIR = E:/PythonProject/protein_automation/prepped_ligands
+OUTPUT_DIR = E:/PythonProject/protein_automation/processed_pdbs
+PDBQT_DIR = E:/PythonProject/protein_automation/pdbqts
+DOCKED_DIR = E:/PythonProject/protein_automation/docked
+
+VINA_PATH = E:/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe
+VINA_EXE = E:/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe
+
+CPU_ONLY = True
+
+PHENIX_DIR = E:/phenix/Library/bin
+PHENIX_LIB_PATH = E:/phenix/Lib/site-packages
+PHENIX_CLEAN_SCRIPT = E:/PythonProject/protein_automation/phenix_clean.py
+
+INPUT_DIR = E:/PythonProject/protein_automation/input_pdbs
+P2RANK_PATH = E:/p2rank_2.5
+
+MGLTOOLS_PATH = E:/MGLTOOLS-1.5.7
+MGLTOOLS_PYTHON = E:/MGLTOOLS-1.5.7/python.exe
+PREPARE_RECEPTOR_SCRIPT = E:/MGLTOOLS-1.5.7/Lib/site-packages/AutoDockTools/Utilities24/prepare_receptor4.py
+MGLTOOLS_DIR = E:/MGLTOOLS-1.5.7
+MAX_PARALLEL_JOBS = 10
+OPENBABEL_PATH = E:/OpenBabel-3.1.1/obabel.exe
+PYMOL_PATH = E:\pymol\python.exe
+DOCKING_MODE = polypharmacology
+
+
+CPU = 12
+OVERALL_DIR = E:/PythonProject/protein_automation
+REDUCE_EXE = E:/phenix/Library/bin/reduce.exe
+FORCE_REPROCESS = False

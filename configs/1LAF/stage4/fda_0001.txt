@@ -1,0 +1,13 @@
+receptor = 1LAF_receptor.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\fda_0001.pdbqt
+center_x = 21.283
+center_y = 58.460
+center_z = 47.733
+size_x = 12.745
+size_y = 7.952
+size_z = 8.430
+num_modes = 9
+energy_range = 6
+exhaustiveness = 8
+out = E:\PythonProject\protein_automation\docked\1LAF\stage4\fda_0001_stage4.pdbqt
+cpu = 1

@@ -1,0 +1,6 @@
+2025-08-05 21:14:04,984 - INFO - Processing protein: 1BLR.pdb
+2025-08-05 21:14:04,984 - INFO - Normalized PDB ID: 1BLR
+2025-08-05 21:14:05,076 - INFO - Extracted 0 ligands to E:\PythonProject\protein_automation\processed_pdbs\1BLR\1BLR_cleaned_ligands
+2025-08-06 11:47:22,530 - INFO - Processing protein: 1BLR.pdb
+2025-08-06 11:47:22,530 - INFO - Normalized PDB ID: 1BLR
+2025-08-06 11:47:22,624 - INFO - Extracted 0 ligands to E:\PythonProject\protein_automation\processed_pdbs\1BLR\1BLR_cleaned_ligands

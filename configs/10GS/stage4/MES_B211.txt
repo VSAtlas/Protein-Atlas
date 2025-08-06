@@ -1,0 +1,13 @@
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\10GS_NOLIG.pdbqt
+ligand = E:\PythonProject\protein_automation\prepped_ligands\10GS\MES_B211.pdbqt
+center_x = 1.000
+center_y = 12.353
+center_z = 16.384
+size_x = 40.000
+size_y = 40.000
+size_z = 40.000
+num_modes = 9
+energy_range = 6
+exhaustiveness = 8
+out = E:/PythonProject/protein_automation\docked\10GS\stage4\MES_B211_stage4.pdbqt
+cpu = 2

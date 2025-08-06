@@ -1,0 +1,13 @@
+receptor = C:/Users/micha/PycharmProjects/PythonProject/protein_automation/pdbqts/1LAF.pdbqt
+ligand = C:/Users/micha/PycharmProjects/PythonProject/protein_automation/prepped_ligands\fda_0007.pdbqt
+center_x = 22.023
+center_y = 58.366
+center_z = 47.720
+size_x = 13.534
+size_y = 9.333
+size_z = 8.430
+num_modes = 9
+energy_range = 6
+exhaustiveness = 8
+out = C:/Users/micha/PycharmProjects/PythonProject/protein_automation\docked\1LAF\stage4\fda_0007_stage4.pdbqt
+cpu = 1

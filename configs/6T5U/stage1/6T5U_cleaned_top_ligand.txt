@@ -1,0 +1,13 @@
+receptor = E:/PythonProject/protein_automation/pdbqts/6T5U.pdbqt
+ligand = E:\PythonProject\protein_automation\processed_pdbs\6T5U\6T5U_prepped_ligands\6T5U_cleaned_top_ligand.pdbqt
+center_x = 9.307
+center_y = 13.793
+center_z = -6.686
+size_x = 12.480
+size_y = 18.992
+size_z = 12.239
+num_modes = 1
+energy_range = 2
+exhaustiveness = 2
+out = E:\PythonProject\protein_automation\docked\6T5U\stage1\6T5U_cleaned_top_ligand_stage1.pdbqt
+cpu = 1
