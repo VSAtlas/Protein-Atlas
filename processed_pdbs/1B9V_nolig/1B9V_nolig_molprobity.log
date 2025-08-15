@@ -12,11 +12,11 @@ Symmetry information was not found, putting molecule in P1 box.
 
   Monomer Library directory:
     "e:\phenix\lib\site-packages\chem_data\mon_lib"
-  Total number of atoms: 5981
+  Total number of atoms: 5983
   Number of models: 1
   Model: ""
     Number of chains: 1
     Chain: "A"
-      Number of atoms: 5981
+      Number of atoms: 5983
       Number of conformers: 1
       Conformer: ""

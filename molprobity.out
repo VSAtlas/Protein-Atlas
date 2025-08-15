@@ -26,10 +26,10 @@
 
   atoms                   ideal    model    delta   sigma  residual   deviation
    A  53  LYS  N
-   A  53  LYS CA
+   A  53  LYS  CA
    A  53  LYS  C         111.00    99.70    11.30  2.80e+00  1.63e+01   4.0*sigma
    B 265  LYS  N
-   B 265  LYS CA
+   B 265  LYS  CA
    B 265  LYS  C         111.00    99.77    11.23  2.80e+00  1.61e+01   4.0*sigma
 
   Min. delta:    0.000 (Z=  0.000)
@@ -914,18 +914,18 @@
     Min Nonbonded Distance : 2.512
   
   Molprobity Statistics.
-    All-atom Clashscore : 230.72
+    All-atom Clashscore : 4.29
     Ramachandran Plot:
-      Outliers :  0.00 %
-      Allowed  :  0.00 %
-      Favored  :  0.00 %
+      Outliers :  0.49 %
+      Allowed  :  2.43 %
+      Favored  : 97.09 %
     Rotamer:
-      Outliers :  0.00 %
-      Allowed  :  0.00 %
-      Favored  :  0.00 %
+      Outliers :  7.43 %
+      Allowed  :  2.57 %
+      Favored  : 90.00 %
     Cbeta Deviations :  0.00 %
     Peptide Plane:
-      Cis-proline     : 0.00 %
+      Cis-proline     : 11.11 %
       Cis-general     : 0.00 %
       Twisted Proline : 0.00 %
       Twisted General : 0.00 %
@@ -934,10 +934,10 @@
   Interpretation: bad |Rama-Z| > 3; suspicious 2 < |Rama-Z| < 3; good |Rama-Z| < 2.
   Scores for whole/helix/sheet/loop are scaled independently;
   therefore, the values are not related in a simple manner.
-    whole:  None (None), residues: 0
-    helix:  None (None), residues: 0
-    sheet:  None (None), residues: 0
-    loop :  None (None), residues: 0
+    whole: -0.98 (0.37), residues: 412
+    helix: -0.12 (0.28), residues: 252
+    sheet: -0.32 (1.02), residues: 20
+    loop : -1.52 (0.49), residues: 140
   
   Max deviation from planes:
      Type  MaxDev  MeanDev LineInFile
@@ -949,16 +949,18 @@
 
                      ----------Asn/Gln/His flips----------                     
 
+   A  82  GLN
    A 109  ASN
+   B 294  GLN
    B 321  ASN
 
 =================================== Summary ===================================
 
-  Ramachandran outliers =   0.00 %
-                favored =   0.00 %
-  Rotamer outliers      =   0.00 %
+  Ramachandran outliers =   0.49 %
+                favored =  97.09 %
+  Rotamer outliers      =   7.43 %
   C-beta deviations     =     0
-  Clashscore            = 230.72
+  Clashscore            =   4.29
   RMS(bonds)            =   0.0056
   RMS(angles)           =   1.24
-  MolProbity score      =   3.97
+  MolProbity score      =   2.03

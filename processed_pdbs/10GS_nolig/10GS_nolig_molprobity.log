@@ -57,19 +57,6 @@ Symmetry information was not found, putting molecule in P1 box.
             Not linked:
               pdbres="HOH B 422 "
               pdbres="HOH B 423 "
-
-List of CYS excluded from plausible disulfide bonds:
-  (reason: may participate in coordination)
-  ATOM    121  SG  CYS A  13      18.129   1.852  29.221  1.00  0.00           S
-  ATOM    409  SG  CYS A  46      14.304  11.197  35.554  1.00  0.00           S
-  ATOM    889  SG  CYS A 100      12.723   8.699  16.921  1.00  0.00           S
-  ATOM   1491  SG  CYS A 168      12.993  -7.986   9.287  1.00  0.00           S
-  ATOM   1964  SG  CYS B 225      20.802  22.248   5.584  1.00  0.00           S
-  ATOM   2252  SG  CYS B 258      20.106  12.681  -1.487  1.00  0.00           S
-  ATOM   2732  SG  CYS B 312      12.566  14.679  15.689  1.00  0.00           S
-  ATOM   3334  SG  CYS B 380       8.792  31.171  22.808  1.00  0.00           S
-
-  Number of resolved scattering type symbol conflicts: 416
   Number of atoms with unknown nonbonded energy type symbols: 20
     "ATOM      8  H   PRO A   1 .*.     H  "
     "ATOM     78  H   PRO A   8 .*.     H  "
@@ -82,7 +69,7 @@ List of CYS excluded from plausible disulfide bonds:
     "ATOM   1724  H   PRO A 195 .*.     H  "
     "ATOM   1781  H   PRO A 201 .*.     H  "
     ... (remaining 10 not shown)
-  Time building chain proxies: 0.52, per 1000 atoms: 0.14
+  Time building chain proxies: 0.55, per 1000 atoms: 0.15
   Number of scatterers: 3685
   At special positions: 0
   Unit cell: (53.611, 71.328, 63.728, 90, 90, 90)
@@ -160,11 +147,11 @@ List of CYS excluded from plausible disulfide bonds:
         Amino acid - RNA/DNA : False
       
   Number of custom bonds: simple=0, symmetry=0
-  Time building additional restraints: 0.34
+  Time building additional restraints: 0.37
   Adding C-beta torsion restraints...
-  Number of C-beta restraints generated:  0
+  Number of C-beta restraints generated:  760
 
-  Time building geometry restraints manager: 0.41 seconds
+  Time building geometry restraints manager: 0.42 seconds
 
   NOTE: a complete listing of the restraints can be obtained by requesting
         output of .geo file.
@@ -208,41 +195,41 @@ List of CYS excluded from plausible disulfide bonds:
   Bond angle restraints: 5310
   Sorted by residual:
   angle pdb=" N   LYS A  53 "
-        pdb="CA   LYS A  53 "
+        pdb=" CA  LYS A  53 "
         pdb=" C   LYS A  53 "
       ideal   model   delta    sigma   weight residual
      111.00   99.70   11.30 2.80e+00 1.28e-01 1.63e+01
   angle pdb=" N   LYS B 265 "
-        pdb="CA   LYS B 265 "
+        pdb=" CA  LYS B 265 "
         pdb=" C   LYS B 265 "
       ideal   model   delta    sigma   weight residual
      111.00   99.77   11.23 2.80e+00 1.28e-01 1.61e+01
   angle pdb=" N   ASP B 268 "
-        pdb="CA   ASP B 268 "
+        pdb=" CA  ASP B 268 "
         pdb=" C   ASP B 268 "
       ideal   model   delta    sigma   weight residual
      111.00  101.26    9.74 2.80e+00 1.28e-01 1.21e+01
   angle pdb=" N   ASP A  56 "
-        pdb="CA   ASP A  56 "
+        pdb=" CA  ASP A  56 "
         pdb=" C   ASP A  56 "
       ideal   model   delta    sigma   weight residual
      111.00  101.45    9.55 2.80e+00 1.28e-01 1.16e+01
   angle pdb=" N   GLY A  40 "
-        pdb="CA   GLY A  40 "
+        pdb=" CA  GLY A  40 "
         pdb=" C   GLY A  40 "
       ideal   model   delta    sigma   weight residual
      113.30  122.46   -9.16 2.90e+00 1.19e-01 9.99e+00
   ... (remaining 5305 not shown)
 
   Histogram of dihedral angle deviations from ideal:
-        0.00 -    17.19: 1412
+        0.00 -    17.19: 2172
        17.19 -    34.38: 100
        34.38 -    51.57: 45
        51.57 -    68.76: 11
        68.76 -    85.95: 8
-  Dihedral angle restraints: 1576
+  Dihedral angle restraints: 2336
     sinusoidal: 1138
-      harmonic: 438
+      harmonic: 1198
   Sorted by residual:
   dihedral pdb=" CB  GLU B 251 "
            pdb=" CG  GLU B 251 "
@@ -262,7 +249,7 @@ List of CYS excluded from plausible disulfide bonds:
            pdb=" OE1 GLU A  30 "
       ideal   model   delta sinusoidal    sigma   weight residual
        0.00   84.07  -84.07     1      3.00e+01 1.11e-03 9.56e+00
-  ... (remaining 1573 not shown)
+  ... (remaining 2333 not shown)
 
   Histogram of chiral volume deviations from ideal:
        0.001 -    0.057: 247
@@ -272,19 +259,19 @@ List of CYS excluded from plausible disulfide bonds:
        0.225 -    0.281: 17
   Chirality restraints: 504
   Sorted by residual:
-  chirality pdb="CA   ASN A 199 "
+  chirality pdb=" CA  ASN A 199 "
             pdb=" N   ASN A 199 "
             pdb=" C   ASN A 199 "
             pdb=" CB  ASN A 199 "
     both_signs  ideal   model   delta    sigma   weight residual
       False      2.51    2.23    0.28 2.00e-01 2.50e+01 1.98e+00
-  chirality pdb="CA   ASN B 411 "
+  chirality pdb=" CA  ASN B 411 "
             pdb=" N   ASN B 411 "
             pdb=" C   ASN B 411 "
             pdb=" CB  ASN B 411 "
     both_signs  ideal   model   delta    sigma   weight residual
       False      2.51    2.23    0.28 2.00e-01 2.50e+01 1.90e+00
-  chirality pdb="CA   LYS B 265 "
+  chirality pdb=" CA  LYS B 265 "
             pdb=" N   LYS B 265 "
             pdb=" C   LYS B 265 "
             pdb=" CB  LYS B 265 "
@@ -327,11 +314,11 @@ List of CYS excluded from plausible disulfide bonds:
 
   Histogram of nonbonded interaction distances:
         1.02 -     1.74: 20
-        1.74 -     2.45: 522
+        1.74 -     2.45: 557
         2.45 -     3.17: 6223
-        3.17 -     3.88: 10153
-        3.88 -     4.60: 14073
-  Nonbonded interactions: 30991
+        3.17 -     3.88: 10159
+        3.88 -     4.60: 14085
+  Nonbonded interactions: 31044
   Sorted by model distance:
   nonbonded pdb=" N   PRO B 213 "
             pdb=" H   PRO B 213 "
@@ -341,19 +328,19 @@ List of CYS excluded from plausible disulfide bonds:
             pdb=" H   PRO A   1 "
      model   vdw
      1.020 1.000
-  nonbonded pdb=" CD  PRO B 413 "
-            pdb=" H   PRO B 413 "
+  nonbonded pdb=" CA  PRO B 378 "
+            pdb=" H   PRO B 378 "
      model   vdw
      1.069 1.000
-  nonbonded pdb=" CD  PRO A   8 "
-            pdb=" H   PRO A   8 "
+  nonbonded pdb=" CA  PRO B 334 "
+            pdb=" H   PRO B 334 "
      model   vdw
      1.070 1.000
-  nonbonded pdb=" CD  PRO B 264 "
-            pdb=" H   PRO B 264 "
+  nonbonded pdb=" CA  PRO A  52 "
+            pdb=" H   PRO A  52 "
      model   vdw
      1.070 1.000
-  ... (remaining 30986 not shown)
+  ... (remaining 31039 not shown)
 
   NOTE: a complete listing of the restraints can be obtained by requesting
         output of .geo file.
@@ -387,10 +374,10 @@ End of input processing
 
   atoms                   ideal    model    delta   sigma  residual   deviation
    A  53  LYS  N
-   A  53  LYS CA
+   A  53  LYS  CA
    A  53  LYS  C         111.00    99.70    11.30  2.80e+00  1.63e+01   4.0*sigma
    B 265  LYS  N
-   B 265  LYS CA
+   B 265  LYS  CA
    B 265  LYS  C         111.00    99.77    11.23  2.80e+00  1.61e+01   4.0*sigma
 
   Min. delta:    0.000 (Z=  0.000)
@@ -1275,18 +1262,18 @@ End of input processing
     Min Nonbonded Distance : 2.512
   
   Molprobity Statistics.
-    All-atom Clashscore : 230.72
+    All-atom Clashscore : 4.29
     Ramachandran Plot:
-      Outliers :  0.00 %
-      Allowed  :  0.00 %
-      Favored  :  0.00 %
+      Outliers :  0.49 %
+      Allowed  :  2.43 %
+      Favored  : 97.09 %
     Rotamer:
-      Outliers :  0.00 %
-      Allowed  :  0.00 %
-      Favored  :  0.00 %
+      Outliers :  7.43 %
+      Allowed  :  2.57 %
+      Favored  : 90.00 %
     Cbeta Deviations :  0.00 %
     Peptide Plane:
-      Cis-proline     : 0.00 %
+      Cis-proline     : 11.11 %
       Cis-general     : 0.00 %
       Twisted Proline : 0.00 %
       Twisted General : 0.00 %
@@ -1295,10 +1282,10 @@ End of input processing
   Interpretation: bad |Rama-Z| > 3; suspicious 2 < |Rama-Z| < 3; good |Rama-Z| < 2.
   Scores for whole/helix/sheet/loop are scaled independently;
   therefore, the values are not related in a simple manner.
-    whole:  None (None), residues: 0
-    helix:  None (None), residues: 0
-    sheet:  None (None), residues: 0
-    loop :  None (None), residues: 0
+    whole: -0.98 (0.37), residues: 412
+    helix: -0.12 (0.28), residues: 252
+    sheet: -0.32 (1.02), residues: 20
+    loop : -1.52 (0.49), residues: 140
   
   Max deviation from planes:
      Type  MaxDev  MeanDev LineInFile
@@ -1310,19 +1297,21 @@ End of input processing
 
                      ----------Asn/Gln/His flips----------                     
 
+   A  82  GLN
    A 109  ASN
+   B 294  GLN
    B 321  ASN
 
 =================================== Summary ===================================
 
-  Ramachandran outliers =   0.00 %
-                favored =   0.00 %
-  Rotamer outliers      =   0.00 %
+  Ramachandran outliers =   0.49 %
+                favored =  97.09 %
+  Rotamer outliers      =   7.43 %
   C-beta deviations     =     0
-  Clashscore            = 230.72
+  Clashscore            =   4.29
   RMS(bonds)            =   0.0056
   RMS(angles)           =   1.24
-  MolProbity score      =   3.97
+  MolProbity score      =   2.03
 
 Results written to molprobity.out
 Wrote script for Coot: molprobity_coot.py

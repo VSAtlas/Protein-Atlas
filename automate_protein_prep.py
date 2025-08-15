@@ -183,22 +183,73 @@ def file_was_reduced(pdb_path: str | Path) -> bool:
     return False
 
 def fix_element_columns_in_file(src: str | Path, dst: str | Path) -> None:
-    """Fill empty element columns using atom-name heuristics."""
-    out_lines: List[str] = []
-    with open(src) as f:
-        for line in f:
-            if line.startswith(("ATOM", "HETATM")):
-                el = line[76:78].strip()
-                if not el:
-                    name = line[12:16]
-                    c = name[1] if name[0] == " " else name[0]
-                    c2 = (name[2] if name[0] == " " else name[1]).strip()
-                    cand = (c + c2).upper()
-                    el = cand if cand in _TWO_LETTER else c.upper()
-                line = line[:76] + f"{el:>2}" + line[78:]
-            out_lines.append(line)
-    with open(dst, "w") as out:
-        out.writelines(out_lines)
+    """
+    Rewrite element columns using residue-aware rules:
+      - If residue looks peptide-like (has N/CA/C/O or OXT etc.), derive from atom name (CA -> C).
+      - If residue is a likely ion (resname in METALS) and has <=2 atoms, force the ion element (e.g., CA).
+      - Otherwise, derive from atom name safely.
+    """
+    METALS = {
+        "ZN","FE","MG","MN","CU","NI","CO","NA","K","CA","CL","BR","SR","BA","CD","HG"
+    }
+    PEPTIDEY = {
+        "N","CA","C","O","OXT","CB","CG","CD","CE","CZ","SG",
+        "ND","NE","OD","OE","SD","NZ","OH","CH","CZ1","CZ2","CD1","CD2","CE1","CE2","CE3"
+    }
+
+    def derive_from_name(aname: str) -> str:
+        an = aname.strip().upper()
+        if an[:2] in {"OE","NE","OD","ND","SD"}: return an[0]
+        if an.startswith("OXT"): return "O"
+        if an and an[0].isalpha(): return an[0]
+        for ch in an:
+            if ch.isalpha(): return ch
+        return "C"
+
+    from collections import defaultdict
+    residues = defaultdict(list)  # key -> list of (idx,line)
+    lines = open(src, "r", encoding="utf-8", errors="ignore").read().splitlines(True)
+
+    for i, line in enumerate(lines):
+        if line.startswith(("ATOM  ","HETATM")):
+            chain = line[21]
+            resseq = line[22:26]
+            icode = line[26]
+            resname = line[17:20].strip().upper()
+            key = (chain, resseq, icode, resname)
+            residues[key].append((i, line))
+
+    def is_peptidic_like(atom_lines):
+        names = [(ln[12:16].strip().upper()) for _, ln in atom_lines]
+        if not names: return False
+        hits = sum((n in PEPTIDEY) or (n[:2] in {"OE","NE","OD","ND","SD"}) for n in names)
+        return hits >= max(4, 0.6*len(names))
+
+    def is_ion_like(resname, atom_lines):
+        # true ions are single atoms (sometimes altLoc duplicates) → ≤2 lines total
+        return (resname in METALS) and (len(atom_lines) <= 2)
+
+    for key, atom_lines in residues.items():
+        chain, resseq, icode, resname = key
+        pep_like = is_peptidic_like(atom_lines)
+        ion_like = is_ion_like(resname, atom_lines)
+        for idx, old in atom_lines:
+            if not old.startswith(("ATOM  ","HETATM")):
+                continue
+            aname = old[12:16]
+            if pep_like:
+                el = derive_from_name(aname)               # CA -> C for backbone CA
+            elif ion_like:
+                el = resname[:2] if len(resname) >= 2 else derive_from_name(aname)  # CA -> CA
+            else:
+                el = derive_from_name(aname)
+            lines[idx] = old[:76] + f"{el:>2}" + old[78:]
+
+    with open(dst, "w", encoding="utf-8") as out:
+        out.writelines(lines)
+
+
+
 
 # =============================
 # Structural Cleaning Utilities
@@ -681,6 +732,63 @@ def strip_nonstandard_residues(input_pdb: str | Path, output_pdb: str | Path) ->
                      pocket_center[0], pocket_center[1], pocket_center[2])
     return len(removed), str(output_pdb)
 
+def log_metal_mislabels(pdb_path: str | Path):
+    metal_names = {"NA","K","CA","MG","MN","FE","CO","NI","CU","ZN","CL","BR"}
+    mis = {}
+    with open(pdb_path) as f:
+        for ln in f:
+            if not ln.startswith(("ATOM","HETATM")): continue
+            resname = ln[17:20].strip().upper()
+            aname   = ln[12:16].strip().upper()
+            elem    = ln[76:78].strip().upper()
+            if resname in metal_names and elem not in {resname[:2], "H"}:
+                mis.setdefault(resname, 0); mis[resname] += 1
+    if mis:
+        logging.warning("Possible mislabels in metal residues: %s", mis)
+
+def quick_element_histogram(pdb_path: str | Path) -> None:
+    """Log a compact element histogram to catch mislabel floods quickly."""
+    from collections import Counter
+    cnt = Counter()
+    with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if ln.startswith(("ATOM","HETATM")):
+                el = ln[76:78].strip().upper()
+                cnt[el or ""] += 1
+    logging.info("[Elem histogram %s] %s", os.path.basename(str(pdb_path)), dict(sorted(cnt.items())))
+
+def assert_no_metal_in_peptidic(pdb_path: str | Path) -> None:
+    """
+    Warn if any peptide-like residue (backbone-like atom names) contains metal/ion elements.
+    This should never happen after proper element rewriting; flags severely broken inputs.
+    """
+    METALS = {"NA","K","CA","MG","MN","FE","CO","NI","CU","ZN","CL","BR"}
+    PEPTIDEY = {"N","CA","C","O","OXT","CB","CG","CD","CE","CZ","SG",
+                "ND","NE","OD","OE","SD","NZ","OH","CH","CZ1","CZ2","CD1","CD2","CE1","CE2","CE3"}
+
+    from collections import defaultdict
+    res_atoms = defaultdict(list)
+
+    with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if ln.startswith(("ATOM  ","HETATM")):
+                key = (ln[21], ln[22:26], ln[26], ln[17:20].strip().upper())
+                res_atoms[key].append(ln)
+
+    offenders = []
+    for key, lines in res_atoms.items():
+        names = [ln[12:16].strip().upper() for ln in lines]
+        if not names:
+            continue
+        pep_like = sum((n in PEPTIDEY) or (n[:2] in {"OE","NE","OD","ND","SD"}) for n in names) >= max(4, 0.6*len(names))
+        if not pep_like:
+            continue
+        if any(ln[76:78].strip().upper() in METALS for ln in lines):
+            offenders.append(key)
+
+    if offenders:
+        logging.warning("Peptide-like residues contain metal elements (check upstream labeling): %s", offenders)
+
 # =============================
 # End-to-end Cleaning Pipeline
 # =============================
@@ -713,9 +821,10 @@ def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
     # 2) Element fix → MODELLER loop fill → element fix again (defensive)
     fixed_elements_pdb = os.path.join(output_dir, f"{pdb_id}_elemfix.pdb")
     fix_element_columns_in_file(stripped_pdb, fixed_elements_pdb)
-
+    log_metal_mislabels(fixed_elements_pdb)
     loop_fixed_pdb = build_missing_loops(fixed_elements_pdb, output_dir)
     fix_element_columns_in_file(loop_fixed_pdb, loop_fixed_pdb)
+    log_metal_mislabels(loop_fixed_pdb)
 
     # 3) Incomplete residue visibility
     invalid_residues = find_invalid_atoms(loop_fixed_pdb)
@@ -773,6 +882,8 @@ def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
 
     # Final element fix (+ external fix for anything pdbtools changed)
     fix_pdb_elements(reduced_pdb)
+    # (2) quick histogram on the reduced file
+    quick_element_histogram(reduced_pdb)
 
     cleaned_pdb = os.path.abspath(os.path.join(output_dir, f"{pdb_id}_cleaned.pdb")).replace("\\", "/")
     # Respect WATER_POLICY here so Phenix doesn't strip waters you decided to keep  # << UPDATED
@@ -782,6 +893,10 @@ def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
 
     # One more element sanity pass in case pdbtools touched columns
     fix_pdb_elements(cleaned_pdb)
+    # (2) histogram and (3) peptide-like metal check on the final file
+    quick_element_histogram(cleaned_pdb)
+    assert_no_metal_in_peptidic(cleaned_pdb)
+
     assert file_contains_hydrogens(cleaned_pdb), f"[FATAL] Cleaned file lost hydrogens: {cleaned_pdb}"
 
     # 7) MolProbity report (non-blocking)

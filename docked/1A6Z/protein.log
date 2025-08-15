@@ -3326,3 +3326,45 @@
 2025-08-14 17:46:15,545 - INFO - fda_0745.pdbqt validation: {'valid': True, 'distance_to_surface': 1.9040793050710871, 'distance_to_pocket': 1.9040793050710871, 'clash_count': 3, 'hydrogen_bonds': 50, 'lipinski': None, 'reason': 'Valid pose'}
 2025-08-14 17:46:26,620 - INFO - fda_1985.pdbqt validation: {'valid': True, 'distance_to_surface': 1.7440946075256365, 'distance_to_pocket': 1.7440946075256365, 'clash_count': 1, 'hydrogen_bonds': 62, 'lipinski': None, 'reason': 'Valid pose'}
 2025-08-14 17:46:28,118 - INFO - fda_2283.pdbqt validation: {'valid': True, 'distance_to_surface': 2.358493375017196, 'distance_to_pocket': 2.358493375017196, 'clash_count': 0, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:52:17,115 - INFO - Processing protein: 1A6Z.pdb (id=1A6Z)
+2025-08-15 11:52:17,126 - INFO - Extracted 0 ligands -> E:\PythonProject\protein_automation\processed_pdbs\1A6Z\1A6Z_cleaned_ligands
+2025-08-15 11:52:17,127 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2025-08-15 11:52:53,520 - INFO - Valid .pdbqt ligands (global): 11
+2025-08-15 11:52:53,521 - INFO - Ligands queued for docking: 11
+2025-08-15 11:52:53,523 - INFO - Starting stage1 with 11 ligands...
+2025-08-15 11:53:02,213 - INFO - fda_0003_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:53:02,245 - INFO - fda_0003.pdbqt validation: {'valid': True, 'distance_to_surface': 2.7363080966879423, 'distance_to_pocket': 2.7363080966879423, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:03,409 - INFO - fda_0007_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:53:03,437 - INFO - fda_0007.pdbqt validation: {'valid': True, 'distance_to_surface': 2.4341031202477805, 'distance_to_pocket': 2.4341031202477805, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:04,839 - INFO - MES_A211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:53:04,878 - INFO - MES_A211.pdbqt validation: {'valid': True, 'distance_to_surface': 3.742244647267196, 'distance_to_pocket': 3.742244647267196, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:05,212 - INFO - MES_B211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:53:05,259 - INFO - MES_B211.pdbqt validation: {'valid': True, 'distance_to_surface': 2.992072525858952, 'distance_to_pocket': 2.992072525858952, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:08,638 - INFO - fda_0002_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:53:08,691 - INFO - fda_0002.pdbqt validation: {'valid': True, 'distance_to_surface': 3.1612234973187205, 'distance_to_pocket': 3.1612234973187205, 'clash_count': 1, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:16,049 - INFO - fda_0005_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:53:16,158 - INFO - fda_0005.pdbqt validation: {'valid': True, 'distance_to_surface': 2.488373967071668, 'distance_to_pocket': 2.488373967071668, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:16,412 - INFO - fda_0006_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:53:16,455 - INFO - fda_0006.pdbqt validation: {'valid': True, 'distance_to_surface': 2.153569594881948, 'distance_to_pocket': 2.153569594881948, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:18,028 - INFO - fda_0009_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:53:18,082 - INFO - fda_0009.pdbqt validation: {'valid': True, 'distance_to_surface': 2.05350675674564, 'distance_to_pocket': 2.05350675674564, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:35,326 - INFO - fda_0008_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:53:35,448 - INFO - fda_0008.pdbqt validation: {'valid': True, 'distance_to_surface': 1.7257850387577238, 'distance_to_pocket': 1.7257850387577238, 'clash_count': 2, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:36,249 - INFO - fda_0001_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:53:36,354 - INFO - fda_0001.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1595087404314914, 'distance_to_pocket': 2.1595087404314914, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:44,501 - INFO - fda_0004_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:53:44,949 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.217557665541078, 'distance_to_pocket': 2.217557665541078, 'clash_count': 0, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:53:44,958 - INFO - Early recenter skipped: evaluated=11 < threshold.
+2025-08-15 11:53:44,958 - INFO - Adaptive shrink: median dist 2.43 Å -> box (40.0, 40.0, 40.0) -> (36.0, 36.0, 36.0)
+2025-08-15 11:53:44,958 - INFO - Selected top 1 ligands (5.00000%) for the next stage.
+2025-08-15 11:53:44,963 - INFO - Starting stage2 with 1 ligands...
+2025-08-15 11:55:43,089 - INFO - fda_0004_stage2.pdbqt: RMSD filter kept 2, removed 8 duplicate poses.
+2025-08-15 11:55:43,200 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.403494747237863, 'distance_to_pocket': 2.403494747237863, 'clash_count': 0, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:55:43,201 - INFO - Adaptive shrink: median dist 2.40 Å -> box (36.0, 36.0, 36.0) -> (32.0, 32.0, 32.0)
+2025-08-15 11:55:43,201 - INFO - Selected top 1 ligands (0.50000%) for the next stage.
+2025-08-15 11:55:43,204 - INFO - Starting stage3 with 1 ligands...
+2025-08-15 11:59:35,211 - INFO - fda_0004_stage3.pdbqt: RMSD filter kept 2, removed 18 duplicate poses.
+2025-08-15 11:59:35,337 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.3616919782223937, 'distance_to_pocket': 2.3616919782223937, 'clash_count': 0, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:59:35,339 - INFO - Adaptive shrink: median dist 2.36 Å -> box (32.0, 32.0, 32.0) -> (28.0, 28.0, 28.0)
+2025-08-15 11:59:35,388 - INFO - [Polypharmacology] Selected top 1 ligands for images/validation.
+2025-08-15 11:59:40,174 - INFO - Score summary written: E:/PythonProject/protein_automation/docked\1A6Z\docking_score_summary.csv

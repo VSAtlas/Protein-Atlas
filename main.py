@@ -1,20 +1,19 @@
-"""
-High-level pipeline for multi-stage docking.
-
-Phases per protein:
-1) Setup & logging
-2) Extract ligands and generate a ligand-free PDB
-3) Protein preparation (clean PDB + receptor PDBQT), reuse if cached
-4) Active-site detection (center, box size)
-5) Ligand preparation & filtering
-6) Multi-stage docking with early/fallback recenter heuristics + CenterSelector
-7) Final pose validation & optional screenshots
-8) Write per-protein score CSV
-"""
+# High-level pipeline for multi-stage docking.
+#
+# Phases per protein:
+# 1) Setup & logging
+# 2) Extract ligands and generate a ligand-free PDB
+# 3) Protein preparation (clean PDB + receptor PDBQT), reuse if cached
+# 4) Active-site detection (center, box size)
+# 5) Ligand preparation & filtering
+# 6) Multi-stage docking with early/fallback recenter heuristics + CenterSelector
+# 7) Final pose validation & optional screenshots
+# 8) Write per-protein score CSV
 
 from __future__ import annotations
 
 import sys
+
 if hasattr(sys.stdout, "reconfigure"):  # Py3.7+
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -23,7 +22,7 @@ import os
 import time
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,8 +47,6 @@ from run_vina import run_docking_task, validate_all_poses
 # ======================
 # Data models & utilities
 # ======================
-from dataclasses import dataclass, field
-from typing import Dict, Any, List
 
 @dataclass
 class RetryManager:
@@ -82,6 +79,7 @@ class RetryManager:
                 p[k] = v
         return p
 
+
 @dataclass
 class RecenterParams:
     """Thresholds for early/fallback recenter heuristics."""
@@ -90,7 +88,28 @@ class RecenterParams:
     EARLY_RECENTER_FAR_A: float = 15.0
     EARLY_RECENTER_MEDIAN_A: float = 10.0
     ALLOW_BOX_EXPAND: bool = True
-    MAX_RECENTER_ATTEMPTS: int = 3
+    MAX_RECENTER_ATTEMPTS: int = 1  # tightened: fewer early recenter tries
+
+
+@dataclass
+class GlobalCenterGuard:
+    """
+    Tracks and gates any GLOBAL center changes (early recenter, empty-stage fallback, CenterSelector promotion).
+    Ensures: (1) hard cap on total global switches, (2) at most one per stage, (3) control anchoring respected.
+    """
+    max_global_switches: int = 2
+    global_switches: int = 0
+    switched_this_stage: bool = False
+
+    def reset_stage(self):
+        self.switched_this_stage = False
+
+    def can_switch(self) -> bool:
+        return (not self.switched_this_stage) and (self.global_switches < self.max_global_switches)
+
+    def mark_switch(self):
+        self.global_switches += 1
+        self.switched_this_stage = True
 
 
 @dataclass
@@ -119,11 +138,11 @@ def get_recenter_params(cfg: Dict) -> RecenterParams:
         EARLY_RECENTER_FAR_A=float(cfg.get("EARLY_RECENTER_FAR_A", 15.0)),
         EARLY_RECENTER_MEDIAN_A=float(cfg.get("EARLY_RECENTER_MEDIAN_A", 10.0)),
         ALLOW_BOX_EXPAND=bool(cfg.get("ALLOW_BOX_EXPAND", True)),
-        MAX_RECENTER_ATTEMPTS=int(cfg.get("MAX_RECENTER_ATTEMPTS", 3)),
+        MAX_RECENTER_ATTEMPTS=int(cfg.get("MAX_RECENTER_ATTEMPTS", 1)),  # stricter default
     )
 
 
-def make_protein_logger(docked_dir: str, pdb_id: str) -> logging.Logger:
+def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logger:
     """
     Create a logger writing to DOCKED_DIR/<pdb_id>/protein.log and also to console.
     Keeps logs per-protein and avoids duplicate handlers.
@@ -146,7 +165,11 @@ def make_protein_logger(docked_dir: str, pdb_id: str) -> logging.Logger:
     fh.setFormatter(formatter)
 
     ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
+    # Console quieter if QUIET_CONSOLE (env override supported)
+    env_override = os.environ.get("QUIET_CONSOLE_OVERRIDE", "").strip()
+    quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else bool(cfg.get("QUIET_CONSOLE", True))
+    ch_level = logging.WARNING if quiet else logging.INFO
+    ch.setLevel(ch_level)
     ch.setFormatter(formatter)
 
     logger.addHandler(fh)
@@ -156,10 +179,7 @@ def make_protein_logger(docked_dir: str, pdb_id: str) -> logging.Logger:
 
 
 def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
-    """
-    Build common paths for a protein and ensure necessary folders exist.
-    This keeps path construction in one place for readability.
-    """
+    """Build common paths for a protein and ensure necessary folders exist."""
     pdb_id = base_id
     ligand_output_dir = Path(cfg["OUTPUT_DIR"]) / pdb_id / f"{pdb_id}_cleaned_ligands"
     ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
@@ -188,8 +208,6 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
 
 
 # --------- extra helpers (easy-win features) ---------
-
-# Map validator/reported reasons to retry categories understood by RetryManager
 def _map_reason_to_category(reason: str) -> str:
     if not reason:
         return "no_valid_pose"
@@ -203,6 +221,7 @@ def _map_reason_to_category(reason: str) -> str:
     if "no pose" in r or "no_valid" in r or "all_poses_invalid" in r:
         return "no_valid_pose"
     return "no_valid_pose"
+
 
 # --------- improved checkpointing (fingerprinted) ---------
 def _file_md5(path: str, blocksize: int = 1 << 20) -> Optional[str]:
@@ -220,7 +239,6 @@ def _file_md5(path: str, blocksize: int = 1 << 20) -> Optional[str]:
 
 
 def _round_tuple(t: Tuple[float, float, float], ndp: int = 1) -> Tuple[float, float, float]:
-    # round to 0.1 Å to avoid float noise triggering spurious invalidation
     return tuple(None if (x is None) else round(float(x), ndp) for x in t)
 
 
@@ -229,10 +247,6 @@ def _fingerprint_stage(cfg: Dict,
                        center: Tuple[float, float, float],
                        box_size: Tuple[float, float, float],
                        stage: Dict) -> Dict[str, Any]:
-    """
-    Minimal but robust fingerprint that defines the 'work' of a stage.
-    If any of this changes, the stage must be re-run.
-    """
     rec_hash = _file_md5(receptor_pdbqt) if receptor_pdbqt else None
     stage_keys = ["name", "size", "exhaustiveness", "energy_range", "num_modes", "seed"]
     stage_core = {k: stage.get(k) for k in stage_keys if k in stage}
@@ -243,7 +257,7 @@ def _fingerprint_stage(cfg: Dict,
         "stage": stage_core,
         "vina_exe": str(cfg.get("VINA_EXE", "")),
         "threads_per_vina": int(cfg.get("THREADS_PER_VINA", 1)),
-        "version_tag": "ckpt_v2",  # bump if fingerprint schema changes
+        "version_tag": "ckpt_v2",
     }
 
 
@@ -255,9 +269,6 @@ def checkpoint_should_skip(cfg: Dict,
                            pdb_id: str,
                            stage_name: str,
                            fingerprint: Dict[str, Any]) -> bool:
-    """
-    Return True if an existing checkpoint matches the current fingerprint closely enough.
-    """
     p = _checkpoint_path(cfg, pdb_id, stage_name)
     if not p.exists():
         return False
@@ -281,10 +292,6 @@ def checkpoint_mark_done(cfg: Dict,
 
 
 def checkpoint_invalidate_from(cfg: Dict, pdb_id: str, stages: List[Dict], start_index: int) -> None:
-    """
-    If we change center/box mid-run (e.g., via fallback recenter or CenterSelector),
-    invalidate checkpoints for this and all later stages to avoid stale skips.
-    """
     for j in range(start_index, len(stages)):
         try:
             _checkpoint_path(cfg, pdb_id, stages[j]["name"]).unlink(missing_ok=True)
@@ -302,8 +309,8 @@ def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
     except Exception:
         pass
 
+
 def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
-    """Quick guard against empty/degenerate receptor pdbqt files."""
     try:
         atoms = 0
         any_nonzero = False
@@ -325,12 +332,7 @@ def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
 # ======================
 # Phase 1–5: Prep steps
 # ======================
-
 def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int, set]:
-    """
-    Extract ligands and output a ligand-free PDB at `nolig_pdb_path`.
-    Returns (num_extracted, control_stems) where control_stems are names/stems of extracted ligands.
-    """
     malformed_log = paths.ligands_mol2_dir / "malformed_ligands.txt"
     if malformed_log.exists():
         malformed_log.unlink()
@@ -340,7 +342,6 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
     )
     logger.info(f"Extracted {len(ligands_dict)} ligands -> {paths.ligand_output_dir}")
 
-    # Build a set of control ligand stems based on what was written out
     control_stems = set()
     for ext in (".mol2", ".pdb", ".sdf"):
         for p in paths.ligand_output_dir.rglob(f"*{ext}"):
@@ -350,12 +351,6 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
 
 
 def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Create/reuse:
-      - cleaned PDB without ligands (Phenix/Reduce/etc. via automate_protein_prep)
-      - receptor PDBQT (copied into canonical PDBQT_DIR if generated elsewhere)
-    Returns normalized (cleaned_pdb, receptor_pdbqt) or (None, None) on failure.
-    """
     import automate_protein_prep
     from distutils.util import strtobool
 
@@ -368,7 +363,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
     if paths.cleaned_pdb_path.exists() and paths.receptor_pdbqt_path.exists() and not force_reprocess:
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
-        # Sanity check receptor (optional even when reusing)
         try:
             if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)) and not receptor_sanity_check(str(paths.receptor_pdbqt_path)):
                 logger.warning("Receptor sanity check failed (cached receptor).")
@@ -384,7 +378,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
     cleaned_pdb, receptor_pdbqt = result
 
-    # Ensure receptor is placed in canonical PDBQT_DIR
     try:
         if Path(receptor_pdbqt).resolve() != paths.receptor_pdbqt_path.resolve():
             from shutil import copy2
@@ -394,7 +387,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     except Exception as e:
         logger.warning(f"Could not relocate receptor PDBQT: {e}")
 
-    # Sanity check receptor (optional)
     try:
         if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)):
             ok = receptor_sanity_check(receptor_pdbqt)
@@ -408,10 +400,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
 
 def detect_pocket(cleaned_pdb: str, logger: logging.Logger) -> Tuple[Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float]]]:
-    """
-    Detect binding-site center and box size from the cleaned PDB.
-    Returns (center, box_size) or (None, None) on failure.
-    """
     center, box_size = detect_active_site(cleaned_pdb)
     if center is None:
         logger.warning("Active-site detection failed.")
@@ -419,10 +407,6 @@ def detect_pocket(cleaned_pdb: str, logger: logging.Logger) -> Tuple[Optional[Tu
 
 
 def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
-    """
-    Count non-hydrogen atoms from a PDBQT file without RDKit.
-    Uses element column if present, otherwise falls back to atom name.
-    """
     heavy = 0
     with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -433,7 +417,6 @@ def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
                 if element.upper() != "H":
                     heavy += 1
             else:
-                # fallback: parse atom name field
                 atom_name = line[12:16].strip()
                 if not atom_name.upper().startswith("H"):
                     heavy += 1
@@ -441,33 +424,18 @@ def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
 
 
 def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int]]:
-    """
-    Prepare ligands and build the docking set from the global prepped library:
-      - Preps any ligands extracted from this protein (kept for 'controls')
-      - Collects ALL valid *.pdbqt ligands under OUTPUT_LIGANDS_DIR recursively
-      - Validates basic PDBQT structure with is_valid_ligand
-      - Computes heavy-atom counts directly from PDBQT (no RDKit dependency)
-      - Optional sampling/limiting via config to control runtime in stage1
-
-    Returns:
-      ligands_to_dock: [normalized pdbqt paths]
-      heavy_atom_counts: {normalized pdbqt path -> int heavy atoms}
-    """
-    # Still prep per-protein extracted ligands (controls etc.)
     prep_ligands_from_pdb(
         ligand_output_dir=paths.ligand_output_dir,
         ligands_mol2_dir=paths.ligands_mol2_dir,
         prepped_ligands_dir=paths.prepped_ligands_dir,
     )
 
-    # 1) Collect the entire prepped library (*.pdbqt) globally
     lib_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
     all_pdbqt_paths = list(lib_root.rglob("*.pdbqt"))
     if not all_pdbqt_paths:
         logger.warning("No .pdbqt ligands found under OUTPUT_LIGANDS_DIR; nothing to dock.")
         return [], {}
 
-    # 2) Validate and deduplicate by stem
     seen_stems: set = set()
     valid_pdbqt: Dict[str, Path] = {}
     valid_count = 0
@@ -484,8 +452,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     logger.info(f"Valid .pdbqt ligands (global): {valid_count}")
 
-    # 2.5) Optional light name blacklist based on stems
-    pains_tokens = [t.strip().upper() for t in str(cfg.get("PAINS_NAMES","")).split(",") if t.strip()]
+    pains_tokens = [t.strip().upper() for t in str(cfg.get("PAINS_NAMES", "")).split(",") if t.strip()]
     if pains_tokens:
         before = len(valid_pdbqt)
         valid_pdbqt = {
@@ -496,7 +463,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         if removed > 0:
             logger.info(f"Name blacklist removed {removed} ligands (PAINS_NAMES).")
 
-    # 3) Build docking list + heavy atom counts (from PDBQT directly)
     ligands_to_dock: List[str] = []
     heavy_atom_counts: Dict[str, int] = {}
     for stem, p in valid_pdbqt.items():
@@ -508,7 +474,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         ligands_to_dock.append(lig_norm)
         heavy_atom_counts[lig_norm] = int(ha)
 
-    # 4) Optional runtime control knobs for stage1 (purely convenience)
     import random
     sample_n = int(cfg.get("LIBRARY_SAMPLE_N", 0) or 0)
     limit_n  = int(cfg.get("LIBRARY_LIMIT", 0) or 0)
@@ -531,7 +496,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 # ======================
 # Phase 6: Docking loop
 # ======================
-
 def run_one_stage(
     cfg: Dict,
     pdb_id: str,
@@ -541,25 +505,14 @@ def run_one_stage(
     stage: Dict,
     ligands: List[str],
     logger: logging.Logger,
-    retry_mgr: RetryManager,  # <-- added
+    retry_mgr: RetryManager,
 ) -> Tuple[
-    Dict[str, float],                 # scores (valid)
-    List[str],                        # validated_ligands
-    List[float],                      # all_distances
-    Dict[str, str],                   # raw_docked_ligands {lig -> pose_path}
-    Dict[str, Tuple[Optional[float], str]]  # invalids {lig -> (score_or_None, reason)}
+    Dict[str, float],
+    List[str],
+    List[float],
+    Dict[str, str],
+    Dict[str, Tuple[Optional[float], str]]
 ]:
-    """
-    Run one docking stage in parallel:
-    - Generates configs (THREADS_PER_VINA default 1 to avoid oversubscription)
-    - Runs Vina tasks
-    - Validates poses and returns:
-        scores: {ligand_path -> float score} for valid poses
-        validated_ligands: subset with valid poses
-        all_distances: list of distances to pocket for heuristic checks
-        raw_docked_ligands: {ligand_path -> out_pose_path}
-        invalids: {ligand_path -> (score or None, reason)}
-    """
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     max_workers = int(cfg["MAX_PARALLEL_JOBS"])
 
@@ -574,15 +527,18 @@ def run_one_stage(
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
         for lig in ligands:
+            stage_for_cfg = dict(stage)
+            stage_for_cfg["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
+
             conf_path, out_path = generate_config(
                 cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
-                lig, stage["name"], stage, threads_per_vina
+                lig, stage["name"], stage_for_cfg, threads_per_vina
             )
+
             lig_n, out_n = norm(lig), norm(out_path)
             raw_docked_ligands[lig_n] = out_n
             futures[pool.submit(run_docking_task, cfg["VINA_EXE"], conf_path, lig, out_path)] = (lig_n, out_n)
 
-        # --- per-stage audit hook (first 10 ligands) ---
         try:
             audit_path = Path(cfg["DOCKED_DIR"]) / pdb_id / f"{stage['name']}_ligand_audit.txt"
             audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -593,7 +549,6 @@ def run_one_stage(
                     af.write(f" - {os.path.basename(ln)}\n")
         except Exception as _e:
             logger.warning(f"Audit hook failed: {_e}")
-        # ------------------------------------------------
 
         with tqdm(total=len(futures), desc=f"Docking ({stage['name']})", unit="ligand") as pbar:
             for fut in as_completed(futures):
@@ -613,7 +568,6 @@ def run_one_stage(
                     pbar.update(1)
                     continue
 
-                # --- prune near-identical poses in-place ---
                 try:
                     kept, removed = filter_and_rewrite_poses_by_rmsd(
                         out_path,
@@ -625,7 +579,6 @@ def run_one_stage(
                             f"{os.path.basename(out_path)}: RMSD filter kept {kept}, removed {removed} duplicate poses.")
                 except Exception as e:
                     logger.warning(f"RMSD filtering failed for {os.path.basename(out_path)}: {e}")
-                # -----------------------------------------------
 
                 result = validate_pose_pdbqt(
                     protein_pdbqt=receptor_pdbqt,
@@ -648,7 +601,6 @@ def run_one_stage(
                     print(f"{lig_name} | {stage['name']} score: {score:.2f} kcal/mol (valid)")
                     pbar.update(1)
                 else:
-                    # ---------- optional near-miss rescue (single retry) ----------
                     did_retry = False
                     if bool(cfg.get("RETRY_NEAR_MISS", True)):
                         try:
@@ -658,6 +610,7 @@ def run_one_stage(
                                 did_retry = True
                                 stage_retry = dict(stage)
                                 stage_retry["name"] = f"{stage['name']}_retry"
+                                stage_retry["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
                                 try:
                                     ex0 = int(stage_retry.get("exhaustiveness", 8))
                                 except Exception:
@@ -669,10 +622,8 @@ def run_one_stage(
                                     cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
                                     lig, stage_retry["name"], stage_retry, threads_per_vina
                                 )
-                                # run docking again synchronously
                                 _, score2 = run_docking_task(cfg["VINA_EXE"], conf_path2, lig, out_path2)
 
-                                # prune & re-validate the retry pose
                                 try:
                                     filter_and_rewrite_poses_by_rmsd(
                                         out_path2,
@@ -696,28 +647,26 @@ def run_one_stage(
                                 if result2.get("valid", False):
                                     scores[lig] = float(score2)
                                     validated_ligands.append(lig)
-                                    raw_docked_ligands[lig] = norm(out_path2)  # point to rescued pose
+                                    raw_docked_ligands[lig] = norm(out_path2)
                                     print(f"{lig_name} | {stage_retry['name']} score: {score2:.2f} kcal/mol (rescued)")
                                     pbar.update(1)
-                                    continue  # move on to next ligand
+                                    continue
                         except Exception as _e:
                             logger.warning(f"Retry path failed for {lig_name}: {_e}")
 
-                    # ---------- failure queue retries (category-driven) ----------
                     err_cat = _map_reason_to_category(result.get("reason", ""))
                     attempt = 0
-                    retained_invalid = True  # assume failure stays till we flip it
+                    retained_invalid = True
 
                     while attempt < retry_mgr.max_retries:
                         recipe = retry_mgr.apply(stage, err_cat, attempt)
                         if not recipe:
                             break
 
-                        # Compose a ligand-specific retry stage
                         stage_retry2 = dict(stage)
-                        stage_retry2["name"] = f"{stage['name']}_r{attempt+1}"
+                        stage_retry2["name"] = f"{stage['name']}_r{attempt + 1}"
+                        stage_retry2["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
 
-                        # Mutate docking params from recipe
                         if "exhaustiveness" in recipe:
                             stage_retry2["exhaustiveness"] = recipe["exhaustiveness"]
                         if "num_modes" in recipe:
@@ -729,7 +678,6 @@ def run_one_stage(
                                 base_seed = 0
                             stage_retry2["seed"] = base_seed + (attempt + 1) * 137
 
-                        # Per-ligand recenter/box tweak (doesn't affect other ligands)
                         retry_center = center
                         retry_box = box_size
                         try:
@@ -751,7 +699,6 @@ def run_one_stage(
                         except Exception as _e:
                             logger.warning(f"Retry recenter/box tweak failed: {_e}")
 
-                        # Generate retry config & re-dock synchronously for this ligand
                         conf_path3, out_path3 = generate_config(
                             cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, retry_center, retry_box,
                             lig, stage_retry2["name"], stage_retry2, threads_per_vina
@@ -763,7 +710,6 @@ def run_one_stage(
                             attempt += 1
                             continue
 
-                        # prune & re-validate
                         try:
                             filter_and_rewrite_poses_by_rmsd(
                                 out_path3,
@@ -784,7 +730,7 @@ def run_one_stage(
                             surface_atom_coords=surface_coords
                         )
 
-                        logger.info(f"{lig_name} retry#{attempt+1} ({err_cat}) -> {result_r}")
+                        logger.info(f"{lig_name} retry#{attempt + 1} ({err_cat}) -> {result_r}")
                         if result_r.get("valid", False) and score_r is not None:
                             scores[lig] = float(score_r)
                             validated_ligands.append(lig)
@@ -795,7 +741,6 @@ def run_one_stage(
 
                         attempt += 1
 
-                    # Record final failure if still invalid after retries
                     if retained_invalid:
                         invalids[lig] = (float(score), result.get("reason", "pose_invalid"))
                         print(f"{lig_name} | pose invalid (after retries)")
@@ -818,33 +763,41 @@ def early_recenter_decision(
     receptor_pdbqt: str,
     logger: logging.Logger,
     raw_docked: Dict[str, str],
+    guard: GlobalCenterGuard,
+    control_anchor_hit: bool
 ) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str], int]:
     """
     Stage-1 heuristic for expanding box or recentering when everything docks far from the pocket.
-    Returns:
-      (should_restart_stage1, new_center, new_box_size, redock_list, attempts_used)
+    De-duped and control-anchored: will not fire if (a) a control validated this stage, (b) a global switch already occurred this stage,
+    or (c) global switch cap reached.
     """
     if i != 0:
+        return False, center, box_size, [], attempts_used
+    if control_anchor_hit:
+        logger.info("Early recenter skipped: control-anchored validation present.")
+        return False, center, box_size, [], attempts_used
+    if not guard.can_switch():
+        logger.info("Early recenter skipped: global switch guard disallows further switches this stage/cap reached.")
         return False, center, box_size, [], attempts_used
 
     evaluated = len(all_distances)
     valid_count = len(scores)
-    if evaluated < params.EARLY_RECENTER_MIN_EVAL:
-        logger.info(f"Early recenter skipped: evaluated={evaluated} < {params.EARLY_RECENTER_MIN_EVAL}.")
+    if evaluated < max(params.EARLY_RECENTER_MIN_EVAL, 15):  # slightly stricter
+        logger.info(f"Early recenter skipped: evaluated={evaluated} < threshold.")
         return False, center, box_size, [], attempts_used
 
     far = sum(1 for d in all_distances if isinstance(d, (int, float)) and d > params.EARLY_RECENTER_FAR_A)
     far_ratio = far / evaluated if evaluated else 0.0
     med_dist = float(np.median(all_distances)) if all_distances else 0.0
 
-    # Expand box slightly if borderline and no valids
-    if params.ALLOW_BOX_EXPAND and (0.5 <= far_ratio < params.EARLY_RECENTER_RATIO) and (8.0 <= med_dist < params.EARLY_RECENTER_MEDIAN_A) and (valid_count == 0):
+    # Prefer a single mild box expand over recenter
+    if params.ALLOW_BOX_EXPAND and (0.55 <= far_ratio < params.EARLY_RECENTER_RATIO) and (9.0 <= med_dist < params.EARLY_RECENTER_MEDIAN_A) and (valid_count == 0):
         new_box = tuple(min(28.0, s + 4.0) for s in box_size)
         if new_box != box_size:
             logger.info(f"Borderline far_ratio={far_ratio:.2f}, median={med_dist:.1f} Å -> expand box to {new_box} and redo stage1.")
+            # Note: not counted as a global switch
             return True, center, new_box, stage1_original[:], attempts_used
 
-    # Recenter if clearly off and no valids
     if (far_ratio >= params.EARLY_RECENTER_RATIO) and (med_dist >= params.EARLY_RECENTER_MEDIAN_A) and (valid_count == 0):
         if attempts_used >= params.MAX_RECENTER_ATTEMPTS:
             logger.warning("Early recenter max attempts reached; proceeding without recenter.")
@@ -863,7 +816,8 @@ def early_recenter_decision(
         if new_center is not None:
             attempts_used += 1
             new_box = tuple(min(28.0, s) for s in box_size)
-            logger.info("Re-running stage1 with new center and tightened box.")
+            guard.mark_switch()  # counts as a global switch
+            logger.info("Re-running stage1 with new center and tightened box. [global switch]")
             return True, new_center, new_box, stage1_original[:], attempts_used
         logger.warning("Fallback could not produce a new center; proceeding without recenter.")
 
@@ -871,10 +825,6 @@ def early_recenter_decision(
 
 
 def select_ligands_for_next(docking_mode: str, i: int, stages: List[Dict], scores: Dict[str, float], logger: logging.Logger) -> List[str]:
-    """
-    Choose a fraction of ligands to carry forward, based on docking mode schedule.
-    Returns a list of ligand paths for the next stage.
-    """
     if not scores:
         return []
 
@@ -901,12 +851,21 @@ def fallback_recentering_if_empty(
     box_size: Tuple[float, float, float],
     stage1_original: List[str],
     logger: logging.Logger,
+    guard: GlobalCenterGuard,
+    control_anchor_hit: bool
 ) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str]]:
     """
     If a stage yields no valid ligands, attempt a fallback recenter and restart stage1.
-    Returns (should_restart_stage1, new_center, new_box_size, ligands_for_stage1).
+    De-duped: will not fire if early recenter or CenterSelector already switched this stage,
+    or if a control anchor validated in this stage, or if global cap reached.
     """
     if scores:
+        return False, center, box_size, []
+    if control_anchor_hit:
+        logger.info("Empty-stage fallback skipped: control-anchored validation present earlier.")
+        return False, center, box_size, []
+    if not guard.can_switch():
+        logger.info("Empty-stage fallback skipped: global switch guard disallows further switches.")
         return False, center, box_size, []
 
     logger.warning(f"No valid ligands in {stage_name}. Attempting fallback recentering...")
@@ -924,14 +883,14 @@ def fallback_recentering_if_empty(
         return False, center, box_size, []
 
     new_box = tuple(min(28.0, s) for s in box_size)
-    logger.info("Re-running stage1 with new center after no-valid fallback.")
+    guard.mark_switch()  # counts as a global switch
+    logger.info("Re-running stage1 with new center after no-valid fallback. [global switch]")
     return True, new_center, new_box, stage1_original[:]
 
 
 # ======================
 # Center selection (controls + discovery)
 # ======================
-
 @dataclass
 class CenterDecision:
     new_center: Optional[Tuple[float, float, float]]
@@ -943,7 +902,7 @@ class CenterDecision:
 class CenterSelector:
     """
     Decides when to keep the current center (control-anchored) vs. switch to a newly discovered pocket.
-    Uses clustering of valid pose centroids + simple SwitchScore with hysteresis.
+    Uses clustering of valid pose centroids + SwitchScore, now with stronger control anchoring and guard.
     """
 
     def __init__(self, cfg: Dict, logger: logging.Logger,
@@ -961,17 +920,16 @@ class CenterSelector:
         self.allow_switch_from_control = bool(cfg.get("ALLOW_SWITCH_FROM_CONTROL", True))
         self.require_control_failure = bool(cfg.get("REQUIRE_CONTROL_FAILURE_TO_SWITCH", False))
         self.threshold = float(cfg.get("SWITCH_SCORE_THRESHOLD", 0.7))
+        self.away_from_control_boost = float(cfg.get("SWITCH_AWAY_FROM_CONTROL_MIN_BOOST", 2.5))
         self.hysteresis = float(cfg.get("SWITCH_SCORE_HYSTERESIS", 0.5))
         self.switch_history = []  # keep last few SwitchScores
         self.current_center = np.array(initial_center, float)
 
-        # cache current-center cluster stats (median score, LE, valid_rate) after each stage
         self.curr_stats = {"median_score": None, "median_le": None, "valid_rate": 0.0}
+        self.last_decision_had_control_anchor = False
 
-    # ---------- utilities ----------
     @staticmethod
     def _strip_stage(name: str) -> str:
-        # e.g., "GOL_A401_stage1.pdbqt" -> "GOL_A401"
         stem = Path(name).stem
         return stem.split("_stage")[0].lower()
 
@@ -1000,26 +958,23 @@ class CenterSelector:
         return None
 
     def _is_blacklisted_control_name(self, stem_upper: str) -> bool:
-        # skip solvents/buffers/ions
         return any(stem_upper.startswith(bad) for bad in self.ctrl_blacklist)
 
     def _is_control(self, lig_path: str) -> bool:
         stem = self._strip_stage(os.path.basename(lig_path))
         if stem.upper() and self._is_blacklisted_control_name(stem.upper()):
             return False
-        # Enforce minimum heavy atoms for controls to avoid tiny crystallization junk
         ha = self.heavy.get(lig_path)
         if ha is not None and ha < self.ctrl_min_heavy:
             return False
         return (stem in self.control_stems)
 
     def _cluster(self, points: List[np.ndarray]) -> List[List[int]]:
-        # simple greedy clustering by distance threshold self.eps
         clusters: List[List[int]] = []
         for i, p in enumerate(points):
             placed = False
             for cl in clusters:
-                c = np.mean([points[j] for j in cl], axis=0)  # cluster centroid
+                c = np.mean([points[j] for j in cl], axis=0)
                 if np.linalg.norm(p - c) <= self.eps:
                     cl.append(i); placed = True; break
             if not placed:
@@ -1037,7 +992,6 @@ class CenterSelector:
                        total_docked: int) -> dict:
         members = [ligs[i] for i in member_idxs]
         scores = [scores_map[m] for m in members if m in scores_map]
-        # ligand efficiency per member
         les = []
         for m in members:
             s = scores_map.get(m)
@@ -1047,7 +1001,7 @@ class CenterSelector:
             if ha and ha > 0:
                 les.append((-s) / ha)  # s is negative kcal/mol
         center = np.mean([centroids[i] for i in member_idxs], axis=0)
-        valid_rate = len(members) / max(1, total_docked)  # fraction of all docked ligands that landed here
+        valid_rate = len(members) / max(1, total_docked)
         ctrl_hits = sum(1 for m in members if self._is_control(m))
         return {
             "center": tuple(center.tolist()),
@@ -1059,23 +1013,26 @@ class CenterSelector:
         }
 
     def _switch_score(self, valid_rate, score_boost_kcal, le_gain, pocketability=0.5) -> float:
-        # normalize to [0..1] ranges
-        consensus_boost = max(0.0, min(1.0, score_boost_kcal / 3.0))  # ≥3 kcal/mol -> ~1.0
-        le_norm = max(0.0, min(1.0, le_gain / 0.05))                  # ≥0.05 kcal/mol/HA -> ~1.0
+        consensus_boost = max(0.0, min(1.0, score_boost_kcal / 3.0))
+        le_norm = max(0.0, min(1.0, le_gain / 0.05))
         return 0.40*valid_rate + 0.20*consensus_boost + 0.20*pocketability + 0.20*le_norm
 
-    # ---------- main entry ----------
     def consider_switch(self,
                         stage_name: str,
                         scores: Dict[str, float],
                         validated_ligands: List[str],
                         raw_docked: Dict[str, str],
                         receptor_pdbqt: str,
-                        current_center: Tuple[float, float, float]) -> CenterDecision:
+                        current_center: Tuple[float, float, float],
+                        guard: GlobalCenterGuard) -> CenterDecision:
+        # If the guard forbids a switch this stage or we're capped out, exit early
+        if not guard.can_switch():
+            return CenterDecision(None, "guard_disallowed")
+
         if not validated_ligands:
+            self.last_decision_had_control_anchor = False
             return CenterDecision(None, "no_validated_poses")
 
-        # collect centroids for validated ligands
         ligs = sorted(set(validated_ligands))
         centroids = []
         ligs_kept = []
@@ -1086,15 +1043,13 @@ class CenterSelector:
                 centroids.append(c); ligs_kept.append(lig)
 
         if len(centroids) < 3:
+            self.last_decision_had_control_anchor = False
             return CenterDecision(None, "too_few_centroids")
 
         clusters = self._cluster(centroids)
         total_docked = max(1, len(raw_docked))
-
-        # compute stats per cluster
         stats = [self._cluster_stats(cl, ligs_kept, scores, centroids, total_docked) for cl in clusters]
 
-        # identify cluster overlapping current center (if any)
         curr_idx = None
         curr_center = np.array(current_center, float)
         for idx, st in enumerate(stats):
@@ -1103,28 +1058,16 @@ class CenterSelector:
 
         curr_median = stats[curr_idx]["median_score"] if curr_idx is not None else None
         curr_le = stats[curr_idx]["median_le"] if curr_idx is not None else None
-        self.curr_stats = {
-            "median_score": curr_median,
-            "median_le": curr_le,
-            "valid_rate": stats[curr_idx]["valid_rate"] if curr_idx is not None else 0.0
-        }
+        curr_valid = stats[curr_idx]["valid_rate"] if curr_idx is not None else 0.0
+        curr_ctrl_hits = stats[curr_idx]["control_hits"] if curr_idx is not None else 0
 
-        # control anchoring: if any cluster contains validated controls, prefer that cluster
-        control_clusters = [st for st in stats if st["control_hits"] > 0]
-        if control_clusters and self.mode in ("control-first","hybrid"):
-            ctrl_best = sorted(control_clusters, key=lambda st: (-st["control_hits"], -st["valid_rate"]))[0]
-            if np.linalg.norm(np.array(ctrl_best["center"]) - curr_center) > self.eps:
-                if self.allow_switch_from_control:
-                    self.switch_history.append(1.0)
-                    return CenterDecision(new_center=tuple(ctrl_best["center"]),
-                                          reason="anchor_to_control_cluster",
-                                          switchscore=1.0,
-                                          promoted=True)
-            if curr_idx is not None and curr_idx == stats.index(ctrl_best):
-                if self.require_control_failure:
-                    return CenterDecision(None, "control_validated—no_switch")
+        self.curr_stats = {"median_score": curr_median, "median_le": curr_le, "valid_rate": curr_valid}
 
-        # choose best non-current cluster by SwitchScore
+        # Strong control anchoring:
+        # If current cluster has a control hit and some validity, do not switch unless candidate shows a large boost.
+        self.last_decision_had_control_anchor = (curr_ctrl_hits > 0 and curr_valid >= float(self.cfg.get("CONTROL_ANCHOR_MIN_VALID_RATE", 0.10)))
+
+        # Choose best alternative cluster
         best_cand = None
         best_score = -1.0
         for idx, st in enumerate(stats):
@@ -1139,7 +1082,12 @@ class CenterSelector:
 
             if st["valid_rate"] < float(self.cfg.get("SWITCH_VALID_RATE_MIN", 0.40)):
                 continue
-            if score_boost < float(self.cfg.get("SWITCH_SCORE_IMPROVE_MIN", 1.5)):
+            # Require bigger improvement if leaving a control-anchored cluster
+            required_boost = float(self.cfg.get("SWITCH_SCORE_IMPROVE_MIN", 1.5))
+            if self.last_decision_had_control_anchor:
+                required_boost = max(required_boost, self.away_from_control_boost)
+
+            if score_boost < required_boost:
                 continue
             if le_gain < float(self.cfg.get("SWITCH_LE_GAIN_MIN", 0.02)):
                 continue
@@ -1157,6 +1105,7 @@ class CenterSelector:
         if not promoted:
             return CenterDecision(None, f"below_threshold:{best_score:.2f}", best_score, False)
 
+        # mark guard switch outside (caller), but flag that we want to promote
         return CenterDecision(new_center=tuple(best_cand["center"]),
                               reason=f"promote_new_center score={best_score:.2f}",
                               switchscore=best_score,
@@ -1166,7 +1115,6 @@ class CenterSelector:
 # ======================
 # Phase 7–8: Finalization
 # ======================
-
 def final_pose_validation_and_screenshots(
     cfg: Dict,
     pdb_id: str,
@@ -1179,17 +1127,12 @@ def final_pose_validation_and_screenshots(
     docking_mode: str,
     logger: logging.Logger,
 ) -> None:
-    """
-    Validate all poses for the last-stage ligands; if a best valid pose exists, record it.
-    Render top pose screenshots via PyMOL.
-    """
     if not validated_ligands_last:
         return
 
     last_stage = stages[-1]["name"]
     final_surface = extract_surface_atoms(pdbqt_path=receptor_pdbqt, center=center)
 
-    # In polypharmacology mode, select top-N before images to keep artifacts focused
     if docking_mode == "polypharmacology":
         final_scores = score_history.get(last_stage, {})
         top_ligs = sorted(final_scores.items(), key=score_key)[:20]
@@ -1201,7 +1144,6 @@ def final_pose_validation_and_screenshots(
         if not out_path.exists():
             logger.warning(f"Pose file not found for {os.path.basename(lig)} — likely filtered earlier.")
             continue
-        # Deduplicate final-stage poses before deep validation
         try:
             filter_and_rewrite_poses_by_rmsd(
                 str(out_path),
@@ -1229,7 +1171,6 @@ def final_pose_validation_and_screenshots(
                 record_score(score_history, last_stage, lig, None, False, reason="all_poses_invalid_no_score")
             print(f"{Path(lig).name} | all poses invalid (kept for logs)")
 
-    # Screenshots (best ligand only)
     try:
         import subprocess
         top = validated_ligands_last[0]
@@ -1247,39 +1188,27 @@ def final_pose_validation_and_screenshots(
 
 
 def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, Dict]]) -> str:
-    """
-    Write two CSVs into DOCKED_DIR/<pdb_id>/:
-      1) docking_score_summary.csv  (wide, backwards-compatible with your pipeline)
-      2) docking_score_long.csv     (long-form with score, valid, reason, heavy_atoms, le)
-
-    Returns the path of the wide CSV for convenience.
-    """
     import csv
-
     dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
     os.makedirs(dock_dir, exist_ok=True)
 
-    # -------- Wide summary (backwards compatible) --------
     csv_out_wide = os.path.join(dock_dir, "docking_score_summary.csv")
     flat = {}
     for stage_name, stage_map in score_history.items():
         flat[stage_name] = {}
         for lig, rec in stage_map.items():
-            lig_key = os.path.basename(lig)  # normalize to basename for CSV
+            lig_key = os.path.basename(lig)
             s = rec.get("score", None)
             if rec.get("valid", False):
                 flat[stage_name][lig_key] = s if s is not None else ""
             else:
                 flat[stage_name][lig_key] = f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)"
-
     write_score_summary_to_csv(flat, output_path=csv_out_wide)
 
-    # -------- Long-form table with LE --------
     csv_out_long = os.path.join(dock_dir, "docking_score_long.csv")
     with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le"])
-
         for stage_name, stage_map in score_history.items():
             for lig, rec in stage_map.items():
                 lig_key = os.path.basename(lig)
@@ -1288,24 +1217,15 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
                 reason = rec.get("reason", "")
                 ha = rec.get("heavy_atoms", None)
                 le = rec.get("le", None)
-
-                # Normalize types for clean CSV
                 score_str = f"{score:.2f}" if isinstance(score, (int, float)) else ""
                 ha_str = str(int(ha)) if isinstance(ha, (int, float)) else ""
                 le_str = f"{le:.4f}" if isinstance(le, (int, float)) else ""
                 reason_str = str(reason) if reason is not None else ""
-
                 writer.writerow([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str])
-
     return csv_out_wide
 
+
 def compute_ligand_efficiency(score: Optional[float], heavy_atoms: Optional[int]) -> Optional[float]:
-    """
-    Compute ligand efficiency (LE) as -score / heavy_atoms.
-    - score: docking score (kcal/mol), usually negative.
-    - heavy_atoms: number of non-hydrogen atoms.
-    Returns LE as a positive float (kcal/mol/HA) or None if not computable.
-    """
     try:
         if score is None or heavy_atoms is None or int(heavy_atoms) <= 0:
             return None
@@ -1313,49 +1233,28 @@ def compute_ligand_efficiency(score: Optional[float], heavy_atoms: Optional[int]
     except Exception:
         return None
 
-#LE is ligand efficiency, it measures score/heavy atom count
-#this basically tells you how efficient the ligand is at binding
-#this prevent larger ligands from getting really high scores
-#you dont want that because larger ligands are biased towards binding with more things
-#hypothetically high LE means that the ligands is more specific and wont just bind
-#to any old protein like a low LE might
+
 def record_le(score_history: Dict[str, Dict[str, Dict]],
               stage_name: str,
               lig_path: str,
               score: Optional[float],
               heavy_atom_counts: Dict[str, int]) -> Optional[float]:
-    """
-    Store LE (and heavy atom count) into score_history for later CSV export or iteration logic.
-
-    score_history structure (existing):
-        { stage_name: { lig_path: { "score": float|None, "valid": bool, ... } } }
-
-    After this call, you'll also have:
-        { ..., "le": float|None, "heavy_atoms": int|None }
-
-    Returns the computed LE (or None if not computable).
-    """
-    # look up heavy atoms by *normalized* path if that's how you keyed them
     ha = heavy_atom_counts.get(lig_path)
     le = compute_ligand_efficiency(score, ha)
-
     stage_map = score_history.setdefault(stage_name, {})
     rec = stage_map.setdefault(lig_path, {})
     rec["heavy_atoms"] = int(ha) if isinstance(ha, (int, float)) else None
     rec["le"] = le
     return le
 
+
 # ======================
 # Per-protein driver
 # ======================
-
 def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
-    """
-    Orchestrates all phases for a single protein.
-    """
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = base_id.replace("_cleaned", "")
-    logger = make_protein_logger(cfg["DOCKED_DIR"], pdb_id)
+    logger = make_protein_logger(cfg["DOCKED_DIR"], pdb_id, cfg)
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
 
     paths = make_paths(cfg, base_id, pdb_file)
@@ -1374,26 +1273,33 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     if center is None:
         return
 
+    # clamp initial box once to keep Vina happy
+    box_size = tuple(min(28.0, float(s)) for s in box_size)
+    logger.info(f"Initial box clamped to {box_size} (cap=28 Å)")
+
     # 4) Ligand prep & filtering
     ligands, heavy_atom_counts = prepare_and_filter_ligands(cfg, paths, logger)
     if not ligands:
         logger.warning("No valid ligands after filtering; skipping protein.")
         return
 
-    # 4.5) Initialize center selector
+    # 4.5) Initialize center selector & guard
     selector = CenterSelector(cfg, logger, control_stems, heavy_atom_counts, center)
+    guard = GlobalCenterGuard(
+        max_global_switches=int(cfg.get("MAX_GLOBAL_CENTER_SWITCHES", 2))
+    )
 
-    # 5) Multi-stage docking w/ heuristics
     stage1_original = ligands[:]
     score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
     validated_ligands_last: List[str] = []
     recenter_attempts = 0
     docking_mode = cfg.get("DOCKING_MODE", "discovery").lower()
 
-    retry_mgr = RetryManager()  # <-- instantiate once per protein
+    retry_mgr = RetryManager()
 
     i = 0
     while i < len(stages):
+        guard.reset_stage()  # only one global switch allowed per stage
         stage = stages[i]
 
         # Optional checkpoint skip (fingerprinted)
@@ -1414,7 +1320,19 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         )
         validated_ligands_last = validated
 
-        # ---------- Stage invariant check (every ligand must be accounted for) ----------
+        # --- Compute control anchor hit for this stage (used to gate recentering) ---
+        def _is_control(lig: str) -> bool:
+            stem = Path(lig).stem.split("_stage")[0].lower()
+            if stem.upper() in {s.strip().upper() for s in cfg.get("CONTROL_BLACKLIST", "").split(",") if s.strip()}:
+                return False
+            ha = heavy_atom_counts.get(lig)
+            if ha is not None and ha < int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10)):
+                return False
+            return stem in {s.lower() for s in control_stems}
+
+        control_anchor_hit = any(_is_control(lig) for lig in validated)
+
+        # ---------- Stage invariant check ----------
         try:
             processed = set(ligands)
             valid_set = set(scores.keys())
@@ -1429,7 +1347,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     logger.error("Ligands missing from results: " + ", ".join(os.path.basename(x) for x in list(missing)[:10]))
         except Exception as _e:
             logger.warning(f"Invariant check failed: {_e}")
-        # -------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         # Record both valid and invalid into history for CSV
         for lig, sc in scores.items():
@@ -1439,27 +1357,28 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             record_score(score_history, stage['name'], lig, sc, False, reason=reason)
             record_le(score_history, stage['name'], lig, sc, heavy_atom_counts)
 
-        # Consider switching the center based on clusters/controls
+        # Consider switching the center based on clusters/controls (guarded)
         promoted_this_stage = False
         try:
-            decision = selector.consider_switch(stage['name'], scores, validated, raw_docked, receptor_pdbqt, center)
+            decision = selector.consider_switch(stage['name'], scores, validated, raw_docked, receptor_pdbqt, center, guard)
             if decision.promoted and decision.new_center is not None:
                 old = center
                 center = decision.new_center
                 promoted_this_stage = True
+                guard.mark_switch()  # counts as a global switch
                 if bool(cfg.get("CHECKPOINT_ENABLE", False)):
                     checkpoint_invalidate_from(cfg, paths.pdb_id, stages, start_index=i)
                 logger.info(
-                    f"[CENTER] Switched from {old} -> {center} ({decision.reason}, SwitchScore={decision.switchscore:.2f})"
+                    f"[CENTER] Switched from {old} -> {center} ({decision.reason}, SwitchScore={decision.switchscore:.2f}) [global switch]"
                 )
         except Exception as e:
             logger.warning(f"CenterSelector failed gracefully: {e}")
 
-        # Stage-1 early recenter / expand box — skip if we just promoted a center
+        # Stage-1 early recenter / expand box — skip if promoted or control anchored
         if not promoted_this_stage:
             restart, center, box_size, redo_ligands, recenter_attempts = early_recenter_decision(
                 i, scores, distances, box_size, center, stage1_original, recenter_attempts, params,
-                cfg, paths.pdb_id, receptor_pdbqt, logger, raw_docked
+                cfg, paths.pdb_id, receptor_pdbqt, logger, raw_docked, guard, control_anchor_hit
             )
             if restart:
                 ligands = redo_ligands
@@ -1482,12 +1401,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         except Exception as _e:
             logger.warning(f"Adaptive shrink skipped: {_e}")
 
-        # Selection or generic fallback (for all but last stage)
+        # Selection or generic fallback (guarded)
         if i < len(stages) - 1:
             if not scores:
                 restart, center, box_size, redo_ligands = fallback_recentering_if_empty(
                     cfg, paths.pdb_id, stage['name'], scores, raw_docked,
-                    receptor_pdbqt, center, box_size, stage1_original, logger
+                    receptor_pdbqt, center, box_size, stage1_original, logger, guard, control_anchor_hit
                 )
                 if restart:
                     ligands = redo_ligands
@@ -1503,7 +1422,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 logger.warning(f"No ligands selected for {stages[i + 1]['name']}; stopping.")
                 break
 
-        # Mark checkpoint complete (fingerprinted)
         if bool(cfg.get("CHECKPOINT_ENABLE", False)):
             try:
                 fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
@@ -1532,6 +1450,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             "n_ligands_stage1": len(stage1_original),
             "n_valid_last_stage": len(validated_ligands_last),
             "switch_history": getattr(selector, "switch_history", []),
+            "global_switches": guard.global_switches,
             "stages": [s["name"] for s in stages],
         }
         _write_audit_json(cfg, paths.pdb_id, summary)
@@ -1542,7 +1461,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 # ======================
 # Program entry point
 # ======================
-
 def main() -> None:
     print("MODELLER is working with license.")
 
@@ -1553,43 +1471,52 @@ def main() -> None:
     cfg.setdefault("CENTER_MODE", "control-first")  # ["control-first","hybrid","library-first"]
     cfg.setdefault("CONTROL_BLACKLIST", "GOL,EDO,PG4,MPD,ACT,SO4,PO4,CL,NA,CA")
     cfg.setdefault("CONTROL_MIN_HEAVY_ATOMS", 10)
-    cfg.setdefault("ALLOW_SWITCH_FROM_CONTROL", True)   # allow switching away if evidence is strong
+    cfg.setdefault("CONTROL_ANCHOR_MIN_VALID_RATE", 0.10)  # if current cluster has control hits + ≥10% valid, anchor
+    cfg.setdefault("ALLOW_SWITCH_FROM_CONTROL", True)
     cfg.setdefault("REQUIRE_CONTROL_FAILURE_TO_SWITCH", False)
+    cfg.setdefault("SWITCH_AWAY_FROM_CONTROL_MIN_BOOST", 2.5)  # kcal/mol median boost needed to leave control
 
     # clustering + switching thresholds
-    cfg.setdefault("CLUSTER_EPS_ANG", 3.5)               # Å for pose-centroid clustering
-    cfg.setdefault("SWITCH_VALID_RATE_MIN", 0.40)        # fraction of all docked ligands landing in candidate cluster
-    cfg.setdefault("SWITCH_SCORE_IMPROVE_MIN", 1.5)      # kcal/mol better (median) vs current-center cluster
-    cfg.setdefault("SWITCH_LE_GAIN_MIN", 0.02)           # kcal/mol per heavy atom gain (median)
-    cfg.setdefault("SWITCH_SCORE_THRESHOLD", 0.70)       # final SwitchScore promote threshold
-    cfg.setdefault("SWITCH_SCORE_HYSTERESIS", 0.50)      # reserved for future demotion logic
+    cfg.setdefault("CLUSTER_EPS_ANG", 3.5)
+    cfg.setdefault("SWITCH_VALID_RATE_MIN", 0.40)
+    cfg.setdefault("SWITCH_SCORE_IMPROVE_MIN", 1.5)
+    cfg.setdefault("SWITCH_LE_GAIN_MIN", 0.02)
+    cfg.setdefault("SWITCH_SCORE_THRESHOLD", 0.70)
+    cfg.setdefault("SWITCH_SCORE_HYSTERESIS", 0.50)
 
-    # Critical defaults to avoid CPU oversubscription when MAX_PARALLEL_JOBS is large.
+    # Hard cap on global switching (early recenter, empty-stage fallback, selector promotions)
+    cfg.setdefault("MAX_GLOBAL_CENTER_SWITCHES", 2)
+
+    # Critical defaults
     cfg.setdefault("THREADS_PER_VINA", 1)
-    cfg.setdefault("RMSD_FILTER_ANG", 2.0)  # Å; typical 1.5–2.0
-    cfg.setdefault("RMSD_MAX_MODELS", 3)    # keep at most N distinct poses per ligand per stage
+    cfg.setdefault("RMSD_FILTER_ANG", 2.0)
+    cfg.setdefault("RMSD_MAX_MODELS", 3)
 
-    # ---  safe defaults  ---
+    # --- safe defaults ---
     cfg.setdefault("RETRY_NEAR_MISS", True)
-    cfg.setdefault("RETRY_EXHAUST_MULT", 2)           # multiply stage exhaustiveness
-    cfg.setdefault("RETRY_DIST_THRESH", 7.0)          # Å: close to pocket
-    cfg.setdefault("RETRY_SCORE_THRESH", -7.5)        # kcal/mol: promising score
+    cfg.setdefault("RETRY_EXHAUST_MULT", 2)
+    cfg.setdefault("RETRY_DIST_THRESH", 7.0)
+    cfg.setdefault("RETRY_SCORE_THRESH", -7.5)
 
     cfg.setdefault("ADAPTIVE_SHRINK_ENABLE", True)
-    cfg.setdefault("ADAPTIVE_SHRINK_MEDIAN_MAX", 4.0) # Å: cluster is tight
-    cfg.setdefault("ADAPTIVE_SHRINK_DEC", 4.0)        # Å: shrink per dimension
-    cfg.setdefault("ADAPTIVE_SHRINK_MIN_BOX", 14.0)   # Å: do not go below
+    cfg.setdefault("ADAPTIVE_SHRINK_MEDIAN_MAX", 4.0)
+    cfg.setdefault("ADAPTIVE_SHRINK_DEC", 4.0)
+    cfg.setdefault("ADAPTIVE_SHRINK_MIN_BOX", 14.0)
 
-    cfg.setdefault("CHECKPOINT_ENABLE", True)        # ON by default
-    cfg.setdefault("PAINS_NAMES", "")                 # e.g. "EUG,HEM,CHS,PLP"
+    cfg.setdefault("CHECKPOINT_ENABLE", True)
+    cfg.setdefault("PAINS_NAMES", "")
     cfg.setdefault("RECEPTOR_SANITY_CHECK", True)
     cfg.setdefault("AUDIT_JSON", True)
+
+    # --- logging/noise controls ---
+    cfg.setdefault("QUIET_CONSOLE", True)   # console shows WARN+ only; file keeps DEBUG
+    cfg.setdefault("VINA_VERBOSITY", 0)     # 0=minimal, 1=normal, 2=verbose
+    cfg.setdefault("FILTER_VINA_STDOUT", True)  # reserved if we need extra filtering later
 
     params = get_recenter_params(cfg)
     stages = define_docking_stages(cfg.get("DOCKING_MODE", "discovery").lower())
     print("current docking mode is ", cfg.get("DOCKING_MODE"))
 
-    # Discover input PDBs (skip *_nolig and non-PDB files)
     pdb_files = [
         f for f in os.listdir(cfg["INPUT_DIR"])
         if f.endswith(".pdb") and "_nolig" not in f.lower()

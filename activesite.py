@@ -70,40 +70,86 @@ from Bio.PDB.PDBIO import Select
 import os
 
 class ElementFixer(Select):
+    """Rewrite element symbols safely, with peptide-like HET awareness."""
+    PEPTIDEY = {
+        "N","CA","C","O","OXT","CB","CG","CD","CE","CZ","SG",
+        "ND","NE","OD","OE","SD","NZ","OH","CH","CZ1","CZ2","CD1","CD2","CE1","CE2","CE3"
+    }
+    TWO_LETTER_METALS = {"ZN","FE","MG","MN","CU","NI","CO","NA","CA","CL","BR","K","SR","BA","CD","HG"}
+    # Note: include halides/alkalis here because some PDBs use them as HET atoms
+
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _derive_from_name(aname: str) -> str:
+        an = aname.strip().upper()
+        # OE1/NE2/OD1/SD etc.
+        if an[:2] in {"OE","NE","OD","ND","SD"}:
+            return an[0]
+        # OXT special case
+        if an.startswith("OXT"):
+            return "O"
+        # Typical organic atoms: first character
+        if an and an[0].isalpha():
+            c = an[0]
+            if c in {"C","H","O","N","S","P","F","I","B"}:
+                return c
+        # Fallback to first alphabetic char
+        for ch in an:
+            if ch.isalpha():
+                return ch
+        return "C"
+
+    def _is_peptidic_like(self, residue) -> bool:
+        # peptide-like if majority of atoms have peptide-ish names
+        try:
+            atoms = list(residue.get_atoms())
+        except Exception:
+            return False
+        names = [a.get_name().strip().upper() for a in atoms if hasattr(a, "get_name")]
+        if not names:
+            return False
+        hits = sum((n in self.PEPTIDEY) or (n[:2] in {"OE","NE","OD","ND","SD"}) for n in names)
+        return hits >= max(4, 0.6 * len(names))
+
     def get_atom_element(self, atom):
-        name = atom.get_name().strip().upper()
+        aname = atom.get_name().strip().upper()
+        res = atom.get_parent()
+        rname = getattr(res, "get_resname", lambda: "")().strip().upper() if res else ""
 
-        # Common 2-letter elements first
-        if name.startswith(("ZN", "FE", "CA", "MG", "MN", "CL", "CU", "NI", "CO")):
-            return name[:2]
+        # If this residue looks like a peptide-like HET (e.g., VWW), force derivation from atom name.
+        if self._is_peptidic_like(res):
+            return self._derive_from_name(aname)
 
-        # Broad hydrogen matching: names starting with H or digit+H
-        if name.startswith("H") or name[0] in "123456789" and name[1] == "H":
+        # True two-letter elements (metals/halides/alkalis) only if the atom *name* itself is that element
+        # (e.g., a standalone CA ion where aname == "CA" and residue is also CA/CAL etc.)
+        if len(aname) >= 2 and aname[:2] in self.TWO_LETTER_METALS:
+            # Keep as two-letter element only if residue name matches the ion, or the atom name is exactly the ion.
+            if aname in self.TWO_LETTER_METALS and (rname in self.TWO_LETTER_METALS or len(list(res.get_atoms())) <= 2):
+                return aname[:2]
+            # Otherwise fall through to name-derived element to avoid CA->calcium for backbone CA
+            return self._derive_from_name(aname)
+
+        # Hydrogens including numbered names (1H, 2H, etc.)
+        if aname.startswith("H") or (aname[:1].isdigit() and len(aname) >= 2 and aname[1] == "H"):
             return "H"
 
         # Common heavy atoms
-        if name.startswith("C"):
-            return "C"
-        if name.startswith("O"):
-            return "O"
-        if name.startswith("N"):
-            return "N"
-        if name.startswith("S"):
-            return "S"
-        if name.startswith("P"):
-            return "P"
+        if aname.startswith("C"): return "C"
+        if aname.startswith("O"): return "O"
+        if aname.startswith("N"): return "N"
+        if aname.startswith("S"): return "S"
+        if aname.startswith("P"): return "P"
 
-        # Fallback — assume carbon to prevent crash but warn
-        logging.warning(f"Unknown atom name '{name}', defaulting to 'C'")
+        # Fallback
+        logging.warning(f"[ElementFixer] Unknown atom name '{aname}' in {rname}; defaulting to 'C'")
         return "C"
 
     def accept_atom(self, atom):
-        # Fix element symbol in the atom object itself
         atom.element = self.get_atom_element(atom)
         return True
+
 
 def fix_pdb_elements(input_path, output_path=None):
     parser = PDBParser(QUIET=True)
@@ -157,12 +203,38 @@ def calculate_ligand_protein_contacts(protein_pdb_path, ligand_lines, distance_c
 def rank_ligands_by_atom_count(ligands_dict):
     return sorted(ligands_dict.items(), key=lambda item: len(item[1]), reverse=True)
 
+def _fix_ligand_element_columns_in_memory(lines):
+    """Return new lines with element columns rewritten for peptide-like ligands."""
+    out = []
+    def derive(aname):
+        an = aname.strip().upper()
+        if an[:2] in {"OE","NE","OD","ND","SD"}: return an[0]
+        if an.startswith("OXT"): return "O"
+        if an and an[0].isalpha(): return an[0]
+        for ch in an:
+            if ch.isalpha(): return ch
+        return "C"
+    for line in lines:
+        if line.startswith(("ATOM  ","HETATM")):
+            aname = line[12:16]
+            el = derive(aname)
+            line = line[:76] + f"{el:>2}" + line[78:]
+        out.append(line)
+    return out
 
 def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     os.makedirs(ligands_dir, exist_ok=True)
     ligands = defaultdict(list)
     ligand_coords = []  # collect all ligand atom coords for box calculation
-    retained_resnames = {'HOH', 'SO4', 'MG', 'ZN', 'HEM', 'FAD', 'NAD', 'FE', 'CU', 'MN', 'CO', 'CA', 'CL'}
+    retained_resnames = {
+        # waters (optionally filtered later)
+        'HOH',
+        # true ions/metals to retain in receptor (align with KEEP_METALS)
+        'ZN', 'MG', 'FE', 'MN', 'CU', 'NI', 'CO', 'NA', 'K', 'CA', 'CL', 'BR',
+        # essential prosthetics you NEVER want to treat as small ligands
+        'HEM', 'FAD', 'FMN', 'NAD', 'NADH', 'NADP', 'NADPH', 'PLP', 'SAM', 'SAH', 'ATP', 'ADP', 'COA'
+    }
+    # Do NOT retain common cryos/buffers: GOL/EDO/PG4/MPD/ACT/TRS/PO4/PEG → they’ll be extracted
 
     with open(pdb_path, 'r') as infile, open(output_cleaned_pdb, 'w') as outfile:
         for line in infile:
@@ -182,12 +254,14 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
                     continue
             outfile.write(line)
 
-    # Write separate ligand files
+    # Write separate ligand files (with element repair)
     for (chain, resname, resnum), lines in ligands.items():
         ligand_fname = os.path.join(ligands_dir, f"{resname}_{chain}{resnum}.pdb")
+        fixed = _fix_ligand_element_columns_in_memory(lines)  # <<< ADD
         with open(ligand_fname, 'w') as lf:
-            lf.writelines(lines)
-        logging.info(f"Saved ligand {resname} {chain}{resnum} to {ligand_fname}")
+            lf.writelines(fixed)
+        logging.info(f"Saved ligand {resname} {chain}{resnum} to {ligand_fname} (elements repaired)")
+
 
     logging.info(f"Ligands extracted and removed from {pdb_path}.")
     return ligands, ligand_coords
