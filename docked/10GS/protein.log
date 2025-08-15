@@ -26860,3 +26860,529 @@ Final pose validation pass on last stage ligands
 2025-08-15 11:28:33,172 - INFO - fda_0039.pdbqt validation: {'valid': True, 'distance_to_surface': 2.593046470852381, 'distance_to_pocket': 2.593046470852381, 'clash_count': 3, 'hydrogen_bonds': 11, 'lipinski': None, 'reason': 'Valid pose'}
 2025-08-15 11:28:33,364 - INFO - fda_0006_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
 2025-08-15 11:28:33,447 - INFO - fda_0006.pdbqt validation: {'valid': True, 'distance_to_surface': 3.6780823808066083, 'distance_to_pocket': 3.6780823808066083, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:28:36,404 - INFO - fda_0051_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:28:36,440 - INFO - fda_0051.pdbqt validation: {'valid': True, 'distance_to_surface': 3.8345458662011094, 'distance_to_pocket': 3.8345458662011094, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:28:37,667 - INFO - fda_0042_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:28:37,737 - INFO - fda_0042.pdbqt validation: {'valid': True, 'distance_to_surface': 3.042292885308713, 'distance_to_pocket': 3.042292885308713, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:28:39,650 - INFO - fda_0013_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:28:39,861 - INFO - fda_0013.pdbqt validation: {'valid': True, 'distance_to_surface': 2.571571698397694, 'distance_to_pocket': 2.571571698397694, 'clash_count': 1, 'hydrogen_bonds': 11, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:28:45,184 - INFO - fda_0048_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:28:45,259 - INFO - fda_0048.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4981203524178537, 'distance_to_pocket': 3.4981203524178537, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:28:45,942 - INFO - fda_0056_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:28:45,965 - INFO - fda_0056.pdbqt validation: {'valid': False, 'distance_to_surface': 7.453592288286233, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:28:46,010 - INFO - Recenter candidate 1: fda_0056.pdbqt | score=-4.13 | dist=21.96 | center=(31.83044444444444, 2.874222222222222, 4.483777777777778)
+2025-08-15 11:28:46,011 - INFO - Recentered using ligand fda_0056.pdbqt — proposed new center (31.83044444444444, 2.874222222222222, 4.483777777777778).
+2025-08-15 11:29:12,703 - INFO - fda_0056.pdbqt retry#1 (too_far_from_pocket) -> {'valid': True, 'distance_to_surface': 1.544409595929784, 'distance_to_pocket': 1.544409595929784, 'clash_count': 1, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:12,821 - INFO - fda_0058_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:29:12,973 - INFO - fda_0058.pdbqt validation: {'valid': True, 'distance_to_surface': 4.919359917712871, 'distance_to_pocket': 4.919359917712871, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:13,104 - INFO - fda_0057_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:29:13,231 - INFO - fda_0057.pdbqt validation: {'valid': True, 'distance_to_surface': 4.324101409541641, 'distance_to_pocket': 4.324101409541641, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:13,362 - INFO - fda_0019_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:29:13,704 - INFO - fda_0019.pdbqt validation: {'valid': True, 'distance_to_surface': 4.089568803676008, 'distance_to_pocket': 4.089568803676008, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:13,835 - INFO - fda_0035_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:29:13,936 - INFO - fda_0035.pdbqt validation: {'valid': True, 'distance_to_surface': 3.0333071061137207, 'distance_to_pocket': 3.0333071061137207, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:14,075 - INFO - fda_0055_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:29:14,128 - INFO - fda_0055.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3325193172733445, 'distance_to_pocket': 3.3325193172733445, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:14,247 - INFO - fda_0030_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:29:14,562 - INFO - fda_0030.pdbqt validation: {'valid': True, 'distance_to_surface': 2.421095826273714, 'distance_to_pocket': 2.421095826273714, 'clash_count': 1, 'hydrogen_bonds': 12, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:14,691 - INFO - fda_0060_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:29:14,766 - INFO - fda_0060.pdbqt validation: {'valid': True, 'distance_to_surface': 2.9705654343912373, 'distance_to_pocket': 2.9705654343912373, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:29:14,898 - INFO - fda_0061_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:29:14,940 - INFO - fda_0061.pdbqt validation: {'valid': False, 'distance_to_surface': 7.262829820393701, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:29:14,967 - INFO - Recenter candidate 1: fda_0061.pdbqt | score=-4.567 | dist=19.34 | center=(12.025058823529411, 19.40129411764706, 34.12488235294118)
+2025-08-15 11:29:14,967 - INFO - Recentered using ligand fda_0061.pdbqt — proposed new center (12.025058823529411, 19.40129411764706, 34.12488235294118).
+2025-08-15 11:29:41,889 - INFO - fda_0061.pdbqt retry#1 (too_far_from_pocket) -> {'valid': False, 'distance_to_surface': 7.280736775903931, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:29:41,929 - INFO - Recenter candidate 1: fda_0061.pdbqt | score=-4.567 | dist=19.34 | center=(12.025058823529411, 19.40129411764706, 34.12488235294118)
+2025-08-15 11:29:41,930 - INFO - Recentered using ligand fda_0061.pdbqt — proposed new center (12.025058823529411, 19.40129411764706, 34.12488235294118).
+2025-08-15 11:30:24,197 - INFO - fda_0061.pdbqt retry#2 (too_far_from_pocket) -> {'valid': False, 'distance_to_surface': 7.326526666845618, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:30:24,435 - INFO - fda_0015_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:30:24,597 - INFO - fda_0015.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5993574426555632, 'distance_to_pocket': 3.5993574426555632, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:30:25,329 - INFO - fda_0053_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:30:25,499 - INFO - fda_0053.pdbqt validation: {'valid': True, 'distance_to_surface': 2.164113906429142, 'distance_to_pocket': 2.164113906429142, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:30:26,190 - INFO - fda_0050_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:30:26,390 - INFO - fda_0050.pdbqt validation: {'valid': True, 'distance_to_surface': 3.025507891247354, 'distance_to_pocket': 3.025507891247354, 'clash_count': 1, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:30:26,508 - INFO - fda_0068_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:30:26,560 - INFO - fda_0068.pdbqt validation: {'valid': True, 'distance_to_surface': 3.7694474396123376, 'distance_to_pocket': 3.7694474396123376, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:30:26,630 - INFO - fda_0054_stage1.pdbqt: RMSD filter kept 1, removed 1 duplicate poses.
+2025-08-15 11:30:26,824 - INFO - fda_0054.pdbqt validation: {'valid': True, 'distance_to_surface': 3.429232129792324, 'distance_to_pocket': 3.429232129792324, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:30:27,122 - INFO - fda_0001.pdbqt validation: {'valid': False, 'distance_to_surface': 1.9547547160705345, 'distance_to_pocket': 1.9547547160705345, 'clash_count': 4, 'reason': '4 clashes detected (>3)'}
+2025-08-15 11:36:11,371 - INFO - fda_0001.pdbqt retry#1 (no_valid_pose) -> {'valid': True, 'distance_to_surface': 2.2471715555337552, 'distance_to_pocket': 2.2471715555337552, 'clash_count': 2, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:11,780 - INFO - fda_0029.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4241188647592233, 'distance_to_pocket': 3.4241188647592233, 'clash_count': 1, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:11,929 - INFO - fda_0046_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:12,142 - INFO - fda_0046.pdbqt validation: {'valid': True, 'distance_to_surface': 2.4198981383521083, 'distance_to_pocket': 2.4198981383521083, 'clash_count': 0, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:12,271 - INFO - fda_0032_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:12,381 - INFO - fda_0032.pdbqt validation: {'valid': True, 'distance_to_surface': 3.8243296144553214, 'distance_to_pocket': 3.8243296144553214, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:12,508 - INFO - fda_0047_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:12,637 - INFO - fda_0047.pdbqt validation: {'valid': True, 'distance_to_surface': 2.313677159847501, 'distance_to_pocket': 2.313677159847501, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:12,931 - INFO - fda_0044_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:13,298 - INFO - fda_0044.pdbqt validation: {'valid': True, 'distance_to_surface': 2.069077088945698, 'distance_to_pocket': 2.069077088945698, 'clash_count': 0, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:13,594 - INFO - fda_0025_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:13,738 - INFO - fda_0025.pdbqt validation: {'valid': True, 'distance_to_surface': 3.291625130539625, 'distance_to_pocket': 3.291625130539625, 'clash_count': 1, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:13,951 - INFO - fda_0052_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:14,164 - INFO - fda_0052.pdbqt validation: {'valid': True, 'distance_to_surface': 3.2160811556924376, 'distance_to_pocket': 3.2160811556924376, 'clash_count': 1, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:14,358 - INFO - fda_0062_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:14,634 - INFO - fda_0062.pdbqt validation: {'valid': True, 'distance_to_surface': 3.1632979625700766, 'distance_to_pocket': 3.1632979625700766, 'clash_count': 0, 'hydrogen_bonds': 12, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:14,756 - INFO - fda_0063_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:15,005 - INFO - fda_0063.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3309231453157246, 'distance_to_pocket': 3.3309231453157246, 'clash_count': 0, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:15,132 - INFO - fda_0071_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:15,247 - INFO - fda_0071.pdbqt validation: {'valid': True, 'distance_to_surface': 2.8535017084277357, 'distance_to_pocket': 2.8535017084277357, 'clash_count': 0, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:15,915 - INFO - fda_0008.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1536866067281006, 'distance_to_pocket': 2.1536866067281006, 'clash_count': 0, 'hydrogen_bonds': 12, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:15,998 - INFO - fda_0043_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:16,195 - INFO - fda_0043.pdbqt validation: {'valid': True, 'distance_to_surface': 3.6019422538402814, 'distance_to_pocket': 3.6019422538402814, 'clash_count': 1, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:16,327 - INFO - fda_0077_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:16,479 - INFO - fda_0077.pdbqt validation: {'valid': True, 'distance_to_surface': 2.267288027578322, 'distance_to_pocket': 2.267288027578322, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:16,601 - INFO - fda_0065_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:16,745 - INFO - fda_0065.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5758006096537307, 'distance_to_pocket': 3.5758006096537307, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:16,869 - INFO - fda_0041_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:17,152 - INFO - fda_0041.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4781886090320056, 'distance_to_pocket': 3.4781886090320056, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:17,635 - INFO - fda_0004_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:17,755 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.69903130771023, 'distance_to_pocket': 2.69903130771023, 'clash_count': 0, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:17,831 - INFO - fda_0087_stage1.pdbqt: RMSD filter kept 1, removed 1 duplicate poses.
+2025-08-15 11:36:17,942 - INFO - fda_0087.pdbqt validation: {'valid': True, 'distance_to_surface': 3.72340610194483, 'distance_to_pocket': 3.72340610194483, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:18,138 - INFO - fda_0080_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:18,219 - INFO - fda_0080.pdbqt validation: {'valid': True, 'distance_to_surface': 3.587563797342144, 'distance_to_pocket': 3.587563797342144, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:18,518 - INFO - fda_0026_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:18,952 - INFO - fda_0026.pdbqt validation: {'valid': True, 'distance_to_surface': 2.3694560557224933, 'distance_to_pocket': 2.3694560557224933, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:19,072 - INFO - fda_0083_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:19,134 - INFO - fda_0083.pdbqt validation: {'valid': True, 'distance_to_surface': 3.713412581440418, 'distance_to_pocket': 3.713412581440418, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:19,266 - INFO - fda_0072_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:19,345 - INFO - fda_0072.pdbqt validation: {'valid': True, 'distance_to_surface': 3.395123120006105, 'distance_to_pocket': 3.395123120006105, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:19,536 - INFO - fda_0059_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:19,808 - INFO - fda_0059.pdbqt validation: {'valid': True, 'distance_to_surface': 3.2295693211324634, 'distance_to_pocket': 3.2295693211324634, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:19,943 - INFO - fda_0070_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:20,051 - INFO - fda_0070.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1032833855664808, 'distance_to_pocket': 2.1032833855664808, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:20,205 - INFO - fda_0093_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:20,272 - INFO - fda_0093.pdbqt validation: {'valid': True, 'distance_to_surface': 3.7289379184963662, 'distance_to_pocket': 3.7289379184963662, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:20,502 - INFO - fda_0090_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:20,597 - INFO - fda_0090.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4916503261351917, 'distance_to_pocket': 3.4916503261351917, 'clash_count': 1, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:20,733 - INFO - fda_0086_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:20,851 - INFO - fda_0086.pdbqt validation: {'valid': True, 'distance_to_surface': 3.729100025475316, 'distance_to_pocket': 3.729100025475316, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:20,991 - INFO - fda_0082_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:21,112 - INFO - fda_0082.pdbqt validation: {'valid': True, 'distance_to_surface': 4.807458476159726, 'distance_to_pocket': 4.807458476159726, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:21,246 - INFO - fda_0092_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:21,342 - INFO - fda_0092.pdbqt validation: {'valid': True, 'distance_to_surface': 3.923160588097306, 'distance_to_pocket': 3.923160588097306, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:21,425 - INFO - fda_0088_stage1.pdbqt: RMSD filter kept 1, removed 1 duplicate poses.
+2025-08-15 11:36:21,553 - INFO - fda_0088.pdbqt validation: {'valid': True, 'distance_to_surface': 3.6696689223961325, 'distance_to_pocket': 3.6696689223961325, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:21,684 - INFO - fda_0075_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:21,792 - INFO - fda_0075.pdbqt validation: {'valid': True, 'distance_to_surface': 3.6714058615195335, 'distance_to_pocket': 3.6714058615195335, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:21,975 - INFO - fda_0073_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:22,130 - INFO - fda_0073.pdbqt validation: {'valid': True, 'distance_to_surface': 3.400381743275305, 'distance_to_pocket': 3.400381743275305, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:22,339 - INFO - fda_0078_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:22,531 - INFO - fda_0078.pdbqt validation: {'valid': True, 'distance_to_surface': 2.310128351412536, 'distance_to_pocket': 2.310128351412536, 'clash_count': 1, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:22,653 - INFO - fda_0064_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:22,861 - INFO - fda_0064.pdbqt validation: {'valid': True, 'distance_to_surface': 3.625965940270261, 'distance_to_pocket': 3.625965940270261, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:22,995 - INFO - fda_0094_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:23,162 - INFO - fda_0094.pdbqt validation: {'valid': True, 'distance_to_surface': 3.7334481381157563, 'distance_to_pocket': 3.7334481381157563, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:23,289 - INFO - fda_0099_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:23,371 - INFO - fda_0099.pdbqt validation: {'valid': True, 'distance_to_surface': 4.154813593893231, 'distance_to_pocket': 4.154813593893231, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:23,505 - INFO - fda_0098_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:23,613 - INFO - fda_0098.pdbqt validation: {'valid': True, 'distance_to_surface': 4.503506855773622, 'distance_to_pocket': 4.503506855773622, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:23,617 - INFO - fda_0102_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:23,688 - INFO - fda_0102.pdbqt validation: {'valid': True, 'distance_to_surface': 3.614328430012967, 'distance_to_pocket': 3.614328430012967, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:23,850 - INFO - fda_0096_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:23,980 - INFO - fda_0096.pdbqt validation: {'valid': True, 'distance_to_surface': 3.6711841413908943, 'distance_to_pocket': 3.6711841413908943, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:24,110 - INFO - fda_0097_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:24,355 - INFO - fda_0097.pdbqt validation: {'valid': True, 'distance_to_surface': 3.0617480301291935, 'distance_to_pocket': 3.0617480301291935, 'clash_count': 1, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:24,489 - INFO - fda_0091_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:24,614 - INFO - fda_0091.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4586639038796463, 'distance_to_pocket': 3.4586639038796463, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:24,797 - INFO - fda_0066_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:25,051 - INFO - fda_0066.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5439245195122324, 'distance_to_pocket': 3.5439245195122324, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:25,232 - INFO - fda_0085_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:25,348 - INFO - fda_0085.pdbqt validation: {'valid': True, 'distance_to_surface': 3.573413773970207, 'distance_to_pocket': 3.573413773970207, 'clash_count': 1, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:25,425 - INFO - fda_0095_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:25,594 - INFO - fda_0095.pdbqt validation: {'valid': True, 'distance_to_surface': 3.74792329163765, 'distance_to_pocket': 3.74792329163765, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:25,722 - INFO - fda_0100_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:25,802 - INFO - fda_0100.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4566065729266904, 'distance_to_pocket': 3.4566065729266904, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:25,922 - INFO - fda_0074_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:26,031 - INFO - fda_0074.pdbqt validation: {'valid': True, 'distance_to_surface': 3.2756123091721343, 'distance_to_pocket': 3.2756123091721343, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:26,252 - INFO - fda_0049_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:26,650 - INFO - fda_0049.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5368823842474617, 'distance_to_pocket': 3.5368823842474617, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:26,819 - INFO - fda_0084_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:27,032 - INFO - fda_0084.pdbqt validation: {'valid': True, 'distance_to_surface': 3.315742601590178, 'distance_to_pocket': 3.315742601590178, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:27,253 - INFO - fda_0069_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:27,427 - INFO - fda_0069.pdbqt validation: {'valid': True, 'distance_to_surface': 2.087999999999999, 'distance_to_pocket': 2.087999999999999, 'clash_count': 1, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:27,661 - INFO - fda_0105_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:27,725 - INFO - fda_0105.pdbqt validation: {'valid': True, 'distance_to_surface': 3.465283971047684, 'distance_to_pocket': 3.465283971047684, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:28,031 - INFO - fda_0017_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:28,271 - INFO - fda_0017.pdbqt validation: {'valid': True, 'distance_to_surface': 2.312360482277797, 'distance_to_pocket': 2.312360482277797, 'clash_count': 1, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:29,673 - INFO - fda_0109_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:29,788 - INFO - fda_0109.pdbqt validation: {'valid': True, 'distance_to_surface': 2.664473493957108, 'distance_to_pocket': 2.664473493957108, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:29,982 - INFO - fda_0089_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:30,077 - INFO - fda_0089.pdbqt validation: {'valid': True, 'distance_to_surface': 2.2161755345639924, 'distance_to_pocket': 2.2161755345639924, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:30,209 - INFO - fda_0103_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:30,312 - INFO - fda_0103.pdbqt validation: {'valid': True, 'distance_to_surface': 4.015190406444009, 'distance_to_pocket': 4.015190406444009, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:34,067 - INFO - fda_0124_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:34,135 - INFO - fda_0124.pdbqt validation: {'valid': True, 'distance_to_surface': 3.322766768823837, 'distance_to_pocket': 3.322766768823837, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:35,655 - INFO - fda_0081_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:36,015 - INFO - fda_0081.pdbqt validation: {'valid': True, 'distance_to_surface': 2.2645381427567095, 'distance_to_pocket': 2.2645381427567095, 'clash_count': 0, 'hydrogen_bonds': 12, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:36,214 - INFO - fda_0126_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:36,327 - INFO - fda_0126.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5440774540068953, 'distance_to_pocket': 3.5440774540068953, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:36,515 - INFO - fda_0127_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:36,622 - INFO - fda_0127.pdbqt validation: {'valid': True, 'distance_to_surface': 2.700100924039693, 'distance_to_pocket': 2.700100924039693, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:36,744 - INFO - fda_0107_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:36,931 - INFO - fda_0107.pdbqt validation: {'valid': True, 'distance_to_surface': 3.448578257775225, 'distance_to_pocket': 3.448578257775225, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:37,065 - INFO - fda_0079_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:37,334 - INFO - fda_0079.pdbqt validation: {'valid': True, 'distance_to_surface': 2.3757268361493082, 'distance_to_pocket': 2.3757268361493082, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:37,492 - INFO - fda_0122_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:37,625 - INFO - fda_0122.pdbqt validation: {'valid': True, 'distance_to_surface': 2.8577265439506276, 'distance_to_pocket': 2.8577265439506276, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:37,784 - INFO - fda_0106_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:37,891 - INFO - fda_0106.pdbqt validation: {'valid': True, 'distance_to_surface': 3.50202926886684, 'distance_to_pocket': 3.50202926886684, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:38,039 - INFO - fda_0113_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:38,186 - INFO - fda_0113.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5126021693325877, 'distance_to_pocket': 3.5126021693325877, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:38,311 - INFO - fda_0123_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:38,411 - INFO - fda_0123.pdbqt validation: {'valid': True, 'distance_to_surface': 4.043886496923473, 'distance_to_pocket': 4.043886496923473, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:38,480 - INFO - fda_0104_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:38,631 - INFO - fda_0104.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4905850512485728, 'distance_to_pocket': 3.4905850512485728, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:38,725 - INFO - fda_0117_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:38,833 - INFO - fda_0117.pdbqt validation: {'valid': True, 'distance_to_surface': 3.595566992839933, 'distance_to_pocket': 3.595566992839933, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:38,899 - INFO - fda_0067_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:39,020 - INFO - fda_0067.pdbqt validation: {'valid': True, 'distance_to_surface': 2.7023029067815463, 'distance_to_pocket': 2.7023029067815463, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:39,101 - INFO - fda_0111_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:39,309 - INFO - fda_0111.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5508629936960387, 'distance_to_pocket': 3.5508629936960387, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:39,430 - INFO - fda_0129_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:39,725 - INFO - fda_0129.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3365799855540703, 'distance_to_pocket': 3.3365799855540703, 'clash_count': 1, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:39,867 - INFO - fda_0118_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:39,981 - INFO - fda_0118.pdbqt validation: {'valid': True, 'distance_to_surface': 3.353303445857533, 'distance_to_pocket': 3.353303445857533, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:40,230 - INFO - fda_0131_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:40,597 - INFO - fda_0131.pdbqt validation: {'valid': True, 'distance_to_surface': 3.201048578200587, 'distance_to_pocket': 3.201048578200587, 'clash_count': 2, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:40,748 - INFO - fda_0135_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:40,891 - INFO - fda_0135.pdbqt validation: {'valid': True, 'distance_to_surface': 3.40804195983559, 'distance_to_pocket': 3.40804195983559, 'clash_count': 1, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:41,102 - INFO - fda_0101_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:41,293 - INFO - fda_0101.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3801303229313517, 'distance_to_pocket': 3.3801303229313517, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:41,491 - INFO - fda_0108_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:41,764 - INFO - fda_0108.pdbqt validation: {'valid': True, 'distance_to_surface': 4.1229136542013585, 'distance_to_pocket': 4.1229136542013585, 'clash_count': 1, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:41,890 - INFO - fda_0116_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:42,069 - INFO - fda_0116.pdbqt validation: {'valid': True, 'distance_to_surface': 3.7697649794118466, 'distance_to_pocket': 3.7697649794118466, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:42,233 - INFO - fda_0134_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:42,362 - INFO - fda_0134.pdbqt validation: {'valid': True, 'distance_to_surface': 3.630405073817521, 'distance_to_pocket': 3.630405073817521, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:43,628 - INFO - fda_0136_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:43,746 - INFO - fda_0136.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5217651824049816, 'distance_to_pocket': 3.5217651824049816, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:43,820 - INFO - fda_0112_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:44,032 - INFO - fda_0112.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4873855536777114, 'distance_to_pocket': 3.4873855536777114, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:46,260 - INFO - fda_0024.pdbqt validation: {'valid': True, 'distance_to_surface': 3.348902058884375, 'distance_to_pocket': 3.348902058884375, 'clash_count': 3, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:48,920 - INFO - fda_0128_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:49,368 - INFO - fda_0128.pdbqt validation: {'valid': True, 'distance_to_surface': 3.243131973879571, 'distance_to_pocket': 3.243131973879571, 'clash_count': 1, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:50,083 - INFO - fda_0045_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:50,415 - INFO - fda_0045.pdbqt validation: {'valid': True, 'distance_to_surface': 3.506235302999502, 'distance_to_pocket': 3.506235302999502, 'clash_count': 2, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:50,666 - INFO - fda_0137_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:50,752 - INFO - fda_0137.pdbqt validation: {'valid': True, 'distance_to_surface': 3.5305468414963723, 'distance_to_pocket': 3.5305468414963723, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:50,920 - INFO - fda_0132_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:51,044 - INFO - fda_0132.pdbqt validation: {'valid': True, 'distance_to_surface': 2.335394399239665, 'distance_to_pocket': 2.335394399239665, 'clash_count': 0, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:51,296 - INFO - fda_0144_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:51,343 - INFO - fda_0144.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3306723045055042, 'distance_to_pocket': 3.3306723045055042, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:51,541 - INFO - fda_0142_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:51,662 - INFO - fda_0142.pdbqt validation: {'valid': True, 'distance_to_surface': 2.677767353598891, 'distance_to_pocket': 2.677767353598891, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:52,190 - INFO - fda_0076.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1909851665403854, 'distance_to_pocket': 2.1909851665403854, 'clash_count': 0, 'hydrogen_bonds': 11, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:52,307 - INFO - fda_0114_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:52,534 - INFO - fda_0114.pdbqt validation: {'valid': True, 'distance_to_surface': 3.7858486499066486, 'distance_to_pocket': 3.7858486499066486, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:52,692 - INFO - fda_0125_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:52,798 - INFO - fda_0125.pdbqt validation: {'valid': True, 'distance_to_surface': 3.9735105385540375, 'distance_to_pocket': 3.9735105385540375, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:52,919 - INFO - fda_0143_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:52,999 - INFO - fda_0143.pdbqt validation: {'valid': True, 'distance_to_surface': 3.563024698202358, 'distance_to_pocket': 3.563024698202358, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:53,122 - INFO - fda_0145_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:53,183 - INFO - fda_0145.pdbqt validation: {'valid': True, 'distance_to_surface': 3.731237998305656, 'distance_to_pocket': 3.731237998305656, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:53,315 - INFO - fda_0150_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:53,399 - INFO - fda_0150.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4387744910069347, 'distance_to_pocket': 3.4387744910069347, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:53,535 - INFO - fda_0149_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:53,602 - INFO - fda_0149.pdbqt validation: {'valid': True, 'distance_to_surface': 3.8737941349534837, 'distance_to_pocket': 3.8737941349534837, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:53,767 - INFO - fda_0133_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:53,922 - INFO - fda_0133.pdbqt validation: {'valid': True, 'distance_to_surface': 3.227148741536402, 'distance_to_pocket': 3.227148741536402, 'clash_count': 1, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:54,055 - INFO - fda_0119_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:54,159 - INFO - fda_0119.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3320009003600224, 'distance_to_pocket': 3.3320009003600224, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:54,352 - INFO - fda_0152_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:54,422 - INFO - fda_0152.pdbqt validation: {'valid': True, 'distance_to_surface': 2.8547141713313433, 'distance_to_pocket': 2.8547141713313433, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:54,622 - INFO - fda_0110_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:54,776 - INFO - fda_0110.pdbqt validation: {'valid': True, 'distance_to_surface': 3.6150301520181, 'distance_to_pocket': 3.6150301520181, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:54,909 - INFO - fda_0151_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:54,993 - INFO - fda_0151.pdbqt validation: {'valid': True, 'distance_to_surface': 3.2413083778005465, 'distance_to_pocket': 3.2413083778005465, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:55,174 - INFO - fda_0146_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:55,235 - INFO - fda_0146.pdbqt validation: {'valid': True, 'distance_to_surface': 4.079050624839069, 'distance_to_pocket': 4.079050624839069, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:55,545 - INFO - fda_0115_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:36:55,715 - INFO - fda_0115.pdbqt validation: {'valid': True, 'distance_to_surface': 3.6482417683042887, 'distance_to_pocket': 3.6482417683042887, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:55,924 - INFO - fda_0156_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:56,112 - INFO - fda_0156.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3952639072684763, 'distance_to_pocket': 3.3952639072684763, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:56,271 - INFO - fda_0147_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:56,400 - INFO - fda_0147.pdbqt validation: {'valid': True, 'distance_to_surface': 5.0974798675423925, 'distance_to_pocket': 5.0974798675423925, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:56,509 - INFO - fda_0158_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:56,639 - INFO - fda_0158.pdbqt validation: {'valid': True, 'distance_to_surface': 3.7869129908145496, 'distance_to_pocket': 3.7869129908145496, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:56,775 - INFO - fda_0169_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:56,864 - INFO - fda_0169.pdbqt validation: {'valid': True, 'distance_to_surface': 4.271417680349231, 'distance_to_pocket': 4.271417680349231, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:57,017 - INFO - fda_0148_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:57,107 - INFO - fda_0148.pdbqt validation: {'valid': True, 'distance_to_surface': 5.092253528645251, 'distance_to_pocket': 5.092253528645251, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:36:57,237 - INFO - fda_0167_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:36:57,271 - INFO - fda_0167.pdbqt validation: {'valid': False, 'distance_to_surface': 7.2395240175028075, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:36:57,304 - INFO - Recenter candidate 1: fda_0167.pdbqt | score=-6.041 | dist=19.33 | center=(10.827333333333332, 18.460714285714282, 34.17757142857143)
+2025-08-15 11:36:57,304 - INFO - Recentered using ligand fda_0167.pdbqt — proposed new center (10.827333333333332, 18.460714285714282, 34.17757142857143).
+2025-08-15 11:37:24,958 - INFO - fda_0167.pdbqt retry#1 (too_far_from_pocket) -> {'valid': True, 'distance_to_surface': 3.20745413061512, 'distance_to_pocket': 3.20745413061512, 'clash_count': 0, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:25,158 - INFO - fda_0120_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:37:25,359 - INFO - fda_0120.pdbqt validation: {'valid': True, 'distance_to_surface': 3.412046160297365, 'distance_to_pocket': 3.412046160297365, 'clash_count': 1, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:25,492 - INFO - fda_0141_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:25,566 - INFO - fda_0141.pdbqt validation: {'valid': True, 'distance_to_surface': 2.725819142936671, 'distance_to_pocket': 2.725819142936671, 'clash_count': 1, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:25,730 - INFO - fda_0140_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:25,817 - INFO - fda_0140.pdbqt validation: {'valid': True, 'distance_to_surface': 2.08824184423165, 'distance_to_pocket': 2.08824184423165, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:25,983 - INFO - fda_0171_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:26,056 - INFO - fda_0171.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1244658152109666, 'distance_to_pocket': 2.1244658152109666, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:26,188 - INFO - fda_0168_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:26,320 - INFO - fda_0168.pdbqt validation: {'valid': True, 'distance_to_surface': 3.26660695523658, 'distance_to_pocket': 3.26660695523658, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:26,507 - INFO - fda_0139_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:26,609 - INFO - fda_0139.pdbqt validation: {'valid': True, 'distance_to_surface': 3.63411075780582, 'distance_to_pocket': 3.63411075780582, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:26,863 - INFO - fda_0170_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:26,967 - INFO - fda_0170.pdbqt validation: {'valid': True, 'distance_to_surface': 4.30863249767255, 'distance_to_pocket': 4.30863249767255, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:27,196 - INFO - fda_0172_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:27,278 - INFO - fda_0172.pdbqt validation: {'valid': True, 'distance_to_surface': 3.867971173625781, 'distance_to_pocket': 3.867971173625781, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:27,410 - INFO - fda_0121_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:27,590 - INFO - fda_0121.pdbqt validation: {'valid': True, 'distance_to_surface': 3.706937550053954, 'distance_to_pocket': 3.706937550053954, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:27,754 - INFO - fda_0155_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:27,918 - INFO - fda_0155.pdbqt validation: {'valid': True, 'distance_to_surface': 3.358059112046719, 'distance_to_pocket': 3.358059112046719, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:37:27,921 - INFO - fda_0176_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:37:29,690 - INFO - fda_0176.pdbqt validation: {'valid': False, 'distance_to_surface': 7.329771688122353, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:37:29,720 - INFO - Recenter candidate 1: fda_0176.pdbqt | score=-5.05 | dist=19.28 | center=(11.584187499999999, 18.479437499999996, 34.328625)
+2025-08-15 11:37:29,725 - INFO - Recentered using ligand fda_0176.pdbqt — proposed new center (11.584187499999999, 18.479437499999996, 34.328625).
+2025-08-15 11:38:05,254 - INFO - fda_0176.pdbqt retry#1 (too_far_from_pocket) -> {'valid': False, 'distance_to_surface': 7.000320635513775, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:38:05,283 - INFO - Recenter candidate 1: fda_0176.pdbqt | score=-5.05 | dist=19.28 | center=(11.584187499999999, 18.479437499999996, 34.328625)
+2025-08-15 11:38:05,284 - INFO - Recentered using ligand fda_0176.pdbqt — proposed new center (11.584187499999999, 18.479437499999996, 34.328625).
+2025-08-15 11:38:07,937 - INFO - fda_0176.pdbqt retry#2 (too_far_from_pocket) -> {'valid': False, 'distance_to_surface': 6.850911180273762, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:38:08,056 - INFO - fda_0157_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:38:08,192 - INFO - fda_0157.pdbqt validation: {'valid': True, 'distance_to_surface': 4.12076910297095, 'distance_to_pocket': 4.12076910297095, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:38:08,196 - INFO - fda_0175_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:38:08,280 - INFO - fda_0175.pdbqt validation: {'valid': False, 'distance_to_surface': 7.311647283615368, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:38:08,310 - INFO - Recenter candidate 1: fda_0175.pdbqt | score=-4.966 | dist=18.74 | center=(11.881937499999998, 18.627812499999997, 33.751625000000004)
+2025-08-15 11:38:08,311 - INFO - Recentered using ligand fda_0175.pdbqt — proposed new center (11.881937499999998, 18.627812499999997, 33.751625000000004).
+2025-08-15 11:39:00,532 - INFO - Processing protein: 10GS.pdb (id=10GS)
+2025-08-15 11:39:00,553 - INFO - Extracted 4 ligands -> E:\PythonProject\protein_automation\processed_pdbs\10GS\10GS_cleaned_ligands
+2025-08-15 11:39:00,558 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2025-08-15 11:39:35,627 - INFO - Valid .pdbqt ligands (global): 11
+2025-08-15 11:39:35,629 - INFO - Ligands queued for docking: 11
+2025-08-15 11:39:35,630 - INFO - Starting stage1 with 11 ligands...
+2025-08-15 11:39:45,841 - INFO - fda_0003_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:39:45,877 - INFO - fda_0003.pdbqt validation: {'valid': True, 'distance_to_surface': 3.9318100157561022, 'distance_to_pocket': 3.9318100157561022, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:39:48,760 - INFO - fda_0007_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:39:48,830 - INFO - fda_0007.pdbqt validation: {'valid': True, 'distance_to_surface': 5.875137700513921, 'distance_to_pocket': 5.875137700513921, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:39:52,121 - INFO - MES_B211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:39:52,131 - INFO - MES_B211.pdbqt validation: {'valid': False, 'distance_to_surface': 7.038440523297754, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:39:52,141 - INFO - Recenter candidate 1: MES_B211.pdbqt | score=-4.559 | dist=19.26 | center=(12.344133333333335, 19.3734, 34.11253333333334)
+2025-08-15 11:39:52,142 - INFO - Recentered using ligand MES_B211.pdbqt — proposed new center (12.344133333333335, 19.3734, 34.11253333333334).
+2025-08-15 11:40:04,830 - INFO - MES_B211.pdbqt retry#1 (too_far_from_pocket) -> {'valid': False, 'distance_to_surface': 6.84644360233837, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:40:04,841 - INFO - Recenter candidate 1: MES_B211.pdbqt | score=-4.559 | dist=19.26 | center=(12.344133333333335, 19.3734, 34.11253333333334)
+2025-08-15 11:40:04,842 - INFO - Recentered using ligand MES_B211.pdbqt — proposed new center (12.344133333333335, 19.3734, 34.11253333333334).
+2025-08-15 11:40:18,603 - INFO - MES_B211.pdbqt retry#2 (too_far_from_pocket) -> {'valid': False, 'distance_to_surface': 7.824971565443543, 'distance_to_pocket': None, 'clash_count': None, 'reason': 'Too far from pocket surface (> 6.0 Å)'}
+2025-08-15 11:40:18,605 - INFO - MES_A211_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:40:18,691 - INFO - MES_A211.pdbqt validation: {'valid': True, 'distance_to_surface': 3.142927775180333, 'distance_to_pocket': 3.142927775180333, 'clash_count': 2, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:18,693 - INFO - fda_0002_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:40:18,731 - INFO - fda_0002.pdbqt validation: {'valid': True, 'distance_to_surface': 4.503353639233768, 'distance_to_pocket': 4.503353639233768, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:18,733 - INFO - fda_0005_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:40:18,781 - INFO - fda_0005.pdbqt validation: {'valid': True, 'distance_to_surface': 2.297210046991786, 'distance_to_pocket': 2.297210046991786, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:18,783 - INFO - fda_0006_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:40:18,799 - INFO - fda_0006.pdbqt validation: {'valid': True, 'distance_to_surface': 2.659649224991897, 'distance_to_pocket': 2.659649224991897, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:18,801 - INFO - fda_0009_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:40:18,859 - INFO - fda_0009.pdbqt validation: {'valid': True, 'distance_to_surface': 2.5789172146464874, 'distance_to_pocket': 2.5789172146464874, 'clash_count': 1, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:32,217 - INFO - fda_0001_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:40:32,304 - INFO - fda_0001.pdbqt validation: {'valid': True, 'distance_to_surface': 2.374059182076136, 'distance_to_pocket': 2.374059182076136, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:34,047 - INFO - fda_0008_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 11:40:34,125 - INFO - fda_0008.pdbqt validation: {'valid': True, 'distance_to_surface': 2.3500553184978425, 'distance_to_pocket': 2.3500553184978425, 'clash_count': 0, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:39,447 - INFO - fda_0004_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 11:40:39,472 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.110416546561366, 'distance_to_pocket': 2.110416546561366, 'clash_count': 0, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:40:39,476 - INFO - Early recenter skipped: control-anchored validation present.
+2025-08-15 11:40:39,477 - INFO - Adaptive shrink: median dist 2.62 Å -> box (40.0, 40.0, 40.0) -> (36.0, 36.0, 36.0)
+2025-08-15 11:40:39,477 - INFO - Selected top 1 ligands (5.00000%) for the next stage.
+2025-08-15 11:40:39,479 - INFO - Starting stage2 with 1 ligands...
+2025-08-15 11:42:38,678 - INFO - fda_0004_stage2.pdbqt: RMSD filter kept 2, removed 8 duplicate poses.
+2025-08-15 11:42:38,728 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.3079579718877055, 'distance_to_pocket': 2.3079579718877055, 'clash_count': 0, 'hydrogen_bonds': 10, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:42:38,729 - INFO - Adaptive shrink: median dist 2.31 Å -> box (36.0, 36.0, 36.0) -> (32.0, 32.0, 32.0)
+2025-08-15 11:42:38,729 - INFO - Selected top 1 ligands (0.50000%) for the next stage.
+2025-08-15 11:42:38,731 - INFO - Starting stage3 with 1 ligands...
+2025-08-15 11:46:24,641 - INFO - fda_0004_stage3.pdbqt: RMSD filter kept 2, removed 18 duplicate poses.
+2025-08-15 11:46:24,708 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.5334257439285626, 'distance_to_pocket': 2.5334257439285626, 'clash_count': 0, 'hydrogen_bonds': 10, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 11:46:24,709 - INFO - Adaptive shrink: median dist 2.53 Å -> box (32.0, 32.0, 32.0) -> (28.0, 28.0, 28.0)
+2025-08-15 11:46:24,728 - INFO - [Polypharmacology] Selected top 1 ligands for images/validation.
+2025-08-15 11:46:27,970 - INFO - Score summary written: E:/PythonProject/protein_automation/docked\10GS\docking_score_summary.csv
+2025-08-15 13:14:32,714 - INFO - Processing protein: 10GS.pdb (id=10GS)
+2025-08-15 13:14:32,722 - INFO - Extracted 4 ligands -> E:\PythonProject\protein_automation\processed_pdbs\10GS\10GS_cleaned_ligands
+2025-08-15 13:14:32,725 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2025-08-15 13:14:59,213 - INFO - Initial box clamped to (28.0, 28.0, 28.0) (cap=28 Å)
+2025-08-15 13:15:00,420 - INFO - Valid .pdbqt ligands (global): 19
+2025-08-15 13:15:00,423 - INFO - Ligands queued for docking: 19
+2025-08-15 13:15:00,424 - INFO - Starting stage1 with 19 ligands...
+2025-08-15 13:15:11,577 - INFO - fda_0003_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:11,611 - INFO - fda_0003.pdbqt validation: {'valid': True, 'distance_to_surface': 3.9084095230668945, 'distance_to_pocket': 3.9084095230668945, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:11,674 - INFO - HUP_A1540_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:11,717 - INFO - HUP_A1540.pdbqt validation: {'valid': True, 'distance_to_surface': 3.032941476520772, 'distance_to_pocket': 3.032941476520772, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:14,361 - INFO - fda_0007_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:14,386 - INFO - fda_0007.pdbqt validation: {'valid': True, 'distance_to_surface': 3.2502812186024785, 'distance_to_pocket': 3.2502812186024785, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:15,022 - INFO - NAG_A467_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:15,085 - INFO - NAG_A467.pdbqt validation: {'valid': True, 'distance_to_surface': 2.8739886916966118, 'distance_to_pocket': 2.8739886916966118, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:15,095 - INFO - NAG_B1_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:15,136 - INFO - NAG_B1.pdbqt validation: {'valid': True, 'distance_to_surface': 3.2866843474845577, 'distance_to_pocket': 3.2866843474845577, 'clash_count': 3, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:15,157 - INFO - MES_B211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:15,212 - INFO - MES_B211.pdbqt validation: {'valid': True, 'distance_to_surface': 4.541220320574635, 'distance_to_pocket': 4.541220320574635, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:15,329 - INFO - MES_A211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:15,359 - INFO - MES_A211.pdbqt validation: {'valid': True, 'distance_to_surface': 3.685841559264316, 'distance_to_pocket': 3.685841559264316, 'clash_count': 2, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:15,523 - INFO - NAG_A1536_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:15,648 - INFO - NAG_A1536.pdbqt validation: {'valid': True, 'distance_to_surface': 3.180034748237824, 'distance_to_pocket': 3.180034748237824, 'clash_count': 2, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:15,785 - INFO - NAG_B2_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:15,839 - INFO - NAG_B2.pdbqt validation: {'valid': True, 'distance_to_surface': 3.307183847323883, 'distance_to_pocket': 3.307183847323883, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:15,942 - INFO - NAG_A1539_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:15,976 - INFO - NAG_A1539.pdbqt validation: {'valid': True, 'distance_to_surface': 3.455143991210787, 'distance_to_pocket': 3.455143991210787, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:21,302 - INFO - fda_0002_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:21,339 - INFO - fda_0002.pdbqt validation: {'valid': True, 'distance_to_surface': 3.464712686500861, 'distance_to_pocket': 3.464712686500861, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:29,167 - INFO - fda_0006_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 13:15:29,201 - INFO - fda_0006.pdbqt validation: {'valid': True, 'distance_to_surface': 2.9284784445168786, 'distance_to_pocket': 2.9284784445168786, 'clash_count': 3, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:29,555 - INFO - fda_0005.pdbqt validation: {'valid': True, 'distance_to_surface': 2.2782890510205243, 'distance_to_pocket': 2.2782890510205243, 'clash_count': 0, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:32,183 - INFO - fda_0009_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 13:15:32,261 - INFO - fda_0009.pdbqt validation: {'valid': True, 'distance_to_surface': 2.166170353411752, 'distance_to_pocket': 2.166170353411752, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:15:40,106 - INFO - RA2_A468_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:15:40,146 - INFO - RA2_A468.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4267497720142908, 'distance_to_pocket': 3.4267497720142908, 'clash_count': 1, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:16:00,244 - INFO - fda_0001.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1979811191181775, 'distance_to_pocket': 2.1979811191181775, 'clash_count': 0, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:16:01,072 - INFO - fda_0004_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 13:16:01,135 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.2740773953407984, 'distance_to_pocket': 2.2740773953407984, 'clash_count': 0, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:16:04,741 - INFO - fda_0008.pdbqt validation: {'valid': True, 'distance_to_surface': 2.170047234508961, 'distance_to_pocket': 2.170047234508961, 'clash_count': 0, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:16:49,195 - INFO - XK2_A263_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 13:16:49,261 - INFO - XK2_A263.pdbqt validation: {'valid': True, 'distance_to_surface': 2.786229172196716, 'distance_to_pocket': 2.786229172196716, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:16:49,269 - INFO - Early recenter skipped: control-anchored validation present.
+2025-08-15 13:16:49,269 - INFO - Adaptive shrink: median dist 3.18 Å -> box (28.0, 28.0, 28.0) -> (24.0, 24.0, 24.0)
+2025-08-15 13:16:49,269 - INFO - Selected top 1 ligands (5.00000%) for the next stage.
+2025-08-15 13:16:49,272 - INFO - Starting stage2 with 1 ligands...
+2025-08-15 13:21:32,457 - INFO - XK2_A263_stage2.pdbqt: RMSD filter kept 3, removed 7 duplicate poses.
+2025-08-15 13:21:32,551 - INFO - XK2_A263.pdbqt validation: {'valid': True, 'distance_to_surface': 2.7376161162588146, 'distance_to_pocket': 2.7376161162588146, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:21:32,553 - INFO - Adaptive shrink: median dist 2.74 Å -> box (24.0, 24.0, 24.0) -> (20.0, 20.0, 20.0)
+2025-08-15 13:21:32,553 - INFO - Selected top 1 ligands (0.50000%) for the next stage.
+2025-08-15 13:21:32,555 - INFO - Starting stage3 with 1 ligands...
+2025-08-15 13:25:41,743 - WARNING - No score for XK2_A263.pdbqt
+2025-08-15 13:25:41,746 - INFO - Score summary written: E:/PythonProject/protein_automation/docked\10GS\docking_score_summary.csv
+2025-08-15 13:45:31,505 - INFO - Processing protein: 10GS.pdb (id=10GS)
+2025-08-15 13:45:31,514 - INFO - Extracted 4 ligands -> E:\PythonProject\protein_automation\processed_pdbs\10GS\10GS_cleaned_ligands
+2025-08-15 13:45:31,524 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2025-08-15 13:45:58,665 - INFO - Initial box clamped to (28.0, 28.0, 28.0) (cap=28 Å)
+2025-08-15 13:46:00,538 - INFO - Valid .pdbqt ligands (global): 21
+2025-08-15 13:46:00,540 - INFO - Ligands queued for docking: 21
+2025-08-15 13:46:00,541 - INFO - Starting stage1 with 21 ligands...
+2025-08-15 13:46:12,534 - INFO - HUP_A1540_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:12,574 - INFO - HUP_A1540.pdbqt validation: {'valid': True, 'distance_to_surface': 3.701349753806035, 'distance_to_pocket': 3.701349753806035, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:12,812 - INFO - fda_0003_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:12,843 - INFO - fda_0003.pdbqt validation: {'valid': True, 'distance_to_surface': 3.941331120319631, 'distance_to_pocket': 3.941331120319631, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:15,359 - INFO - fda_0007_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:15,389 - INFO - fda_0007.pdbqt validation: {'valid': True, 'distance_to_surface': 3.84498296485173, 'distance_to_pocket': 3.84498296485173, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:15,938 - INFO - NAG_A1536_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:15,998 - INFO - NAG_A1536.pdbqt validation: {'valid': True, 'distance_to_surface': 1.7943215988222396, 'distance_to_pocket': 1.7943215988222396, 'clash_count': 1, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:16,000 - INFO - MES_B211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:16,025 - INFO - MES_B211.pdbqt validation: {'valid': True, 'distance_to_surface': 3.239832248743753, 'distance_to_pocket': 3.239832248743753, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:16,172 - INFO - NAG_A1539_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:16,287 - INFO - NAG_A1539.pdbqt validation: {'valid': True, 'distance_to_surface': 1.973626864430052, 'distance_to_pocket': 1.973626864430052, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:16,441 - INFO - NAG_B2_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:16,486 - INFO - NAG_B2.pdbqt validation: {'valid': True, 'distance_to_surface': 2.046939422650315, 'distance_to_pocket': 2.046939422650315, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:16,754 - INFO - NAG_B1_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:16,786 - INFO - NAG_B1.pdbqt validation: {'valid': True, 'distance_to_surface': 2.20574726566758, 'distance_to_pocket': 2.20574726566758, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:16,869 - INFO - MES_A211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:16,908 - INFO - MES_A211.pdbqt validation: {'valid': True, 'distance_to_surface': 3.192133612491809, 'distance_to_pocket': 3.192133612491809, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:17,695 - INFO - NAG_A467_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:17,726 - INFO - NAG_A467.pdbqt validation: {'valid': True, 'distance_to_surface': 1.8697732482844003, 'distance_to_pocket': 1.8697732482844003, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:25,204 - INFO - fda_0002_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:25,392 - INFO - fda_0002.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4462520221249076, 'distance_to_pocket': 3.4462520221249076, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:31,733 - INFO - fda_0006.pdbqt validation: {'valid': True, 'distance_to_surface': 2.011762908495928, 'distance_to_pocket': 2.011762908495928, 'clash_count': 2, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:31,755 - INFO - fda_0005_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 13:46:31,787 - INFO - fda_0005.pdbqt validation: {'valid': True, 'distance_to_surface': 2.0195308861218244, 'distance_to_pocket': 2.0195308861218244, 'clash_count': 0, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:34,786 - INFO - fda_0009_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:34,819 - INFO - fda_0009.pdbqt validation: {'valid': True, 'distance_to_surface': 2.251085738038427, 'distance_to_pocket': 2.251085738038427, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:46:42,781 - INFO - RA2_A468_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:46:42,817 - INFO - RA2_A468.pdbqt validation: {'valid': True, 'distance_to_surface': 3.270285767329822, 'distance_to_pocket': 3.270285767329822, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:47:02,725 - INFO - fda_0001.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1458094043973235, 'distance_to_pocket': 2.1458094043973235, 'clash_count': 0, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:47:04,987 - INFO - fda_0004_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 13:47:05,023 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 1.9325035575646423, 'distance_to_pocket': 1.9325035575646423, 'clash_count': 1, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:47:09,379 - INFO - fda_0008.pdbqt validation: {'valid': True, 'distance_to_surface': 2.2247880797954656, 'distance_to_pocket': 2.2247880797954656, 'clash_count': 1, 'hydrogen_bonds': 10, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:47:33,948 - INFO - VWW_B210_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 13:47:34,030 - INFO - VWW_B210.pdbqt validation: {'valid': True, 'distance_to_surface': 1.943428413911868, 'distance_to_pocket': 1.943428413911868, 'clash_count': 1, 'hydrogen_bonds': 11, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:47:35,112 - INFO - VWW_A210_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 13:47:35,170 - INFO - VWW_A210.pdbqt validation: {'valid': True, 'distance_to_surface': 1.3969259107053613, 'distance_to_pocket': 1.3969259107053613, 'clash_count': 3, 'hydrogen_bonds': 13, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:47:54,589 - INFO - XK2_A263.pdbqt validation: {'valid': True, 'distance_to_surface': 2.901188377199935, 'distance_to_pocket': 2.901188377199935, 'clash_count': 1, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:47:54,598 - INFO - Early recenter skipped: control-anchored validation present.
+2025-08-15 13:47:54,598 - INFO - Adaptive shrink: median dist 2.21 Å -> box (28.0, 28.0, 28.0) -> (24.0, 24.0, 24.0)
+2025-08-15 13:47:54,598 - INFO - Selected top 1 ligands (5.00000%) for the next stage.
+2025-08-15 13:47:54,601 - INFO - Starting stage2 with 1 ligands...
+2025-08-15 13:52:13,810 - INFO - XK2_A263_stage2.pdbqt: RMSD filter kept 3, removed 7 duplicate poses.
+2025-08-15 13:52:13,912 - INFO - XK2_A263.pdbqt validation: {'valid': True, 'distance_to_surface': 2.9740775040338137, 'distance_to_pocket': 2.9740775040338137, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 13:52:13,913 - INFO - Adaptive shrink: median dist 2.97 Å -> box (24.0, 24.0, 24.0) -> (20.0, 20.0, 20.0)
+2025-08-15 13:52:13,913 - INFO - Selected top 1 ligands (0.50000%) for the next stage.
+2025-08-15 13:52:13,917 - INFO - Starting stage3 with 1 ligands...
+2025-08-15 13:58:01,252 - WARNING - No score for XK2_A263.pdbqt
+2025-08-15 13:58:01,256 - INFO - Score summary written: E:/PythonProject/protein_automation/docked\10GS\docking_score_summary.csv
+2025-08-15 13:59:33,074 - INFO - Processing protein: 10GS.pdb (id=10GS)
+2025-08-15 13:59:33,083 - INFO - Extracted 4 ligands -> E:\PythonProject\protein_automation\processed_pdbs\10GS\10GS_cleaned_ligands
+2025-08-15 13:59:33,087 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2025-08-15 14:00:02,563 - INFO - Initial box clamped to (28.0, 28.0, 28.0) (cap=28 Å)
+2025-08-15 14:00:05,762 - INFO - Valid .pdbqt ligands (global): 13
+2025-08-15 14:00:05,764 - INFO - Ligands queued for docking: 13
+2025-08-15 14:00:05,766 - INFO - Starting stage1 with 13 ligands...
+2025-08-15 14:00:15,007 - INFO - fda_0003_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:00:15,054 - INFO - fda_0003.pdbqt validation: {'valid': True, 'distance_to_surface': 3.8170890741506156, 'distance_to_pocket': 3.8170890741506156, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:00:18,405 - INFO - fda_0007_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:00:18,456 - INFO - fda_0007.pdbqt validation: {'valid': True, 'distance_to_surface': 3.8032635985427063, 'distance_to_pocket': 3.8032635985427063, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:00:21,077 - INFO - MES_A211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:00:21,092 - INFO - MES_A211.pdbqt validation: {'valid': True, 'distance_to_surface': 2.992158084059063, 'distance_to_pocket': 2.992158084059063, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:00:21,125 - INFO - MES_B211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:00:21,153 - INFO - MES_B211.pdbqt validation: {'valid': True, 'distance_to_surface': 2.6786052340723896, 'distance_to_pocket': 2.6786052340723896, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:00:28,431 - INFO - fda_0002_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:00:28,460 - INFO - fda_0002.pdbqt validation: {'valid': True, 'distance_to_surface': 3.3980915231935716, 'distance_to_pocket': 3.3980915231935716, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:00:36,587 - INFO - fda_0006_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 14:00:36,664 - INFO - fda_0006.pdbqt validation: {'valid': True, 'distance_to_surface': 2.9837377565731207, 'distance_to_pocket': 2.9837377565731207, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:00:40,273 - INFO - fda_0005_stage1.pdbqt: RMSD filter kept 1, removed 1 duplicate poses.
+2025-08-15 14:00:40,349 - INFO - fda_0005.pdbqt validation: {'valid': True, 'distance_to_surface': 2.0539391422337725, 'distance_to_pocket': 2.0539391422337725, 'clash_count': 0, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:00:41,396 - INFO - fda_0009_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:00:41,438 - INFO - fda_0009.pdbqt validation: {'valid': True, 'distance_to_surface': 2.0962027573686672, 'distance_to_pocket': 2.0962027573686672, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:01:13,857 - INFO - fda_0001.pdbqt validation: {'valid': True, 'distance_to_surface': 2.214501298261077, 'distance_to_pocket': 2.214501298261077, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:01:15,439 - INFO - fda_0004_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 14:01:15,531 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.35312621845918, 'distance_to_pocket': 2.35312621845918, 'clash_count': 0, 'hydrogen_bonds': 6, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:01:16,785 - INFO - fda_0008.pdbqt validation: {'valid': True, 'distance_to_surface': 2.0268265836030466, 'distance_to_pocket': 2.0268265836030466, 'clash_count': 0, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:01:44,884 - INFO - VWW_B210.pdbqt validation: {'valid': True, 'distance_to_surface': 1.4121989944763456, 'distance_to_pocket': 1.4121989944763456, 'clash_count': 2, 'hydrogen_bonds': 21, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:01:45,587 - INFO - VWW_A210_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 14:01:45,647 - INFO - VWW_A210.pdbqt validation: {'valid': True, 'distance_to_surface': 1.8714416902484547, 'distance_to_pocket': 1.8714416902484547, 'clash_count': 2, 'hydrogen_bonds': 11, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:01:45,653 - INFO - Early recenter skipped: control-anchored validation present.
+2025-08-15 14:01:45,654 - INFO - Adaptive shrink: median dist 2.35 Å -> box (28.0, 28.0, 28.0) -> (24.0, 24.0, 24.0)
+2025-08-15 14:01:45,654 - INFO - Selected top 1 ligands (5.00000%) for the next stage.
+2025-08-15 14:01:45,656 - INFO - Starting stage2 with 1 ligands...
+2025-08-15 14:04:03,364 - INFO - fda_0004_stage2.pdbqt: RMSD filter kept 2, removed 8 duplicate poses.
+2025-08-15 14:04:03,431 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.033820542722488, 'distance_to_pocket': 2.033820542722488, 'clash_count': 0, 'hydrogen_bonds': 11, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:04:03,432 - INFO - Adaptive shrink: median dist 2.03 Å -> box (24.0, 24.0, 24.0) -> (20.0, 20.0, 20.0)
+2025-08-15 14:04:03,432 - INFO - Selected top 1 ligands (0.50000%) for the next stage.
+2025-08-15 14:04:03,434 - INFO - Starting stage3 with 1 ligands...
+2025-08-15 14:04:09,237 - WARNING - No score for fda_0004.pdbqt
+2025-08-15 14:04:09,240 - INFO - Score summary written: E:/PythonProject/protein_automation/docked\10GS\docking_score_summary.csv
+2025-08-15 14:04:44,357 - INFO - Processing protein: 10GS.pdb (id=10GS)
+2025-08-15 14:04:44,372 - INFO - Extracted 4 ligands -> E:\PythonProject\protein_automation\processed_pdbs\10GS\10GS_cleaned_ligands
+2025-08-15 14:04:44,378 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2025-08-15 14:05:10,798 - INFO - Initial box clamped to (28.0, 28.0, 28.0) (cap=28 Å)
+2025-08-15 14:05:12,743 - INFO - Valid .pdbqt ligands (global): 13
+2025-08-15 14:05:12,745 - INFO - Ligands queued for docking: 13
+2025-08-15 14:05:12,746 - INFO - Starting stage1 with 13 ligands...
+2025-08-15 14:05:20,300 - INFO - fda_0003_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:05:20,335 - INFO - fda_0003.pdbqt validation: {'valid': True, 'distance_to_surface': 3.7433893732819192, 'distance_to_pocket': 3.7433893732819192, 'clash_count': 0, 'hydrogen_bonds': 0, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:05:21,770 - INFO - fda_0007_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:05:21,788 - INFO - fda_0007.pdbqt validation: {'valid': True, 'distance_to_surface': 3.904353211480745, 'distance_to_pocket': 3.904353211480745, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:05:22,953 - INFO - MES_A211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:05:22,978 - INFO - MES_A211.pdbqt validation: {'valid': True, 'distance_to_surface': 2.9085269467550083, 'distance_to_pocket': 2.9085269467550083, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:05:22,980 - INFO - MES_B211_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:05:23,004 - INFO - MES_B211.pdbqt validation: {'valid': True, 'distance_to_surface': 2.9309849880202394, 'distance_to_pocket': 2.9309849880202394, 'clash_count': 0, 'hydrogen_bonds': 5, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:05:28,815 - INFO - fda_0002_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:05:28,851 - INFO - fda_0002.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4671853137667736, 'distance_to_pocket': 3.4671853137667736, 'clash_count': 0, 'hydrogen_bonds': 1, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:05:36,244 - INFO - fda_0006_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:05:36,320 - INFO - fda_0006.pdbqt validation: {'valid': True, 'distance_to_surface': 3.4513152565362692, 'distance_to_pocket': 3.4513152565362692, 'clash_count': 0, 'hydrogen_bonds': 2, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:05:37,429 - INFO - fda_0005_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 14:05:37,492 - INFO - fda_0005.pdbqt validation: {'valid': True, 'distance_to_surface': 2.095384928837659, 'distance_to_pocket': 2.095384928837659, 'clash_count': 0, 'hydrogen_bonds': 4, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:05:39,634 - INFO - fda_0009_stage1.pdbqt: RMSD filter kept 1, removed 2 duplicate poses.
+2025-08-15 14:05:39,664 - INFO - fda_0009.pdbqt validation: {'valid': True, 'distance_to_surface': 1.5346221033205565, 'distance_to_pocket': 1.5346221033205565, 'clash_count': 1, 'hydrogen_bonds': 3, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:06:05,150 - INFO - fda_0001.pdbqt validation: {'valid': True, 'distance_to_surface': 2.02385572608326, 'distance_to_pocket': 2.02385572608326, 'clash_count': 0, 'hydrogen_bonds': 7, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:06:09,297 - INFO - fda_0008_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 14:06:09,352 - INFO - fda_0008.pdbqt validation: {'valid': True, 'distance_to_surface': 2.098848732043357, 'distance_to_pocket': 2.098848732043357, 'clash_count': 0, 'hydrogen_bonds': 9, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:06:09,543 - INFO - fda_0004_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 14:06:09,622 - INFO - fda_0004.pdbqt validation: {'valid': True, 'distance_to_surface': 2.1829910673202506, 'distance_to_pocket': 2.1829910673202506, 'clash_count': 0, 'hydrogen_bonds': 8, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:06:32,077 - INFO - VWW_B210_stage1.pdbqt: RMSD filter kept 2, removed 1 duplicate poses.
+2025-08-15 14:06:32,187 - INFO - VWW_B210.pdbqt validation: {'valid': True, 'distance_to_surface': 1.6184597616252303, 'distance_to_pocket': 1.6184597616252303, 'clash_count': 2, 'hydrogen_bonds': 12, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:06:32,898 - INFO - VWW_A210.pdbqt validation: {'valid': False, 'distance_to_surface': 1.7516683476046493, 'distance_to_pocket': 1.7516683476046493, 'clash_count': 4, 'reason': '4 clashes detected (>3)'}
+2025-08-15 14:08:30,456 - INFO - Early recenter skipped: control-anchored validation present.
+2025-08-15 14:08:30,456 - INFO - Adaptive shrink: median dist 2.18 Å -> box (28.0, 28.0, 28.0) -> (24.0, 24.0, 24.0)
+2025-08-15 14:08:30,456 - INFO - Selected top 1 ligands (5.00000%) for the next stage.
+2025-08-15 14:08:30,459 - INFO - Starting stage2 with 1 ligands...
+2025-08-15 14:11:43,175 - INFO - VWW_B210_stage2.pdbqt: RMSD filter kept 3, removed 7 duplicate poses.
+2025-08-15 14:11:43,259 - INFO - VWW_B210.pdbqt validation: {'valid': True, 'distance_to_surface': 1.4574103746028428, 'distance_to_pocket': 1.4574103746028428, 'clash_count': 2, 'hydrogen_bonds': 15, 'lipinski': None, 'reason': 'Valid pose'}
+2025-08-15 14:11:43,260 - INFO - Adaptive shrink: median dist 1.46 Å -> box (24.0, 24.0, 24.0) -> (20.0, 20.0, 20.0)
+2025-08-15 14:11:43,261 - INFO - Selected top 1 ligands (0.50000%) for the next stage.
+2025-08-15 14:11:43,263 - INFO - Starting stage3 with 1 ligands...
