@@ -1,24 +1,19 @@
-import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Descriptors
-from pathlib import Path
-import os
+from input_and_export_functions import extract_best_score
+import numpy as np
+
 def parse_pdbqt_coordinates(pdbqt_file):
-    coords = []
-    elements = []
-    with open(pdbqt_file, 'r') as f:
+    coords, elements = [], []
+    with open(pdbqt_file, "r") as f:
         for line in f:
-            if line.startswith("ATOM") or line.startswith("HETATM"):
-                parts = line.split()
+            if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
                 try:
-                    x = float(parts[5])
-                    y = float(parts[6])
-                    z = float(parts[7])
-                except (IndexError, ValueError):
+                    x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+                except ValueError:
                     continue
-                element = parts[-1]
-                coords.append([x, y, z])
-                elements.append(element)
+                elem = (line[76:78].strip() if len(line) >= 78 else line[12:16].strip()[0])
+                coords.append([x, y, z]); elements.append(elem)
     return np.array(coords), elements
 
 
@@ -71,51 +66,97 @@ def extract_surface_atoms(pdbqt_path, max_dist_from_center=12.0, center=None):
         coords = np.array([c for c in coords if np.linalg.norm(c - center) <= max_dist_from_center])
     return coords
 
-def attempt_fallback_recenter(fallback_ligands, receptor_pdbqt, docking_dir, stage_name, pocket_center, logger):
-    if not fallback_ligands:
-        logger.warning("No fallback ligands available.")
-        return None, pocket_center, None
 
-    sorted_ligands = sorted(fallback_ligands.items(), key=lambda x: x[1])  # sort by score
-    best_lig_path = None
-    best_center = pocket_center
+def attempt_fallback_recenter(
+    fallback_ligands: dict,             # {orig_ligand_path_norm -> pose_out_path_norm}
+    receptor_pdbqt: str,
+    docking_dir: str,
+    stage_name: str,
+    pocket_center: tuple,
+    logger,
+    exclude_basenames: set = None,      # NEW
+    max_candidates: int = 5,            # try a handful
+):
+    """
+    Returns (fb_pose_path, new_center, best_score, chosen_ligand_path) where chosen_ligand_path
+    is the original ligand we used to propose the new center. If no center found, returns (None, None, None, None).
+    """
+    import os
+    exclude_basenames = exclude_basenames or set()
 
-    for ligand_path, score in sorted_ligands:
-        fallback_pose_path = Path(docking_dir) / stage_name / f"{Path(ligand_path).stem}_{stage_name}.pdbqt"
-        if not fallback_pose_path.exists():
-            logger.warning(f"Fallback pose path missing: {fallback_pose_path}")
-            continue
+    candidates = []
+    # Build a ranked list of candidates by (is_valid_first, score_asc, distance_asc)
+    for lig_path, pose_path in fallback_ligands.items():
+        try:
+            # Your existing helper; if not available here, import from input_and_export_functions
+            score = extract_best_score(pose_path) if os.path.exists(pose_path) else None
+        except Exception:
+            score = None
 
-        coords, elements = parse_pdbqt_coordinates(fallback_pose_path)
-        if len(coords) == 0:
-            logger.warning(f"No coordinates found in fallback pose: {fallback_pose_path}")
-            continue
-
-        new_center = np.mean(coords, axis=0).tolist()
-        surface_coords = extract_surface_atoms(receptor_pdbqt, center=new_center)
-
-        result = validate_pose_pdbqt(
+        # Validate pose relative to current (possibly wrong) center to get a distance
+        res = validate_pose_pdbqt(
             protein_pdbqt=receptor_pdbqt,
-            ligand_pdbqt=fallback_pose_path,
-            pocket_center=new_center,
+            ligand_pdbqt=pose_path,
+            pocket_center=pocket_center,
             clash_threshold=2.0,
+            CLASH_TOLERANCE=3,
             DIST_THRESHOLD_SURFACE=6.0,
             DIST_THRESHOLD_CENTROID=4.5,
-            surface_atom_coords=surface_coords,
+            surface_atom_coords=None
         )
+        dist = res.get("distance_to_pocket", float("inf"))
+        valid = bool(res.get("valid", False))
+        base = os.path.basename(lig_path)
 
-        if result.get("valid", False):
-            logger.info(f"Recentered using ligand {Path(ligand_path).stem} — validation passed.")
-            best_score = score
-            return str(fallback_pose_path), new_center, best_score
+        if base in exclude_basenames:
+            continue
 
-        # If not valid, keep this as best option to recenter anyway
-        if best_lig_path is None:
-            best_lig_path = fallback_pose_path
-            best_center = new_center
+        # sort key: valid first, then best score (lower), then closer distance
+        score_key = (0 if valid else 1, (score if isinstance(score, (int, float)) else float("inf")), dist)
+        candidates.append((score_key, lig_path, pose_path, score, dist))
 
-    logger.warning("No fallback ligand passed validation — recentering using best-scoring ligand anyway.")
-    return str(best_lig_path), best_center, sorted_ligands[0][1]
+    if not candidates:
+        logger.warning("Fallback recenter: no eligible candidates after exclusions.")
+        return None, None, None, None
+
+    candidates.sort(key=lambda x: x[0])
+    tried = 0
+    for _, lig_path, pose_path, score, dist in candidates:
+        tried += 1
+        # Propose new center from this pose (ligand centroid)
+        try:
+            new_center = _pose_centroid_from_pdbqt(pose_path)  # helper below
+        except Exception as e:
+            logger.warning(f"Fallback recenter: failed to compute centroid for {os.path.basename(pose_path)}: {e}")
+            new_center = None
+
+        logger.info(f"Recenter candidate {tried}: {os.path.basename(lig_path)} | score={score} | dist={dist:.2f} | center={new_center}")
+        if new_center is not None:
+            logger.info(f"Recentered using ligand {os.path.basename(lig_path)} — proposed new center {new_center}.")
+            return pose_path, tuple(map(float, new_center)), score, lig_path
+
+        if tried >= max_candidates:
+            break
+
+    logger.warning("Fallback recenter: no workable candidate produced a new center.")
+    return None, None, None, None
+
+
+def _pose_centroid_from_pdbqt(pdbqt_path: str):
+    """Compute centroid of HETATM/ATOM coordinates in a PDBQT pose."""
+    xs, ys, zs = [], [], []
+    with open(pdbqt_path, "r") as f:
+        for line in f:
+            if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
+                # columns 31-38, 39-46, 47-54 (1-based PDB), but PDBQT is similar
+                try:
+                    x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+                    xs.append(x); ys.append(y); zs.append(z)
+                except ValueError:
+                    continue
+    if not xs:
+        return None
+    return (sum(xs)/len(xs), sum(ys)/len(ys), sum(zs)/len(zs))
 
 
 def validate_pose_pdbqt(
@@ -210,3 +251,193 @@ def validate_pose_pdbqt(
         "reason": "Valid pose (fallback used)" if used_fallback else "Valid pose"
     }
 
+# =========================
+# RMSD pose filtering utils
+# =========================
+import re
+from typing import List, Tuple, Optional
+
+def _parse_vina_score_from_lines(lines: List[str]) -> Optional[float]:
+    """
+    Parse the 'REMARK VINA RESULT:   -8.7  0.0  0.0' score in a block.
+    Returns float or None if not found.
+    """
+    pat = re.compile(r"REMARK\s+VINA\s+RESULT:\s*([-\d\.]+)")
+    for ln in lines:
+        m = pat.search(ln)
+        if m:
+            try:
+                return float(m.group(1))
+            except Exception:
+                return None
+    return None
+
+def _split_pdbqt_models(pdbqt_path: str) -> List[List[str]]:
+    """
+    Split a multi-model PDBQT into a list of model blocks (list-of-lines per model).
+    If no MODEL/ENDMDL tags exist, treat entire file as a single-model block.
+    """
+    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f:
+        all_lines = f.readlines()
+
+    blocks: List[List[str]] = []
+    cur: List[str] = []
+    in_model = False
+    for ln in all_lines:
+        if ln.startswith("MODEL"):
+            if cur:
+                blocks.append(cur)
+                cur = []
+            in_model = True
+            cur.append(ln)
+        elif ln.startswith("ENDMDL"):
+            cur.append(ln)
+            blocks.append(cur)
+            cur = []
+            in_model = False
+        else:
+            cur.append(ln)
+
+    if in_model:
+        # dangling model (no ENDMDL): finalize
+        blocks.append(cur)
+    elif not blocks:
+        # no model tags: whole file is one "block"
+        blocks = [all_lines]
+
+    return blocks
+
+def _coords_from_block(block: List[str]) -> np.ndarray:
+    xs, ys, zs = [], [], []
+    for ln in block:
+        if (ln.startswith("ATOM") or ln.startswith("HETATM")) and len(ln) >= 54:
+            try:
+                x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+            except Exception:
+                parts = ln.split()
+                if len(parts) >= 8:
+                    try:
+                        x = float(parts[5]); y = float(parts[6]); z = float(parts[7])
+                    except Exception:
+                        continue
+                else:
+                    continue
+            xs.append(x); ys.append(y); zs.append(z)
+    if not xs:
+        return np.zeros((0,3), dtype=float)
+    return np.vstack([xs, ys, zs]).T.astype(float)
+
+def _kabsch(P: np.ndarray, Q: np.ndarray) -> float:
+    """
+    Return RMSD between two Nx3 point sets after optimal superposition.
+    Assumes P and Q have same shape and atom order.
+    """
+    if P.shape != Q.shape or P.size == 0:
+        return float("inf")
+
+    Pc = P - P.mean(axis=0)
+    Qc = Q - Q.mean(axis=0)
+
+    # covariance and SVD
+    C = Pc.T @ Qc
+    V, S, Wt = np.linalg.svd(C)
+    # proper rotation (determinant check)
+    d = np.sign(np.linalg.det(V @ Wt))
+    D = np.diag([1.0, 1.0, d])
+    U = V @ D @ Wt
+
+    P_rot = Pc @ U
+    diff = P_rot - Qc
+    return float(np.sqrt((diff * diff).sum() / P.shape[0]))
+
+def cluster_models_by_rmsd(blocks: List[List[str]], rmsd_tol: float = 2.0) -> List[int]:
+    """
+    Greedy clustering: keep the first model, then keep any model whose RMSD
+    to all kept models is >= rmsd_tol. Returns indices of kept models.
+    """
+    if not blocks:
+        return []
+
+    kept = []
+    kept_coords = []
+
+    for i, b in enumerate(blocks):
+        C = _coords_from_block(b)
+        # skip empty models
+        if C.shape[0] == 0:
+            continue
+        if not kept:
+            kept.append(i)
+            kept_coords.append(C)
+            continue
+        # compare to all previously kept coords
+        min_r = float("inf")
+        for KC in kept_coords:
+            if KC.shape[0] != C.shape[0]:
+                # different atom counts: fallback to centroid distance
+                r = float(np.linalg.norm(C.mean(axis=0) - KC.mean(axis=0)))
+            else:
+                r = _kabsch(C, KC)
+            if r < min_r:
+                min_r = r
+        if min_r >= rmsd_tol:
+            kept.append(i)
+            kept_coords.append(C)
+
+    return kept
+
+def _sort_model_indices_by_score(blocks: List[List[str]]) -> List[int]:
+    """
+    Sort model indices ascending by score (more negative first).
+    Falls back to original order if no scores found.
+    """
+    scored = []
+    for i, b in enumerate(blocks):
+        sc = _parse_vina_score_from_lines(b)
+        scored.append((i, sc))
+    if all(sc is None for _, sc in scored):
+        return list(range(len(blocks)))
+    # sort by score (lower/more negative first), None at end
+    return [i for (i, sc) in sorted(scored, key=lambda t: (t[1] is None, t[1]))]
+
+def filter_and_rewrite_poses_by_rmsd(pdbqt_path: str,
+                                     rmsd_tol: float = 2.0,
+                                     max_models: Optional[int] = None) -> Tuple[int, int]:
+    """
+    In-place filter: keep only unique poses >= rmsd_tol apart (Kabsch RMSD).
+    Optionally cap to top-N by score after dedup.
+    Returns (kept_count, removed_count).
+    No-ops if the file has <2 models.
+    """
+    blocks = _split_pdbqt_models(pdbqt_path)
+    if len(blocks) <= 1:
+        return (len(blocks), 0)
+
+    # first, sort by score so greedy takes best first
+    order = _sort_model_indices_by_score(blocks)
+    blocks_sorted = [blocks[i] for i in order]
+
+    kept_sorted_idx = cluster_models_by_rmsd(blocks_sorted, rmsd_tol=rmsd_tol)
+
+    # map back to original indices
+    kept_idx = [order[i] for i in kept_sorted_idx]
+    # optional cap
+    if max_models is not None and len(kept_idx) > max_models:
+        # re-sort kept by score (ascending) and take top-N
+        kept_idx = [i for i in _sort_model_indices_by_score([blocks[j] for j in kept_idx])][:max_models]
+
+    # write back (preserve MODEL/ENDMDL if present)
+    kept_blocks = [blocks[i] for i in kept_idx]
+    with open(pdbqt_path, "w", encoding="utf-8", errors="ignore") as f:
+        for bi, blk in enumerate(kept_blocks):
+            # Ensure MODEL/ENDMDL wrappers
+            has_model = any(ln.startswith("MODEL") for ln in blk)
+            has_end   = any(ln.startswith("ENDMDL") for ln in blk)
+            if not has_model:
+                f.write(f"MODEL        {bi+1}\n")
+            f.writelines(blk)
+            if not has_end:
+                f.write("ENDMDL\n")
+
+    removed = max(0, len(blocks) - len(kept_blocks))
+    return (len(kept_blocks), removed)

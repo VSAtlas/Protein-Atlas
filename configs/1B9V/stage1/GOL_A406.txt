@@ -1,4 +1,4 @@
-receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1B9V_NOLIG.pdbqt
+receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS/1B9V_NOLIG.pdbqt
 ligand = E:\PythonProject\protein_automation\prepped_ligands\4GT3\GOL_A406.pdbqt
 center_x = 32.035
 center_y = -9.211

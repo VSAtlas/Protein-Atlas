@@ -1,8 +1,8 @@
 receptor = E:/PYTHONPROJECT/PROTEIN_AUTOMATION/PROCESSED_PDBS\1A6Z_NOLIG.pdbqt
 ligand = E:\PythonProject\protein_automation\prepped_ligands\fda_0093.pdbqt
 center_x = 1.000
-center_y = 6.332
-center_z = 27.794
+center_y = 13.880
+center_z = 24.959
 size_x = 40.000
 size_y = 40.000
 size_z = 40.000

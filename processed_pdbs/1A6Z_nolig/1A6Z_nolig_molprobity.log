@@ -93,7 +93,7 @@ List of CYS excluded from plausible disulfide bonds:
     "ATOM   1931  H   PRO A 207 .*.     H  "
     "ATOM   2057  H   PRO A 220 .*.     H  "
     ... (remaining 32 not shown)
-  Time building chain proxies: 1.11, per 1000 atoms: 0.16
+  Time building chain proxies: 1.44, per 1000 atoms: 0.21
   Number of scatterers: 6904
   At special positions: 0
   Unit cell: (67.484, 67.635, 141.734, 90, 90, 90)
@@ -171,11 +171,11 @@ List of CYS excluded from plausible disulfide bonds:
         Amino acid - RNA/DNA : False
       
   Number of custom bonds: simple=0, symmetry=0
-  Time building additional restraints: 0.85
+  Time building additional restraints: 0.87
   Adding C-beta torsion restraints...
   Number of C-beta restraints generated:  0
 
-  Time building geometry restraints manager: 1.00 seconds
+  Time building geometry restraints manager: 1.02 seconds
 
   NOTE: a complete listing of the restraints can be obtained by requesting
         output of .geo file.
@@ -188,22 +188,22 @@ List of CYS excluded from plausible disulfide bonds:
         1.70 -     1.88: 42
   Bond restraints: 7044
   Sorted by residual:
-  bond pdb=" N   ARG A   1 "
-       pdb=" H   ARG A   1 "
-    ideal  model  delta    sigma   weight residual
-    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.44e+01
   bond pdb=" N   ARG C 372 "
        pdb=" H   ARG C 372 "
     ideal  model  delta    sigma   weight residual
-    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.42e+01
+    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.43e+01
   bond pdb=" N   ILE B 273 "
        pdb=" H   ILE B 273 "
     ideal  model  delta    sigma   weight residual
-    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.41e+01
+    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.43e+01
   bond pdb=" N   ILE D 644 "
        pdb=" H   ILE D 644 "
     ideal  model  delta    sigma   weight residual
-    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.38e+01
+    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.40e+01
+  bond pdb=" N   ARG A   1 "
+       pdb=" H   ARG A   1 "
+    ideal  model  delta    sigma   weight residual
+    0.860  1.020 -0.160 2.00e-02 2.50e+03 6.39e+01
   bond pdb=" N   ASP B 331 "
        pdb=" H   ASP B 331 "
     ideal  model  delta    sigma   weight residual
@@ -336,11 +336,11 @@ List of CYS excluded from plausible disulfide bonds:
 
   Histogram of nonbonded interaction distances:
         1.07 -     1.78: 88
-        1.78 -     2.48: 952
-        2.48 -     3.19: 10733
-        3.19 -     3.89: 17857
+        1.78 -     2.48: 950
+        2.48 -     3.19: 10729
+        3.19 -     3.89: 17860
         3.89 -     4.60: 26026
-  Nonbonded interactions: 55656
+  Nonbonded interactions: 55653
   Sorted by model distance:
   nonbonded pdb=" CD  PRO B 277 "
             pdb=" H   PRO B 277 "
@@ -362,7 +362,7 @@ List of CYS excluded from plausible disulfide bonds:
             pdb=" H   PRO A 249 "
      model   vdw
      1.070 1.000
-  ... (remaining 55651 not shown)
+  ... (remaining 55648 not shown)
 
   NOTE: a complete listing of the restraints can be obtained by requesting
         output of .geo file.
@@ -1911,10 +1911,10 @@ End of input processing
    C 628  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
    A 129  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
    B 331  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A   1  ARG  H  , Bond N--H, observed: 1.020, delta from target: -0.160
    D 644  ILE  H  , Bond N--H, observed: 1.020, delta from target: -0.160
    B 273  ILE  H  , Bond N--H, observed: 1.020, delta from target: -0.160
    C 372  ARG  H  , Bond N--H, observed: 1.020, delta from target: -0.160
-   A   1  ARG  H  , Bond N--H, observed: 1.020, delta from target: -0.160
 
 ============================ Molprobity validation ============================
 

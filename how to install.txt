@@ -7,7 +7,9 @@ pip install pandas biopython p2ranktools
 pip install pywin32
 pip install biopython
 conda install requests
-
+conda install -c conda-forge pubchempy
+conda install -c conda-forge "rdkit>=2022.09"
+conda install -c conda-forge rdkit
  
 conda install -c salilab modeller
 set MODELLER_KEY=MODELIRANJE   # on Windows, also this might not work, might have to manually edit the modeller config file

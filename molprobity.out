@@ -2,12 +2,12 @@
 =============================== Model properties ==============================
 
    Number of:
-     all atoms      : 6904
-     H or D atoms   : 742
-     chains         : 4
-     a.a. residues  : 742
+     all atoms      : 3685
+     H or D atoms   : 416
+     chains         : 2
+     a.a. residues  : 416
      nucleotides    : 0
-     water          : 0
+     water          : 7
      other (ligands): 0
    Ligands: None
 
@@ -16,73 +16,58 @@
 
                         ----------Bond lengths----------                       
 
-  atoms                 ideal   model   delta   sigma   slack  residual   deviation
-   C 583  MET  SD
-   C 583  MET  CE          1.79     1.66     0.13  2.50e-02  2.66e+01   5.2*sigma
-   C 381  MET  SD
-   C 381  MET  CE          1.79     1.68     0.11  2.50e-02  1.99e+01   4.5*sigma
-   A  10  MET  SD
-   A  10  MET  CE          1.79     1.69     0.11  2.50e-02  1.77e+01   4.2*sigma
+  All restrained atoms within 4.0 sigma of ideal values.
 
   Min. delta:    0.000 (Z=  0.000)
-  Max. delta:    0.129 (Z=  5.162)
-  Mean delta:    0.009 (Z=  0.386)
+  Max. delta:    0.061 (Z=  2.440)
+  Mean delta:    0.006 (Z=  0.244)
 
                         ----------Bond angles----------                        
 
   atoms                   ideal    model    delta   sigma  residual   deviation
-   C 605  ASN  N
-   C 605  ASN CA
-   C 605  ASN  C         111.00    96.91    14.09  2.80e+00  2.53e+01   5.0*sigma
-   A 234  ASN  N
-   A 234  ASN CA
-   A 234  ASN  C         111.00    97.92    13.08  2.80e+00  2.18e+01   4.7*sigma
-   B 278  LYS  N
-   B 278  LYS CA
-   B 278  LYS  C         111.00    98.65    12.35  2.80e+00  1.95e+01   4.4*sigma
-   D 649  LYS  N
-   D 649  LYS CA
-   D 649  LYS  C         111.00    99.09    11.91  2.80e+00  1.81e+01   4.3*sigma
-   A 184  LEU  N
-   A 184  LEU CA
-   A 184  LEU  C         111.00    99.33    11.67  2.80e+00  1.74e+01   4.2*sigma
+   A  53  LYS  N
+   A  53  LYS CA
+   A  53  LYS  C         111.00    99.70    11.30  2.80e+00  1.63e+01   4.0*sigma
+   B 265  LYS  N
+   B 265  LYS CA
+   B 265  LYS  C         111.00    99.77    11.23  2.80e+00  1.61e+01   4.0*sigma
 
   Min. delta:    0.000 (Z=  0.000)
-  Max. delta:   14.090 (Z=  5.032)
-  Mean delta:    1.378 (Z=  0.586)
+  Max. delta:   11.298 (Z=  4.035)
+  Mean delta:    1.240 (Z=  0.509)
 
                       ----------Dihedral angles----------                      
 
   All restrained atoms within 4.0 sigma of ideal values.
 
-  Min. delta:    0.000
-  Max. delta:   87.509
-  Mean delta:   21.230
+  Min. delta:    0.005
+  Max. delta:   85.946
+  Mean delta:   14.788
 
                        ----------Chiral volumes----------                      
 
   All restrained atoms within 4.0 sigma of ideal values.
 
-  Min. delta:    0.000
-  Max. delta:    0.349
-  Mean delta:    0.105
+  Min. delta:    0.001
+  Max. delta:    0.281
+  Mean delta:    0.095
 
                        ----------Planar groups----------                       
 
   All restrained atoms within 4.0 sigma of ideal values.
 
   Min. delta:    0.000
-  Max. delta:    0.056
-  Mean delta:    0.006
+  Max. delta:    0.039
+  Mean delta:    0.007
 
 ============================= Hydrogen validation =============================
 
 
                 ----------H/D atoms in the input model----------               
 
-  Total number of hydrogen atoms : 742
+  Total number of hydrogen atoms : 416
   Total number of deuterium atoms: 0
-  Number of H atoms (protein)    : 742
+  Number of H atoms (protein)    : 416
   Number of D atoms (protein)    : 0
   Number of H atoms (water)      : 0
   Number of D atoms (water)      : 0
@@ -91,8 +76,8 @@
 
                       ----------Water molecules----------                      
 
-  Number of water                            : 0
-  Number of water with 0 H (or D)            : 0
+  Number of water                            : 7
+  Number of water with 0 H (or D)            : 7
   Number of water with 1 H (or D)            : 0
   Number of water with 2 H (or D)            : 0
   Number of water in alternative conformation: 0
@@ -100,1466 +85,836 @@
 
                     ----------MISSING H or D atoms----------                   
 
-  ARG A   1  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  SER A   2  conformer  : HA, HB2, HG, HB3 
-  HIS A   3  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  SER A   4  conformer  : HA, HB2, HG, HB3 
-  LEU A   5  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  HIS A   6  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  TYR A   7  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  LEU A   8  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PHE A   9  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  MET A  10  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
+  PRO A   1  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  TYR A   2  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  THR A   3  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  VAL A   4  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  VAL A   5  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  TYR A   6  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  PHE A   7  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  PRO A   8  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  VAL A   9  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ARG A  10  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
   GLY A  11  conformer  : HA2, HA3 
-  ALA A  12  conformer  : HA, HB1, HB2, HB3 
-  SER A  13  conformer  : HA, HB2, HG, HB3 
-  GLU A  14  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLN A  15  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASP A  16  conformer  : HA, HB2, HB3 
-  LEU A  17  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY A  18  conformer  : HA2, HA3 
+  ARG A  12  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  CYS A  13  conformer  : HA, HB2, HG, HB3 
+  ALA A  14  conformer  : HA, HB1, HB2, HB3 
+  ALA A  15  conformer  : HA, HB1, HB2, HB3 
+  LEU A  16  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ARG A  17  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  MET A  18  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
   LEU A  19  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  SER A  20  conformer  : HA, HB2, HG, HB3 
-  LEU A  21  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PHE A  22  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  GLU A  23  conformer  : HA, HB2, HG2, HB3, HG3 
-  ALA A  24  conformer  : HA, HB1, HB2, HB3 
-  LEU A  25  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY A  26  conformer  : HA2, HA3 
-  TYR A  27  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  VAL A  28  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASP A  29  conformer  : HA, HB2, HB3 
-  ASP A  30  conformer  : HA, HB2, HB3 
-  GLN A  31  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  LEU A  32  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PHE A  33  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  LEU A  20  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ALA A  21  conformer  : HA, HB1, HB2, HB3 
+  ASP A  22  conformer  : HA, HB2, HB3 
+  GLN A  23  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLY A  24  conformer  : HA2, HA3 
+  GLN A  25  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  SER A  26  conformer  : HA, HB2, HG, HB3 
+  TRP A  27  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
+  LYS A  28  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  GLU A  29  conformer  : HA, HB2, HG2, HB3, HG3 
+  GLU A  30  conformer  : HA, HB2, HG2, HB3, HG3 
+  VAL A  31  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  VAL A  32  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  THR A  33  conformer  : HA, HB, HG1, HG21, HG22, HG23 
   VAL A  34  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  PHE A  35  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  TYR A  36  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  ASP A  37  conformer  : HA, HB2, HB3 
-  HIS A  38  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
+  GLU A  35  conformer  : HA, HB2, HG2, HB3, HG3 
+  THR A  36  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  TRP A  37  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
+  GLN A  38  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
   GLU A  39  conformer  : HA, HB2, HG2, HB3, HG3 
-  SER A  40  conformer  : HA, HB2, HG, HB3 
-  ARG A  41  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ARG A  42  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  VAL A  43  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  GLU A  44  conformer  : HA, HB2, HG2, HB3, HG3 
-  PRO A  45  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ARG A  46  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  THR A  47  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  PRO A  48  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  TRP A  49  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  VAL A  50  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  SER A  51  conformer  : HA, HB2, HG, HB3 
-  SER A  52  conformer  : HA, HB2, HG, HB3 
-  ARG A  53  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ILE A  54  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  SER A  55  conformer  : HA, HB2, HG, HB3 
-  SER A  56  conformer  : HA, HB2, HG, HB3 
-  GLN A  57  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  MET A  58  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  TRP A  59  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  LEU A  60  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLN A  61  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  LEU A  62  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  SER A  63  conformer  : HA, HB2, HG, HB3 
-  GLN A  64  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  SER A  65  conformer  : HA, HB2, HG, HB3 
-  LEU A  66  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LYS A  67  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLY A  68  conformer  : HA2, HA3 
-  TRP A  69  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ASP A  70  conformer  : HA, HB2, HB3 
-  HIS A  71  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  MET A  72  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  PHE A  73  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  GLY A  40  conformer  : HA2, HA3 
+  SER A  41  conformer  : HA, HB2, HG, HB3 
+  LEU A  42  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LYS A  43  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ALA A  44  conformer  : HA, HB1, HB2, HB3 
+  SER A  45  conformer  : HA, HB2, HG, HB3 
+  CYS A  46  conformer  : HA, HB2, HG, HB3 
+  LEU A  47  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  TYR A  48  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLY A  49  conformer  : HA2, HA3 
+  GLN A  50  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  LEU A  51  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  PRO A  52  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  LYS A  53  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  PHE A  54  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  GLN A  55  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  ASP A  56  conformer  : HA, HB2, HB3 
+  GLY A  57  conformer  : HA2, HA3 
+  ASP A  58  conformer  : HA, HB2, HB3 
+  LEU A  59  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  THR A  60  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  LEU A  61  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  TYR A  62  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLN A  63  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  SER A  64  conformer  : HA, HB2, HG, HB3 
+  ASN A  65  conformer  : HA, HB2, HD21, HD22, HB3 
+  THR A  66  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  ILE A  67  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  LEU A  68  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ARG A  69  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  HIS A  70  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
+  LEU A  71  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  GLY A  72  conformer  : HA2, HA3 
+  ARG A  73  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
   THR A  74  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  VAL A  75  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASP A  76  conformer  : HA, HB2, HB3 
-  PHE A  77  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  TRP A  78  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  THR A  79  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  ILE A  80  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  MET A  81  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  GLU A  82  conformer  : HA, HB2, HG2, HB3, HG3 
-  ASN A  83  conformer  : HA, HB2, HD21, HD22, HB3 
-  HIS A  84  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  ASN A  85  conformer  : HA, HB2, HD21, HD22, HB3 
-  HIS A  86  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  SER A  87  conformer  : HA, HB2, HG, HB3 
-  LYS A  88  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLU A  89  conformer  : HA, HB2, HG2, HB3, HG3 
-  SER A  90  conformer  : HA, HB2, HG, HB3 
-  HIS A  91  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  THR A  92  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU A  93  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLN A  94  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  LEU A  75  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  GLY A  76  conformer  : HA2, HA3 
+  LEU A  77  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  TYR A  78  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLY A  79  conformer  : HA2, HA3 
+  LYS A  80  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ASP A  81  conformer  : HA, HB2, HB3 
+  GLN A  82  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLN A  83  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLU A  84  conformer  : HA, HB2, HG2, HB3, HG3 
+  ALA A  85  conformer  : HA, HB1, HB2, HB3 
+  ALA A  86  conformer  : HA, HB1, HB2, HB3 
+  LEU A  87  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  VAL A  88  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ASP A  89  conformer  : HA, HB2, HB3 
+  MET A  90  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
+  VAL A  91  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ASN A  92  conformer  : HA, HB2, HD21, HD22, HB3 
+  ASP A  93  conformer  : HA, HB2, HB3 
+  GLY A  94  conformer  : HA2, HA3 
   VAL A  95  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ILE A  96  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  LEU A  97  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY A  98  conformer  : HA2, HA3 
-  CYS A  99  conformer  : HA, HB2, HG, HB3 
-  GLU A 100  conformer  : HA, HB2, HG2, HB3, HG3 
-  MET A 101  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  GLN A 102  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLU A 103  conformer  : HA, HB2, HG2, HB3, HG3 
-  ASP A 104  conformer  : HA, HB2, HB3 
-  ASN A 105  conformer  : HA, HB2, HD21, HD22, HB3 
-  SER A 106  conformer  : HA, HB2, HG, HB3 
-  THR A 107  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  GLU A 108  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLY A 109  conformer  : HA2, HA3 
+  GLU A  96  conformer  : HA, HB2, HG2, HB3, HG3 
+  ASP A  97  conformer  : HA, HB2, HB3 
+  LEU A  98  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ARG A  99  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  CYS A 100  conformer  : HA, HB2, HG, HB3 
+  LYS A 101  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  TYR A 102  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  ILE A 103  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  SER A 104  conformer  : HA, HB2, HG, HB3 
+  LEU A 105  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ILE A 106  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  TYR A 107  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  THR A 108  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  ASN A 109  conformer  : HA, HB2, HD21, HD22, HB3 
   TYR A 110  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  TRP A 111  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  LYS A 112  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  TYR A 113  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  GLY A 114  conformer  : HA2, HA3 
-  TYR A 115  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLU A 111  conformer  : HA, HB2, HG2, HB3, HG3 
+  ALA A 112  conformer  : HA, HB1, HB2, HB3 
+  GLY A 113  conformer  : HA2, HA3 
+  LYS A 114  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ASP A 115  conformer  : HA, HB2, HB3 
   ASP A 116  conformer  : HA, HB2, HB3 
-  GLY A 117  conformer  : HA2, HA3 
-  GLN A 118  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASP A 119  conformer  : HA, HB2, HB3 
-  HIS A 120  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
+  TYR A 117  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  VAL A 118  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  LYS A 119  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ALA A 120  conformer  : HA, HB1, HB2, HB3 
   LEU A 121  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU A 122  conformer  : HA, HB2, HG2, HB3, HG3 
-  PHE A 123  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  CYS A 124  conformer  : HA, HB2, HG, HB3 
-  PRO A 125  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ASP A 126  conformer  : HA, HB2, HB3 
-  THR A 127  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU A 128  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASP A 129  conformer  : HA, HB2, HB3 
-  TRP A 130  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ARG A 131  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA A 132  conformer  : HA, HB1, HB2, HB3 
-  ALA A 133  conformer  : HA, HB1, HB2, HB3 
-  GLU A 134  conformer  : HA, HB2, HG2, HB3, HG3 
-  PRO A 135  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ARG A 136  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA A 137  conformer  : HA, HB1, HB2, HB3 
-  TRP A 138  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  PRO A 139  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  PRO A 122  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  GLY A 123  conformer  : HA2, HA3 
+  GLN A 124  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  LEU A 125  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LYS A 126  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  PRO A 127  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  PHE A 128  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  GLU A 129  conformer  : HA, HB2, HG2, HB3, HG3 
+  THR A 130  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  LEU A 131  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU A 132  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  SER A 133  conformer  : HA, HB2, HG, HB3 
+  GLN A 134  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  ASN A 135  conformer  : HA, HB2, HD21, HD22, HB3 
+  GLN A 136  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLY A 137  conformer  : HA2, HA3 
+  GLY A 138  conformer  : HA2, HA3 
+  LYS A 139  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
   THR A 140  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LYS A 141  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  LEU A 142  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU A 143  conformer  : HA, HB2, HG2, HB3, HG3 
-  TRP A 144  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  GLU A 145  conformer  : HA, HB2, HG2, HB3, HG3 
-  ARG A 146  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  HIS A 147  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  LYS A 148  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ILE A 149  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  ARG A 150  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA A 151  conformer  : HA, HB1, HB2, HB3 
-  ARG A 152  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  GLN A 153  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASN A 154  conformer  : HA, HB2, HD21, HD22, HB3 
-  ARG A 155  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA A 156  conformer  : HA, HB1, HB2, HB3 
-  TYR A 157  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  PHE A 141  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  ILE A 142  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  VAL A 143  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  GLY A 144  conformer  : HA2, HA3 
+  ASP A 145  conformer  : HA, HB2, HB3 
+  GLN A 146  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  ILE A 147  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  SER A 148  conformer  : HA, HB2, HG, HB3 
+  PHE A 149  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  ALA A 150  conformer  : HA, HB1, HB2, HB3 
+  ASP A 151  conformer  : HA, HB2, HB3 
+  TYR A 152  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  ASN A 153  conformer  : HA, HB2, HD21, HD22, HB3 
+  LEU A 154  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU A 155  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ASP A 156  conformer  : HA, HB2, HB3 
+  LEU A 157  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
   LEU A 158  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU A 159  conformer  : HA, HB2, HG2, HB3, HG3 
-  ARG A 160  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ASP A 161  conformer  : HA, HB2, HB3 
-  CYS A 162  conformer  : HA, HB2, HG, HB3 
-  PRO A 163  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ALA A 164  conformer  : HA, HB1, HB2, HB3 
-  GLN A 165  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  LEU A 166  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLN A 167  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLN A 168  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  LEU A 159  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ILE A 160  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  HIS A 161  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
+  GLU A 162  conformer  : HA, HB2, HG2, HB3, HG3 
+  VAL A 163  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  LEU A 164  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ALA A 165  conformer  : HA, HB1, HB2, HB3 
+  PRO A 166  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  GLY A 167  conformer  : HA2, HA3 
+  CYS A 168  conformer  : HA, HB2, HG, HB3 
   LEU A 169  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LEU A 170  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU A 171  conformer  : HA, HB2, HG2, HB3, HG3 
-  LEU A 172  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY A 173  conformer  : HA2, HA3 
-  ARG A 174  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  GLY A 175  conformer  : HA2, HA3 
-  VAL A 176  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LEU A 177  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASP A 178  conformer  : HA, HB2, HB3 
-  GLN A 179  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLN A 180  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  VAL A 181  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  PRO A 182  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  PRO A 183  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LEU A 184  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  VAL A 185  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LYS A 186  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  VAL A 187  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR A 188  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  HIS A 189  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  HIS A 190  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  VAL A 191  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR A 192  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  SER A 193  conformer  : HA, HB2, HG, HB3 
+  ASP A 170  conformer  : HA, HB2, HB3 
+  ALA A 171  conformer  : HA, HB1, HB2, HB3 
+  PHE A 172  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  PRO A 173  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  LEU A 174  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU A 175  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  SER A 176  conformer  : HA, HB2, HG, HB3 
+  ALA A 177  conformer  : HA, HB1, HB2, HB3 
+  TYR A 178  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  VAL A 179  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  GLY A 180  conformer  : HA2, HA3 
+  ARG A 181  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  LEU A 182  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  SER A 183  conformer  : HA, HB2, HG, HB3 
+  ALA A 184  conformer  : HA, HB1, HB2, HB3 
+  ARG A 185  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  PRO A 186  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  LYS A 187  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  LEU A 188  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LYS A 189  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ALA A 190  conformer  : HA, HB1, HB2, HB3 
+  PHE A 191  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  LEU A 192  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ALA A 193  conformer  : HA, HB1, HB2, HB3 
   SER A 194  conformer  : HA, HB2, HG, HB3 
-  VAL A 195  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR A 196  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  THR A 197  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU A 198  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ARG A 199  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  CYS A 200  conformer  : HA, HB2, HG, HB3 
-  ARG A 201  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA A 202  conformer  : HA, HB1, HB2, HB3 
-  LEU A 203  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASN A 204  conformer  : HA, HB2, HD21, HD22, HB3 
-  TYR A 205  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  TYR A 206  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  PRO A 207  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  PRO A 195  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  GLU A 196  conformer  : HA, HB2, HG2, HB3, HG3 
+  TYR A 197  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  VAL A 198  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ASN A 199  conformer  : HA, HB2, HD21, HD22, HB3 
+  LEU A 200  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  PRO A 201  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  ILE A 202  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  ASN A 203  conformer  : HA, HB2, HD21, HD22, HB3 
+  GLY A 204  conformer  : HA2, HA3 
+  ASN A 205  conformer  : HA, HB2, HD21, HD22, HB3 
+  GLY A 206  conformer  : HA2, HA3 
+  LYS A 207  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
   GLN A 208  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASN A 209  conformer  : HA, HB2, HD21, HD22, HB3 
-  ILE A 210  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  THR A 211  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  MET A 212  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  LYS A 213  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  TRP A 214  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  LEU A 215  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LYS A 216  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP A 217  conformer  : HA, HB2, HB3 
-  LYS A 218  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLN A 219  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  PRO A 220  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  MET A 221  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  ASP A 222  conformer  : HA, HB2, HB3 
-  ALA A 223  conformer  : HA, HB1, HB2, HB3 
-  LYS A 224  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLU A 225  conformer  : HA, HB2, HG2, HB3, HG3 
-  PHE A 226  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  GLU A 227  conformer  : HA, HB2, HG2, HB3, HG3 
-  PRO A 228  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LYS A 229  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP A 230  conformer  : HA, HB2, HB3 
-  VAL A 231  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LEU A 232  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PRO A 233  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ASN A 234  conformer  : HA, HB2, HD21, HD22, HB3 
-  GLY A 235  conformer  : HA2, HA3 
-  ASP A 236  conformer  : HA, HB2, HB3 
-  GLY A 237  conformer  : HA2, HA3 
-  THR A 238  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  TYR A 239  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  GLN A 240  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLY A 241  conformer  : HA2, HA3 
-  TRP A 242  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ILE A 243  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  THR A 244  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU A 245  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ALA A 246  conformer  : HA, HB1, HB2, HB3 
-  VAL A 247  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  PRO A 248  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  PRO A 249  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  GLY A 250  conformer  : HA2, HA3 
-  GLU A 251  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLU A 252  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLN A 253  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ARG A 254  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  TYR A 255  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  THR A 256  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  CYS A 257  conformer  : HA, HB2, HG, HB3 
-  GLN A 258  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  VAL A 259  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  GLU A 260  conformer  : HA, HB2, HG2, HB3, HG3 
-  HIS A 261  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  PRO A 262  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  GLY A 263  conformer  : HA2, HA3 
-  LEU A 264  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASP A 265  conformer  : HA, HB2, HB3 
-  GLN A 266  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  PRO A 267  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LEU A 268  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ILE A 269  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  VAL A 270  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ILE A 271  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  TRP A 272  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ILE B 273  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  GLN B 274  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ARG B 275  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  THR B 276  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  PRO B 277  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LYS B 278  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  PRO B 213  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  TYR B 214  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  THR B 215  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  VAL B 216  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  VAL B 217  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  TYR B 218  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  PHE B 219  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  PRO B 220  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  VAL B 221  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ARG B 222  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  GLY B 223  conformer  : HA2, HA3 
+  ARG B 224  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  CYS B 225  conformer  : HA, HB2, HG, HB3 
+  ALA B 226  conformer  : HA, HB1, HB2, HB3 
+  ALA B 227  conformer  : HA, HB1, HB2, HB3 
+  LEU B 228  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ARG B 229  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  MET B 230  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
+  LEU B 231  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU B 232  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ALA B 233  conformer  : HA, HB1, HB2, HB3 
+  ASP B 234  conformer  : HA, HB2, HB3 
+  GLN B 235  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLY B 236  conformer  : HA2, HA3 
+  GLN B 237  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  SER B 238  conformer  : HA, HB2, HG, HB3 
+  TRP B 239  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
+  LYS B 240  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  GLU B 241  conformer  : HA, HB2, HG2, HB3, HG3 
+  GLU B 242  conformer  : HA, HB2, HG2, HB3, HG3 
+  VAL B 243  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  VAL B 244  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  THR B 245  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  VAL B 246  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  GLU B 247  conformer  : HA, HB2, HG2, HB3, HG3 
+  THR B 248  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  TRP B 249  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
+  GLN B 250  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLU B 251  conformer  : HA, HB2, HG2, HB3, HG3 
+  GLY B 252  conformer  : HA2, HA3 
+  SER B 253  conformer  : HA, HB2, HG, HB3 
+  LEU B 254  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LYS B 255  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ALA B 256  conformer  : HA, HB1, HB2, HB3 
+  SER B 257  conformer  : HA, HB2, HG, HB3 
+  CYS B 258  conformer  : HA, HB2, HG, HB3 
+  LEU B 259  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  TYR B 260  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLY B 261  conformer  : HA2, HA3 
+  GLN B 262  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  LEU B 263  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  PRO B 264  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  LYS B 265  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  PHE B 266  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  GLN B 267  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  ASP B 268  conformer  : HA, HB2, HB3 
+  GLY B 269  conformer  : HA2, HA3 
+  ASP B 270  conformer  : HA, HB2, HB3 
+  LEU B 271  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  THR B 272  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  LEU B 273  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  TYR B 274  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLN B 275  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  SER B 276  conformer  : HA, HB2, HG, HB3 
+  ASN B 277  conformer  : HA, HB2, HD21, HD22, HB3 
+  THR B 278  conformer  : HA, HB, HG1, HG21, HG22, HG23 
   ILE B 279  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  GLN B 280  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  VAL B 281  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  TYR B 282  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  SER B 283  conformer  : HA, HB2, HG, HB3 
-  ARG B 284  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  HIS B 285  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  PRO B 286  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ALA B 287  conformer  : HA, HB1, HB2, HB3 
-  GLU B 288  conformer  : HA, HB2, HG2, HB3, HG3 
-  ASN B 289  conformer  : HA, HB2, HD21, HD22, HB3 
-  GLY B 290  conformer  : HA2, HA3 
-  LYS B 291  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  SER B 292  conformer  : HA, HB2, HG, HB3 
-  ASN B 293  conformer  : HA, HB2, HD21, HD22, HB3 
-  PHE B 294  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  LEU B 295  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASN B 296  conformer  : HA, HB2, HD21, HD22, HB3 
-  CYS B 297  conformer  : HA, HB2, HG, HB3 
-  TYR B 298  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  VAL B 299  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  SER B 300  conformer  : HA, HB2, HG, HB3 
-  GLY B 301  conformer  : HA2, HA3 
-  PHE B 302  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  HIS B 303  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  PRO B 304  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  SER B 305  conformer  : HA, HB2, HG, HB3 
-  ASP B 306  conformer  : HA, HB2, HB3 
-  ILE B 307  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  LEU B 280  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ARG B 281  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  HIS B 282  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
+  LEU B 283  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  GLY B 284  conformer  : HA2, HA3 
+  ARG B 285  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  THR B 286  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  LEU B 287  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  GLY B 288  conformer  : HA2, HA3 
+  LEU B 289  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  TYR B 290  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLY B 291  conformer  : HA2, HA3 
+  LYS B 292  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ASP B 293  conformer  : HA, HB2, HB3 
+  GLN B 294  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLN B 295  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLU B 296  conformer  : HA, HB2, HG2, HB3, HG3 
+  ALA B 297  conformer  : HA, HB1, HB2, HB3 
+  ALA B 298  conformer  : HA, HB1, HB2, HB3 
+  LEU B 299  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  VAL B 300  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ASP B 301  conformer  : HA, HB2, HB3 
+  MET B 302  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
+  VAL B 303  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ASN B 304  conformer  : HA, HB2, HD21, HD22, HB3 
+  ASP B 305  conformer  : HA, HB2, HB3 
+  GLY B 306  conformer  : HA2, HA3 
+  VAL B 307  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
   GLU B 308  conformer  : HA, HB2, HG2, HB3, HG3 
-  VAL B 309  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASP B 310  conformer  : HA, HB2, HB3 
-  LEU B 311  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LEU B 312  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ASP B 309  conformer  : HA, HB2, HB3 
+  LEU B 310  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ARG B 311  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  CYS B 312  conformer  : HA, HB2, HG, HB3 
   LYS B 313  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASN B 314  conformer  : HA, HB2, HD21, HD22, HB3 
-  GLY B 315  conformer  : HA2, HA3 
-  GLU B 316  conformer  : HA, HB2, HG2, HB3, HG3 
-  ARG B 317  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  TYR B 314  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  ILE B 315  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  SER B 316  conformer  : HA, HB2, HG, HB3 
+  LEU B 317  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
   ILE B 318  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  GLU B 319  conformer  : HA, HB2, HG2, HB3, HG3 
-  LYS B 320  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  VAL B 321  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  GLU B 322  conformer  : HA, HB2, HG2, HB3, HG3 
-  HIS B 323  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  SER B 324  conformer  : HA, HB2, HG, HB3 
-  ASP B 325  conformer  : HA, HB2, HB3 
-  LEU B 326  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  SER B 327  conformer  : HA, HB2, HG, HB3 
-  PHE B 328  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  SER B 329  conformer  : HA, HB2, HG, HB3 
-  LYS B 330  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP B 331  conformer  : HA, HB2, HB3 
-  TRP B 332  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  SER B 333  conformer  : HA, HB2, HG, HB3 
-  PHE B 334  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  TYR B 335  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  LEU B 336  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  TYR B 319  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  THR B 320  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  ASN B 321  conformer  : HA, HB2, HD21, HD22, HB3 
+  TYR B 322  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  GLU B 323  conformer  : HA, HB2, HG2, HB3, HG3 
+  ALA B 324  conformer  : HA, HB1, HB2, HB3 
+  GLY B 325  conformer  : HA2, HA3 
+  LYS B 326  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ASP B 327  conformer  : HA, HB2, HB3 
+  ASP B 328  conformer  : HA, HB2, HB3 
+  TYR B 329  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  VAL B 330  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  LYS B 331  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ALA B 332  conformer  : HA, HB1, HB2, HB3 
+  LEU B 333  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  PRO B 334  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  GLY B 335  conformer  : HA2, HA3 
+  GLN B 336  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
   LEU B 337  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  TYR B 338  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  TYR B 339  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  THR B 340  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  LYS B 338  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  PRO B 339  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  PHE B 340  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
   GLU B 341  conformer  : HA, HB2, HG2, HB3, HG3 
-  PHE B 342  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  THR B 343  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  PRO B 344  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  THR B 345  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  GLU B 346  conformer  : HA, HB2, HG2, HB3, HG3 
-  LYS B 347  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP B 348  conformer  : HA, HB2, HB3 
-  GLU B 349  conformer  : HA, HB2, HG2, HB3, HG3 
-  TYR B 350  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  ALA B 351  conformer  : HA, HB1, HB2, HB3 
-  CYS B 352  conformer  : HA, HB2, HG, HB3 
-  ARG B 353  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  VAL B 354  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASN B 355  conformer  : HA, HB2, HD21, HD22, HB3 
-  HIS B 356  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  VAL B 357  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR B 358  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU B 359  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  THR B 342  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  LEU B 343  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU B 344  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  SER B 345  conformer  : HA, HB2, HG, HB3 
+  GLN B 346  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  ASN B 347  conformer  : HA, HB2, HD21, HD22, HB3 
+  GLN B 348  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  GLY B 349  conformer  : HA2, HA3 
+  GLY B 350  conformer  : HA2, HA3 
+  LYS B 351  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  THR B 352  conformer  : HA, HB, HG1, HG21, HG22, HG23 
+  PHE B 353  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  ILE B 354  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  VAL B 355  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  GLY B 356  conformer  : HA2, HA3 
+  ASP B 357  conformer  : HA, HB2, HB3 
+  GLN B 358  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
+  ILE B 359  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
   SER B 360  conformer  : HA, HB2, HG, HB3 
-  GLN B 361  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  PRO B 362  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LYS B 363  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ILE B 364  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  VAL B 365  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LYS B 366  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  TRP B 367  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
+  PHE B 361  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  ALA B 362  conformer  : HA, HB1, HB2, HB3 
+  ASP B 363  conformer  : HA, HB2, HB3 
+  TYR B 364  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  ASN B 365  conformer  : HA, HB2, HD21, HD22, HB3 
+  LEU B 366  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU B 367  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
   ASP B 368  conformer  : HA, HB2, HB3 
-  ARG B 369  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ASP B 370  conformer  : HA, HB2, HB3 
-  MET B 371  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  ARG C 372  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  SER C 373  conformer  : HA, HB2, HG, HB3 
-  HIS C 374  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  SER C 375  conformer  : HA, HB2, HG, HB3 
-  LEU C 376  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  HIS C 377  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  TYR C 378  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  LEU C 379  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PHE C 380  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  MET C 381  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  GLY C 382  conformer  : HA2, HA3 
-  ALA C 383  conformer  : HA, HB1, HB2, HB3 
-  SER C 384  conformer  : HA, HB2, HG, HB3 
-  GLU C 385  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLN C 386  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASP C 387  conformer  : HA, HB2, HB3 
-  LEU C 388  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY C 389  conformer  : HA2, HA3 
-  LEU C 390  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  SER C 391  conformer  : HA, HB2, HG, HB3 
-  LEU C 392  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PHE C 393  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  GLU C 394  conformer  : HA, HB2, HG2, HB3, HG3 
-  ALA C 395  conformer  : HA, HB1, HB2, HB3 
-  LEU C 396  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY C 397  conformer  : HA2, HA3 
-  TYR C 398  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  VAL C 399  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASP C 400  conformer  : HA, HB2, HB3 
-  ASP C 401  conformer  : HA, HB2, HB3 
-  GLN C 402  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  LEU C 403  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PHE C 404  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  VAL C 405  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  PHE C 406  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  TYR C 407  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  ASP C 408  conformer  : HA, HB2, HB3 
-  HIS C 409  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  GLU C 410  conformer  : HA, HB2, HG2, HB3, HG3 
-  SER C 411  conformer  : HA, HB2, HG, HB3 
-  ARG C 412  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ARG C 413  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  VAL C 414  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  GLU C 415  conformer  : HA, HB2, HG2, HB3, HG3 
-  PRO C 416  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ARG C 417  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  THR C 418  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  PRO C 419  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  TRP C 420  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  VAL C 421  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  SER C 422  conformer  : HA, HB2, HG, HB3 
-  SER C 423  conformer  : HA, HB2, HG, HB3 
-  ARG C 424  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ILE C 425  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  SER C 426  conformer  : HA, HB2, HG, HB3 
-  SER C 427  conformer  : HA, HB2, HG, HB3 
-  GLN C 428  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  MET C 429  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  TRP C 430  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  LEU C 431  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLN C 432  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  LEU C 433  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  SER C 434  conformer  : HA, HB2, HG, HB3 
-  GLN C 435  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  SER C 436  conformer  : HA, HB2, HG, HB3 
-  LEU C 437  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LYS C 438  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLY C 439  conformer  : HA2, HA3 
-  TRP C 440  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ASP C 441  conformer  : HA, HB2, HB3 
-  HIS C 442  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  MET C 443  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  PHE C 444  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  THR C 445  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  VAL C 446  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASP C 447  conformer  : HA, HB2, HB3 
-  PHE C 448  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  TRP C 449  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  THR C 450  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  ILE C 451  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  MET C 452  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  GLU C 453  conformer  : HA, HB2, HG2, HB3, HG3 
-  ASN C 454  conformer  : HA, HB2, HD21, HD22, HB3 
-  HIS C 455  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  ASN C 456  conformer  : HA, HB2, HD21, HD22, HB3 
-  HIS C 457  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  SER C 458  conformer  : HA, HB2, HG, HB3 
-  LYS C 459  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLU C 460  conformer  : HA, HB2, HG2, HB3, HG3 
-  SER C 461  conformer  : HA, HB2, HG, HB3 
-  HIS C 462  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  THR C 463  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU C 464  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLN C 465  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  VAL C 466  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ILE C 467  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  LEU C 468  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY C 469  conformer  : HA2, HA3 
-  CYS C 470  conformer  : HA, HB2, HG, HB3 
-  GLU C 471  conformer  : HA, HB2, HG2, HB3, HG3 
-  MET C 472  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  GLN C 473  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLU C 474  conformer  : HA, HB2, HG2, HB3, HG3 
-  ASP C 475  conformer  : HA, HB2, HB3 
-  ASN C 476  conformer  : HA, HB2, HD21, HD22, HB3 
-  SER C 477  conformer  : HA, HB2, HG, HB3 
-  THR C 478  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  GLU C 479  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLY C 480  conformer  : HA2, HA3 
-  TYR C 481  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  TRP C 482  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  LYS C 483  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  TYR C 484  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  GLY C 485  conformer  : HA2, HA3 
-  TYR C 486  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  ASP C 487  conformer  : HA, HB2, HB3 
-  GLY C 488  conformer  : HA2, HA3 
-  GLN C 489  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASP C 490  conformer  : HA, HB2, HB3 
-  HIS C 491  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  LEU C 492  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU C 493  conformer  : HA, HB2, HG2, HB3, HG3 
-  PHE C 494  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  CYS C 495  conformer  : HA, HB2, HG, HB3 
-  PRO C 496  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ASP C 497  conformer  : HA, HB2, HB3 
-  THR C 498  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU C 499  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASP C 500  conformer  : HA, HB2, HB3 
-  TRP C 501  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ARG C 502  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA C 503  conformer  : HA, HB1, HB2, HB3 
-  ALA C 504  conformer  : HA, HB1, HB2, HB3 
-  GLU C 505  conformer  : HA, HB2, HG2, HB3, HG3 
-  PRO C 506  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ARG C 507  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA C 508  conformer  : HA, HB1, HB2, HB3 
-  TRP C 509  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  PRO C 510  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  THR C 511  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LYS C 512  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  LEU C 513  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU C 514  conformer  : HA, HB2, HG2, HB3, HG3 
-  TRP C 515  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  GLU C 516  conformer  : HA, HB2, HG2, HB3, HG3 
-  ARG C 517  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  HIS C 518  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  LYS C 519  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ILE C 520  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  ARG C 521  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA C 522  conformer  : HA, HB1, HB2, HB3 
-  ARG C 523  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  GLN C 524  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASN C 525  conformer  : HA, HB2, HD21, HD22, HB3 
-  ARG C 526  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA C 527  conformer  : HA, HB1, HB2, HB3 
-  TYR C 528  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  LEU C 529  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU C 530  conformer  : HA, HB2, HG2, HB3, HG3 
-  ARG C 531  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ASP C 532  conformer  : HA, HB2, HB3 
-  CYS C 533  conformer  : HA, HB2, HG, HB3 
-  PRO C 534  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ALA C 535  conformer  : HA, HB1, HB2, HB3 
-  GLN C 536  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  LEU C 537  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLN C 538  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLN C 539  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  LEU C 540  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LEU C 541  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLU C 542  conformer  : HA, HB2, HG2, HB3, HG3 
-  LEU C 543  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  GLY C 544  conformer  : HA2, HA3 
-  ARG C 545  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  GLY C 546  conformer  : HA2, HA3 
-  VAL C 547  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LEU C 548  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASP C 549  conformer  : HA, HB2, HB3 
-  GLN C 550  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLN C 551  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  VAL C 552  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  PRO C 553  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  PRO C 554  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LEU C 555  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  VAL C 556  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LYS C 557  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  VAL C 558  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR C 559  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  HIS C 560  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  HIS C 561  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  VAL C 562  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR C 563  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  SER C 564  conformer  : HA, HB2, HG, HB3 
-  SER C 565  conformer  : HA, HB2, HG, HB3 
-  VAL C 566  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR C 567  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  THR C 568  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU C 569  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ARG C 570  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  CYS C 571  conformer  : HA, HB2, HG, HB3 
-  ARG C 572  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ALA C 573  conformer  : HA, HB1, HB2, HB3 
-  LEU C 574  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASN C 575  conformer  : HA, HB2, HD21, HD22, HB3 
-  TYR C 576  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  TYR C 577  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  PRO C 578  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  GLN C 579  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ASN C 580  conformer  : HA, HB2, HD21, HD22, HB3 
-  ILE C 581  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  THR C 582  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  MET C 583  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  LYS C 584  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  TRP C 585  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  LEU C 586  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LYS C 587  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP C 588  conformer  : HA, HB2, HB3 
-  LYS C 589  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLN C 590  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  PRO C 591  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  MET C 592  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
-  ASP C 593  conformer  : HA, HB2, HB3 
-  ALA C 594  conformer  : HA, HB1, HB2, HB3 
-  LYS C 595  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  GLU C 596  conformer  : HA, HB2, HG2, HB3, HG3 
-  PHE C 597  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  GLU C 598  conformer  : HA, HB2, HG2, HB3, HG3 
-  PRO C 599  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LYS C 600  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP C 601  conformer  : HA, HB2, HB3 
-  VAL C 602  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LEU C 603  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  PRO C 604  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ASN C 605  conformer  : HA, HB2, HD21, HD22, HB3 
-  GLY C 606  conformer  : HA2, HA3 
-  ASP C 607  conformer  : HA, HB2, HB3 
-  GLY C 608  conformer  : HA2, HA3 
-  THR C 609  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  TYR C 610  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  GLN C 611  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  GLY C 612  conformer  : HA2, HA3 
-  TRP C 613  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ILE C 614  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  THR C 615  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU C 616  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ALA C 617  conformer  : HA, HB1, HB2, HB3 
-  VAL C 618  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  PRO C 619  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  PRO C 620  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  GLY C 621  conformer  : HA2, HA3 
-  GLU C 622  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLU C 623  conformer  : HA, HB2, HG2, HB3, HG3 
-  GLN C 624  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ARG C 625  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  TYR C 626  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  THR C 627  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  CYS C 628  conformer  : HA, HB2, HG, HB3 
-  GLN C 629  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  VAL C 630  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  GLU C 631  conformer  : HA, HB2, HG2, HB3, HG3 
-  HIS C 632  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  PRO C 633  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  GLY C 634  conformer  : HA2, HA3 
-  LEU C 635  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASP C 636  conformer  : HA, HB2, HB3 
-  GLN C 637  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  PRO C 638  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LEU C 639  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ILE C 640  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  VAL C 641  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ILE C 642  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  TRP C 643  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ILE D 644  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  GLN D 645  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  ARG D 646  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  THR D 647  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  PRO D 648  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LYS D 649  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ILE D 650  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  GLN D 651  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  VAL D 652  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  TYR D 653  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  SER D 654  conformer  : HA, HB2, HG, HB3 
-  ARG D 655  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  HIS D 656  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  PRO D 657  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  ALA D 658  conformer  : HA, HB1, HB2, HB3 
-  GLU D 659  conformer  : HA, HB2, HG2, HB3, HG3 
-  ASN D 660  conformer  : HA, HB2, HD21, HD22, HB3 
-  GLY D 661  conformer  : HA2, HA3 
-  LYS D 662  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  SER D 663  conformer  : HA, HB2, HG, HB3 
-  ASN D 664  conformer  : HA, HB2, HD21, HD22, HB3 
-  PHE D 665  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  LEU D 666  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  ASN D 667  conformer  : HA, HB2, HD21, HD22, HB3 
-  CYS D 668  conformer  : HA, HB2, HG, HB3 
-  TYR D 669  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  VAL D 670  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  SER D 671  conformer  : HA, HB2, HG, HB3 
-  GLY D 672  conformer  : HA2, HA3 
-  PHE D 673  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  HIS D 674  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  PRO D 675  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  SER D 676  conformer  : HA, HB2, HG, HB3 
-  ASP D 677  conformer  : HA, HB2, HB3 
-  ILE D 678  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  GLU D 679  conformer  : HA, HB2, HG2, HB3, HG3 
-  VAL D 680  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASP D 681  conformer  : HA, HB2, HB3 
-  LEU D 682  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LEU D 683  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LYS D 684  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASN D 685  conformer  : HA, HB2, HD21, HD22, HB3 
-  GLY D 686  conformer  : HA2, HA3 
-  GLU D 687  conformer  : HA, HB2, HG2, HB3, HG3 
-  ARG D 688  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ILE D 689  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  GLU D 690  conformer  : HA, HB2, HG2, HB3, HG3 
-  LYS D 691  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  VAL D 692  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  GLU D 693  conformer  : HA, HB2, HG2, HB3, HG3 
-  HIS D 694  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  SER D 695  conformer  : HA, HB2, HG, HB3 
-  ASP D 696  conformer  : HA, HB2, HB3 
-  LEU D 697  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  SER D 698  conformer  : HA, HB2, HG, HB3 
-  PHE D 699  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  SER D 700  conformer  : HA, HB2, HG, HB3 
-  LYS D 701  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP D 702  conformer  : HA, HB2, HB3 
-  TRP D 703  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  SER D 704  conformer  : HA, HB2, HG, HB3 
-  PHE D 705  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  TYR D 706  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  LEU D 707  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  LEU D 708  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  TYR D 709  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  TYR D 710  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  THR D 711  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  GLU D 712  conformer  : HA, HB2, HG2, HB3, HG3 
-  PHE D 713  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
-  THR D 714  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  PRO D 715  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  THR D 716  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  GLU D 717  conformer  : HA, HB2, HG2, HB3, HG3 
-  LYS D 718  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ASP D 719  conformer  : HA, HB2, HB3 
-  GLU D 720  conformer  : HA, HB2, HG2, HB3, HG3 
-  TYR D 721  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
-  ALA D 722  conformer  : HA, HB1, HB2, HB3 
-  CYS D 723  conformer  : HA, HB2, HG, HB3 
-  ARG D 724  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  VAL D 725  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  ASN D 726  conformer  : HA, HB2, HD21, HD22, HB3 
-  HIS D 727  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
-  VAL D 728  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  THR D 729  conformer  : HA, HB, HG1, HG21, HG22, HG23 
-  LEU D 730  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
-  SER D 731  conformer  : HA, HB2, HG, HB3 
-  GLN D 732  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
-  PRO D 733  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
-  LYS D 734  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  ILE D 735  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
-  VAL D 736  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
-  LYS D 737  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
-  TRP D 738  conformer  : HA, HB2, HD1, HE1, HE3, HZ3, HH2, HZ2, HB3 
-  ASP D 739  conformer  : HA, HB2, HB3 
-  ARG D 740  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
-  ASP D 741  conformer  : HA, HB2, HB3 
-  MET D 742  conformer  : HA, HB2, HG2, HE1, HE2, HE3, HB3, HG3 
+  LEU B 369  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU B 370  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU B 371  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ILE B 372  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  HIS B 373  conformer  : HA, HB2, HD1, HE1, HE2, HD2, HB3 
+  GLU B 374  conformer  : HA, HB2, HG2, HB3, HG3 
+  VAL B 375  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  LEU B 376  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ALA B 377  conformer  : HA, HB1, HB2, HB3 
+  PRO B 378  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  GLY B 379  conformer  : HA2, HA3 
+  CYS B 380  conformer  : HA, HB2, HG, HB3 
+  LEU B 381  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ASP B 382  conformer  : HA, HB2, HB3 
+  ALA B 383  conformer  : HA, HB1, HB2, HB3 
+  PHE B 384  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  PRO B 385  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  LEU B 386  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LEU B 387  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  SER B 388  conformer  : HA, HB2, HG, HB3 
+  ALA B 389  conformer  : HA, HB1, HB2, HB3 
+  TYR B 390  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  VAL B 391  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  GLY B 392  conformer  : HA2, HA3 
+  ARG B 393  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  LEU B 394  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  SER B 395  conformer  : HA, HB2, HG, HB3 
+  ALA B 396  conformer  : HA, HB1, HB2, HB3 
+  ARG B 397  conformer  : HA, HB2, HG2, HD2, HE, HH11, HH12, HH21, HH22, HB3, HG3, HD3 
+  PRO B 398  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  LYS B 399  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  LEU B 400  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  LYS B 401  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  ALA B 402  conformer  : HA, HB1, HB2, HB3 
+  PHE B 403  conformer  : HA, HB2, HD1, HE1, HZ, HE2, HD2, HB3 
+  LEU B 404  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  ALA B 405  conformer  : HA, HB1, HB2, HB3 
+  SER B 406  conformer  : HA, HB2, HG, HB3 
+  PRO B 407  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  GLU B 408  conformer  : HA, HB2, HG2, HB3, HG3 
+  TYR B 409  conformer  : HA, HB2, HD1, HE1, HH, HE2, HD2, HB3 
+  VAL B 410  conformer  : HA, HB, HG11, HG12, HG13, HG21, HG22, HG23 
+  ASN B 411  conformer  : HA, HB2, HD21, HD22, HB3 
+  LEU B 412  conformer  : HA, HB2, HG, HD11, HD12, HD13, HD21, HD22, HD23, HB3 
+  PRO B 413  conformer  : HA, HB2, HG2, HD2, HB3, HG3, HD3 
+  ILE B 414  conformer  : HA, HB, HG12, HD11, HD12, HD13, HG21, HG22, HG23, HG13 
+  ASN B 415  conformer  : HA, HB2, HD21, HD22, HB3 
+  GLY B 416  conformer  : HA2, HA3 
+  ASN B 417  conformer  : HA, HB2, HD21, HD22, HB3 
+  GLY B 418  conformer  : HA2, HA3 
+  LYS B 419  conformer  : HA, HB2, HG2, HD2, HE2, HZ1, HZ2, HZ3, HB3, HG3, HD3, HE3 
+  GLN B 420  conformer  : HA, HB2, HG2, HE21, HE22, HB3, HG3 
 
                        ----------Bond outliers----------                       
 
-   C 577  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  57  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 741  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 596  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 546  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 175  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 558  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 101  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 148  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 585  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  89  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A   5  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 527  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 606  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  19  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 726  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 406  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 710  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 252  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  53  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 706  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 330  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  59  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 373  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 145  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 165  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  74  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 653  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 479  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 442  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 441  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 191  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 636  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 649  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  56  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 109  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 261  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 404  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  97  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 661  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 703  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 674  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 316  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 383  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 522  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 237  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 104  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  31  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 390  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 294  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 518  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 275  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 692  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 151  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 215  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 580  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 366  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 736  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 137  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 370  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  60  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 556  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 189  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 723  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 566  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  18  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 375  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 192  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 666  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 590  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  54  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 353  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 118  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 265  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 282  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  64  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 488  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 695  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 216  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 492  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 214  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 194  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 360  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 174  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 627  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 716  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 365  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 152  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 208  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 705  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 601  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 690  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 587  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 514  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A   2  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 708  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 568  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  50  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 386  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 700  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 133  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 640  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  81  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  69  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 142  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 669  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 420  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 552  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 382  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 393  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 486  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 357  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 735  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 504  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 203  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 358  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 339  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 289  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  70  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 528  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 423  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 385  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 369  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 481  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 662  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 303  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 530  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 539  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 395  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 295  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 537  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 445  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 111  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 722  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  84  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  51  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 181  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 232  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 199  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 342  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 272  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 462  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 240  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 646  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 680  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 545  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 287  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 713  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 702  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 254  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  86  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 502  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 317  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 501  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 379  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 487  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 167  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  62  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  58  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 656  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 544  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 664  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  28  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 399  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 157  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 535  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 239  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  88  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 251  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  55  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  35  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 324  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 337  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 737  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  42  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 164  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 193  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 200  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 321  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 332  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 172  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 392  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 293  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 637  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 612  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 507  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 687  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 178  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 688  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 574  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 484  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 473  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 288  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 236  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 340  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 471  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 677  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 434  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 417  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 413  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  66  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 676  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 431  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 569  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  26  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 583  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 449  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 430  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  68  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 671  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 654  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 567  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 697  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 730  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 217  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 614  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 422  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 158  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 131  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A   7  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  43  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 354  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  32  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 398  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 410  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 387  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 103  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 682  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 415  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 686  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 119  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 608  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 560  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 361  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 603  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 245  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 231  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 182  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 308  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  23  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 288  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 320  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 311  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 275  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 108  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 202  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
    A  39  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 562  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 465  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 549  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 540  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 595  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 213  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 489  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 201  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 548  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  22  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 291  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 643  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 727  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 440  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 170  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 122  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 334  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  65  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 524  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 581  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 458  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 679  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 443  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 276  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 407  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 536  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 274  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 418  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 618  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 474  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 377  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 221  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 448  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 438  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 542  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 285  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 456  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  37  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 617  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 180  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 495  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 678  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 428  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 513  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 327  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 336  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 367  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  78  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 571  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 371  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  49  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  99  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 246  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 280  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 541  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  93  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 615  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 450  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 298  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 572  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 475  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 292  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  44  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 306  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 154  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 559  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  98  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 144  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 114  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 467  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 108  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 660  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 668  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 112  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 364  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 725  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 350  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 231  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 359  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 526  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 432  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 491  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 699  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 597  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  92  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  20  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 584  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 140  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 499  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 592  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 197  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 622  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 302  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 244  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 446  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 128  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 283  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  98  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 354  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 315  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  79  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 111  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  57  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 314  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 250  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  76  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
    B 368  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 219  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 565  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 276  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 244  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 149  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 374  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 338  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 279  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  70  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 341  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 185  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 394  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 399  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 306  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  32  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 377  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 294  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 309  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 369  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 408  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  36  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 171  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  46  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 190  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  69  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 322  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 174  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 289  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 367  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 145  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 113  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 375  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 106  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 224  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  25  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 180  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 270  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  93  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  77  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 189  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 216  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 227  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  94  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 240  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 251  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  37  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 248  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  58  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 222  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 249  TRP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  41  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  15  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  85  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 198  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 326  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 158  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 274  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 363  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 125  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 184  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 163  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 417  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 183  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 118  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  51  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 234  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 305  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  31  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 317  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 159  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 176  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 381  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 107  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 151  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 177  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 208  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 105  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 143  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 161  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 370  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 348  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 267  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  80  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 296  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  10  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 371  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 123  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 268  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 415  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 332  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 241  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 147  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  62  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 410  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 310  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 116  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 124  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  55  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 393  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 400  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 247  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 302  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  26  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 170  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 154  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
    A  34  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 107  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 494  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 117  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  61  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 186  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 235  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 670  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  33  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 742  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 455  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 268  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 374  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 609  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 520  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 519  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 721  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   B 352  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A  46  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 503  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 134  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 241  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   A 149  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 611  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   C 480  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
-   D 701  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 613  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 570  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 575  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 630  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 166  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  21  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 739  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 414  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 720  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 147  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 610  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 511  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 598  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 234  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 645  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 256  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 641  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 315  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 523  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  95  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 222  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 338  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 623  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 226  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  15  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 225  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 110  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  36  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 728  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 444  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 284  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 173  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 121  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  85  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 312  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 243  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 563  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  30  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 279  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 266  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  72  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 356  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 639  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  80  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 155  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 421  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  75  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 384  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 426  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 621  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 594  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 718  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  41  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 466  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 401  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 731  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 264  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 320  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 190  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 250  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 740  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 230  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 113  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 263  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A   3  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 319  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 202  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 472  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 732  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  29  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 271  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 605  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 512  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 631  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 218  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 468  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 593  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 625  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 253  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 717  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A   6  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A   9  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 196  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 586  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 600  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 602  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 663  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 521  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  23  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 389  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  91  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 313  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 409  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 436  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 452  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 533  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 328  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 209  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 696  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 116  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 238  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 378  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 525  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 345  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 698  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 403  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 453  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 659  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 712  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 333  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 323  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 412  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 161  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 223  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  14  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  76  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 102  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 681  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 624  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 335  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  90  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 724  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  73  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 493  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 652  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 516  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 589  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  38  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  11  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 500  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 296  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 464  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  96  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 143  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 299  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 469  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 269  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 100  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 704  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 425  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 159  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 179  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 435  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  71  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 734  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 476  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 322  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 550  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 363  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 626  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 212  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 564  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 532  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 396  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 405  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 634  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 709  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 497  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 211  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 429  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 205  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 561  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 477  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 270  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  17  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 301  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 650  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 146  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 607  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  47  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  52  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 629  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 498  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 694  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 305  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 188  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 538  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 707  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 347  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 691  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 257  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 341  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 227  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 547  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 515  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 153  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 176  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 300  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 683  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 290  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 665  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 394  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 719  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 693  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 531  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 127  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 132  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 555  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 255  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 635  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  16  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 672  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 576  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 150  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 329  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A   4  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 667  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 557  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 658  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 427  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A   8  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 115  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 689  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 400  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 380  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  13  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 729  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 459  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 673  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 187  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 124  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 126  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 461  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 684  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  10  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  94  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  83  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 160  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 136  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 437  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 582  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 463  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 318  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 573  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 325  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 579  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 204  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 551  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 588  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 508  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 470  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  25  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 191  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A   2  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 383  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 230  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 285  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 129  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 179  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 372  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 414  ILE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 126  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 419  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 282  HIS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  40  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 352  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A   7  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  49  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 226  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 131  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 162  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 333  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 164  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  42  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  73  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 223  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 313  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 272  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 175  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 261  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 330  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 349  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A   3  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  44  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 138  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  19  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A   6  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 265  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 283  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  14  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  30  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 344  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 284  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  18  MET  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 281  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 217  VAL  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  53  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 229  ARG  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 168  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  56  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  22  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 150  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 278  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 204  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 353  PHE  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 312  CYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 257  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 253  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 104  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  59  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  68  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 206  GLY  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  96  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 140  THR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 404  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 364  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 412  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 187  LYS  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 233  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 321  ASN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 329  TYR  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 188  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 115  ASP  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 242  GLU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   B 395  SER  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  82  GLN  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  47  LEU  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A 112  ALA  H  , Bond N--H, observed: 0.984, delta from target: -0.124
+   A  74  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 197  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  50  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 172  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 316  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 389  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  84  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 384  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 207  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  35  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 420  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 391  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 327  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 196  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 277  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 379  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 199  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 117  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 402  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A   5  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  91  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 273  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 292  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  88  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 382  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 291  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  27  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  97  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 133  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  72  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 114  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 235  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 295  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  92  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 155  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 157  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 237  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 328  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 298  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 386  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 392  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  66  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 396  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  87  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 325  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 390  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 297  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 405  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 336  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 203  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 346  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 366  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 236  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 286  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 259  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 299  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  12  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  20  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  61  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 418  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 387  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 365  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A   4  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 356  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 167  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 355  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  81  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  86  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
    A 169  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 451  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 447  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 123  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 105  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 424  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 433  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 308  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  63  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 388  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 651  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 685  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 647  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 457  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 198  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 397  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 490  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 229  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 655  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  24  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 156  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 509  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 247  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 310  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 348  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 120  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  79  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 106  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 210  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 258  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 517  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  67  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 505  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 278  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 346  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 738  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 529  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  77  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 411  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 355  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 138  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 439  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 714  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  40  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 460  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 195  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 454  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 326  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  87  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 297  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 478  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 185  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 314  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 376  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 351  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 311  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 307  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 343  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 259  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 206  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 260  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 616  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 168  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 483  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  12  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 162  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 141  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 632  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 171  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  82  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A  27  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 381  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 184  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 402  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 242  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 281  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 543  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 309  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 485  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 391  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 177  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 711  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 224  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 130  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 408  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 642  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 482  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 349  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   C 628  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   A 129  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   B 331  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
-   D 644  ILE  H  , Bond N--H, observed: 1.020, delta from target: -0.160
-   B 273  ILE  H  , Bond N--H, observed: 1.020, delta from target: -0.160
-   C 372  ARG  H  , Bond N--H, observed: 1.020, delta from target: -0.160
-   A   1  ARG  H  , Bond N--H, observed: 1.020, delta from target: -0.160
+   A  28  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  67  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  65  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 218  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 252  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 134  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 101  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 300  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 258  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  95  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 340  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 373  HIS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 130  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 301  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 144  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 388  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 318  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 238  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A   9  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  75  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 192  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 337  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 401  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 380  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 181  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 152  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 228  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 221  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 397  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 194  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 361  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 331  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 347  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 303  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  71  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 280  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 243  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  33  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  16  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 324  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 376  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 271  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 323  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  63  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 262  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  83  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 132  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  11  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 135  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 110  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 307  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 255  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 103  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 335  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  43  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 360  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 351  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 293  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 290  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  60  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 254  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 403  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 357  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  45  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  64  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 120  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 165  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 263  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 343  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 205  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 304  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 156  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 109  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 342  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 141  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 358  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 225  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 416  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 146  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  17  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 350  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 245  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 178  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 121  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 137  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 287  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 406  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 359  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 232  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  38  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 200  LEU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 119  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 345  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 142  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 193  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  89  ASP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 102  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 160  ILE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 269  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 362  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 260  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  29  GLU  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 219  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 214  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  78  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 128  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 246  VAL  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 411  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 239  TRP  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  54  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 256  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  99  ARG  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  90  MET  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 139  LYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 409  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  21  ALA  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 266  PHE  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 148  SER  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 153  ASN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  48  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  13  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 136  GLN  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 215  THR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A  24  GLY  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   B 319  TYR  H  , Bond N--H, observed: 0.985, delta from target: -0.125
+   A 100  CYS  H  , Bond N--H, observed: 0.985, delta from target: -0.125
 
 ============================ Molprobity validation ============================
 
 
   Geometry Restraints Library: GeoStd + Monomer Library
   Deviations from Ideal Values - rmsd, rmsZ for bonds and angles.
-    Bond      :  0.009   0.129   6344  Z= 0.386
-    Angle     :  1.378  14.090   8622  Z= 0.586
-    Chirality :  0.105   0.349    890
-    Planarity :  0.006   0.056   1120
-    Dihedral  : 21.230  87.509   2348
-    Min Nonbonded Distance : 1.686
+    Bond      :  0.006   0.061   3330  Z= 0.244
+    Angle     :  1.240  11.298   4518  Z= 0.509
+    Chirality :  0.095   0.281    504
+    Planarity :  0.007   0.039    584
+    Dihedral  : 14.788  85.946   1232
+    Min Nonbonded Distance : 2.512
   
   Molprobity Statistics.
-    All-atom Clashscore : 244.23
+    All-atom Clashscore : 230.72
     Ramachandran Plot:
       Outliers :  0.00 %
       Allowed  :  0.00 %
@@ -1586,36 +941,16 @@
   
   Max deviation from planes:
      Type  MaxDev  MeanDev LineInFile
-   ARG   0.012   0.001   ARG A 199 
-   TYR   0.105   0.014   TYR C 528 
-   PHE   0.048   0.010   PHE B 302 
-   TRP   0.064   0.008   TRP C 449 
-   HIS   0.003   0.001   HIS A 120 
+   ARG   0.022   0.005   ARG B 285 
+   TYR   0.042   0.007   TYR B 390 
+   PHE   0.031   0.009   PHE B 266 
+   TRP   0.037   0.011   TRP A  27 
+   HIS   0.003   0.001   HIS B 373 
 
                      ----------Asn/Gln/His flips----------                     
 
-   C 536  GLN
-   D 674  HIS
-   C 491  HIS
-   A 165  GLN
-   A 120  HIS
-   B 303  HIS
-   A   6  HIS
-   A  15  GLN
-   A  61  GLN
-   A 102  GLN
-   A 208  GLN
-   A 266  GLN
-   B 323  HIS
-   B 361  GLN
-   C 377  HIS
-   C 386  GLN
-   C 432  GLN
-   C 473  GLN
-   C 579  GLN
-   C 637  GLN
-   D 694  HIS
-   D 732  GLN
+   A 109  ASN
+   B 321  ASN
 
 =================================== Summary ===================================
 
@@ -1623,7 +958,7 @@
                 favored =   0.00 %
   Rotamer outliers      =   0.00 %
   C-beta deviations     =     0
-  Clashscore            = 244.23
-  RMS(bonds)            =   0.0089
-  RMS(angles)           =   1.38
-  MolProbity score      =   3.99
+  Clashscore            = 230.72
+  RMS(bonds)            =   0.0056
+  RMS(angles)           =   1.24
+  MolProbity score      =   3.97

@@ -3,6 +3,26 @@ import csv
 from pathlib import Path
 import win32api  # Requires: pip install pywin32
 import win32file
+from collections import defaultdict
+from distutils.util import strtobool
+
+def _to_bool(x):
+    try:
+        return bool(strtobool(str(x)))
+    except Exception:
+        return False
+
+def _to_int(x, default=None):
+    try:
+        return int(x)
+    except Exception:
+        return default
+
+def _to_float(x, default=None):
+    try:
+        return float(x)
+    except Exception:
+        return default
 
 # === Tool Locator ===
 def find_tool_on_any_drive(possible_subpaths):
@@ -132,19 +152,34 @@ def load_inputs():
         config = {}
         with open(config_path) as f:
             for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):  # skip blanks/comments
+                    continue
                 if "=" in line:
-                    k, v = line.strip().split("=", 1)
+                    k, v = line.split("=", 1)
                     config[k.strip().upper()] = v.strip()
-        # Fill in missing keys from default
+
         default_cfg = get_default_config()
-        config["MAX_PARALLEL_JOBS"] = int(config["MAX_PARALLEL_JOBS"])
         merged_cfg = {**default_cfg, **config}
-        config["DOCKING_MODE"] = config.get("DOCKING_MODE", "discovery").lower()
-        if "MAX_PARALLEL_JOBS" in merged_cfg:
-            merged_cfg["MAX_PARALLEL_JOBS"] = int(merged_cfg["MAX_PARALLEL_JOBS"])
+
+        # coerce types
+        for k in ["CPU_ONLY", "FORCE_REPROCESS", "ALLOW_BOX_EXPAND"]:
+            if k in merged_cfg:
+                merged_cfg[k] = _to_bool(merged_cfg[k])
+
+        for k in ["MAX_PARALLEL_JOBS", "CPU", "MAX_RECENTER_ATTEMPTS", "EARLY_RECENTER_MIN_EVAL"]:
+            if k in merged_cfg:
+                merged_cfg[k] = _to_int(merged_cfg[k], merged_cfg[k])
+
+        for k in ["EARLY_RECENTER_RATIO", "EARLY_RECENTER_FAR_A", "EARLY_RECENTER_MEDIAN_A"]:
+            if k in merged_cfg:
+                merged_cfg[k] = _to_float(merged_cfg[k], merged_cfg[k])
+
+        merged_cfg["DOCKING_MODE"] = merged_cfg.get("DOCKING_MODE", "discovery").lower()
         return merged_cfg
     else:
         return get_default_config()
+
 
 
 # === Config Validation ===
@@ -178,7 +213,7 @@ def define_docking_stages(mode="discovery"):
         ]
     elif mode == "polypharmacology":
         return [
-            {"name": "stage1", "num_modes": 5, "energy_range": 4, "exhaustiveness": 8},
+            {"name": "stage1", "num_modes": 3, "energy_range": 2, "exhaustiveness": 4},
             {"name": "stage2", "num_modes": 10, "energy_range": 6, "exhaustiveness": 12},
             {"name": "stage3", "num_modes": 20, "energy_range": 9, "exhaustiveness": 24},
         ]
@@ -186,31 +221,37 @@ def define_docking_stages(mode="discovery"):
         raise ValueError(f"Unknown docking mode: {mode}")
 
 # === Docking Score Output ===
+import re
 
 def write_score_summary_to_csv(score_history, output_path="docking_score_summary.csv"):
-    all_ligands = set()
-    for stage_scores in score_history.values():
-        all_ligands.update(os.path.basename(lig) for lig in stage_scores)
+    # Normalize ligand names (remove _stageX)
+    ligand_stage_pattern = re.compile(r"^(.*?)(_stage\d+)?\.pdbqt$", re.IGNORECASE)
 
-    all_ligands = sorted(all_ligands)
-    stages = sorted(score_history.keys())
-    header = ["Ligand"] + stages
+    ligand_scores = defaultdict(dict)
 
+    for stage, stage_scores in score_history.items():
+        for path, score in stage_scores.items():
+            ligand_filename = os.path.basename(path)
+            match = ligand_stage_pattern.match(ligand_filename)
+            if match:
+                ligand_core = f"{match.group(1)}.pdbqt"
+                ligand_scores[ligand_core][stage] = score
+
+    # Get sorted list of unique ligands and stages
+    all_ligands = sorted(ligand_scores.keys())
+    all_stages = sorted(score_history.keys())
+
+    header = ["Ligand"] + all_stages
     rows = []
+
     for ligand in all_ligands:
         row = [ligand]
-        for stage in stages:
-            stage_scores = score_history.get(stage, {})
-            matched = [score for path, score in stage_scores.items() if os.path.basename(path) == ligand]
-
-            if matched:
-                value = matched[0]
-                if isinstance(value, (float, int)):
-                    row.append(f"{value:.2f}")
-                else:
-                    row.append(str(value))  # fall back to string if it's not numeric
+        for stage in all_stages:
+            score = ligand_scores[ligand].get(stage, "")
+            if isinstance(score, (float, int)):
+                row.append(f"{score:.2f}")
             else:
-                row.append("")
+                row.append(str(score) if score else "")
         rows.append(row)
 
     with open(output_path, "w", newline="") as csvfile:
@@ -219,6 +260,7 @@ def write_score_summary_to_csv(score_history, output_path="docking_score_summary
         writer.writerows(rows)
 
     print(f"\nScore summary written to: {output_path}")
+
 
 # === Extract Best Docking Score ===
 
@@ -234,7 +276,6 @@ def extract_best_score(docked_pdbqt_path):
     return best_score
 
 # === Docking Config Writer ===
-
 def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job):
     config_dir = os.path.join(output_dir, "configs", pdb_id, stage)
     os.makedirs(config_dir, exist_ok=True)
@@ -263,3 +304,103 @@ def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand
     with open(config_path, "w") as f:
         f.write("\n".join(config_lines))
     return config_path, out_path
+
+import re
+# NEW: helpers for structured scores
+import math
+
+# input_and_export_functions.py
+from typing import Any
+def record_score(score_history, stage_name, ligand, score: Any, valid, reason=None):
+    def coerce_score(x):
+        # numeric already?
+        if isinstance(x, (int, float)):
+            return float(x)
+        # PDBQT path? try to read best score
+        if isinstance(x, str) and x.lower().endswith(".pdbqt"):
+            try:
+                return extract_best_score(x)
+            except Exception:
+                return None
+        # numeric string?
+        try:
+            return float(x)
+        except Exception:
+            return None
+
+    s = coerce_score(score)
+    score_history[stage_name][ligand] = {
+        "score": s,
+        "valid": bool(valid),
+        "reason": reason,
+    }
+
+
+
+def score_key(item):
+    """item = (ligand, rec). Sort by numeric score; invalid or None go to bottom."""
+    _, rec = item
+    s = rec.get("score")
+    if s is None:
+        return math.inf
+    try:
+        s = float(s)
+    except (TypeError, ValueError):
+        return math.inf
+
+    # Keep native Vina ordering (more negative = better)
+    # If you want invalid to always be worse than same-number valid, add a small bump:
+    return s if rec.get("valid", False) else s + 1e-6
+
+def write_scores_csv(cfg, pdb_id, score_history):
+    """
+    Flatten score_history and write docking_score_summary.csv into DOCKED_DIR/<pdb>/.
+    """
+    protein_dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
+    os.makedirs(protein_dock_dir, exist_ok=True)
+    csv_output_path = os.path.join(protein_dock_dir, "docking_score_summary.csv")
+
+    flat_history = {}
+    for stage_name, stage_map in score_history.items():
+        flat_history[stage_name] = {}
+        for lig, rec in stage_map.items():
+            s = rec.get("score", None)
+            if rec.get("valid", False):
+                flat_history[stage_name][lig] = s if s is not None else ""
+            else:
+                flat_history[stage_name][lig] = (f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)")
+
+    write_score_summary_to_csv(flat_history, output_path=csv_output_path)
+    return csv_output_path
+
+def build_paths_for_protein(cfg, base_id, pdb_file):
+    """
+    Build common paths/dirs for a protein and ensure required folders exist.
+    Returns a dict with input/output paths.
+    """
+    pdb_id = base_id
+    ligand_output_dir = Path(cfg["OUTPUT_DIR"]) / pdb_id / f"{pdb_id}_cleaned_ligands"
+    ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
+    prepped_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]) / pdb_id
+    protein_dir = Path(cfg["OUTPUT_DIR"]) / f"{base_id}_nolig"
+    cleaned_pdb_path = protein_dir / f"{base_id}_nolig_cleaned.pdb"
+    receptor_pdbqt_path = Path(cfg["PDBQT_DIR"]) / f"{base_id}_receptor.pdbqt"
+    pdb_path = os.path.join(cfg["INPUT_DIR"], pdb_file)
+    nolig_pdb_path = os.path.join(cfg["OUTPUT_DIR"], f"{base_id}_nolig.pdb")
+
+    ligand_output_dir.mkdir(parents=True, exist_ok=True)
+    prepped_ligands_dir.mkdir(parents=True, exist_ok=True)
+    protein_dir.mkdir(parents=True, exist_ok=True)
+    receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "pdb_id": pdb_id,
+        "pdb_path": pdb_path,
+        "nolig_pdb_path": nolig_pdb_path,
+        "ligand_output_dir": ligand_output_dir,
+        "ligands_mol2_dir": ligands_mol2_dir,
+        "prepped_ligands_dir": prepped_ligands_dir,
+        "cleaned_pdb_path": cleaned_pdb_path,
+        "receptor_pdbqt_path": receptor_pdbqt_path,
+    }
+

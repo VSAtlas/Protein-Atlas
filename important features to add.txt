@@ -18,5 +18,5 @@ make function to delete new files
 
 KNOWN ISSUES:
 config reading and writing does not work
-currently the extracted ligands are being docked in all 5 stages, this is wasteful or compute, could be better if they only ran
+currently the extracted ligands from the protein are being docked in all 5 stages, this is wasteful for compute, could be better if they only ran
 during the final stage

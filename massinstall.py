@@ -1,7 +1,9 @@
 import os
 import requests
 
-pdb_ids = [ "4GT3","1OHR", "1HVR", "3CLN", "2P16", "1B9V", "1A30", "1J1Z", "2P54", "3K8Y", "4AKE", "1A6Z", "1GPK"
+pdb_ids = [ "1M17", "2HYY", "6O0K", "3LN1", "1UZE",
+
+"4GT3","1OHR", "1HVR", "3CLN", "2P16", "1B9V", "1A30", "1J1Z", "2P54", "3K8Y", "4AKE", "1A6Z", "1GPK"
 ,"6T5U", "1J1Z", "6BD4", "1LAF",
      "1XCA", "1HL4", "2PRH", "1EYB", "6BD4", "8D0J", "8GBL", "7CR3", "8IJ3", "9J8Z",
      "7E4T", "8BDC", "7QDS", "9F9Q", "7DF7", "2RXN", "1INS", "4W51", "5H9A", "1GUD",

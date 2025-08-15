@@ -279,7 +279,87 @@ def get_box_from_p2rank_csv(pdb_file):
         return None, None
 
 
+def detect_pocket(cleaned_pdb, logger):
+    """
+    Detect pocket center and box size from cleaned PDB.
+    Returns (center, box_size) or (None, None) if failed.
+    """
+    center, box_size = detect_active_site(cleaned_pdb)
+    if center is None:
+        logger.warning("Active-site detection failed.")
+    return center, box_size
 
+def prepare_receptor(cfg, paths, logger):
+    """
+    Run or reuse protein preparation to produce:
+      - cleaned PDB without ligands
+      - receptor PDBQT
+    Returns (cleaned_pdb_path_str, receptor_pdbqt_path_str) or (None, None) on failure.
+    """
+    from distutils.util import strtobool
+    force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
+    logger.info(f"FORCE_REPROCESS={force_reprocess} | "
+                f"exists(cleaned)={paths['cleaned_pdb_path'].exists()} "
+                f"exists(receptor)={paths['receptor_pdbqt_path'].exists()}")
+
+    if paths["cleaned_pdb_path"].exists() and paths["receptor_pdbqt_path"].exists() and not force_reprocess:
+        logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
+        return norm(paths["cleaned_pdb_path"]), norm(paths["receptor_pdbqt_path"])
+
+    result = automate_protein_prep.main(str(paths["nolig_pdb_path"]))
+    if not result or not isinstance(result, tuple) or len(result) != 2:
+        logger.warning("Protein prep failed.")
+        return None, None
+
+    cleaned_pdb, receptor_pdbqt = result
+
+    # Ensure receptor lives in canonical PDBQT_DIR
+    try:
+        if Path(receptor_pdbqt).resolve() != paths["receptor_pdbqt_path"].resolve():
+            from shutil import copy2
+            paths["receptor_pdbqt_path"].parent.mkdir(parents=True, exist_ok=True)
+            copy2(receptor_pdbqt, paths["receptor_pdbqt_path"])
+            receptor_pdbqt = str(paths["receptor_pdbqt_path"])
+    except Exception as e:
+        logger.warning(f"Could not relocate receptor PDBQT: {e}")
+
+    return norm(cleaned_pdb), norm(receptor_pdbqt)
+
+
+# ---------- high-level pipeline steps ----------
+
+def extract_ligands(cfg, paths, logger):
+    """
+    Extract and strip ligands from input PDB into clean PDB without ligands.
+    Returns the ligand count.
+    """
+    malformed_log = paths["ligands_mol2_dir"] / "malformed_ligands.txt"
+    if malformed_log.exists():
+        malformed_log.unlink()
+
+    ligands_dict, _ = extract_and_remove_ligands(
+        paths["pdb_path"], paths["nolig_pdb_path"], str(paths["ligand_output_dir"])
+    )
+    logger.info(f"Extracted {len(ligands_dict)} ligands → {paths['ligand_output_dir']}")
+    return len(ligands_dict)
+
+
+# ---------- small utils ----------
+
+def norm(p):
+    """Normalize a path to forward slashes for stable logging/keys."""
+    return os.path.abspath(str(p)).replace("\\", "/")
+
+def get_recenter_params(cfg):
+    """Read early/fallback recentering knobs from config with safe defaults."""
+    return {
+        "EARLY_RECENTER_RATIO": float(cfg.get("EARLY_RECENTER_RATIO", 0.70)),
+        "EARLY_RECENTER_MIN_EVAL": int(cfg.get("EARLY_RECENTER_MIN_EVAL", 10)),
+        "EARLY_RECENTER_FAR_A": float(cfg.get("EARLY_RECENTER_FAR_A", 15.0)),
+        "EARLY_RECENTER_MEDIAN_A": float(cfg.get("EARLY_RECENTER_MEDIAN_A", 10.0)),
+        "ALLOW_BOX_EXPAND": bool(cfg.get("ALLOW_BOX_EXPAND", True)),
+        "MAX_RECENTER_ATTEMPTS": int(cfg.get("MAX_RECENTER_ATTEMPTS", 3)),
+    }
 def main(pdb_file):
     base = os.path.splitext(pdb_file)[0]
     if base.endswith("_cleaned"):
