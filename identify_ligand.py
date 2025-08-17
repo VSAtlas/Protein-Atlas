@@ -23,7 +23,7 @@ except Exception:
         _std = None  # we'll gracefully fall back in neutralize_smiles()
 
 # ========= User config =========
-SDF_PATH = Path(r"E:\PythonProject\protein_automation\extracted_ligands\fda.sdf")
+SDF_PATH = Path(r"E:\PythonProject\protein_automation\extracted_ligands\merged_dedup.sdf")
 SEARCH_ROOT = Path(r"E:\PythonProject\protein_automation\prepped_ligands")
 ONE_BASED = True            # set False if your fda_000 matches SDF index 0
 
@@ -280,25 +280,81 @@ def load_sdf_rows(sdf_path: Path, one_based: bool) -> pd.DataFrame:
     log.info(f"SDF records parsed: {len(df)} "
              f"(mol=None: {int(df['sdf_title'].isna().sum())})")
     return df
+def _merge_coverage(files_df: pd.DataFrame, sdf_df: pd.DataFrame, one_based: bool) -> float:
+    """
+    Compute how many rows match when merging file_num (adjust for indexing) to sdf_index.
+    Returns coverage fraction in [0,1].
+    """
+    if files_df.empty or sdf_df.empty:
+        return 0.0
+    # Adjust indices based on hypothesis
+    adj = files_df.copy()
+    adj["match_index"] = adj["file_num"] + (1 if one_based else 0)
+    merged = adj.merge(sdf_df[["sdf_index"]], left_on="match_index", right_on="sdf_index", how="left")
+    hits = int(merged["sdf_index"].notna().sum())
+    total = len(adj)
+    return (hits / total) if total else 0.0
 
-def scan_fda_files(root: Path) -> pd.DataFrame:
-    log.info(f"Scanning for FDA ligands under: {root}")
-    regex = re.compile(r"(fda)_(\d+)", re.IGNORECASE)
-    recs = []
+
+def infer_indexing(files_df: pd.DataFrame, sdf_df: pd.DataFrame, default_one_based: bool) -> bool:
+    """
+    Try both zero-based and one-based; pick the one with higher coverage.
+    If a tie, fall back to the provided default_one_based.
+    """
+    cov_zero = _merge_coverage(files_df, sdf_df, one_based=False)
+    cov_one  = _merge_coverage(files_df, sdf_df, one_based=True)
+    log.info(f"Indexing coverage test → zero-based: {cov_zero:.3f}, one-based: {cov_one:.3f}")
+
+    if cov_zero > cov_one:
+        log.info("Auto-selected ZERO-based indexing (rdk_* style).")
+        return False
+    if cov_one > cov_zero:
+        log.info("Auto-selected ONE-based indexing (fda_* style).")
+        return True
+
+    log.info(f"Coverage tie; using configured ONE_BASED={default_one_based}.")
+    return default_one_based
+
+def scan_prepped_files(root: Path) -> pd.DataFrame:
+    """
+    Find prepped ligand files under `root` supporting either:
+      • rdk_0000003.pdbqt  (zero-based, typical for RDKit batches)
+      • fda_1158.*         (legacy pattern; extension flexible)
+
+    Returns a dataframe with:
+      file_num: int index parsed from the filename (0/1-based unknown yet)
+      scheme:   'rdk' or 'fda'
+      example_path: example file path for that number
+    """
+    log.info(f"Scanning for prepped ligands under: {root}")
+    rx_rdk = re.compile(r"(?i)\brdk_(\d+)\.pdbqt$")
+    rx_fda = re.compile(r"(?i)\bfda_(\d+)\b")
+    recs: List[Dict[str, Any]] = []
     count = 0
-    for path in root.rglob("*"):
-        if not path.is_file():
+
+    for p in root.rglob("*"):
+        if not p.is_file():
             continue
-        m = regex.search(path.name)
+        name = p.name
+        m = rx_rdk.search(name)
         if m:
-            recs.append({
-                "fda_id": m.group(0).lower(),      # e.g., fda_1158
-                "fda_num": int(m.group(2)),
-                "example_path": str(path),
-            })
+            recs.append({"scheme": "rdk", "file_num": int(m.group(1)), "example_path": str(p)})
             count += 1
-    df = pd.DataFrame(recs).drop_duplicates(["fda_num"])
-    log.info(f"Found {count} matching files; unique fda_num: {len(df)}")
+            continue
+        m = rx_fda.search(name)
+        if m:
+            recs.append({"scheme": "fda", "file_num": int(m.group(1)), "example_path": str(p)})
+            count += 1
+
+    df = pd.DataFrame(recs)
+    if df.empty:
+        log.warning("No prepped ligand files found. Check SEARCH_ROOT and filename patterns.")
+        return df
+
+    # If multiple paths share the same (scheme, file_num), keep the first (just for logging/example)
+    df = df.sort_values(["scheme", "file_num"]).drop_duplicates(["scheme", "file_num"])
+    by_scheme = df.groupby("scheme")["file_num"].nunique().to_dict()
+    log.info(f"Found {count} matching files; unique counts by scheme: {by_scheme}")
     return df
 
 def sanity_check_index_merge(mapping: pd.DataFrame) -> None:
@@ -307,8 +363,7 @@ def sanity_check_index_merge(mapping: pd.DataFrame) -> None:
     pct = 0 if total == 0 else 100.0 * (total - missing) / total
     log.info(f"Merge coverage: {total - missing}/{total} ({pct:.1f}%)")
     if pct < 80:
-        log.warning("Low coverage. Your numbering might be zero-based. "
-                    "Try setting ONE_BASED=False and rerun.")
+        log.warning("Low coverage. Check that your merged_dedup.sdf ordering aligns with prepped ligand numbering.")
 
 # ---------- cache utils ----------
 def load_cache(path: Path) -> dict:
@@ -1027,12 +1082,21 @@ def main():
     # 1) Build SDF index → metadata table
     df_sdf = load_sdf_rows(SDF_PATH, ONE_BASED)
 
-    # 2) Scan your FDA files and extract fda_num
-    fda_df = scan_fda_files(SEARCH_ROOT)
+    # 2) Scan prepped ligands (supports rdk_* and fda_*)
+    files_df = scan_prepped_files(SEARCH_ROOT)
+    if files_df.empty:
+        raise RuntimeError("No prepped ligand files found; cannot proceed.")
 
-    # 3) Merge by order index
-    mapping = fda_df.merge(df_sdf, left_on="fda_num", right_on="sdf_index", how="left")
-    mapping = mapping.sort_values(["fda_num", "example_path"])
+    # 3) Decide indexing automatically (zero- vs one-based)
+    #    We *don’t* mutate the global ONE_BASED; we select a local choice.
+    one_based_choice = infer_indexing(files_df, df_sdf, ONE_BASED)
+
+    # Build the merge key according to the chosen indexing
+    files_df = files_df.assign(sdf_join_index=files_df["file_num"] + (1 if one_based_choice else 0))
+
+    # Merge by computed index
+    mapping = files_df.merge(df_sdf, left_on="sdf_join_index", right_on="sdf_index", how="left")
+    mapping = mapping.sort_values(["scheme", "file_num", "example_path"])
 
     # 4) Sanity report + write base mapping immediately
     sanity_check_index_merge(mapping)

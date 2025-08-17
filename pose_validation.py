@@ -17,6 +17,64 @@ def parse_pdbqt_coordinates(pdbqt_file):
     return np.array(coords), elements
 
 
+# --- Minimal readers and self-docking RMSD ---
+
+def parse_pdb_coordinates(pdb_file):
+    """
+    Heavy-atom PDB reader using fixed columns (like parse_pdbqt_coordinates but for PDB).
+    Returns (N,3) float array and element list (H filtered out).
+    """
+    coords, elements = [], []
+    with open(pdb_file, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
+                try:
+                    x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+                except ValueError:
+                    continue
+                elem = (line[76:78].strip().upper() if len(line) >= 78 else line[12:16].strip()[0].upper())
+                if elem == "H":
+                    continue
+                coords.append([x, y, z]); elements.append(elem)
+    return np.array(coords, dtype=float), elements
+
+def compute_redock_rmsd(crystal_lig_path: str, docked_pdbqt_path: str):
+    """
+    Compute heavy-atom Kabsch RMSD between the extracted crystal ligand (PDB/MOL2/SDF-as-PDB formatted)
+    and the best-scoring docked pose (PDBQT). Assumes atom ordering is consistent; truncates to min length.
+    Returns float RMSD in Å, or None on failure.
+    """
+    try:
+        # Prefer PDB; if the extracted file is MOL2/SDF but written with PDB-like columns, parse still works.
+        if crystal_lig_path.lower().endswith(".pdb"):
+            ref_xyz, _ = parse_pdb_coordinates(crystal_lig_path)
+        else:
+            # best-effort parse using PDB columns (your extractor often writes PDB too)
+            ref_xyz, _ = parse_pdb_coordinates(crystal_lig_path)
+
+        prd_xyz, _ = parse_pdbqt_coordinates(docked_pdbqt_path)
+        if ref_xyz.size == 0 or prd_xyz.size == 0:
+            return None
+
+        n = min(ref_xyz.shape[0], prd_xyz.shape[0])
+        if n < 5:
+            return None
+
+        return _kabsch(ref_xyz[:n], prd_xyz[:n])
+    except Exception:
+        return None
+def compute_self_rmsd(pdbqt_path: str):
+    blocks = _split_pdbqt_models(pdbqt_path)
+    if len(blocks) < 2:
+        return None
+    A = _coords_from_block(blocks[0])
+    B = _coords_from_block(blocks[1])
+    if A.shape[0] == 0 or B.shape[0] == 0:
+        return None
+    n = min(A.shape[0], B.shape[0])
+    if n < 5:
+        return None
+    return _kabsch(A[:n], B[:n])
 
 def detect_hydrogen_bonds(protein_coords, protein_elements, ligand_coords, ligand_elements, max_dist=3.5):
     donors = {'N', 'O'}

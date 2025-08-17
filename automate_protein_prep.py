@@ -111,6 +111,155 @@ _TWO_LETTER = {
     "HG","PB","SN","SB","CD","GA","GE","ZR","Y","NB","W","RE","OS","RH","RU","I"
 }
 
+# --- add near the top (imports) ---
+from pathlib import Path
+try:
+    from rdkit import Chem
+    _HAS_RDKIT = True
+except Exception:
+    _HAS_RDKIT = False
+
+def _write_pristine_reference(pdb_lig_path: Path):
+    """
+    Write a pristine reference SDF and an atom map JSON (no sanitization/neutralization).
+    Reference lives in sibling 'reference' folder next to ligands_raw.
+    This is for RMSD calculations, RMSD struggles to deal with pdbqt files
+    so writing a copy of the ligand for reference before ligand
+    prep allows a little bypass
+    """
+    ref_dir = pdb_lig_path.parent.parent / "reference"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    ref_sdf = ref_dir / (pdb_lig_path.stem + ".sdf")
+    ref_json = ref_dir / (pdb_lig_path.stem + ".map.json")
+
+    # If RDKit is available, prefer it to preserve coords and order.
+    if _HAS_RDKIT:
+        m = Chem.MolFromPDBFile(str(pdb_lig_path), sanitize=False, removeHs=False)
+        if m is not None:
+            w = Chem.SDWriter(str(ref_sdf)); w.write(m); w.close()
+            # write a lightweight atom “map” for later correspondence (index, name, element)
+            amap = []
+            with open(pdb_lig_path, "r", encoding="utf-8", errors="ignore") as f:
+                for ln in f:
+                    if ln.startswith(("ATOM","HETATM")):
+                        amap.append({
+                            "name": ln[12:16].strip(),
+                            "element": ln[76:78].strip() or ln[12:16].strip()[:1].upper()
+                        })
+            import json
+            json.dump({"atoms": amap}, open(ref_json, "w"), indent=2)
+            return
+
+    # Fallback: copy-as-is into SDF-style single record (very minimal)
+    # (Keeps you moving even without RDKit; robust RMSD can still LCS-map later)
+    with open(ref_sdf, "w", encoding="utf-8") as out:
+        out.write(f"{pdb_lig_path.stem}\n  -Pristine-\n\n")  # SDF header stubs
+        out.write("$$$$\n")
+
+# --- Canonical per-protein directory layout ---
+def canon_paths(pdb_id: str, output_root: str | Path) -> dict[str, Path]:
+    root = Path(output_root).resolve()
+    base = root / pdb_id.upper()
+    return {
+        "protein_root": base,                      # processed_pdbs/1IEP
+        "raw":          base / "raw",              # working copy, altloc-filtered
+        "work":         base / "work",             # intermediates
+        "ligands_raw":  base / "ligands_raw",      # extracted ligands (from filtered PDB)
+        "nolig":        base / "nolig",            # ligand-stripped protein + phenix outputs
+        "receptor":     base / "receptor",         # final cleaned receptor & PDBQT
+    }
+
+# Clean up legacy sibling dirs (best effort; non-fatal)
+def fold_legacy_layout(pdb_id: str, output_root: str | Path) -> None:
+    root = Path(output_root).resolve()
+    base = root / pdb_id.upper()
+    base.mkdir(parents=True, exist_ok=True)
+
+    # Move common legacy siblings inside canonical tree
+    candidates = [
+        (root / f"{pdb_id}_nolig", base / "nolig"),
+        (root / f"{pdb_id.lower()}_nolig", base / "nolig"),
+        (root / f"{pdb_id}_cleaned_ligands", base / "ligands_raw"),
+        (root / f"{pdb_id.lower()}_cleaned_ligands", base / "ligands_raw"),
+        (root / f"{pdb_id}_nolig.pdb", base / "nolig" / f"{pdb_id}_nolig_phenix_clean.pdb"),
+        (root / f"{pdb_id.lower()}_nolig.pdb", base / "nolig" / f"{pdb_id}_nolig_phenix_clean.pdb"),
+    ]
+    for src, dst in candidates:
+        try:
+            if src.is_dir():
+                (dst.parent).mkdir(parents=True, exist_ok=True)
+                # merge contents without overwriting
+                for p in src.rglob("*"):
+                    rel = p.relative_to(src)
+                    target = dst / rel
+                    if p.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    else:
+                        if not target.exists():
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(p), str(target))
+                shutil.rmtree(src, ignore_errors=True)
+            elif src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if not dst.exists():
+                    shutil.move(str(src), str(dst))
+        except Exception:
+            pass  # non-fatal tidy
+def extract_ligands_from_filtered(filtered_pdb: str | Path, out_dir: str | Path) -> list[Path]:
+    """
+    Extract non-water HETATM residues from an altLoc-filtered PDB.
+    Output files are named like RES_CHAINRESI.pdb (e.g., STI_A201.pdb).
+    Returns list of written paths.
+    """
+    outd = Path(out_dir); outd.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    cur_key = None
+    bucket: list[str] = []
+
+    def flush():
+        nonlocal bucket, cur_key, written
+        if not bucket or cur_key is None:
+            return
+        resname, chain, resseq, icode = cur_key
+        name = f"{resname}_{chain}{int(resseq)}"
+        outp = outd / f"{name}.pdb"
+        with open(outp, "w") as w:
+            # write minimal HEADER/TER around the residue atoms
+            w.write(f"REMARK Extracted {name}\n")
+            for ln in bucket:
+                w.write(ln)
+            w.write("TER\nEND\n")
+        written.append(outp)
+        bucket = []
+        cur_key = None
+        # write a pristine reference alongside
+        try:
+            _write_pristine_reference(outp)
+        except Exception as e:
+            logging.warning("Could not write pristine reference for %s: %s", outp.name, e)
+
+    with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if not ln.startswith("HETATM"):
+                continue
+            resname = ln[17:20].strip().upper()
+            if resname == "HOH":
+                continue
+            chain = ln[21]
+            resseq = ln[22:26].strip() or "0"
+            icode = ln[26]
+            key = (resname, chain, resseq, icode)
+            if cur_key is None:
+                cur_key = key
+            if key != cur_key:
+                flush()
+                cur_key = key
+            bucket.append(ln)
+    flush()
+    logging.info("Extracted %d ligand residues to %s", len(written), outd)
+    return written
+
+
 # =============================
 # Element & Hydrogen Utilities
 # =============================
@@ -792,133 +941,91 @@ def assert_no_metal_in_peptidic(pdb_path: str | Path) -> None:
 # =============================
 # End-to-end Cleaning Pipeline
 # =============================
-
 def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
-    """Run the full cleaning pipeline and return path to final cleaned PDB."""
+    """Run the full cleaning pipeline and return path to final cleaned PDB (receptor)."""
     output_root = str(output_root)
     if not os.access(output_root, os.W_OK):
         raise PermissionError(f"Cannot write to output directory: {output_root}")
 
-    pdb_id = os.path.splitext(os.path.basename(str(pdb_file)))[0]
-    if pdb_id.endswith("_cleaned"):
-        pdb_id = pdb_id[:-8]
+    pdb_id = os.path.splitext(os.path.basename(str(pdb_file)))[0].upper()
+    fold_legacy_layout(pdb_id, output_root)
+    paths = canon_paths(pdb_id, output_root)
+    for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
+        paths[d].mkdir(parents=True, exist_ok=True)
 
-    output_dir = os.path.join(output_root, pdb_id)
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 1) Working copy & altLoc filtering
-    working_pdb = os.path.join(output_dir, f"{pdb_id}_working.pdb")
+    # 1) Working copy
+    working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
     shutil.copyfile(str(pdb_file), working_pdb)
 
-    filtered_pdb = os.path.join(output_dir, f"{pdb_id}_filtered.pdb")
+    # 2) AltLoc filtering (→ filtered.pdb in raw/)
+    filtered_pdb = paths["raw"] / f"{pdb_id}_filtered.pdb"
     filter_altlocs(working_pdb, filtered_pdb)
 
-    # 1.5) Remove nonstandard residues (policy-aware keep of cofactors/metals/waters)
-    stripped_pdb = os.path.join(output_dir, f"{pdb_id}_stripped.pdb")
+    # 3) **Extract ligands now** from filtered PDB (controls live here)
+    extracted = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
+
+    # 4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
+    stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
     removed_count, _ = strip_nonstandard_residues(filtered_pdb, stripped_pdb)
     logging.info("Removed %d nonstandard residue lines.", removed_count)
 
-    # 2) Element fix → MODELLER loop fill → element fix again (defensive)
-    fixed_elements_pdb = os.path.join(output_dir, f"{pdb_id}_elemfix.pdb")
-    fix_element_columns_in_file(stripped_pdb, fixed_elements_pdb)
-    log_metal_mislabels(fixed_elements_pdb)
-    loop_fixed_pdb = build_missing_loops(fixed_elements_pdb, output_dir)
+    # 5) Element fix → MODELLER → element fix
+    elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
+    fix_element_columns_in_file(stripped_pdb, elemfix_pdb)
+    log_metal_mislabels(elemfix_pdb)
+    loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
     fix_element_columns_in_file(loop_fixed_pdb, loop_fixed_pdb)
     log_metal_mislabels(loop_fixed_pdb)
 
-    # 3) Incomplete residue visibility
-    invalid_residues = find_invalid_atoms(loop_fixed_pdb)
-    if invalid_residues:
-        for chain_id, resname, resnum in invalid_residues:
-            logging.warning("Incomplete residue: %s %s%d has ≤2 atoms incl. CA", resname, chain_id, resnum)
-    else:
-        logging.info("No incomplete CA residues found.")
-
-    # 4) Phenix clean pass (Windows-friendly)
-    phenix_input = os.path.abspath(loop_fixed_pdb).replace("\\", "/")
-    phenix_out_dir = os.path.abspath(os.path.join(output_root, f"{pdb_id}_nolig")).replace("\\", "/")
-    os.makedirs(phenix_out_dir, exist_ok=True)
-    phenix_out_pdb = os.path.join(phenix_out_dir, f"{pdb_id}_nolig_phenix_clean.pdb").replace("\\", "/")
-
+    # 6) Phenix clean (kept inside nolig/)
+    phenix_out_pdb = paths["nolig"] / f"{pdb_id}_nolig_phenix_clean.pdb"
     r = subprocess.run(
-        ["cmd.exe", "/c", PHENIX_PYTHON_BAT, PHENIX_CLEAN_SCRIPT, phenix_input, phenix_out_dir],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        ["cmd.exe", "/c", PHENIX_PYTHON_BAT, PHENIX_CLEAN_SCRIPT,
+         str(loop_fixed_pdb).replace("\\", "/"),
+         str(paths["nolig"]).replace("\\", "/")],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     if r.returncode != 0:
         logging.warning("Phenix clean script failed (rc=%s). stderr:\n%s", r.returncode, r.stderr)
 
-    src_for_step4 = phenix_out_pdb if os.path.isfile(phenix_out_pdb) else loop_fixed_pdb
+    src_for_step = phenix_out_pdb if phenix_out_pdb.is_file() else loop_fixed_pdb
 
-    # Handle transient file locks on Windows
-    if src_for_step4 == phenix_out_pdb:
-        import time
-        for _ in range(20):  # ~4 seconds total
-            try:
-                with open(src_for_step4, "rb"):
-                    break
-            except PermissionError:
-                time.sleep(0.2)
-        else:
-            logging.warning("Phenix output stays locked; falling back to loop_fixed_pdb.")
-            src_for_step4 = loop_fixed_pdb
-
-    # 5) Hydrogen cleanup & chain validation
-    debulked_pdb = os.path.join(output_dir, f"{pdb_id}_debulked.pdb")
-    shutil.copyfile(src_for_step4, debulked_pdb)
-
+    # 7) Hydrogen cleanup & chain validation
+    debulked_pdb = paths["work"] / f"{pdb_id}_debulked.pdb"
+    shutil.copyfile(src_for_step, debulked_pdb)
     clean_hydrogens(debulked_pdb, use_conect_if_reliable=True, conect_min_cov=0.6)
 
-    chain_validated_pdb = os.path.join(output_dir, f"{pdb_id}_validated.pdb")
+    chain_validated_pdb = paths["work"] / f"{pdb_id}_validated.pdb"
     filter_invalid_chains(debulked_pdb, chain_validated_pdb)
 
-    # 6) Protonation & verification
-    reduced_pdb = os.path.join(output_dir, f"{pdb_id}_reduced.pdb")
+    # 8) Reduce (with fallbacks)
+    reduced_pdb = paths["work"] / f"{pdb_id}_reduced.pdb"
     assign_protonation_states(chain_validated_pdb, reduced_pdb)
     if not file_contains_hydrogens(reduced_pdb):
         logging.error("[FATAL] Reduced file missing hydrogens: %s", reduced_pdb)
         return None
 
-    # Final element fix (+ external fix for anything pdbtools changed)
+    # 9) Final element fix & polish to receptor/
     fix_pdb_elements(reduced_pdb)
-    # (2) quick histogram on the reduced file
     quick_element_histogram(reduced_pdb)
 
-    cleaned_pdb = os.path.abspath(os.path.join(output_dir, f"{pdb_id}_cleaned.pdb")).replace("\\", "/")
-    # Respect WATER_POLICY here so Phenix doesn't strip waters you decided to keep  # << UPDATED
+    receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
     remove_waters_flag = (config.get("WATER_POLICY", "site_only").lower() == "remove_all")
-    if not run_phenix_pdbtools(reduced_pdb, cleaned_pdb, remove_waters=remove_waters_flag):
+    if not run_phenix_pdbtools(reduced_pdb, receptor_pdb, remove_waters=remove_waters_flag):
         return None
 
-    # One more element sanity pass in case pdbtools touched columns
-    fix_pdb_elements(cleaned_pdb)
-    # (2) histogram and (3) peptide-like metal check on the final file
-    quick_element_histogram(cleaned_pdb)
-    assert_no_metal_in_peptidic(cleaned_pdb)
+    fix_pdb_elements(receptor_pdb)
+    quick_element_histogram(receptor_pdb)
+    assert_no_metal_in_peptidic(receptor_pdb)
+    assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
-    assert file_contains_hydrogens(cleaned_pdb), f"[FATAL] Cleaned file lost hydrogens: {cleaned_pdb}"
+    # 10) MolProbity (non-blocking)
+    with open(paths["work"] / f"{pdb_id}_molprobity.log", "w") as out:
+        subprocess.run([MOLPROBITY_BAT, str(receptor_pdb)], stdout=out)
 
-    # 7) MolProbity report (non-blocking)
-    molprobity_log = os.path.join(output_dir, f"{pdb_id}_molprobity.log")
-    with open(molprobity_log, "w") as out:
-        subprocess.run([MOLPROBITY_BAT, cleaned_pdb], stdout=out)
+    logging.info("Cleaned receptor: %s", receptor_pdb)
+    return str(receptor_pdb)
 
-    logging.info("Cleaned: %s", cleaned_pdb)
-    logging.info("Input PDB: %s", pdb_file)
-    logging.info("Cleaned PDB will be written to: %s", cleaned_pdb)
-
-    # 8) Final parse sanity check
-    from Bio.PDB import PDBParser
-    try:
-        parser = PDBParser(QUIET=True)
-        structure = parser.get_structure("validate", cleaned_pdb)
-        atoms = list(structure.get_atoms())
-        assert len(atoms) > 0, f"[FATAL] Final cleaned PDB has no atoms: {cleaned_pdb}"
-    except Exception as e:
-        logging.error("[FATAL] Could not parse cleaned PDB: %s", e)
-
-    return cleaned_pdb
 
 # =============================
 # Module Entrypoint
@@ -945,7 +1052,8 @@ def main(pdb_filename: str, output_dir: str | Path = r"./processed_pdbs") -> tup
             return None
 
         # Prepare receptor PDBQT with ADT
-        output_pdbqt = os.path.join(output_dir, pdb_id, f"{pdb_id}.pdbqt")
+        paths = canon_paths(pdb_id, output_dir)
+        output_pdbqt = str((paths["receptor"] / f"{pdb_id}.pdbqt").resolve())
         if not run_prepare_receptor(cleaned_pdb, output_pdbqt, config):
             logging.error("ERROR: Failed to prepare receptor PDBQT for %s", pdb_id)
             return None

@@ -162,7 +162,8 @@ def fix_pdb_elements(input_path, output_path=None):
     if output_path is None:
         output_path = input_path
 
-    io.save(output_path, fixer)
+    with open(output_path, "w") as fh:
+        io.save(fh, fixer)
     print(f"Saved fixed PDB to {output_path}")
 
 from Bio.PDB import PDBParser, NeighborSearch, Selection
