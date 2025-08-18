@@ -605,64 +605,95 @@ def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
     return heavy
 
 def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int]]:
+    # Keep your existing prep step (controls/extracted); harmless if nothing to do
     prep_ligands_from_pdb(
         ligand_output_dir=paths.ligand_output_dir,
         ligands_mol2_dir=paths.ligands_mol2_dir,
         prepped_ligands_dir=paths.prepped_ligands_dir,
     )
 
-    lib_root = paths.prepped_ligands_dir  # <-- was Path(cfg["OUTPUT_LIGANDS_DIR"])
-    logger.info(f"Scanning for ligands under: {lib_root}")
-    all_pdbqt_paths = list(lib_root.rglob("*.pdbqt"))
+    # --- NEW: scan multiple roots ---
+    roots = []
+    global_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
+    if global_root.exists():
+        roots.append(global_root)
+    # also include the per-protein folder (controls you just prepared land here)
+    if paths.prepped_ligands_dir.exists():
+        roots.append(paths.prepped_ligands_dir)
+
+    # optional extras (semicolon-separated absolute paths)
+    extra = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
+    if extra:
+        for d in extra.split(";"):
+            d = d.strip()
+            if d:
+                p = Path(d)
+                if p.exists():
+                    roots.append(p)
+
+    # Gather all .pdbqt files from all roots (deduped by normalized absolute path)
+    logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
+    seen_paths: set[str] = set()
+    all_pdbqt_paths: list[Path] = []
+    for r in roots:
+        for p in r.rglob("*.pdbqt"):
+            pn = norm(p)
+            if pn not in seen_paths:
+                seen_paths.add(pn)
+                all_pdbqt_paths.append(p)
+
     if not all_pdbqt_paths:
-        logger.warning(f"No .pdbqt ligands found under {lib_root}; nothing to dock.")
+        logger.warning("No .pdbqt ligands found in any library roots; nothing to dock.")
         return [], {}
 
-    seen_stems: set = set()
+    # Validate each ligand and collect heavy atom counts
     valid_pdbqt: Dict[str, Path] = {}
     valid_count = 0
     for p in all_pdbqt_paths:
         stem = p.stem
-        if stem in seen_stems:
-            continue
-        if is_valid_ligand(p, str(paths.prepped_ligands_dir.parent)):  # or just str(paths.prepped_ligands_dir)
-            valid_pdbqt[stem] = p  # keep as Path
-            valid_count += 1
-        else:
-            logger.debug(f"Excluded malformed ligand (pdbqt check failed): {p}")
-        seen_stems.add(stem)
+        try:
+            # use the global root as "library root" for path-based checks
+            lib_root_for_checks = str(global_root if global_root.exists() else paths.prepped_ligands_dir.parent)
+            if is_valid_ligand(p, lib_root_for_checks):
+                valid_pdbqt[norm(p)] = p
+                valid_count += 1
+            else:
+                logger.debug(f"Excluded malformed ligand (pdbqt check failed): {p}")
+        except Exception:
+            logger.debug(f"Excluded malformed ligand (exception): {p}")
 
-    logger.info(f"Valid .pdbqt ligands (global): {valid_count}")
+    logger.info(f"Valid .pdbqt ligands (union of roots): {valid_count}")
 
+    # Optional blacklist by name prefix (PAINS_NAMES)
     pains_tokens = [t.strip().upper() for t in str(cfg.get("PAINS_NAMES", "")).split(",") if t.strip()]
     if pains_tokens:
         before = len(valid_pdbqt)
         valid_pdbqt = {
-            stem: p for stem, p in valid_pdbqt.items()
-            if not any(stem.upper().startswith(tok) for tok in pains_tokens)
+            k: v for k, v in valid_pdbqt.items()
+            if not any(Path(k).stem.upper().startswith(tok) for tok in pains_tokens)
         }
         removed = before - len(valid_pdbqt)
         if removed > 0:
             logger.info(f"Name blacklist removed {removed} ligands (PAINS_NAMES).")
 
+    # Heavy atoms per ligand
     heavy_atom_counts: Dict[str, int] = {}
     ligands_to_dock: List[str] = []
-    for stem, p in valid_pdbqt.items():
-        path_str = str(p)  # one canonical string
-        ligands_to_dock.append(path_str)
+    for k, p in valid_pdbqt.items():
+        ligands_to_dock.append(k)
         try:
             ha = _count_heavy_atoms_from_pdbqt(p)
         except Exception:
             ha = 0
-        heavy_atom_counts[path_str] = int(ha)
+        heavy_atom_counts[k] = int(ha)
 
+    # Sampling / limits for Stage1
     import random
     sample_n = int(cfg.get("LIBRARY_SAMPLE_N", 0) or 0)
     limit_n  = int(cfg.get("LIBRARY_LIMIT", 0) or 0)
 
     if sample_n > 0 and sample_n < len(ligands_to_dock):
-        sampled = random.sample(ligands_to_dock, sample_n)
-        ligands_to_dock = sampled
+        ligands_to_dock = random.sample(ligands_to_dock, sample_n)
         heavy_atom_counts = {k: heavy_atom_counts[k] for k in ligands_to_dock}
         logger.info(f"[Debug] Sampling {sample_n} ligands from library for stage1.")
 
@@ -671,7 +702,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         heavy_atom_counts = {k: heavy_atom_counts[k] for k in ligands_to_dock}
         logger.info(f"[Debug] Limiting library to first {limit_n} ligands for stage1.")
 
-    logger.info(f"Ligands queued for docking: {len(ligands_to_dock)}")
+    logger.info(f"Ligands queued for docking (union roots): {len(ligands_to_dock)}")
     return ligands_to_dock, heavy_atom_counts
 
 # ======================
@@ -695,6 +726,8 @@ def run_one_stage(
     Dict[str, str],
     Dict[str, Tuple[Optional[float], str]]
 ]:
+    from sys import stdout as _stdout
+
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     max_workers = int(cfg["MAX_PARALLEL_JOBS"])
 
@@ -727,7 +760,7 @@ def run_one_stage(
 
             return str(out_pdb) if out_pdb.exists() and out_pdb.stat().st_size > 0 else None
         except Exception as e:
-            print(f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}")
+            logger.warning(f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}")
             return None
 
     def _validate_with_rmsd_gate(
@@ -759,7 +792,7 @@ def run_one_stage(
                 logger=logger
             )
             if ok:
-                print(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (valid, redock-RMSD PASS)")
+                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (valid, redock-RMSD PASS)")
                 return True, None
             else:
                 return False, "rmsd_fail"
@@ -776,7 +809,7 @@ def run_one_stage(
         )
         if ok:
             msg = f"(valid, selfRMSD={self_rmsd:.2f} Å)" if isinstance(self_rmsd, (int, float)) else "(valid)"
-            print(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol {msg}")
+            logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol {msg}")
             return True, None
         else:
             # include selfRMSD in reason for easier triage
@@ -810,7 +843,17 @@ def run_one_stage(
         except Exception as _e:
             logger.warning(f"Audit hook failed: {_e}")
 
-        with tqdm(total=len(futures), desc=f"Docking ({stage['name']})", unit="ligand") as pbar:
+        processed = 0
+        with tqdm(
+            total=len(futures),
+            desc=f"Docking ({stage['name']})",
+            unit="ligand",
+            position=1,           # keep nested bar separate from outer "Processing Proteins"
+            dynamic_ncols=True,   # adapt to terminal width
+            mininterval=0.2,      # refresh often
+            leave=True,
+            file=_stdout          # write to same stream as any prints/logging
+        ) as pbar:
             for fut in as_completed(futures):
                 lig, out_path = futures[fut]
                 lig_name = os.path.basename(lig)
@@ -819,12 +862,18 @@ def run_one_stage(
                 except Exception as e:
                     logger.warning(f"Docking crashed for {lig_name}: {e}")
                     invalids[lig] = (None, "docking_exception")
+                    processed += 1
+                    if (processed % 25 == 0) or (processed == len(futures)):
+                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
                     pbar.update(1)
                     continue
 
                 if score is None:
                     logger.warning(f"No score for {lig_name}")
                     invalids[lig] = (None, "no_score")
+                    processed += 1
+                    if (processed % 25 == 0) or (processed == len(futures)):
+                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
                     pbar.update(1)
                     continue
 
@@ -864,6 +913,9 @@ def run_one_stage(
                     else:
                         invalids[lig] = (float(score), reason or "rmsd_fail")
 
+                    processed += 1
+                    if (processed % 25 == 0) or (processed == len(futures)):
+                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
                     pbar.update(1)
                     continue  # move to next ligand
 
@@ -917,16 +969,22 @@ def run_one_stage(
                                 # apply RMSD gate here too
                                 ok2, reason2 = _validate_with_rmsd_gate(lig, lig_name, out_path2, float(score2))
                                 if ok2:
-                                    scores[lig] = float(score2)
-                                    validated_ligands.append(lig)
-                                    raw_docked_ligands[lig] = norm(out_path2)
-                                    print(f"{lig_name} | {stage_retry['name']} score: {score2:.2f} kcal/mol (rescued)")
-                                    pbar.update(1)
-                                    continue
+                                     scores[lig] = float(score2)
+                                     validated_ligands.append(lig)
+                                     raw_docked_ligands[lig] = norm(out_path2)
+                                     logger.info(f"{lig_name} | {stage_retry['name']} score: {score2:.2f} kcal/mol (rescued)")
+                                     processed += 1
+                                     if (processed % 25 == 0) or (processed == len(futures)):
+                                         pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                                     pbar.update(1)
+                                     continue
                                 else:
-                                    invalids[lig] = (float(score2), reason2 or "rmsd_fail")
-                                    pbar.update(1)
-                                    continue
+                                     invalids[lig] = (float(score2), reason2 or "rmsd_fail")
+                                     processed += 1
+                                     if (processed % 25 == 0) or (processed == len(futures)):
+                                         pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                                     pbar.update(1)
+                                     continue
                     except Exception as _e:
                         logger.warning(f"Retry path failed for {lig_name}: {_e}")
 
@@ -1013,7 +1071,7 @@ def run_one_stage(
                             scores[lig] = float(score_r)
                             validated_ligands.append(lig)
                             raw_docked_ligands[lig] = norm(out_path3)
-                            print(f"{lig_name} | {stage_retry2['name']} score: {score_r:.2f} kcal/mol (retry rescued)")
+                            logger.info(f"{lig_name} | {stage_retry2['name']} score: {score_r:.2f} kcal/mol (retry rescued)")
                             retained_invalid = False
                             break
                         else:
@@ -1025,12 +1083,14 @@ def run_one_stage(
 
                 if retained_invalid:
                     invalids[lig] = (float(score), result.get("reason", "pose_invalid"))
-                    print(f"{lig_name} | pose invalid (after retries)")
+                    logger.info(f"{lig_name} | pose invalid (after retries)")
 
+                processed += 1
+                if (processed % 25 == 0) or (processed == len(futures)):
+                    pbar.set_postfix(ok=len(scores), inv=len(invalids))
                 pbar.update(1)
 
     return scores, validated_ligands, all_distances, raw_docked_ligands, invalids
-
 
 
 def early_recenter_decision(
@@ -1678,8 +1738,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # 1) Extract ligands → produce nolig PDB
     _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
     robust_prepare_controls(paths, cfg, logger)
-    ctrl_pdbqts = list(paths.prepped_ligands_dir.glob("*.pdbqt"))
-    logger.info(f"[Controls] Prepped control PDBQTs found: {len(ctrl_pdbqts)}")
+    ctrl_pdbqts: list[Path] = []
+    for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
+        if root.exists():
+            ctrl_pdbqts.extend(root.glob("*.pdbqt"))
+
+    logger.info(f"[Controls] Prepped control PDBQTs found (union): {len(ctrl_pdbqts)}")
     for p in ctrl_pdbqts[:10]:
         logger.info(f"[Controls]   {p.name}")
 
@@ -1714,9 +1778,13 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # Force-inject control PDBQTs if they exist on disk but weren't selected
     control_stems_lower = {s.lower() for s in control_stems}
     prepped_control_pdbqts = []
-    for p in paths.prepped_ligands_dir.glob("*.pdbqt"):
-        if p.stem.split("_stage")[0].lower() in control_stems_lower:
-            prepped_control_pdbqts.append(norm(p))
+    for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
+        if not root.exists():
+            continue
+        for p in root.glob("*.pdbqt"):
+            if p.stem.split("_stage")[0].lower() in control_stems_lower:
+                prepped_control_pdbqts.append(norm(p))
+
     # Fallback: if any extracted control stems are missing as PDBQT, try on-the-fly obabel convert
     missing_stems = {s.lower() for s in control_stems} - {Path(p).stem.split("_stage")[0].lower() for p in
                                                           prepped_control_pdbqts}
@@ -2068,9 +2136,9 @@ def main() -> None:
     cfg.setdefault("AUDIT_JSON", True)
 
     # --- logging/noise controls ---
-    cfg.setdefault("QUIET_CONSOLE", True)   # console shows WARN+ only; file keeps DEBUG
-    cfg.setdefault("VINA_VERBOSITY", 0)     # 0=minimal, 1=normal, 2=verbose
-    cfg.setdefault("FILTER_VINA_STDOUT", True)  # reserved if we need extra filtering later
+    cfg.setdefault("QUIET_CONSOLE", False)   # console shows WARN+ only; file keeps DEBUG
+    cfg.setdefault("VINA_VERBOSITY", 2)     # 0=minimal, 1=normal, 2=verbose
+    cfg.setdefault("FILTER_VINA_STDOUT", False)  # reserved if we need extra filtering later
 
     #RMSD PARAMETERS
     cfg.setdefault("SELF_RMSD_MAX_ANG", 2.0)
