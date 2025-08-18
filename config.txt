@@ -32,7 +32,7 @@ DOCKING_MODE = polypharmacology
 CPU = 32
 OVERALL_DIR = E:/PythonProject/protein_automation
 REDUCE_EXE = E:/phenix/Library/bin/reduce.exe
-FORCE_REPROCESS = True
+FORCE_REPROCESS = False
 
 
 EARLY_RECENTER_RATIO = 0.70
@@ -41,3 +41,5 @@ EARLY_RECENTER_FAR_A = 15.0
 EARLY_RECENTER_MEDIAN_A = 10.0
 ALLOW_BOX_EXPAND = True
 MAX_RECENTER_ATTEMPTS = 3
+
+QUIET_CONSOLE = False

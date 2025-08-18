@@ -32,7 +32,7 @@ from tqdm import tqdm
 
 from input_and_export_functions import (
     load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, generate_config, record_score, score_key
+    extract_best_score, generate_config, record_score, score_key,_to_bool
 )
 from protein_functions import detect_active_site
 from activesite import extract_and_remove_ligands
@@ -173,9 +173,10 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
 
-    ch = logging.StreamHandler()
+    ch = logging.StreamHandler(stream=sys.stdout)  # stdout, not stderr
     env_override = os.environ.get("QUIET_CONSOLE_OVERRIDE", "").strip()
-    quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else bool(cfg.get("QUIET_CONSOLE", True))
+    quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else _to_bool(cfg.get("QUIET_CONSOLE", False))
+    ch.setLevel(logging.WARNING if quiet else logging.INFO)
     ch_level = logging.WARNING if quiet else logging.INFO
     ch.setLevel(ch_level)
     ch.setFormatter(formatter)
@@ -484,7 +485,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     import automate_protein_prep
     from distutils.util import strtobool
 
-    force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", True))))
+    force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
     logger.info(
         f"FORCE_REPROCESS={force_reprocess} | "
         f"cleaned_exists={paths.cleaned_pdb_path.exists()} "
@@ -1691,12 +1692,14 @@ def compute_rmsd(ref_path: str, docked_path: str) -> float:
         return float("inf")
 
 
-def validate_ligand(ligand_name: str,
-                    docked_path: str,
-                    crystal_path: str = None,
-                    rmsd_thresh: float = 2.0,
-                    self_rmsd: float = None,
-                    logger=None) -> bool:
+def validate_ligand(
+    ligand_name: str,
+    docked_path: str,
+    crystal_path: str = None,
+    rmsd_thresh: float = 2.0,
+    self_rmsd: float = None,
+    logger=None
+) -> bool:
     """
     Validate ligand docking.
       • If crystal structure available → use redocking RMSD.
@@ -1705,23 +1708,34 @@ def validate_ligand(ligand_name: str,
     if crystal_path and Path(crystal_path).exists():
         redock_rmsd = compute_rmsd(crystal_path, docked_path)
         if logger:
-            logger.info(f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} Å, self_RMSD={self_rmsd}")
+            sr = f"{self_rmsd:.2f}" if isinstance(self_rmsd, (int, float)) else "n/a"
+            logger.info(f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} Å, self_RMSD={sr}")
         if redock_rmsd <= rmsd_thresh:
             return True  # passes redocking test
         else:
             if logger:
-                logger.warning(f"[validate] {ligand_name}: redocking failed (RMSD {redock_rmsd:.2f} Å > {rmsd_thresh:.2f})")
+                logger.warning(
+                    f"[validate] {ligand_name}: redocking failed (RMSD {redock_rmsd:.2f} Å > {rmsd_thresh:.2f})"
+                )
             return False
     else:
         # Non-controls or missing ref → use self-RMSD
-        if self_rmsd is not None and self_rmsd <= rmsd_thresh:
+        try:
+            sr_val = float(self_rmsd) if self_rmsd is not None else None
+        except Exception:
+            sr_val = None
+
+        if (sr_val is not None) and (sr_val <= rmsd_thresh):
             if logger:
-                logger.info(f"[validate] {ligand_name}: self_RMSD={self_rmsd:.2f} Å (PASS)")
+                logger.info(f"[validate] {ligand_name}: self_RMSD={sr_val:.2f} Å (PASS)")
             return True
         else:
             if logger:
-                logger.warning(f"[validate] {ligand_name}: self_RMSD={self_rmsd:.2f} Å (FAIL)")
+                sr_txt = f"{sr_val:.2f}" if isinstance(sr_val, (int, float)) else "n/a"
+                logger.warning(f"[validate] {ligand_name}: self_RMSD={sr_txt} Å (FAIL)")
             return False
+
+
 
 # ======================
 # Per-protein driver
@@ -1834,6 +1848,27 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     ligands = _norm_dedupe(ligands)
     # Also normalize keys in heavy_atom_counts to match
     heavy_atom_counts = {norm(k): v for k, v in heavy_atom_counts.items()}
+    # ---- super-simple: front-load controls at the head of Stage1 ----
+    ctrl_stems_lower = {s.lower() for s in control_stems}
+    ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
+    min_ha = int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10))
+
+    def _is_control_path(p: str) -> bool:
+        stem = Path(p).stem.split("_stage")[0]
+        if stem.upper() in ctrl_blacklist:
+            return False
+        if stem.lower() not in ctrl_stems_lower:
+            return False
+        ha = heavy_atom_counts.get(p)
+        return (ha is None) or (ha >= min_ha)
+
+    ctrls = [p for p in ligands if _is_control_path(p)]
+    non_ctrls = [p for p in ligands if not _is_control_path(p)]
+    if ctrls:
+        ligands = ctrls + non_ctrls
+        logger.info(f"[Controls] Front-loading {len(ctrls)} controls. "
+                    f"First wave: {[Path(x).name for x in ligands[:int(cfg.get('MAX_PARALLEL_JOBS', 1))]]}")
+
     present_ctrls = [Path(l).stem.split("_stage")[0].lower() for l in ligands
                      if Path(l).stem.split("_stage")[0].lower() in control_stems_lower]
     if not present_ctrls:
@@ -1884,10 +1919,70 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             break
 
         logger.info(f"Starting {stage['name']} with {len(ligands)} ligands...")
-        scores, validated, distances, raw_docked, invalids = run_one_stage(
-            cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-            ligands, logger, retry_mgr, control_lookup
-        )
+        # Stage-1 two-wave run: controls first, then others (so center can update/lock early)
+        if i == 0 and ctrls and non_ctrls:
+            logger.info(f"Stage1 two-wave: {len(ctrls)} controls first, then {len(non_ctrls)} others.")
+
+            # Wave A — controls only
+            s1, v1, d1, rd1, inv1 = run_one_stage(
+                cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
+                ctrls, logger, retry_mgr, control_lookup
+            )
+
+            # Let controls influence center/lock immediately
+            try:
+                dec = selector.consider_switch(stage['name'], s1, v1, rd1, receptor_pdbqt, center, guard)
+                if dec.promoted and dec.new_center is not None:
+                    old = center
+                    center = dec.new_center
+                    guard.mark_switch()
+                    logger.info(
+                        f"[CENTER] Switched before library run: {old} -> {center} ({dec.reason}) [global switch]")
+            except Exception as e:
+                logger.warning(f"CenterSelector (controls-only) failed gracefully: {e}")
+            # Early control-lock using Wave A (controls-only) results
+            lock_score_max = float(cfg.get("CONTROL_LOCK_SCORE_MAX", -6.0))
+            lock_min_hits = int(cfg.get("CONTROL_LOCK_MIN_HITS", 1))
+            lock_center_max = float(cfg.get("CONTROL_LOCK_CENTER_MAX_DIST", 4.0))
+            qualified_controls = []
+
+            for lig in v1:
+                stem = Path(lig).stem.split("_stage")[0].lower()
+                ha = heavy_atom_counts.get(lig)
+                if stem in control_stems_lower and (ha is None or ha >= min_ha):
+                    sc = s1.get(lig)
+                    if sc is not None and np.isfinite(sc) and sc <= lock_score_max:
+                        pose_path = rd1.get(lig)
+                        c = CenterSelector._pdbqt_centroid(pose_path) if pose_path else None
+                        if c is not None and np.linalg.norm(c - np.array(center, float)) <= lock_center_max:
+                            qualified_controls.append(lig)
+
+            if len(qualified_controls) >= lock_min_hits and not guard.locked:
+                guard.lock()
+                logger.info(
+                    "[CONTROL-LOCK] Early lock from controls-only wave "
+                    f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} Å); "
+                    "future center switches disabled."
+                )
+
+            # (Optional) reuse your existing qualified-control locking gate here using s1/v1/rd1.
+
+            # Wave B — non-controls, using (possibly) updated/locked center
+            s2, v2, d2, rd2, inv2 = run_one_stage(
+                cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
+                non_ctrls, logger, retry_mgr, control_lookup
+            )
+
+            # Merge results to keep the rest of the pipeline unchanged
+            scores, validated, distances = ({**s1, **s2}, v1 + v2, d1 + d2)
+            raw_docked = {**rd1, **rd2}
+            invalids = {**inv1, **inv2}
+        else:
+            logger.info(f"Starting {stage['name']} with {len(ligands)} ligands...")
+            scores, validated, distances, raw_docked, invalids = run_one_stage(
+                cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
+                ligands, logger, retry_mgr, control_lookup
+            )
 
         validated_ligands_last = validated
 
@@ -1978,7 +2073,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 center = decision.new_center
                 promoted_this_stage = True
                 guard.mark_switch()  # counts as a global switch
-                if bool(cfg.get("CHECKPOINT_ENABLE", False)):
+                if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                     checkpoint_invalidate_from(cfg, paths.pdb_id, stages, start_index=i)
                 logger.info(
                     f"[CENTER] Switched from {old} -> {center} ({decision.reason}, SwitchScore={decision.switchscore:.2f}) [global switch]"
@@ -2022,7 +2117,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 )
                 if restart:
                     ligands = redo_ligands
-                    if bool(cfg.get("CHECKPOINT_ENABLE", False)):
+                    if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                         checkpoint_invalidate_from(cfg, paths.pdb_id, stages, start_index=0)
                     i = 0
                     continue
@@ -2045,7 +2140,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 logger.warning(f"No ligands selected for {stages[i + 1]['name']}; stopping.")
                 break
 
-        if bool(cfg.get("CHECKPOINT_ENABLE", False)):
+        if bool(cfg.get("CHECKPOINT_ENABLE", True)):
             try:
                 fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
                 checkpoint_mark_done(cfg, paths.pdb_id, stage["name"], fp)

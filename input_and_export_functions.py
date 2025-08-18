@@ -163,7 +163,9 @@ def load_inputs():
         merged_cfg = {**default_cfg, **config}
 
         # coerce types
-        for k in ["CPU_ONLY", "FORCE_REPROCESS", "ALLOW_BOX_EXPAND"]:
+        for k in ["CPU_ONLY", "FORCE_REPROCESS", "ALLOW_BOX_EXPAND",
+                  "QUIET_CONSOLE", "RECEPTOR_SANITY_CHECK", "CHECKPOINT_ENABLE",
+                  "FILTER_VINA_STDOUT"]:
             if k in merged_cfg:
                 merged_cfg[k] = _to_bool(merged_cfg[k])
 
