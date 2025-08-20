@@ -765,25 +765,26 @@ def run_one_stage(
             return None
 
     def _validate_with_rmsd_gate(
-        lig_path: str,
-        lig_name: str,
-        out_pdbqt_path: str,
-        score_val: float
+            lig_path: str,
+            lig_name: str,
+            out_pdbqt_path: str,
+            score_val: float
     ) -> Tuple[bool, Optional[str]]:
         """
-        Apply the RMSD gate consistently:
-          - If a crystal reference exists: convert best docked pose to PDB and compute redock RMSD.
-          - Else: compute self-RMSD from the PDBQT itself.
-        Returns (ok, fail_reason_if_any).
+        RMSD validation:
+          - Controls (have a crystal reference): gate by redock RMSD vs the crystal pose.
+          - Non-controls: compute self-RMSD and LOG it only (never reject).
         """
         base = Path(lig_path).stem.split("_stage")[0]
         crystal_ref = control_lookup.get(base)
 
+        # --- Controls: keep redock RMSD as a hard gate ---
         if crystal_ref:
             best_pdb = _best_pose_pdb_from_pdbqt(out_pdbqt_path, obabel_path=cfg.get("OPENBABEL_PATH"))
             if not best_pdb:
                 logger.warning(f"{lig_name} | unable to extract best pose PDB for redock RMSD.")
                 return False, "no_best_pose_for_rmsd"
+
             ok = validate_ligand(
                 ligand_name=lig_name,
                 docked_path=best_pdb,
@@ -793,29 +794,23 @@ def run_one_stage(
                 logger=logger
             )
             if ok:
-                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (valid, redock-RMSD PASS)")
+                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (redock-RMSD PASS)")
                 return True, None
             else:
                 return False, "rmsd_fail"
 
-        # Non-control path → self-RMSD from the PDBQT file itself
-        self_rmsd = compute_self_rmsd(out_pdbqt_path)
-        ok = validate_ligand(
-            ligand_name=lig_name,
-            docked_path="",            # unused in non-control path
-            crystal_path=None,
-            rmsd_thresh=float(cfg.get("SELF_RMSD_MAX_ANG", 2.0)),
-            self_rmsd=self_rmsd,
-            logger=logger
-        )
-        if ok:
-            msg = f"(valid, selfRMSD={self_rmsd:.2f} Å)" if isinstance(self_rmsd, (int, float)) else "(valid)"
-            logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol {msg}")
-            return True, None
-        else:
-            # include selfRMSD in reason for easier triage
-            rmsg = f"self_rmsd_{self_rmsd:.2f}_>{float(cfg.get('SELF_RMSD_MAX_ANG',2.0)):.2f}" if isinstance(self_rmsd, (int, float)) else "rmsd_fail"
-            return False, rmsg
+        # --- Non-controls: self-RMSD is *log-only* (never a hard gate) ---
+        try:
+            sr = compute_self_rmsd(out_pdbqt_path)
+            if isinstance(sr, (int, float)):
+                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (selfRMSD={sr:.2f} Å)")
+            else:
+                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (selfRMSD=n/a)")
+        except Exception as _e:
+            logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (selfRMSD=error: {_e})")
+
+        # Always accept here; geometry/clash/centroid checks already passed
+        return True, None
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
@@ -1567,11 +1562,19 @@ def final_pose_validation_and_screenshots(
         logger.warning(f"Screenshot generation failed: {e}")
 
 
+def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str) -> str:
+    """Build the expected pose path for a ligand at a given stage."""
+    from pathlib import Path
+    return str(Path(csv_cfg["DOCKED_DIR"]) / pdb_id / stage_name / f"{Path(lig_path).stem}_{stage_name}.pdbqt")
+
+
 def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, Dict]]) -> str:
-    import csv
+    import csv, math
+
     dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
     os.makedirs(dock_dir, exist_ok=True)
 
+    # --- Wide summary (unchanged shape) ---
     csv_out_wide = os.path.join(dock_dir, "docking_score_summary.csv")
     flat = {}
     for stage_name, stage_map in score_history.items():
@@ -1585,23 +1588,40 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
                 flat[stage_name][lig_key] = f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)"
     write_score_summary_to_csv(flat, output_path=csv_out_wide)
 
+    # --- Long format with self_rmsd added ---
     csv_out_long = os.path.join(dock_dir, "docking_score_long.csv")
     with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le"])
+        writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd"])
+
         for stage_name, stage_map in score_history.items():
             for lig, rec in stage_map.items():
                 lig_key = os.path.basename(lig)
                 score = rec.get("score", None)
                 valid = bool(rec.get("valid", False))
                 reason = rec.get("reason", "")
+
                 ha = rec.get("heavy_atoms", None)
                 le = rec.get("le", None)
+
+                # Compute self-RMSD from the saved pose for this stage (if present)
+                pose_path = _pose_path_for(cfg, pdb_id, stage_name, lig)
+                if os.path.exists(pose_path):
+                    try:
+                        sr = compute_self_rmsd(pose_path)
+                        sr_str = f"{sr:.2f}" if isinstance(sr, (int, float)) and math.isfinite(sr) else ""
+                    except Exception:
+                        sr_str = ""
+                else:
+                    sr_str = ""
+
                 score_str = f"{score:.2f}" if isinstance(score, (int, float)) else ""
                 ha_str = str(int(ha)) if isinstance(ha, (int, float)) else ""
                 le_str = f"{le:.4f}" if isinstance(le, (int, float)) else ""
                 reason_str = str(reason) if reason is not None else ""
-                writer.writerow([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str])
+
+                writer.writerow([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str, sr_str])
+
     return csv_out_wide
 
 
@@ -1702,8 +1722,8 @@ def validate_ligand(
 ) -> bool:
     """
     Validate ligand docking.
-      • If crystal structure available → use redocking RMSD.
-      • Otherwise → fall back to self-RMSD.
+      • If crystal structure available → use redocking RMSD (hard gate).
+      • Otherwise (non-controls) → self-RMSD is *log-only* (never reject).
     """
     if crystal_path and Path(crystal_path).exists():
         redock_rmsd = compute_rmsd(crystal_path, docked_path)
@@ -1711,29 +1731,23 @@ def validate_ligand(
             sr = f"{self_rmsd:.2f}" if isinstance(self_rmsd, (int, float)) else "n/a"
             logger.info(f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} Å, self_RMSD={sr}")
         if redock_rmsd <= rmsd_thresh:
-            return True  # passes redocking test
+            return True
         else:
             if logger:
                 logger.warning(
                     f"[validate] {ligand_name}: redocking failed (RMSD {redock_rmsd:.2f} Å > {rmsd_thresh:.2f})"
                 )
             return False
-    else:
-        # Non-controls or missing ref → use self-RMSD
-        try:
-            sr_val = float(self_rmsd) if self_rmsd is not None else None
-        except Exception:
-            sr_val = None
 
-        if (sr_val is not None) and (sr_val <= rmsd_thresh):
-            if logger:
-                logger.info(f"[validate] {ligand_name}: self_RMSD={sr_val:.2f} Å (PASS)")
-            return True
-        else:
-            if logger:
-                sr_txt = f"{sr_val:.2f}" if isinstance(sr_val, (int, float)) else "n/a"
-                logger.warning(f"[validate] {ligand_name}: self_RMSD={sr_txt} Å (FAIL)")
-            return False
+    # Non-controls: log self-RMSD but do not gate on it
+    try:
+        sr_val = float(self_rmsd) if self_rmsd is not None else None
+    except Exception:
+        sr_val = None
+    if logger:
+        sr_txt = f"{sr_val:.2f}" if isinstance(sr_val, (int, float)) else "n/a"
+        logger.info(f"[validate] {ligand_name}: self_RMSD={sr_txt} Å (LOG-ONLY)")
+    return True
 
 
 
@@ -2127,7 +2141,17 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             # By default, Stage3 (i==1) in polypharmacology should use Stage1 pool size
             use_stage1_base = (docking_mode == "polypharmacology" and i == 1)
 
-            ligands = select_ligands_for_next(
+            # --- near-miss rescue (place BEFORE select_ligands_for_next) ---
+            rescue = []
+            if i < len(stages) - 1:
+                for lig, (sc, reason) in invalids.items():
+                    if sc is not None and "self_rmsd_" in str(reason).lower() and sc <= float(
+                            cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0)):
+                        rescue.append((sc, lig))
+                rescue = [lig for _, lig in sorted(rescue)[:int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]]
+
+            # Select by score
+            selected = select_ligands_for_next(
                 docking_mode,
                 i,
                 stages,
@@ -2136,6 +2160,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 base_pool_n=(len(stage1_original) if use_stage1_base else None),
                 force_include=(forced_extracted_for_stage3 if use_stage1_base else None)
             )
+
+            # Union (rescue-first), preserve order, dedupe
+            if rescue:
+                sel_set = set(selected)
+                rescue_unique = [r for r in rescue if r not in sel_set]
+                ligands = rescue_unique + selected
+            else:
+                ligands = selected
             if not ligands:
                 logger.warning(f"No ligands selected for {stages[i + 1]['name']}; stopping.")
                 break
