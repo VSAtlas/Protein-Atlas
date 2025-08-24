@@ -25,7 +25,7 @@ def get_default_config():
         "mgltools_python": "C:/Program Files (x86)/MGLTools-1.5.7/python.exe",
         "openbabel_path": "C:/Program Files (x86)/OpenBabel-3.1.1/obabel.exe",
         "cpu_only": True,
-        "cpu": 6
+        "cpu":28
     }
 
 def load_config(config_path="config.txt"):

@@ -158,6 +158,462 @@ def safe_inchikey(mol) -> Optional[str]:
     except Exception:
         return None
 
+# ========= Logging setup =========
+LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_PATH, encoding="utf-8")
+    ],
+)
+log = logging.getLogger("fda-map")
+
+# ========= SDF & file scanning =========
+def load_sdf_rows(sdf_path: Path, one_based: bool) -> pd.DataFrame:
+    log.info(f"Parsing SDF: {sdf_path}")
+    suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=False)
+    rows = []
+    for i, mol in enumerate(suppl):
+        idx = i + 1 if one_based else i
+        if mol is None:
+            rows.append({"sdf_index": idx, "sdf_title": None, "smiles": None, "inchikey": None})
+            continue
+
+        title = mol.GetProp("_Name") if mol.HasProp("_Name") else ""
+        row: Dict[str, Any] = {
+            "sdf_index": idx,
+            "sdf_title": title,
+            "smiles": safe_smiles(mol),
+            "inchikey": safe_inchikey(mol),
+        }
+
+        props = set(mol.GetPropNames())
+        # store any helpful fields in lowercase
+        for key in SDF_FIELDS:
+            if key in props:
+                row[key.lower()] = mol.GetProp(key)
+
+        # extra: attempt to compute neutralized SMILES to aid dedup & lookup
+        if row.get("smiles"):
+            row["smiles_neutral"] = neutralize_smiles(row["smiles"])
+        else:
+            row["smiles_neutral"] = None
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    log.info(f"SDF records parsed: {len(df)} "
+             f"(mol=None: {int(df['sdf_title'].isna().sum())})")
+    return df
+
+def _merge_coverage(files_df: pd.DataFrame, sdf_df: pd.DataFrame, one_based: bool) -> float:
+    """
+    Compute how many rows match when merging file_num (adjust for indexing) to sdf_index.
+    Returns coverage fraction in [0,1].
+    """
+    if files_df.empty or sdf_df.empty:
+        return 0.0
+    # Adjust indices based on hypothesis
+    adj = files_df.copy()
+    adj["match_index"] = adj["file_num"] + (1 if one_based else 0)
+    merged = adj.merge(sdf_df[["sdf_index"]], left_on="match_index", right_on="sdf_index", how="left")
+    hits = int(merged["sdf_index"].notna().sum())
+    total = len(adj)
+    return (hits / total) if total else 0.0
+
+def infer_indexing(files_df: pd.DataFrame, sdf_df: pd.DataFrame, default_one_based: bool) -> bool:
+    """
+    Try both zero-based and one-based; pick the one with higher coverage.
+    If a tie, fall back to the provided default_one_based.
+    """
+    # files_df must contain column 'file_num'
+    tmp = files_df[["file_num"]].drop_duplicates().copy()
+    cov_zero = _merge_coverage(tmp, sdf_df, one_based=False)
+    cov_one  = _merge_coverage(tmp, sdf_df, one_based=True)
+    log.info(f"Indexing coverage test → zero-based: {cov_zero:.3f}, one-based: {cov_one:.3f}")
+
+    if cov_zero > cov_one:
+        log.info("Auto-selected ZERO-based indexing (rdk_* style).")
+        return False
+    if cov_one > cov_zero:
+        log.info("Auto-selected ONE-based indexing (fda_* style).")
+        return True
+
+    log.info(f"Coverage tie; using configured ONE_BASED={default_one_based}.")
+    return default_one_based
+
+def sanity_check_index_merge(mapping: pd.DataFrame) -> None:
+    total = len(mapping)
+    missing = int(mapping["sdf_title"].isna().sum())
+    pct = 0 if total == 0 else 100.0 * (total - missing) / total
+    log.info(f"Merge coverage: {total - missing}/{total} ({pct:.1f}%)")
+    if pct < 80:
+        log.warning("Low coverage. Check that your merged_dedup.sdf ordering aligns with prepped ligand numbering.")
+
+# ---------- cache utils ----------
+def load_cache(path: Path) -> dict:
+    if path.exists():
+        try:
+            return json.load(open(path, "r", encoding="utf-8"))
+        except Exception:
+            log.warning(f"Cache exists but failed to load ({path}); starting fresh.")
+    return {}
+
+def save_cache(cache: dict, path: Path) -> None:
+    try:
+        json.dump(cache, open(path, "w", encoding="utf-8"))
+    except Exception as e:
+        log.error(f"Failed to save cache to {path}: {e}")
+
+def _calc_formula_heavy_unpack(args):  # new
+    """
+    Unpack (path, smiles, ...) and forward to _calc_formula_heavy.
+    Exists only to avoid lambdas so ProcessPool can pickle it on Windows.
+    """
+    return _calc_formula_heavy(*args)
+
+# ===================== PDBQT scanning & identity ========================
+def scan_prepped_files(root: Path) -> pd.DataFrame:
+    """
+    Find prepped ligand files under `root`. Supports:
+      • rdk_000123.pdbqt
+      • rdk_000123_stage5.pdbqt
+      • fda_1158.pdbqt
+      • fda_1158_stage3.pdbqt
+
+    Returns a dataframe with:
+      scheme: 'rdk' or 'fda'
+      file_num: int
+      stage: optional int (None if not present)
+      path: full file path
+    """
+    log.info(f"Scanning for prepped ligands under: {root}")
+
+    rx_rdk = re.compile(r"(?i)\brdk_(\d+)(?:_stage(\d+))?\.pdbqt$")
+    rx_fda = re.compile(r"(?i)\bfda_(\d+)(?:_stage(\d+))?\.pdbqt$")
+    recs: List[Dict[str, Any]] = []
+
+    total = 0
+    for p in root.rglob("*.pdbqt"):
+        if not p.is_file():
+            continue
+        name = p.name
+        m = rx_rdk.search(name)
+        if m:
+            total += 1
+            recs.append({
+                "scheme": "rdk",
+                "file_num": int(m.group(1)),
+                "stage": int(m.group(2)) if m.group(2) is not None else None,
+                "path": str(p)
+            })
+            continue
+        m = rx_fda.search(name)
+        if m:
+            total += 1
+            recs.append({
+                "scheme": "fda",
+                "file_num": int(m.group(1)),
+                "stage": int(m.group(2)) if m.group(2) is not None else None,
+                "path": str(p)
+            })
+
+    df = pd.DataFrame(recs)
+    if df.empty:
+        log.warning("No prepped ligand files found. Check SEARCH_ROOT and filename patterns.")
+        return df
+
+    # 🔧 make stage a numeric nullable int to avoid object-dtype fillna warnings later
+    df["stage"] = pd.to_numeric(df["stage"], errors="coerce").astype("Int16")
+
+    log.info(
+        f"Found {total} .pdbqt files; unique (scheme,file_num) pairs: "
+        f"{df.drop_duplicates(['scheme', 'file_num']).shape[0]}"
+    )
+    return df
+
+# Atom-type to element mapping for AutoDock/Vina PDBQT
+_ELEMENT_MAP = {
+    "A": "C",   # aromatic carbon
+    "C": "C",
+    "HD": "H", "H": "H",
+    "N": "N", "NA": "N",
+    "O": "O", "OA": "O",
+    "S": "S", "SA": "S",
+    "P": "P",
+    "F": "F",
+    "CL": "Cl", "Cl": "Cl", "cl": "Cl",
+    "BR": "Br", "Br": "Br", "br": "Br",
+    "I": "I",
+    "B": "B", "SI": "Si", "Si": "Si", "se": "Se", "Se": "Se"
+}
+
+def _hill_formula_from_counts(counts: Dict[str, int]) -> str:
+    """Return Hill-system formula string from element counts dict."""
+    norm = {}
+    for k, v in counts.items():
+        if not v:
+            continue
+        kk = k[0].upper() + (k[1:].lower() if len(k) > 1 else "")
+        norm[kk] = norm.get(kk, 0) + int(v)
+
+    c = norm.pop("C", 0)
+    h = norm.pop("H", 0)
+    parts = []
+    if c:
+        parts.append(f"C{c if c>1 else ''}")
+        if h:
+            parts.append(f"H{h if h>1 else ''}")
+    else:
+        if h:
+            parts.append(f"H{h if h>1 else ''}")
+
+    for el in sorted(norm.keys()):
+        n = norm[el]
+        parts.append(f"{el}{n if n>1 else ''}")
+    return "".join(parts) if parts else ""
+
+def _parse_pdbqt_element_counts(lines: List[str]) -> Dict[str, int]:
+    """Count elements from PDBQT ATOM/HETATM lines using the last token (AutoDock type)."""
+    counts: Dict[str, int] = {}
+    for ln in lines:
+        if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
+            continue
+        toks = ln.split()
+        if not toks:
+            continue
+        ad_type = toks[-1]  # AutoDock type is typically the last token
+        el = _ELEMENT_MAP.get(ad_type, None)
+        if el is None:
+            # Fallback: try atom-name field token
+            atom_name = toks[2] if len(toks) > 2 else ""
+            prefix = "".join([ch for ch in atom_name if ch.isalpha()])[:2]
+            el = _ELEMENT_MAP.get(prefix, None) or (prefix.capitalize() if prefix else None)
+        if el:
+            counts[el] = counts.get(el, 0) + 1
+    return counts
+
+_rx_remark_smiles = re.compile(r"(?i)^REMARK\s+(?:SMILES|SMI)\s*[:=]\s*(\S+)")
+_rx_remark_inchikey = re.compile(r"(?i)^REMARK.*?(INCHIKEY|InChIKey)\s*[:=]\s*([A-Z0-9\-]+)")
+_rx_remark_name = re.compile(r"(?i)^REMARK\s+(?:NAME|Title)\s*[:=]\s*(.+)$")
+
+def parse_pdbqt_identity(p: Path) -> Dict[str, Any]:
+    """Extract identity hints from a PDBQT file.
+
+    Returns:
+      {
+        'path': str,
+        'remark_smiles': Optional[str],
+        'remark_inchikey': Optional[str],
+        'remark_name': Optional[str],
+        'pdbqt_formula': Optional[str],
+        'pdbqt_heavy_atoms': Optional[int],
+      }
+    """
+    out = {
+        "path": str(p), "remark_smiles": None, "remark_inchikey": None, "remark_name": None,
+        "pdbqt_formula": None, "pdbqt_heavy_atoms": None
+    }
+    try:
+        txt = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return out
+
+    # REMARK fields
+    for ln in txt:
+        m = _rx_remark_smiles.search(ln)
+        if m and not out["remark_smiles"]:
+            out["remark_smiles"] = m.group(1).strip()
+
+        m2 = _rx_remark_inchikey.search(ln)
+        if m2 and not out["remark_inchikey"]:
+            out["remark_inchikey"] = m2.group(2).strip()
+
+        m3 = _rx_remark_name.search(ln)
+        if m3 and not out["remark_name"]:
+            out["remark_name"] = m3.group(1).strip()
+
+    # Composition fingerprint
+    counts = _parse_pdbqt_element_counts(txt)
+    if counts:
+        out["pdbqt_formula"] = _hill_formula_from_counts(counts)
+        # "heavy" excludes hydrogens
+        heavy = sum(v for k, v in counts.items() if k.upper() != "H")
+        out["pdbqt_heavy_atoms"] = heavy
+
+    return out
+
+def select_representative_pdbqt(files_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    One row per (scheme, file_num), preferring the highest stage if present.
+    Adds parsed PDBQT identity columns.
+    """
+    if files_df.empty:
+        return files_df.assign(remark_smiles=None, remark_inchikey=None, remark_name=None,
+                               pdbqt_formula=None, pdbqt_heavy_atoms=None)
+
+    # Pick best path per group
+    def _pick(group: pd.DataFrame) -> pd.Series:
+        g = group.copy()
+        # Prefer higher stage; if none, just first
+        g["stage_rank"] = pd.to_numeric(g["stage"], errors="coerce").fillna(-1).astype("int32")
+        g = g.sort_values(["stage_rank"], ascending=[False])
+        return g.iloc[0]
+
+
+    cols = [c for c in files_df.columns if c not in ("scheme", "file_num")]
+    reps = (
+        files_df
+        .groupby(["scheme", "file_num"], group_keys=False)[cols]
+        .apply(_pick)
+        .reset_index(drop=False)  # scheme/file_num come back from the index
+    )
+    # Parse identity for each chosen path
+    id_rows = []
+    for _, r in reps.iterrows():
+        id_rows.append(parse_pdbqt_identity(Path(r["path"])))
+    id_df = pd.DataFrame(id_rows)
+
+    reps = reps.merge(id_df, on="path", how="left")
+    return reps
+
+# SDF composition features
+try:
+    from rdkit.Chem import rdMolDescriptors as rdMD
+except Exception:
+    rdMD = None
+
+from concurrent.futures import ProcessPoolExecutor
+
+def _calc_formula_heavy(smi: Optional[str], smi_neutral: Optional[str]) -> Tuple[Optional[str], Optional[int]]:
+    try:
+        s = smi_neutral or smi
+        if not s: return None, None
+        mol = Chem.MolFromSmiles(s)
+        if not mol: return None, None
+        try:
+            from rdkit.Chem import rdMolDescriptors as rdMD
+            f = rdMD.CalcMolFormula(mol)
+        except Exception:
+            # manual fallback
+            counts = {}
+            for a in mol.GetAtoms():
+                el = a.GetSymbol()
+                counts[el] = counts.get(el, 0) + 1
+            f = _hill_formula_from_counts(counts) or None
+        heavy = sum(1 for a in mol.GetAtoms() if a.GetSymbol() != "H")
+        return f, int(heavy)
+    except Exception:
+        return None, None
+
+import os
+def sdf_add_formula_features(df_sdf: pd.DataFrame) -> pd.DataFrame:
+    inputs = list(zip(df_sdf.get("smiles"), df_sdf.get("smiles_neutral")))
+    # Processes ≈ CPU cores is fine
+    with ProcessPoolExecutor(max_workers=os.cpu_count() or 2) as ex:
+        results = list(ex.map(_calc_formula_heavy_unpack, inputs))
+    formulas, heavies = zip(*results) if results else ([], [])
+    out = df_sdf.copy()
+    out["sdf_formula"] = list(formulas)
+    out["sdf_heavy_atoms"] = list(heavies)
+    return out
+
+
+def match_using_pdbqt_features(reps_df: pd.DataFrame, sdf_df: pd.DataFrame, default_one_based: bool) -> pd.DataFrame:
+    """
+    For each representative PDBQT:
+      1) Try InChIKey exact match to SDF inchikey
+      2) Try SMILES → InChIKey match
+      3) Try composition match: (formula, heavy atoms)
+      4) Fallback: index alignment (infer one-based vs zero-based)
+    Returns a merged mapping with a 'match_method' column.
+    """
+    if reps_df.empty:
+        raise RuntimeError("No representative PDBQT files to match.")
+
+    # Decide index fallback globally
+    inferred_one_based = infer_indexing(
+        files_df=reps_df[["file_num"]].copy(),
+        sdf_df=sdf_df[["sdf_index"]],
+        default_one_based=default_one_based
+    )
+
+    # Fast lookups
+    by_inchikey = {str(ik): i for i, ik in zip(sdf_df["sdf_index"], sdf_df["inchikey"].fillna(""))
+                   if isinstance(ik, str) and ik}
+    ik14 = {str(ik)[:14]: i for i, ik in zip(sdf_df["sdf_index"], sdf_df["inchikey"].fillna(""))
+            if isinstance(ik, str) and ik}
+
+    comp_index: Dict[Tuple[str, int], List[int]] = {}
+    for i, f, h in zip(sdf_df["sdf_index"], sdf_df["sdf_formula"], sdf_df["sdf_heavy_atoms"]):
+        if not isinstance(f, str) or pd.isna(f) or pd.isna(h):
+            continue
+        comp_index.setdefault((f, int(h)), []).append(int(i))
+
+    matched_rows = []
+    for _, row in reps_df.iterrows():
+        method = None
+        target_sdf_index = None
+
+        # 1) InChIKey from REMARK
+        ik = row.get("remark_inchikey")
+        if isinstance(ik, str) and ik in by_inchikey:
+            target_sdf_index = by_inchikey[ik]
+            method = "inchikey"
+        else:
+            # 2) SMILES from REMARK (compute IK and match)
+            smi = row.get("remark_smiles")
+            if isinstance(smi, str) and smi.strip():
+                try:
+                    mol = Chem.MolFromSmiles(smi)
+                    if mol:
+                        ik2 = inchi.MolToInchiKey(mol)
+                        if ik2 in by_inchikey:
+                            target_sdf_index = by_inchikey[ik2]
+                            method = "smiles→inchikey"
+                        elif ik2[:14] in ik14:
+                            target_sdf_index = ik14[ik2[:14]]
+                            method = "smiles→IK14"
+                except Exception:
+                    pass
+
+        # 3) Composition match
+        if target_sdf_index is None:
+            pf = row.get("pdbqt_formula")
+            ph = row.get("pdbqt_heavy_atoms")
+            if isinstance(pf, str) and isinstance(ph, (int, float)):
+                candidates = comp_index.get((pf, int(ph)), [])
+                if len(candidates) == 1:
+                    target_sdf_index = candidates[0]
+                    method = "composition"
+                elif len(candidates) > 1:
+                    idx0 = int(row["file_num"] + (1 if inferred_one_based else 0))
+                    if idx0 in candidates:
+                        target_sdf_index = idx0
+                        method = "composition+index"
+                    else:
+                        target_sdf_index = min(candidates)
+                        method = f"composition(ambig:{len(candidates)})"
+
+        # 4) Fallback: index-only merge
+        if target_sdf_index is None:
+            target_sdf_index = int(row["file_num"] + (1 if inferred_one_based else 0))
+            method = "index-fallback"
+
+        matched_rows.append({
+            **row.to_dict(),
+            "sdf_index": target_sdf_index,
+            "match_method": method
+        })
+
+    matched_df = pd.DataFrame(matched_rows)
+    mapping = matched_df.merge(sdf_df, on="sdf_index", how="left")
+    return mapping
+
+# ============================ Enrichment: PubChem ============================
+
 def parent_cid_from_cid(cid: Optional[int]) -> Optional[int]:
     """Ask PubChem for the parent CID of a given CID (PUG REST)."""
     if cid is None:
@@ -231,156 +687,6 @@ def collect_brand_names(synonyms: Optional[List[str]], limit: int = 3) -> List[s
             break
     return out
 
-# ========= Logging setup =========
-LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_PATH, encoding="utf-8")
-    ],
-)
-log = logging.getLogger("fda-map")
-
-# ========= SDF & file scanning =========
-def load_sdf_rows(sdf_path: Path, one_based: bool) -> pd.DataFrame:
-    log.info(f"Parsing SDF: {sdf_path}")
-    suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=False)
-    rows = []
-    for i, mol in enumerate(suppl):
-        idx = i + 1 if one_based else i
-        if mol is None:
-            rows.append({"sdf_index": idx, "sdf_title": None, "smiles": None, "inchikey": None})
-            continue
-
-        title = mol.GetProp("_Name") if mol.HasProp("_Name") else ""
-        row: Dict[str, Any] = {
-            "sdf_index": idx,
-            "sdf_title": title,
-            "smiles": safe_smiles(mol),
-            "inchikey": safe_inchikey(mol),
-        }
-
-        props = set(mol.GetPropNames())
-        # store any helpful fields in lowercase
-        for key in SDF_FIELDS:
-            if key in props:
-                row[key.lower()] = mol.GetProp(key)
-
-        # extra: attempt to compute neutralized SMILES to aid dedup & lookup
-        if row.get("smiles"):
-            row["smiles_neutral"] = neutralize_smiles(row["smiles"])
-        else:
-            row["smiles_neutral"] = None
-
-        rows.append(row)
-
-    df = pd.DataFrame(rows)
-    log.info(f"SDF records parsed: {len(df)} "
-             f"(mol=None: {int(df['sdf_title'].isna().sum())})")
-    return df
-def _merge_coverage(files_df: pd.DataFrame, sdf_df: pd.DataFrame, one_based: bool) -> float:
-    """
-    Compute how many rows match when merging file_num (adjust for indexing) to sdf_index.
-    Returns coverage fraction in [0,1].
-    """
-    if files_df.empty or sdf_df.empty:
-        return 0.0
-    # Adjust indices based on hypothesis
-    adj = files_df.copy()
-    adj["match_index"] = adj["file_num"] + (1 if one_based else 0)
-    merged = adj.merge(sdf_df[["sdf_index"]], left_on="match_index", right_on="sdf_index", how="left")
-    hits = int(merged["sdf_index"].notna().sum())
-    total = len(adj)
-    return (hits / total) if total else 0.0
-
-
-def infer_indexing(files_df: pd.DataFrame, sdf_df: pd.DataFrame, default_one_based: bool) -> bool:
-    """
-    Try both zero-based and one-based; pick the one with higher coverage.
-    If a tie, fall back to the provided default_one_based.
-    """
-    cov_zero = _merge_coverage(files_df, sdf_df, one_based=False)
-    cov_one  = _merge_coverage(files_df, sdf_df, one_based=True)
-    log.info(f"Indexing coverage test → zero-based: {cov_zero:.3f}, one-based: {cov_one:.3f}")
-
-    if cov_zero > cov_one:
-        log.info("Auto-selected ZERO-based indexing (rdk_* style).")
-        return False
-    if cov_one > cov_zero:
-        log.info("Auto-selected ONE-based indexing (fda_* style).")
-        return True
-
-    log.info(f"Coverage tie; using configured ONE_BASED={default_one_based}.")
-    return default_one_based
-
-def scan_prepped_files(root: Path) -> pd.DataFrame:
-    """
-    Find prepped ligand files under `root` supporting either:
-      • rdk_0000003.pdbqt  (zero-based, typical for RDKit batches)
-      • fda_1158.*         (legacy pattern; extension flexible)
-
-    Returns a dataframe with:
-      file_num: int index parsed from the filename (0/1-based unknown yet)
-      scheme:   'rdk' or 'fda'
-      example_path: example file path for that number
-    """
-    log.info(f"Scanning for prepped ligands under: {root}")
-    rx_rdk = re.compile(r"(?i)\brdk_(\d+)\.pdbqt$")
-    rx_fda = re.compile(r"(?i)\bfda_(\d+)\b")
-    recs: List[Dict[str, Any]] = []
-    count = 0
-
-    for p in root.rglob("*"):
-        if not p.is_file():
-            continue
-        name = p.name
-        m = rx_rdk.search(name)
-        if m:
-            recs.append({"scheme": "rdk", "file_num": int(m.group(1)), "example_path": str(p)})
-            count += 1
-            continue
-        m = rx_fda.search(name)
-        if m:
-            recs.append({"scheme": "fda", "file_num": int(m.group(1)), "example_path": str(p)})
-            count += 1
-
-    df = pd.DataFrame(recs)
-    if df.empty:
-        log.warning("No prepped ligand files found. Check SEARCH_ROOT and filename patterns.")
-        return df
-
-    # If multiple paths share the same (scheme, file_num), keep the first (just for logging/example)
-    df = df.sort_values(["scheme", "file_num"]).drop_duplicates(["scheme", "file_num"])
-    by_scheme = df.groupby("scheme")["file_num"].nunique().to_dict()
-    log.info(f"Found {count} matching files; unique counts by scheme: {by_scheme}")
-    return df
-
-def sanity_check_index_merge(mapping: pd.DataFrame) -> None:
-    total = len(mapping)
-    missing = int(mapping["sdf_title"].isna().sum())
-    pct = 0 if total == 0 else 100.0 * (total - missing) / total
-    log.info(f"Merge coverage: {total - missing}/{total} ({pct:.1f}%)")
-    if pct < 80:
-        log.warning("Low coverage. Check that your merged_dedup.sdf ordering aligns with prepped ligand numbering.")
-
-# ---------- cache utils ----------
-def load_cache(path: Path) -> dict:
-    if path.exists():
-        try:
-            return json.load(open(path, "r", encoding="utf-8"))
-        except Exception:
-            log.warning(f"Cache exists but failed to load ({path}); starting fresh.")
-    return {}
-
-def save_cache(cache: dict, path: Path) -> None:
-    try:
-        json.dump(cache, open(path, "w", encoding="utf-8"))
-    except Exception as e:
-        log.error(f"Failed to save cache to {path}: {e}")
-
-# ---------- PubChem ----------
 def fetch_synonyms_and_title(cid: Optional[int]) -> Tuple[List[str], Optional[str]]:
     if cid is None:
         return [], None
@@ -533,7 +839,7 @@ def pubchem_lookup(smiles: Optional[str], inchikey_val: Optional[str], cache: di
                     "name": iupac2 or name,
                     "cid": parent,
                     "title": title2 or title,
-                    "synonyms": merged,              # keep full set
+                    "synonyms": merged,
                     "sources": view2.get("sources", {}),
                     "generic": generic,
                     "brands": brands,
@@ -545,7 +851,7 @@ def pubchem_lookup(smiles: Optional[str], inchikey_val: Optional[str], cache: di
             "name": view_iupac or name,
             "cid": cid,
             "title": title,
-            "synonyms": syns,                      # keep full set
+            "synonyms": syns,
             "sources": view.get("sources", {}),
             "generic": generic,
             "brands": brands,
@@ -601,7 +907,163 @@ def pubchem_lookup(smiles: Optional[str], inchikey_val: Optional[str], cache: di
             return entry
     return {"name": None, "cid": None, "title": None, "synonyms": [], "generic": None, "brands": [], "iupac_name": None}
 
-# ---------- RxNorm (US NLM) ----------
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+def enrich_with_pubchem(mapping: pd.DataFrame) -> pd.DataFrame:
+    cache = load_cache(CACHE_PATH_PUBCHEM)
+    log.info(f"Loaded PubChem cache entries: {len(cache)}")
+    # Normalize/repair old cache entries
+    changed = False
+    for k, v in list(cache.items()):
+        if isinstance(v, dict) and v.get("cid") and (not v.get("synonyms") or v.get("title") is None or v.get("iupac_name") is None):
+            syns, ttl = fetch_synonyms_and_title(v["cid"])
+            view = fetch_pubchem_view_by_cid(v.get("cid"))
+            merged_syns = merge_name_buckets(syns, view.get("synonyms", []) or [])
+            if merged_syns: v["synonyms"] = merged_syns
+            if ttl and not v.get("title"): v["title"] = ttl
+            if not v.get("title") and view.get("record_title"): v["title"] = view.get("record_title")
+            if not v.get("iupac_name") and view.get("iupac_name"): v["iupac_name"] = view.get("iupac_name")
+            v["generic"] = choose_best_generic(v.get("synonyms"), v.get("title"))
+            v["brands"]  = collect_brand_names(v.get("synonyms"))
+            changed = True
+        elif isinstance(v, dict) and ("generic" not in v or "brands" not in v):
+            v["generic"] = choose_best_generic(v.get("synonyms"), v.get("title"))
+            v["brands"]  = collect_brand_names(v.get("synonyms"))
+            changed = True
+    if changed:
+        save_cache(cache, CACHE_PATH_PUBCHEM)
+
+    # Deduplicate queries (prefer SMILES; fallback to neutral → InChIKey)
+    queries = []
+    for _, row in mapping.iterrows():
+        s  = row.get("smiles", None)
+        sn = row.get("smiles_neutral", None)
+        ik = row.get("inchikey", None)
+        if isinstance(s, str) and s not in cache:
+            queries.append(("smiles", s, s, ik)); continue
+        if isinstance(sn, str) and sn not in cache:
+            queries.append(("smiles", sn, sn, ik)); continue
+        if (not isinstance(s, str)) and isinstance(ik, str) and f"IK:{ik}" not in cache:
+            queries.append(("inchikey", f"IK:{ik}", s, ik))
+
+    if MAX_LOOKUPS is not None:
+        queries = queries[:MAX_LOOKUPS]
+    log.info(f"PubChem lookups to perform (deduped): {len(queries)}")
+
+    # Worker returns (cache_key, entry, optional neutral_smiles, cid)
+    def _worker(item):
+        _, cache_key, s, ik = item
+        # polite spacing per worker; tiny sleep helps smooth bursts
+        time.sleep(RATE_LIMIT_SEC)
+        entry = pubchem_lookup(s, ik, {})  # use a local dict; merge later
+        neut = neutralize_smiles(s) if isinstance(s, str) else None
+        cid  = entry.get("cid")
+        return cache_key, entry, neut, cid
+
+    # Small pool for I/O-bound API calls
+    results_local: Dict[str, dict] = {}
+    extra_keys: List[Tuple[str, dict]] = []
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for cache_key, entry, neut, cid in ex.map(_worker, queries):
+            results_local[cache_key] = entry
+            if isinstance(neut, str):
+                extra_keys.append((neut, entry))
+            if cid:
+                extra_keys.append((f"CID:{cid}", entry))
+
+    # Merge once at the end (thread-safe, single thread)
+    for k, v in results_local.items():
+        cache[k] = v
+    for k, v in extra_keys:
+        cache[k] = v
+
+    save_cache(cache, CACHE_PATH_PUBCHEM)
+    log.info("Saved PubChem cache (parallel phase complete).")
+
+    for i, (_, cache_key, s, ik) in enumerate(queries, start=1):
+        time.sleep(RATE_LIMIT_SEC)
+        entry = pubchem_lookup(s, ik, cache)
+        cache[cache_key] = entry
+        if isinstance(s, str):
+            neut = neutralize_smiles(s)
+            if neut: cache[neut] = entry
+        if entry.get("cid"):
+            cache[f"CID:{entry['cid']}"] = entry
+        if i % 50 == 0:
+            save_cache(cache, CACHE_PATH_PUBCHEM)
+            log.info(f"PubChem progress: {i}/{len(queries)} cached…")
+
+    save_cache(cache, CACHE_PATH_PUBCHEM)
+    log.info("Saved PubChem cache.")
+
+    # Attach resolved fields (do NOT overwrite existing SDF)
+    def get_entry(row):
+        s = row.get("smiles", None)
+        sn = row.get("smiles_neutral", None)
+        ik = row.get("inchikey", None)
+        cid_val = row.get("pubchem_cid", None)
+        if isinstance(s, str) and s in cache: return cache[s]
+        if isinstance(sn, str) and sn in cache: return cache[sn]
+        if isinstance(ik, str) and f"IK:{ik}" in cache: return cache[f"IK:{ik}"]
+        try:
+            cid_int = int(cid_val) if pd.notna(cid_val) else None
+        except Exception:
+            cid_int = None
+        if cid_int and f"CID:{cid_int}" in cache: return cache[f"CID:{cid_int}"]
+        return {}
+
+    mapping["pubchem_name"] = mapping.apply(lambda r: get_entry(r).get("name"), axis=1)
+    mapping["pubchem_cid_resolved"] = mapping.apply(lambda r: get_entry(r).get("cid"), axis=1)
+    mapping["pubchem_record_title"] = mapping.apply(lambda r: get_entry(r).get("title"), axis=1)
+    mapping["generic_name"] = mapping.apply(lambda r: get_entry(r).get("generic"), axis=1)
+    mapping["brand_names"] = mapping.apply(lambda r: "; ".join(get_entry(r).get("brands", [])), axis=1)
+    mapping["pubchem_iupac_name"] = mapping.apply(lambda r: get_entry(r).get("iupac_name"), axis=1)
+    mapping["pubchem_synonyms"] = mapping.apply(
+        lambda r: "; ".join((get_entry(r).get("synonyms") or [])) or None, axis=1
+    )
+    mapping["pubchem_unii_list"] = mapping.apply(
+        lambda r: "; ".join((get_entry(r).get("sources", {}) or {}).get("UNII", [])) or None, axis=1
+    )
+
+    # normalize CID as int for readability
+    def _as_int(x):
+        try: return int(x)
+        except Exception: return None
+    mapping["pubchem_cid_resolved"] = mapping["pubchem_cid_resolved"].apply(_as_int)
+
+    # Rescue generic if still missing
+    def rescue_generic(row):
+        if pd.notna(row.get("generic_name")) and row.get("generic_name"):
+            return row.get("generic_name")
+        guess = guess_generic_from_title(row.get("sdf_title"))
+        if guess:
+            return guess
+        for k in ("drug_name","drugname","name"):
+            v = row.get(k)
+            if isinstance(v, str):
+                g = guess_generic_from_title(v)
+                if g:
+                    return g
+        return None
+    mapping["generic_name"] = mapping.apply(rescue_generic, axis=1)
+
+    # Friendly display name
+    def pick_display(row):
+        return (_clean_display_name(row.get("generic_name"))
+                or _clean_display_name(row.get("pubchem_record_title"))
+                or _clean_display_name(row.get("pubchem_iupac_name"))
+                or _clean_display_name(row.get("pubchem_name"))
+                or row.get("sdf_title"))
+    mapping["display_name"] = mapping.apply(pick_display, axis=1)
+
+    hits = int(mapping["pubchem_cid_resolved"].notna().sum())
+    log.info(f"PubChem hits: {hits}/{len(mapping)}")
+    return mapping
+
+# ============================ Enrichment: RxNorm =============================
+
 RXN_BASE = "https://rxnav.nlm.nih.gov/REST"
 
 def rxn_get(url: str, params: Dict[str, Any] = None) -> Optional[dict]:
@@ -762,7 +1224,8 @@ def enrich_with_rxnorm(df: pd.DataFrame) -> pd.DataFrame:
     log.info(f"RxNorm hits: {hits}/{len(df)}")
     return df
 
-# ---------- DrugCentral (local TSV match; fastest & reliable) ----------
+# =========================== Enrichment: DrugCentral =========================
+
 def _load_drugcentral_index(tsv_path: Path):
     if not tsv_path.exists():
         log.warning(f"DrugCentral TSV not found at {tsv_path}; skipping DrugCentral enrichment.")
@@ -824,9 +1287,6 @@ def enrich_with_drugcentral(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 dc_ids.append(None); dc_generic.append(None)
 
-        # local file join: no rate limiting required
-        # time.sleep(0.0)
-
     df["drugcentral_id"] = dc_ids
     df["drugcentral_generic_name"] = dc_generic
     df["drugcentral_brand_names"] = None  # TSV typically lacks brand names
@@ -834,7 +1294,8 @@ def enrich_with_drugcentral(df: pd.DataFrame) -> pd.DataFrame:
     log.info(f"DrugCentral hits: {hits}/{len(df)}")
     return df
 
-# ---------- OpenFDA (drug/label) ----------
+# ============================= Enrichment: OpenFDA ===========================
+
 OPENFDA_BASE = "https://api.fda.gov/drug/label.json"
 
 def openfda_query(search: str) -> Optional[List[dict]]:
@@ -874,6 +1335,9 @@ def _extract_openfda_names(items: List[dict]) -> Dict[str, Any]:
         "rxcui": _dedup(rxcui, cap=5),
     }
 
+def _rx_candidates_for_openfda(obj: Dict[str, Any]) -> List[str]:
+    return _rx_candidates(obj)
+
 def enrich_with_openfda(df: pd.DataFrame) -> pd.DataFrame:
     cache = load_cache(CACHE_PATH_OPENFDA)
     results_generic, results_brand, results_unii, results_rxcui = [], [], [], []
@@ -904,8 +1368,7 @@ def enrich_with_openfda(df: pd.DataFrame) -> pd.DataFrame:
             "display_name": row.get("display_name"),
             "pubchem_synonyms": row.get("pubchem_synonyms"),
         }
-        for nm in _rx_candidates(nm_obj):
-            # Try as generic and brand
+        for nm in _rx_candidates_for_openfda(nm_obj):
             queries.append(f'openfda.generic_name:"{nm}"')
             queries.append(f'openfda.brand_name:"{nm}"')
 
@@ -953,193 +1416,68 @@ def enrich_with_openfda(df: pd.DataFrame) -> pd.DataFrame:
     log.info(f"OpenFDA rows with names: {hits}/{len(df)}")
     return df
 
-# ---------- PubChem enrichment driver ----------
-def enrich_with_pubchem(mapping: pd.DataFrame) -> pd.DataFrame:
-    cache = load_cache(CACHE_PATH_PUBCHEM)
-    log.info(f"Loaded PubChem cache entries: {len(cache)}")
+# =============================== main ========================================
 
-    # Normalize/repair old cache entries
-    changed = False
-    for k, v in list(cache.items()):
-        if isinstance(v, dict) and v.get("cid") and (not v.get("synonyms") or v.get("title") is None or v.get("iupac_name") is None):
-            syns, ttl = fetch_synonyms_and_title(v["cid"])
-            view = fetch_pubchem_view_by_cid(v.get("cid"))
-            merged_syns = merge_name_buckets(syns, view.get("synonyms", []) or [])
-            if merged_syns: v["synonyms"] = merged_syns
-            if ttl and not v.get("title"): v["title"] = ttl
-            if not v.get("title") and view.get("record_title"): v["title"] = view.get("record_title")
-            if not v.get("iupac_name") and view.get("iupac_name"): v["iupac_name"] = view.get("iupac_name")
-            v["generic"] = choose_best_generic(v.get("synonyms"), v.get("title"))
-            v["brands"]  = collect_brand_names(v.get("synonyms"))
-            changed = True
-        elif isinstance(v, dict) and ("generic" not in v or "brands" not in v):
-            v["generic"] = choose_best_generic(v.get("synonyms"), v.get("title"))
-            v["brands"]  = collect_brand_names(v.get("synonyms"))
-            changed = True
-    if changed:
-        save_cache(cache, CACHE_PATH_PUBCHEM)
-
-    # Deduplicate queries (prefer SMILES; fallback to neutral → InChIKey)
-    queries = []
-    for _, row in mapping.iterrows():
-        s  = row.get("smiles", None)
-        sn = row.get("smiles_neutral", None)
-        ik = row.get("inchikey", None)
-        if isinstance(s, str) and s not in cache:
-            queries.append(("smiles", s, s, ik)); continue
-        if isinstance(sn, str) and sn not in cache:
-            queries.append(("smiles", sn, sn, ik)); continue
-        if (not isinstance(s, str)) and isinstance(ik, str) and f"IK:{ik}" not in cache:
-            queries.append(("inchikey", f"IK:{ik}", s, ik))
-
-    if MAX_LOOKUPS is not None:
-        queries = queries[:MAX_LOOKUPS]
-
-    log.info(f"PubChem lookups to perform (deduped): {len(queries)}")
-
-    for i, (_, cache_key, s, ik) in enumerate(queries, start=1):
-        time.sleep(RATE_LIMIT_SEC)
-        entry = pubchem_lookup(s, ik, cache)
-        cache[cache_key] = entry
-        if isinstance(s, str):
-            neut = neutralize_smiles(s)
-            if neut: cache[neut] = entry
-        if entry.get("cid"):
-            cache[f"CID:{entry['cid']}"] = entry
-        if i % 50 == 0:
-            save_cache(cache, CACHE_PATH_PUBCHEM)
-            log.info(f"PubChem progress: {i}/{len(queries)} cached…")
-
-    save_cache(cache, CACHE_PATH_PUBCHEM)
-    log.info("Saved PubChem cache.")
-
-    # Attach resolved fields (do NOT overwrite existing SDF)
-    def get_entry(row):
-        s = row.get("smiles", None)
-        sn = row.get("smiles_neutral", None)
-        ik = row.get("inchikey", None)
-        cid_val = row.get("pubchem_cid", None)
-        if isinstance(s, str) and s in cache: return cache[s]
-        if isinstance(sn, str) and sn in cache: return cache[sn]
-        if isinstance(ik, str) and f"IK:{ik}" in cache: return cache[f"IK:{ik}"]
-        try:
-            cid_int = int(cid_val) if pd.notna(cid_val) else None
-        except Exception:
-            cid_int = None
-        if cid_int and f"CID:{cid_int}" in cache: return cache[f"CID:{cid_int}"]
-        return {}
-
-    mapping["pubchem_name"] = mapping.apply(lambda r: get_entry(r).get("name"), axis=1)
-    mapping["pubchem_cid_resolved"] = mapping.apply(lambda r: get_entry(r).get("cid"), axis=1)
-    mapping["pubchem_record_title"] = mapping.apply(lambda r: get_entry(r).get("title"), axis=1)
-    mapping["generic_name"] = mapping.apply(lambda r: get_entry(r).get("generic"), axis=1)
-    mapping["brand_names"] = mapping.apply(lambda r: "; ".join(get_entry(r).get("brands", [])), axis=1)
-    mapping["pubchem_iupac_name"] = mapping.apply(lambda r: get_entry(r).get("iupac_name"), axis=1)
-    mapping["pubchem_synonyms"] = mapping.apply(
-        lambda r: "; ".join((get_entry(r).get("synonyms") or [])) or None, axis=1
-    )
-    mapping["pubchem_unii_list"] = mapping.apply(
-        lambda r: "; ".join((get_entry(r).get("sources", {}) or {}).get("UNII", [])) or None, axis=1
-    )
-
-    # normalize CID as int for readability
-    def _as_int(x):
-        try: return int(x)
-        except Exception: return None
-    mapping["pubchem_cid_resolved"] = mapping["pubchem_cid_resolved"].apply(_as_int)
-
-    # Rescue generic if still missing
-    def rescue_generic(row):
-        if pd.notna(row.get("generic_name")) and row.get("generic_name"):
-            return row.get("generic_name")
-        guess = guess_generic_from_title(row.get("sdf_title"))
-        if guess:
-            return guess
-        for k in ("drug_name","drugname","name"):
-            v = row.get(k)
-            if isinstance(v, str):
-                g = guess_generic_from_title(v)
-                if g:
-                    return g
-        return None
-    mapping["generic_name"] = mapping.apply(rescue_generic, axis=1)
-
-    # Friendly display name
-    def pick_display(row):
-        return (_clean_display_name(row.get("generic_name"))
-                or _clean_display_name(row.get("pubchem_record_title"))
-                or _clean_display_name(row.get("pubchem_iupac_name"))
-                or _clean_display_name(row.get("pubchem_name"))
-                or row.get("sdf_title"))
-    mapping["display_name"] = mapping.apply(pick_display, axis=1)
-
-    hits = int(mapping["pubchem_cid_resolved"].notna().sum())
-    log.info(f"PubChem hits: {hits}/{len(mapping)}")
-    return mapping
-
-# ========= main =========
 def main():
     # 1) Build SDF index → metadata table
     df_sdf = load_sdf_rows(SDF_PATH, ONE_BASED)
 
-    # 2) Scan prepped ligands (supports rdk_* and fda_*)
+    # 2) Scan prepped ligands (supports rdk_* and fda_* and *_stageX)
     files_df = scan_prepped_files(SEARCH_ROOT)
     if files_df.empty:
         raise RuntimeError("No prepped ligand files found; cannot proceed.")
 
-    # 3) Decide indexing automatically (zero- vs one-based)
-    #    We *don’t* mutate the global ONE_BASED; we select a local choice.
-    one_based_choice = infer_indexing(files_df, df_sdf, ONE_BASED)
+    # 3) Select one representative .pdbqt per ligand and parse identity
+    reps_df = select_representative_pdbqt(files_df)
 
-    # Build the merge key according to the chosen indexing
-    files_df = files_df.assign(sdf_join_index=files_df["file_num"] + (1 if one_based_choice else 0))
+    # Add SDF composition features to enable composition matching
+    df_sdf = sdf_add_formula_features(df_sdf)
 
-    # Merge by computed index
-    mapping = files_df.merge(df_sdf, left_on="sdf_join_index", right_on="sdf_index", how="left")
-    mapping = mapping.sort_values(["scheme", "file_num", "example_path"])
+    # 4) Match representative PDBQTs to SDF rows using identity hints
+    mapping = match_using_pdbqt_features(reps_df, df_sdf, ONE_BASED)
 
-    # 4) Sanity report + write base mapping immediately
+    # 5) Sanity + write base mapping immediately
     sanity_check_index_merge(mapping)
-    base_csv = Path("fda_mapping_from_order.csv")
+    base_csv = Path("fda_mapping_from_pdbqt.csv")
     mapping.to_csv(base_csv, index=False)
-    log.info(f"Wrote base mapping (no names yet): {base_csv.resolve()}")
+    log.info(f"Wrote base mapping (with identity & match_method): {base_csv.resolve()}")
 
-    # 5) PubChem enrichment
+    # 6) PubChem enrichment
     if LOOKUP_PUBCHEM:
         log.info("Starting PubChem enrichment…")
         mapping = enrich_with_pubchem(mapping)
         mapping.to_csv(base_csv, index=False)
         log.info("Updated mapping with PubChem names/CIDs and generic/brand fields.")
 
-    # 6) RxNorm enrichment
+    # 7) RxNorm enrichment
     if LOOKUP_RXNORM:
         log.info("Starting RxNorm enrichment…")
         mapping = enrich_with_rxnorm(mapping)
         mapping.to_csv(base_csv, index=False)
         log.info("Added RxNorm RXCUI, generic and brand names (source-specific).")
 
-    # 7) DrugCentral enrichment
+    # 8) DrugCentral enrichment
     if LOOKUP_DRUGCENTRAL:
         log.info("Starting DrugCentral enrichment…")
         mapping = enrich_with_drugcentral(mapping)
         mapping.to_csv(base_csv, index=False)
         log.info("Added DrugCentral IDs and generic names (source-specific).")
 
-    # 8) OpenFDA enrichment
+    # 9) OpenFDA enrichment
     if LOOKUP_OPENFDA:
         log.info("Starting OpenFDA enrichment…")
         mapping = enrich_with_openfda(mapping)
         mapping.to_csv(base_csv, index=False)
         log.info("Added OpenFDA generic/brand/UNII/RXCUI (source-specific).")
 
-    # 9) Write problem rows for quick inspection (missing SDF title or SMILES)
+    # 10) Write problem rows for quick inspection (missing SDF title or SMILES)
     unmapped = mapping[mapping["sdf_title"].isna() | mapping["smiles"].isna()]
     if len(unmapped) > 0:
         bad_csv = Path("fda_mapping_unmapped_or_no_smiles.csv")
         unmapped.to_csv(bad_csv, index=False)
         log.warning(f"Wrote {len(unmapped)} problematic rows to: {bad_csv.resolve()}")
 
-    # 10) Final preview
+    # 11) Final preview
     log.info("Preview:")
     with pd.option_context("display.max_columns", None, "display.width", 220):
         log.info("\n" + mapping.head(10).to_string(index=False))

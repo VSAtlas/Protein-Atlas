@@ -51,17 +51,21 @@ from run_vina import run_docking_task, validate_all_poses
 class RetryManager:
     max_retries: int = 2
     recipes: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
+        # If we docked far from the pocket, try small geometry tweaks — not more modes
         "too_far_from_pocket": [
-            {"recenter": True, "box_pad_delta": +2.0},
-            {"recenter": True, "box_pad_delta": +3.0, "exhaustiveness": 6},
+            {"recenter": True, "box_pad_delta": +1.0, "num_modes": 4},
+            {"recenter": True, "box_pad_delta": +2.0, "exhaustiveness": 6, "num_modes": 4},
         ],
+        # If we didn't get a valid pose, explore new seeds and a slightly wider energy window,
+        # but keep returned modes low so validation stays fast.
         "no_valid_pose": [
-            {"exhaustiveness": 6, "num_modes": 12},
-            {"exhaustiveness": 4, "num_modes": 16, "seed_jitter": True},
+            {"exhaustiveness": 6, "num_modes": 5, "seed_jitter": True, "energy_range": 6},
+            {"recenter": True, "box_pad_delta": +1.0, "exhaustiveness": 6, "num_modes": 5, "seed_jitter": True, "energy_range": 6},
         ],
+        # If we timed out, go cheaper, not deeper.
         "timeout": [
-            {"num_modes": 4},
-            {"exhaustiveness": 4, "num_modes": 3},
+            {"exhaustiveness": 3, "num_modes": 3, "seed_jitter": True},
+            {"exhaustiveness": 2, "num_modes": 2},
         ],
         "malformed": []  # do not retry
     })
@@ -77,6 +81,111 @@ class RetryManager:
             else:
                 p[k] = v
         return p
+
+from dataclasses import dataclass
+import time
+from pathlib import Path
+
+@dataclass
+class BudgetGuard:
+    """Simple per-ligand wall-clock guard for retries/validation."""
+    max_seconds: float
+    _deadline: float = None
+
+    def __post_init__(self):
+        self._deadline = time.time() + float(self.max_seconds)
+
+    def expired(self) -> bool:
+        return time.time() >= self._deadline
+
+def _iter_pdbqt_models(pdbqt_path: str):
+    """
+    Yield individual MODEL..ENDMDL blocks from a (possibly multi-model) PDBQT.
+    If no MODEL/ENDMDL markers exist, yield the whole file once.
+    """
+    buf = []
+    saw_model = False
+    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if ln.startswith("MODEL"):
+                if buf:
+                    yield "".join(buf)
+                    buf = []
+                saw_model = True
+                buf.append(ln)
+            elif ln.startswith("ENDMDL"):
+                buf.append(ln)
+                yield "".join(buf)
+                buf = []
+                saw_model = True
+            else:
+                if saw_model:
+                    buf.append(ln)
+
+    # If we never saw a MODEL block, treat the whole file as one model
+    if not saw_model:
+        try:
+            with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f2:
+                yield f2.read()
+        except Exception:
+            yield ""
+
+def validate_first_valid_pose(
+    receptor_pdbqt: str,
+    ligand_pdbqt: str,
+    pocket_center: tuple[float, float, float],
+    surface_coords,
+    max_models: int = 3,
+    clash_threshold: float = 2.0,
+    clash_tol: int = 3,
+    dist_surf: float = 6.0,
+    dist_centroid: float = 4.5,
+):
+    """
+    Validate poses in order and return as soon as one passes.
+    Falls back to the last invalid result if none pass.
+    """
+    from pose_validation import validate_pose_pdbqt  # local import to avoid cycles
+    tmp_dir = Path(ligand_pdbqt).parent
+    best_invalid = None
+    count = 0
+
+    for idx, model_text in enumerate(_iter_pdbqt_models(ligand_pdbqt)):
+        if max_models and count >= int(max_models):
+            break
+        count += 1
+
+        tmp = tmp_dir / f"{Path(ligand_pdbqt).stem}.m{idx}.tmp.pdbqt"
+        try:
+            tmp.write_text(model_text, encoding="utf-8")
+        except Exception:
+            # If we can't write a temp file, just fall back to validating the whole file once
+            tmp = Path(ligand_pdbqt)
+
+        try:
+            res = validate_pose_pdbqt(
+                protein_pdbqt=receptor_pdbqt,
+                ligand_pdbqt=str(tmp),
+                pocket_center=pocket_center,
+                clash_threshold=clash_threshold,
+                CLASH_TOLERANCE=clash_tol,
+                DIST_THRESHOLD_SURFACE=dist_surf,
+                DIST_THRESHOLD_CENTROID=dist_centroid,
+                surface_atom_coords=surface_coords,
+            )
+        finally:
+            if tmp.name.endswith(".tmp.pdbqt"):
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        if res.get("valid", False):
+            return res  # early exit on first valid
+
+        best_invalid = res  # keep the last invalid for diagnostics
+
+    return best_invalid or {"valid": False, "reason": "no_poses"}
 
 
 @dataclass
@@ -886,21 +995,24 @@ def run_one_stage(
                     logger.warning(f"RMSD filtering failed for {os.path.basename(out_path)}: {e}")
 
                 # Geometric validation
-                result = validate_pose_pdbqt(
-                    protein_pdbqt=receptor_pdbqt,
+                result = validate_first_valid_pose(
+                    receptor_pdbqt=receptor_pdbqt,
                     ligand_pdbqt=out_path,
                     pocket_center=center,
+                    surface_coords=surface_coords,
+                    max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
                     clash_threshold=2.0,
-                    CLASH_TOLERANCE=3,
-                    DIST_THRESHOLD_SURFACE=6.0,
-                    DIST_THRESHOLD_CENTROID=4.5,
-                    surface_atom_coords=surface_coords
+                    clash_tol=3,
+                    dist_surf=6.0,
+                    dist_centroid=4.5,
                 )
                 dist = result.get("distance_to_pocket")
                 if isinstance(dist, (int, float)):
                     all_distances.append(dist)
 
                 logger.info(f"{lig_name} validation: {result}")
+                guard = BudgetGuard(float(cfg.get("MAX_RETRY_SECONDS_PER_LIGAND", 300)))
+
                 if result.get("valid", False):
                     ok, reason = _validate_with_rmsd_gate(lig, lig_name, out_path, float(score))
                     if ok:
@@ -919,6 +1031,14 @@ def run_one_stage(
                 # Geometrically invalid path
                 # --------------------------
                 did_retry = False
+                # Bail early if we've already blown the budget
+                if guard.expired():
+                    invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
+                    processed += 1
+                    if (processed % 25 == 0) or (processed == len(futures)):
+                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                    pbar.update(1)
+                    continue
                 if bool(cfg.get("RETRY_NEAR_MISS", True)):
                     try:
                         dthr = float(cfg.get("RETRY_DIST_THRESH", 7.0))
@@ -939,6 +1059,13 @@ def run_one_stage(
                                 cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
                                 lig, stage_retry["name"], stage_retry, threads_per_vina
                             )
+                            if guard.expired():
+                                invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
+                                processed += 1
+                                if (processed % 25 == 0) or (processed == len(futures)):
+                                    pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                                pbar.update(1)
+                                continue
                             _, score2 = run_docking_task(cfg["VINA_EXE"], conf_path2, lig, out_path2)
 
                             try:
@@ -950,15 +1077,16 @@ def run_one_stage(
                             except Exception:
                                 pass
 
-                            result2 = validate_pose_pdbqt(
-                                protein_pdbqt=receptor_pdbqt,
+                            result2 = validate_first_valid_pose(
+                                receptor_pdbqt=receptor_pdbqt,
                                 ligand_pdbqt=out_path2,
                                 pocket_center=center,
+                                surface_coords=surface_coords,
+                                max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
                                 clash_threshold=2.0,
-                                CLASH_TOLERANCE=3,
-                                DIST_THRESHOLD_SURFACE=6.0,
-                                DIST_THRESHOLD_CENTROID=4.5,
-                                surface_atom_coords=surface_coords
+                                clash_tol=3,
+                                dist_surf=6.0,
+                                dist_centroid=4.5,
                             )
 
                             if result2.get("valid", False) and score2 is not None:
@@ -989,6 +1117,10 @@ def run_one_stage(
                 retained_invalid = True
 
                 while attempt < retry_mgr.max_retries:
+                    # Budget guard for recipe retries
+                    if guard.expired():
+                        invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
+                        break
                     recipe = retry_mgr.apply(stage, err_cat, attempt)
                     if not recipe:
                         break
@@ -1049,15 +1181,16 @@ def run_one_stage(
                     except Exception:
                         pass
 
-                    result_r = validate_pose_pdbqt(
-                        protein_pdbqt=receptor_pdbqt,
+                    result_r = validate_first_valid_pose(
+                        receptor_pdbqt=receptor_pdbqt,
                         ligand_pdbqt=out_path3,
-                        pocket_center=retry_center,
+                        pocket_center=center,
+                        surface_coords=surface_coords,
+                        max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
                         clash_threshold=2.0,
-                        CLASH_TOLERANCE=3,
-                        DIST_THRESHOLD_SURFACE=6.0,
-                        DIST_THRESHOLD_CENTROID=4.5,
-                        surface_atom_coords=surface_coords
+                        clash_tol=3,
+                        dist_surf=6.0,
+                        dist_centroid=4.5,
                     )
 
                     logger.info(f"{lig_name} retry#{attempt + 1} ({err_cat}) -> {result_r}")
@@ -2270,6 +2403,8 @@ def main() -> None:
     #RMSD PARAMETERS
     cfg.setdefault("SELF_RMSD_MAX_ANG", 2.0)
     cfg.setdefault("SELF_RMSD_REQUIRE_FOR_CONTROLS", True)  # reserved for future stricter gating
+    cfg.setdefault("EARLY_EXIT_MAX_MODELS", 3)  # validate at most N poses, stop on first PASS
+    cfg.setdefault("MAX_RETRY_SECONDS_PER_LIGAND", 300)  # wall-clock for retries/validation per ligand
 
     params = get_recenter_params(cfg)
     stages = define_docking_stages(cfg.get("DOCKING_MODE", "discovery").lower())
