@@ -1,0 +1,32 @@
+name: WSL smoke
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+concurrency:
+  group: wsl-smoke-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    runs-on: [self-hosted, linux, wsl, docking]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python version
+        run: python3 -V
+      - name: Install deps if requirements.txt exists
+        run: |
+          if [ -f requirements.txt ]; then
+            python3 -m pip install -U pip
+            python3 -m pip install -r requirements.txt
+          fi
+      - name: Run smoke test
+        env:
+          REDUCE_EXE: /mnt/e/phenix/Library/bin/reduce.exe
+        run: |
+          python3 scripts/run_smoketest.py
+      - name: Upload artifacts (if present)
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoketest_out
+          path: smoketest_out
+          if-no-files-found: ignore
