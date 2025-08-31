@@ -1,0 +1,7 @@
+name: ping
+on: [push]
+jobs:
+  hello:
+    runs-on: [self-hosted, linux, wsl, docking]
+    steps:
+      - run: echo "hello from $(uname -r) on $(hostname)"
