@@ -660,6 +660,72 @@ def find_pair_only_screenshots(pdb_id: str, pocket_dir: Path, rdk_id: Optional[s
         out.append(sorted(cands)[0] if cands else None)
     return out[0], out[1], out[2]
 
+def _ensure_pair_only_images(pocket_dir: Path, pdb_id: str, ctrl_path: Path, rdk_path: Path, rdk_id: str) -> None:
+    outprefix = pocket_dir / f"{pdb_id}_cleaned__CONTROL+{rdk_id}_PAIR"
+    want = [outprefix.with_name(outprefix.name + f"_{v}.png") for v in ("side", "front", "top")]
+    if all(p.is_file() for p in want):
+        return
+    try:
+        # Prefer dedicated pair-only renderer (no receptor loaded)
+        from capture_pose import render_pair_only_three_views_with_pymol
+        render_pair_only_three_views_with_pymol(
+            ligand_paths_and_colors=[(str(ctrl_path), "control", "green"),
+                                     (str(rdk_path), "rdk_closest", "magenta")],
+            outprefix=str(outprefix),
+        )
+    except Exception:
+        # Last-ditch fallback to the old function so files still exist
+        try:
+            from capture_pose import _render_three_views_with_pymol
+            _render_three_views_with_pymol(
+                receptor_path=str(ctrl_path),  # arbitrary; will be visible
+                ligand_paths_and_colors=[(str(ctrl_path), "control", "green"),
+                                         (str(rdk_path), "rdk_closest", "magenta")],
+                outprefix=str(outprefix),
+                label_top_n_res=0,
+            )
+        except Exception:
+            pass
+
+def _find_cleaned_receptor(pdb_id: str, pdb_dir: Path) -> Optional[Path]:
+    """
+    Heuristic: look for a cleaned receptor PDB in the PDB folder.
+    Prefers '<PDB>_cleaned.pdb'; falls back to '*cleaned*.pdb'.
+    """
+    exact = pdb_dir / f"{pdb_id}_cleaned.pdb"
+    if exact.is_file():
+        return exact
+    cands = sorted(p for p in pdb_dir.glob("*cleaned*.pdb") if p.is_file())
+    return cands[0] if cands else None
+
+
+def _ensure_overlay_images(pocket_dir: Path, pdb_id: str, receptor_path: Optional[Path],
+                           ctrl_path: Path, rdk_path: Path) -> None:
+    """
+    Ensure the three overlay images '<PDB>_cleaned__CONTROL+RDKclosest_[side|front|top].png'
+    exist in this pocket directory by calling the original PyMOL renderer.
+    """
+    if not (receptor_path and receptor_path.is_file()):
+        return
+    outprefix = pocket_dir / f"{pdb_id}_cleaned__CONTROL+RDKclosest"
+    want = [outprefix.with_name(outprefix.name + f"_{v}.png") for v in ("side", "front", "top")]
+    if all(p.is_file() for p in want):
+        return
+    try:
+        from capture_pose import _render_three_views_with_pymol
+        _render_three_views_with_pymol(
+            receptor_path=str(receptor_path),
+            ligand_paths_and_colors=[
+                (str(ctrl_path), "control", "green"),
+                (str(rdk_path), "rdk_closest", "magenta"),
+            ],
+            outprefix=str(outprefix),
+            label_top_n_res=5,
+            label_cutoff=5.0,
+        )
+    except Exception:
+        # Quiet best-effort: if PyMOL/capture_pose isn't available, we just skip.
+        pass
 
 @dataclass
 class PairEval:
@@ -777,8 +843,9 @@ def evaluate_pairs(
     rmsd_tol: float,
     include_identity: bool,
 ) -> List[PairEval]:
-    # Locate the PyMOL screenshots once per pocket
+    # Check once per pocket whether overlay images exist
     png_side, png_front, png_top = find_pymol_screenshots(pdb_id, pocket_dir)
+    overlay_ok = bool(png_side and png_front and png_top)
 
     rows: List[PairEval] = []
     for control_id, ctrl in controls:
@@ -799,9 +866,7 @@ def evaluate_pairs(
             continue
 
         pick_reason = "identity" if identity_flag else "centroid"
-
-        # alias for consistency (fixes NameError in confidence calc)
-        flag_identity = identity_flag
+        flag_identity = identity_flag  # alias for clarity
 
         # Score delta
         delta_kcal: Optional[float] = None
@@ -821,8 +886,17 @@ def evaluate_pairs(
                   f"but RAW centroid {raw_ctr:.2f} Å; ALIGNED centroid {aligned_ctr if aligned_ctr is None else f'{aligned_ctr:.2f}'} Å. "
                   f"Using aligned for scoring. pick={picked.path.name} via {pick_reason}")
 
-        rdk_id = _rdk_id_from_stem(picked.path.stem) or ""
-        pair_side, pair_front, pair_top = find_pair_only_screenshots(pdb_id, pocket_dir, rdk_id or "RDKclosest")
+        # Ensure overlay images (once per pocket) if missing
+        if not overlay_ok:
+            receptor = _find_cleaned_receptor(pdb_id, pocket_dir.parent)
+            _ensure_overlay_images(pocket_dir, pdb_id, receptor, ctrl.path, picked.path)
+            png_side, png_front, png_top = find_pymol_screenshots(pdb_id, pocket_dir)
+            overlay_ok = bool(png_side and png_front and png_top)
+
+        # Ensure pair-only images (per control–RDK pair)
+        rdk_id = _rdk_id_from_stem(picked.path.stem) or "RDKclosest"
+        _ensure_pair_only_images(pocket_dir, pdb_id, ctrl.path, picked.path, rdk_id)
+        pair_side, pair_front, pair_top = find_pair_only_screenshots(pdb_id, pocket_dir, rdk_id)
 
         # interpretability / labels
         ctrl_guess_list = expected_names_for_het(het)
@@ -848,7 +922,7 @@ def evaluate_pairs(
                 control_score=ctrl.score,
                 rdk_score=picked.score,
                 delta_kcal=delta_kcal,
-                centroid_dist=centroid_to_score,   # value used for scoring
+                centroid_dist=centroid_to_score,
                 rmsd=rmsd_val,
                 flag_score=flag_score,
                 flag_center=flag_center,
@@ -871,10 +945,10 @@ def evaluate_pairs(
                 png_pair_side=pair_side,
                 png_pair_front=pair_front,
                 png_pair_top=pair_top,
-
             )
         )
     return rows
+
 
 
 # -----------------------------

@@ -98,6 +98,8 @@ def _safe_open_csv_for_write(target_path: Path, retries: int = 3, delay: float =
 # ------------------------
 # PyMOL render helpers (safe to import; do work only when called)
 # ------------------------
+from typing import List, Tuple
+
 def _render_three_views_with_pymol(
     receptor_path: str,
     ligand_paths_and_colors: List[Tuple[str, str, str]],  # [(path, object_name, color), ...]
@@ -105,10 +107,14 @@ def _render_three_views_with_pymol(
     label_top_n_res: int = 5,
     label_cutoff: float = 5.0,
     viewport: Tuple[int, int] = (1200, 900),
+    *,
+    hide_receptor: bool = False,          # <-- NEW
+    **_ignored,                           # <-- future-proof against extra kwargs
 ) -> None:
     """
     Saves <outprefix>_[front|side|top].png.
-    Receptor shown as transparent surface; ligands as sticks; labels top-N closest residues (CA) within cutoff Å.
+    Receptor shown as transparent surface (unless hide_receptor=True); ligands as sticks;
+    labels top-N closest residues (CA) within cutoff Å.
     """
     try:
         from pymol2 import PyMOL
@@ -120,12 +126,19 @@ def _render_three_views_with_pymol(
         cmd = pm.cmd
         cmd.reinitialize()
 
-        # receptor surface
+        # load receptor
         cmd.load(receptor_path, "receptor")
         cmd.hide("everything")
-        cmd.show("surface", "receptor")
-        cmd.set("transparency", 0.30, "receptor")
-        cmd.color("slate", "receptor")
+
+        if not hide_receptor:
+            # Show receptor as translucent surface
+            cmd.show("surface", "receptor")
+            cmd.set("transparency", 0.30, "receptor")
+            cmd.color("slate", "receptor")
+        else:
+            # Keep it hidden but present (helps orientation stay consistent)
+            cmd.hide("everything", "receptor")
+            cmd.disable("receptor")
 
         # ligands
         any_lig = []
@@ -139,10 +152,10 @@ def _render_three_views_with_pymol(
 
         lig_union = " or ".join(any_lig) if any_lig else "receptor"
 
-        # label nearest residues
-        if any_lig:
+        # label nearest residues only if receptor is visible and labels requested
+        if any_lig and (label_top_n_res > 0) and (not hide_receptor):
             cmd.select("active_site_all", f"receptor within {label_cutoff} of ({lig_union})")
-            distances: List[Tuple[str,str,str,str,float]] = []
+            distances: List[Tuple[str, str, str, str, float]] = []
             cmd.iterate(
                 "active_site_all and name CA",
                 "distances.append((model, chain, resi, resn, cmd.distance('tmp', '%s', f'{model}//{chain}/{resi}/CA')))" % lig_union,
@@ -169,8 +182,61 @@ def _render_three_views_with_pymol(
         cmd.turn("x", 90)
         cmd.png(f"{outprefix}_top.png", ray=1)
 
-# --- add to capture_pose.py ---
 import subprocess, shlex
+from pathlib import Path
+from typing import List, Tuple
+#loads view of control and rdk
+def render_pair_only_three_views_with_pymol(
+    ligand_paths_and_colors: List[Tuple[str, str, str]],  # [(path, object_name, color)]
+    outprefix: str,
+    viewport: Tuple[int, int] = (1200, 900),
+) -> None:
+    """
+    Pair-only screenshots: loads ONLY the supplied ligands (no receptor at all)
+    and writes <outprefix>_[front|side|top].png.
+    """
+    try:
+        from pymol2 import PyMOL
+    except Exception as e:
+        print(f"[capture_pose] PyMOL not available; skipping pair-only renders: {e}")
+        return
+
+    with PyMOL() as pm:
+        cmd = pm.cmd
+        cmd.reinitialize()
+        cmd.hide("everything")
+
+        loaded_objs: List[str] = []
+        for lig_path, obj_name, color in ligand_paths_and_colors:
+            if not lig_path or not Path(lig_path).is_file():
+                continue
+            cmd.load(lig_path, obj_name)
+            cmd.show("sticks", obj_name)
+            cmd.color(color, obj_name)
+            loaded_objs.append(obj_name)
+
+        if not loaded_objs:
+            print("[capture_pose] No ligands loaded for pair-only views; skipping.")
+            return
+
+        lig_union = " or ".join(loaded_objs)
+
+        # View settings
+        cmd.viewport(*viewport)
+        cmd.set("antialias", 2)
+        cmd.set("ray_opaque_background", 0)
+        cmd.bg_color("white")
+
+        # Consistent framing
+        cmd.orient(lig_union)
+        cmd.zoom(lig_union, 10)
+
+        # Save three orthogonal views
+        cmd.png(f"{outprefix}_front.png", ray=1)
+        cmd.turn("y", 90)
+        cmd.png(f"{outprefix}_side.png", ray=1)
+        cmd.turn("x", 90)
+        cmd.png(f"{outprefix}_top.png", ray=1)
 
 def _prefer_best_pdb(pose_path: str) -> str:
     """
