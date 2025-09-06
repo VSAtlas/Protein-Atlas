@@ -1,46 +1,44 @@
-PROTEIN_DIR = E:/PythonProject/protein_automation/pdbqts
-LIGAND_DIR = E:/PythonProject/protein_automation/input_ligands
-LIGAND_EXTRACTED_DIR = E:/PythonProject/protein_automation/extracted_ligands
-LIGANDS_MOL2_DIR = E:/PythonProject/protein_automation/ligands_mol2
-OUTPUT_LIGANDS_DIR = E:/PythonProject/protein_automation/prepped_ligands
-OUTPUT_DIR = E:/PythonProject/protein_automation/processed_pdbs
-PDBQT_DIR = E:/PythonProject/protein_automation/pdbqts
-DOCKED_DIR = E:/PythonProject/protein_automation/docked
+PROTEIN_DIR = /mnt/e/PythonProject/protein_automation/pdbqts
+LIGAND_DIR = /mnt/e/PythonProject/protein_automation/input_ligands
+LIGAND_EXTRACTED_DIR = /mnt/e/PythonProject/protein_automation/extracted_ligands
+LIGANDS_MOL2_DIR = /mnt/e/PythonProject/protein_automation/ligands_mol2
+OUTPUT_LIGANDS_DIR = /mnt/e/PythonProject/protein_automation/prepped_ligands
+OUTPUT_DIR = /mnt/e/PythonProject/protein_automation/processed_pdbs
+PDBQT_DIR = /mnt/e/PythonProject/protein_automation/pdbqts
+DOCKED_DIR = /mnt/e/PythonProject/protein_automation/docked
+INPUT_DIR = /mnt/e/PythonProject/protein_automation/input_pdbs
+OVERALL_DIR = /mnt/e/PythonProject/protein_automation
 
-VINA_PATH = E:/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe
-VINA_EXE = E:/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe
+VINA_PATH = /home/michael/miniconda3/envs/docking-env/bin/vina
+VINA_EXE  = /home/michael/miniconda3/envs/docking-env/bin/vina
+
+USE_MEEKO = True
+HIS_DEFAULT = HIE
+MEEKO_ALLOW_BAD_RES = True
+MEEKO_DEFAULT_ALTLOC = A
+
+
+PREPARE_LIGAND_SCRIPT = /home/michael/miniconda3/envs/docking-env/bin/mk_prepare_ligand.py
+MGLTOOLS_PYTHON = /home/michael/miniconda3/envs/docking-env/bin/python
+MGLTOOLS_DIR = /home/michael/miniconda3/envs/docking-env/bin/python
+PREPARE_RECEPTOR_SCRIPT = /home/michael/miniconda3/envs/docking-env/bin/prepare_receptor4.py
+OPENBABEL_PATH = /home/michael/miniconda3/envs/docking-env/bin/obabel
+
+
+PYMOL_PATH = /home/michael/miniconda3/envs/docking-env/bin/pymol
+
+P2RANK_PATH = /mnt/e/p2rank_2.5
+PHENIX_CLEAN_SCRIPT = /mnt/e/PythonProject/protein_automation/phenix_clean.py
+
+PHENIX_DIR = /home/michael/phenix/phenix-1.21.2-5419/build/bin
+PHENIX_LIB_PATH = /home/michael/phenix/phenix-1.21.2-5419/modules
+REDUCE_EXE = /usr/local/bin/reduce
+
 
 CPU_ONLY = True
-
-PHENIX_DIR = E:/phenix/Library/bin
-PHENIX_LIB_PATH = E:/phenix/Lib/site-packages
-PHENIX_CLEAN_SCRIPT = E:/PythonProject/protein_automation/phenix_clean.py
-
-INPUT_DIR = E:/PythonProject/protein_automation/input_pdbs
-P2RANK_PATH = E:/p2rank_2.5
-
-MGLTOOLS_PATH = E:/MGLTOOLS-1.5.7
-MGLTOOLS_PYTHON = E:/MGLTOOLS-1.5.7/python.exe
-PREPARE_RECEPTOR_SCRIPT = E:/MGLTOOLS-1.5.7/Lib/site-packages/AutoDockTools/Utilities24/prepare_receptor4.py
-MGLTOOLS_DIR = E:/MGLTOOLS-1.5.7
-MAX_PARALLEL_JOBS = 28
-OPENBABEL_PATH = E:/OpenBabel-3.1.1/obabel.exe
-PYMOL_PATH = E:\pymol\python.exe
-DOCKING_MODE = polypharmacology
-
-
 CPU = 32
-OVERALL_DIR = E:/PythonProject/protein_automation
-REDUCE_EXE = E:/phenix/Library/bin/reduce.exe
+MAX_PARALLEL_JOBS = 28
+DOCKING_MODE = polypharmacology
 FORCE_REPROCESS = False
-
-
-EARLY_RECENTER_RATIO = 0.70
-EARLY_RECENTER_MIN_EVAL = 10
-EARLY_RECENTER_FAR_A = 15.0
-EARLY_RECENTER_MEDIAN_A = 10.0
-ALLOW_BOX_EXPAND = True
-MAX_RECENTER_ATTEMPTS = 3
-
-QUIET_CONSOLE = False
-CHECKPOINT_ENABLE = True
+CONTROL_BLACKLIST = "PO4,SO4,CL,NA,K,MG,MN,CA,ZN,FE,CO,CU,NI,MO,GOL,EDO,PEG,PG4,MPD,TRS,MES,HEP,CIT,TAR,TLA,DMS,NAG,BMA,GLC,GAL,MAN,FUC,TRE,BGC,BOG,HEM,FAD,FMN,NAD,NAP,NADH,SAM,SAH,ANP,GNP,ATP,ADP,AMP,GDP,GTP,PTR"
+_QUIET_CONSOLE = True 

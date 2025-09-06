@@ -1,0 +1,35 @@
+REMARK  5 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: S_1  and  C1_5 
+REMARK    2  A    between atoms: C1_5  and  C2_6 
+REMARK    3  A    between atoms: C2_6  and  C3_7 
+REMARK    4  A    between atoms: C3_7  and  N_8 
+REMARK    5  A    between atoms: N_8  and  C4_10 
+ROOT
+HETATM    1  N   CXS A1007     -19.815 -19.658 -11.595  1.00 85.19    -0.417 N 
+ATOM      2  HN  CXS A1007     -18.968 -19.969 -12.071  1.00  0.00     0.153 HD
+ENDROOT
+BRANCH   1   3
+HETATM    3  C3  CXS A1007     -20.757 -18.817 -12.302  1.00 71.57     0.115 C 
+BRANCH   3   4
+HETATM    4  C2  CXS A1007     -20.064 -17.649 -12.992  1.00 60.75     0.037 C 
+BRANCH   4   5
+HETATM    5  C1  CXS A1007     -19.653 -17.918 -14.449  1.00 57.14     0.167 C 
+BRANCH   5   6
+HETATM    6  S   CXS A1007     -18.009 -17.901 -14.720  1.00 48.63     0.101 S 
+HETATM    7  O1  CXS A1007     -17.392 -19.136 -14.287  1.00 63.85    -0.595 OA
+HETATM    8  O2  CXS A1007     -17.779 -17.762 -16.313  1.00 42.92    -0.595 OA
+HETATM    9  O3  CXS A1007     -17.415 -16.780 -14.043  1.00 58.44    -0.595 OA
+ENDBRANCH   5   6
+ENDBRANCH   4   5
+ENDBRANCH   3   4
+ENDBRANCH   1   3
+BRANCH   1  10
+HETATM   10  C4  CXS A1007     -20.049 -20.068 -10.223  1.00 84.20     0.076 C 
+HETATM   11  C5  CXS A1007     -21.317 -20.919 -10.104  1.00 94.50     0.024 C 
+HETATM   12  C6  CXS A1007     -21.577 -21.322  -8.652  1.00104.33     0.002 C 
+HETATM   13  C7  CXS A1007     -20.364 -21.980  -7.985  1.00 93.24     0.000 C 
+HETATM   14  C8  CXS A1007     -19.052 -21.228  -8.221  1.00 89.68     0.002 C 
+HETATM   15  C9  CXS A1007     -18.853 -20.862  -9.694  1.00 76.76     0.024 C 
+ENDBRANCH   1  10
+TORSDOF 5

@@ -1,0 +1,36 @@
+REMARK  5 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: N_1  and  CA_5 
+REMARK    2  A    between atoms: CA_5  and  CB_8 
+REMARK    3  A    between atoms: CA_5  and  C_6 
+REMARK    4  A    between atoms: CB_8  and  CG_9 
+REMARK    5  A    between atoms: CZ_14  and  OH_15 
+ROOT
+HETATM    1  CG  PTR B 393      67.275  23.976  32.996  1.00 24.34    -0.056 A 
+HETATM    2  CD1 PTR B 393      67.265  22.665  32.550  1.00 23.52     0.010 A 
+HETATM    3  CD2 PTR B 393      66.356  24.862  32.448  1.00 23.36     0.010 A 
+HETATM    4  CE1 PTR B 393      66.373  22.248  31.587  1.00 23.36     0.037 A 
+HETATM    5  CE2 PTR B 393      65.457  24.455  31.482  1.00 20.52     0.037 A 
+HETATM    6  CZ  PTR B 393      65.470  23.145  31.055  1.00 22.84     0.065 A 
+ENDROOT
+BRANCH   1   7
+HETATM    7  CB  PTR B 393      68.290  24.440  34.011  1.00 27.94     0.078 C 
+BRANCH   7   8
+HETATM    8  CA  PTR B 393      69.613  24.843  33.369  1.00 29.91     0.248 C 
+BRANCH   8   9
+HETATM    9  C   PTR B 393      69.351  25.966  32.381  1.00 30.36     0.264 C 
+HETATM   10  O   PTR B 393      68.954  27.057  32.776  1.00 29.54    -0.305 OA
+ENDBRANCH   8   9
+BRANCH   8  11
+HETATM   11  N   PTR B 393      70.545  25.359  34.356  1.00 32.38    -0.069 N 
+ATOM     12  HN3 PTR B 393      70.138  26.128  34.888  1.00  0.00     0.275 HD
+ATOM     13  HN2 PTR B 393      70.686  24.697  35.119  1.00  0.00     0.275 HD
+ATOM     14  HN1 PTR B 393      71.430  25.629  33.927  1.00  0.00     0.275 HD
+ENDBRANCH   8  11
+ENDBRANCH   7   8
+ENDBRANCH   1   7
+BRANCH   6  15
+HETATM   15  OH  PTR B 393      64.569  22.718  30.098  1.00 23.99    -0.361 OA
+ATOM     16  HH  PTR B 393      64.578  21.815  29.804  1.00  0.00     0.217 HD
+ENDBRANCH   6  15
+TORSDOF 5

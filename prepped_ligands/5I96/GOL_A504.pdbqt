@@ -1,0 +1,29 @@
+REMARK  5 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C1_1  and  O1_2 
+REMARK    2  A    between atoms: C1_1  and  C2_4 
+REMARK    3  A    between atoms: C2_4  and  O2_5 
+REMARK    4  A    between atoms: C2_4  and  C3_7 
+REMARK    5  A    between atoms: C3_7  and  O3_8 
+ROOT
+HETATM    1  C2  GOL A 504      -1.268 -17.685 -37.948  1.00 34.82     0.165 C 
+ENDROOT
+BRANCH   1   2
+HETATM    2  C1  GOL A 504      -1.899 -18.986 -38.398  1.00 36.94     0.198 C 
+BRANCH   2   3
+HETATM    3  O1  GOL A 504      -1.047 -19.542 -39.370  1.00 39.69    -0.398 OA
+ATOM      4  H1  GOL A 504      -1.443 -20.358 -39.652  1.00  0.00     0.209 HD
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1   5
+HETATM    5  O2  GOL A 504      -1.008 -16.879 -39.076  1.00 32.42    -0.391 OA
+ATOM      6  H2  GOL A 504      -0.612 -16.063 -38.794  1.00  0.00     0.210 HD
+ENDBRANCH   1   5
+BRANCH   1   7
+HETATM    7  C3  GOL A 504      -2.223 -16.947 -37.030  1.00 28.90     0.198 C 
+BRANCH   7   8
+HETATM    8  O3  GOL A 504      -1.434 -16.013 -36.339  1.00 25.74    -0.398 OA
+ATOM      9  H3  GOL A 504      -2.032 -15.551 -35.764  1.00  0.00     0.209 HD
+ENDBRANCH   7   8
+ENDBRANCH   1   7
+TORSDOF 5

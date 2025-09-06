@@ -1,0 +1,68 @@
+REMARK  15 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: O1_2  and  C2_3 
+REMARK    2  A    between atoms: C2_3  and  C3_4 
+REMARK    3  A    between atoms: C3_4  and  O2_5 
+REMARK    4  A    between atoms: O2_5  and  C4_6 
+REMARK    5  A    between atoms: C4_6  and  C5_7 
+REMARK    6  A    between atoms: C5_7  and  O3_8 
+REMARK    7  A    between atoms: O3_8  and  C6_9 
+REMARK    8  A    between atoms: C6_9  and  C7_10 
+REMARK    9  A    between atoms: C7_10  and  O4_11 
+REMARK   10  A    between atoms: O4_11  and  C8_12 
+REMARK   11  A    between atoms: C8_12  and  C9_13 
+REMARK   12  A    between atoms: C9_13  and  O5_14 
+REMARK   13  A    between atoms: O5_14  and  C10_15 
+REMARK   14  A    between atoms: C10_15  and  C11_16 
+REMARK   15  A    between atoms: C11_16  and  O6_17 
+ROOT
+HETATM    1  C6  PG6 L 302      15.695   7.597  16.629  1.00 64.15     0.193 C 
+ENDROOT
+BRANCH   1   2
+HETATM    2  C7  PG6 L 302      16.375   6.254  16.874  1.00 64.22     0.193 C 
+BRANCH   2   3
+HETATM    3  O4  PG6 L 302      17.223   6.314  18.029  1.00 62.45    -0.387 OA
+BRANCH   3   4
+HETATM    4  C8  PG6 L 302      16.627   5.982  19.289  1.00 59.92     0.193 C 
+BRANCH   4   5
+HETATM    5  C9  PG6 L 302      17.534   5.019  20.052  1.00 58.56     0.193 C 
+BRANCH   5   6
+HETATM    6  O5  PG6 L 302      17.176   4.953  21.440  1.00 57.56    -0.387 OA
+BRANCH   6   7
+HETATM    7  C10 PG6 L 302      15.918   4.338  21.738  1.00 56.28     0.193 C 
+BRANCH   7   8
+HETATM    8  C11 PG6 L 302      16.073   3.397  22.929  1.00 55.20     0.193 C 
+BRANCH   8   9
+HETATM    9  O6  PG6 L 302      14.792   3.053  23.471  1.00 55.76    -0.394 OA
+HETATM   10  C12 PG6 L 302      14.025   2.120  22.696  1.00 55.17     0.201 C 
+ENDBRANCH   8   9
+ENDBRANCH   7   8
+ENDBRANCH   6   7
+ENDBRANCH   5   6
+ENDBRANCH   4   5
+ENDBRANCH   3   4
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1  11
+HETATM   11  O3  PG6 L 302      14.533   7.709  17.452  1.00 65.82    -0.387 OA
+BRANCH  11  12
+HETATM   12  C5  PG6 L 302      13.885   8.984  17.366  1.00 67.94     0.193 C 
+BRANCH  12  13
+HETATM   13  C4  PG6 L 302      14.521   9.998  18.321  1.00 67.94     0.193 C 
+BRANCH  13  14
+HETATM   14  O2  PG6 L 302      13.555  10.978  18.723  1.00 68.04    -0.387 OA
+BRANCH  14  15
+HETATM   15  C3  PG6 L 302      12.734  10.631  19.847  1.00 66.32     0.193 C 
+BRANCH  15  16
+HETATM   16  C2  PG6 L 302      11.316  11.168  19.647  1.00 66.15     0.193 C 
+BRANCH  16  17
+HETATM   17  O1  PG6 L 302      10.351  10.283  20.227  1.00 64.11    -0.394 OA
+HETATM   18  C1  PG6 L 302       9.010  10.531  19.793  1.00 61.70     0.201 C 
+ENDBRANCH  16  17
+ENDBRANCH  15  16
+ENDBRANCH  14  15
+ENDBRANCH  13  14
+ENDBRANCH  12  13
+ENDBRANCH  11  12
+ENDBRANCH   1  11
+TORSDOF 15

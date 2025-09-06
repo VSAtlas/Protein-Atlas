@@ -1,0 +1,42 @@
+REMARK  7 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: NZ_1  and  CE_5 
+REMARK    2  A    between atoms: CE_5  and  CD_6 
+REMARK    3  A    between atoms: CD_6  and  CG_7 
+REMARK    4  A    between atoms: CG_7  and  CB_8 
+REMARK    5  A    between atoms: CA_9  and  CB_8 
+REMARK    6  A    between atoms: CA_9  and  C_10 
+REMARK    7  A    between atoms: CA_9  and  N_13 
+ROOT
+ATOM      1  CB  LYS d   1      -0.092   0.226   0.531  0.00  0.00     0.044 C 
+ENDROOT
+BRANCH   1   2
+ATOM      2  CG  LYS d   1       0.849  -0.160  -0.605  0.00  0.00     0.004 C 
+BRANCH   2   3
+ATOM      3  CD  LYS d   1       2.265   0.293  -0.298  0.00  0.00     0.027 C 
+BRANCH   3   4
+ATOM      4  CE  LYS d   1       2.898  -0.616   0.739  0.00  0.00     0.229 C 
+BRANCH   4   5
+ATOM      5  NZ  LYS d   1       4.247  -0.163   1.021  0.00  0.00    -0.079 N 
+ATOM      6  HZ3 LYS d   1       4.813  -0.089   0.175  1.00  0.00     0.274 HD
+ATOM      7  HZ2 LYS d   1       4.274   0.818   1.300  1.00  0.00     0.274 HD
+ATOM      8  HZ1 LYS d   1       4.673  -0.774   1.718  1.00  0.00     0.274 HD
+ENDBRANCH   4   5
+ENDBRANCH   3   4
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1   9
+ATOM      9  CA  LYS d   1      -1.531  -0.216   0.273  0.00  0.00     0.283 C 
+BRANCH   9  10
+ATOM     10  C   LYS d   1      -2.149   0.515  -0.877  0.00  0.00     0.204 C 
+ATOM     11  O   LYS d   1      -2.970   1.608  -0.632  0.00  0.00    -0.646 OA
+ATOM     12  OXT LYS d   1      -1.907   0.170  -2.064  0.00  0.00    -0.646 OA
+ENDBRANCH   9  10
+BRANCH   9  13
+ATOM     13  N   LYS d   1      -1.610  -1.656   0.080  0.00  0.00    -0.065 N 
+ATOM     14  HN3 LYS d   1      -0.982  -1.971  -0.660  1.00  0.00     0.275 HD
+ATOM     15  HN2 LYS d   1      -1.196  -2.163   0.862  1.00  0.00     0.275 HD
+ATOM     16  HN1 LYS d   1      -2.571  -1.951  -0.092  1.00  0.00     0.275 HD
+ENDBRANCH   9  13
+ENDBRANCH   1   9
+TORSDOF 7

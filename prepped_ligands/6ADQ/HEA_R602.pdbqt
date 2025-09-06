@@ -1,0 +1,28 @@
+REMARK  22 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C2A_9  and  CAA_14 
+REMARK    2  A    between atoms: C3A_10  and  CMA_12 
+REMARK    3  A    between atoms: CAA_14  and  CBA_15 
+REMARK    4  A    between atoms: CBA_15  and  CGA_16 
+REMARK    5  A    between atoms: C3B_23  and  C11_47 
+REMARK    6  A    between atoms: C3C_30  and  CAC_33 
+REMARK    7  A    between atoms: C3D_39  and  CAD_42 
+REMARK    8  A    between atoms: CAD_42  and  CBD_43 
+REMARK    9  A    between atoms: CBD_43  and  CGD_44 
+REMARK   10  A    between atoms: C11_47  and  O11_48 
+REMARK   11  A    between atoms: C11_47  and  C12_50 
+REMARK   12  A    between atoms: C12_50  and  C13_51 
+REMARK   13  A    between atoms: C13_51  and  C14_52 
+REMARK   14  A    between atoms: C14_52  and  C15_53 
+REMARK   15  A    between atoms: C15_53  and  C16_54 
+REMARK   16  A    between atoms: C16_54  and  C17_55 
+REMARK   17  A    between atoms: C17_55  and  C18_56 
+REMARK   18  A    between atoms: C18_56  and  C19_57 
+REMARK   19  A    between atoms: C19_57  and  C20_58 
+REMARK   20  A    between atoms: C20_58  and  C21_59 
+REMARK   21  A    between atoms: C21_59  and  C22_60 
+REMARK   22  A    between atoms: C22_60  and  C23_61 
+ROOT
+HETATM    1  FE  HEA R 602     255.001 215.484 193.403  1.00 26.49     0.000 F 
+ENDROOT
+TORSDOF 22

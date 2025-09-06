@@ -1,0 +1,9 @@
+REMARK  0 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+ROOT
+HETATM    1  C   ACT B 505     -18.472  13.317 -39.746  1.00 51.75     0.168 C 
+HETATM    2  O   ACT B 505     -18.083  13.188 -40.926  1.00 53.89    -0.648 OA
+HETATM    3  OXT ACT B 505     -19.057  12.328 -39.255  1.00 57.23    -0.648 OA
+HETATM    4  CH3 ACT B 505     -18.254  14.577 -38.965  1.00 48.52     0.129 C 
+ENDROOT
+TORSDOF 0

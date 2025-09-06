@@ -1,0 +1,14 @@
+REMARK  8 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C2A_9  and  CAA_13 
+REMARK    2  A    between atoms: CAA_13  and  CBA_14 
+REMARK    3  A    between atoms: CBA_14  and  CGA_15 
+REMARK    4  A    between atoms: C3B_22  and  CAB_25 
+REMARK    5  A    between atoms: C3C_31  and  CAC_34 
+REMARK    6  A    between atoms: C3D_40  and  CAD_43 
+REMARK    7  A    between atoms: CAD_43  and  CBD_44 
+REMARK    8  A    between atoms: CBD_44  and  CGD_45 
+ROOT
+HETATM    1  FE  HEC C 302     156.119 180.415 213.882  1.00 34.46     0.000 F 
+ENDROOT
+TORSDOF 8

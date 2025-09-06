@@ -1,0 +1,40 @@
+REMARK  8 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C1_1  and  C2_3 
+REMARK    2  A    between atoms: C2_3  and  C3_4 
+REMARK    3  A    between atoms: C3_4  and  C4_5 
+REMARK    4  A    between atoms: C4_5  and  C5_6 
+REMARK    5  A    between atoms: C5_6  and  C6_7 
+REMARK    6  A    between atoms: C6_7  and  C7_8 
+REMARK    7  A    between atoms: C7_8  and  C8_9 
+REMARK    8  A    between atoms: C8_9  and  C9_10 
+ROOT
+HETATM    1  C5  PLM Y 301     167.315 152.271 192.053  1.00 34.27     0.000 C 
+ENDROOT
+BRANCH   1   2
+HETATM    2  C6  PLM Y 301     167.961 152.724 190.741  1.00 34.27     0.000 C 
+BRANCH   2   3
+HETATM    3  C7  PLM Y 301     167.017 152.743 189.539  1.00 34.27     0.000 C 
+BRANCH   3   4
+HETATM    4  C8  PLM Y 301     167.649 153.339 188.280  1.00 34.27    -0.000 C 
+BRANCH   4   5
+HETATM    5  C9  PLM Y 301     166.636 153.857 187.251  1.00 34.27    -0.005 C 
+HETATM    6  CA  PLM Y 301     167.258 154.765 186.176  1.00 34.27     0.005 C 
+ENDBRANCH   4   5
+ENDBRANCH   3   4
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1   7
+HETATM    7  C4  PLM Y 301     168.254 152.382 193.255  1.00 34.27     0.000 C 
+BRANCH   7   8
+HETATM    8  C3  PLM Y 301     167.647 151.918 194.573  1.00 34.27     0.007 C 
+BRANCH   8   9
+HETATM    9  C2  PLM Y 301     168.558 152.152 195.765  1.00 34.27     0.069 C 
+BRANCH   9  10
+HETATM   10  C1  PLM Y 301     168.246 151.292 197.026  1.00 34.27     0.231 C 
+HETATM   11  O2  PLM Y 301     167.183 151.569 197.639  1.00 34.27    -0.307 OA
+ENDBRANCH   9  10
+ENDBRANCH   8   9
+ENDBRANCH   7   8
+ENDBRANCH   1   7
+TORSDOF 8

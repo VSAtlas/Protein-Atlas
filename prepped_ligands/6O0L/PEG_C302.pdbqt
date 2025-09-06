@@ -1,0 +1,32 @@
+REMARK  6 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C1_1  and  O1_2 
+REMARK    2  A    between atoms: C1_1  and  C2_4 
+REMARK    3  A    between atoms: C2_4  and  O2_5 
+REMARK    4  A    between atoms: O2_5  and  C3_6 
+REMARK    5  A    between atoms: C3_6  and  C4_7 
+REMARK    6  A    between atoms: C4_7  and  O4_8 
+ROOT
+HETATM    1  O2  PEG C 302       1.793  34.120  25.599  1.00 62.79    -0.387 OA
+ENDROOT
+BRANCH   1   2
+HETATM    2  C2  PEG C 302       1.043  34.188  26.804  1.00 56.81     0.193 C 
+BRANCH   2   3
+HETATM    3  C1  PEG C 302      -0.090  33.209  26.747  1.00 58.37     0.190 C 
+BRANCH   3   4
+HETATM    4  O1  PEG C 302      -0.931  33.313  27.883  1.00 58.43    -0.399 OA
+ATOM      5  H1  PEG C 302      -1.649  32.692  27.847  1.00  0.00     0.209 HD
+ENDBRANCH   3   4
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1   6
+HETATM    6  C3  PEG C 302       1.551  35.218  24.730  1.00 55.89     0.193 C 
+BRANCH   6   7
+HETATM    7  C4  PEG C 302       0.538  34.830  23.697  1.00 58.40     0.190 C 
+BRANCH   7   8
+HETATM    8  O4  PEG C 302       0.067  35.955  22.976  1.00 58.51    -0.399 OA
+ATOM      9  H4  PEG C 302      -0.575  35.709  22.321  1.00  0.00     0.209 HD
+ENDBRANCH   7   8
+ENDBRANCH   6   7
+ENDBRANCH   1   6
+TORSDOF 6

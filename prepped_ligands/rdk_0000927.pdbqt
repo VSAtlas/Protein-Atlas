@@ -1,0 +1,66 @@
+REMARK  6 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C_2  and  O_4 
+REMARK    2  A    between atoms: C_5  and  O_4 
+REMARK    3  A    between atoms: C_14  and  N_15 
+REMARK    4  A    between atoms: C_29  and  N_35 
+REMARK    5  A    between atoms: C_30  and  O_31 
+REMARK    6  A    between atoms: O_31  and  C_32 
+ROOT
+ATOM      1  C   UNL d   1       4.069   1.772  -0.234  0.00  0.00     0.165 C 
+ATOM      2  C   UNL d   1       3.303   2.637  -1.246  0.00  0.00     0.040 C 
+ATOM      3  C   UNL d   1       1.839   2.203  -1.406  0.00  0.00    -0.004 C 
+ATOM      4  C   UNL d   1       1.010   2.684  -0.201  0.00  0.00     0.006 C 
+ATOM      5  C   UNL d   1      -0.443   2.231  -0.291  0.00  0.00     0.006 C 
+ATOM      6  C   UNL d   1      -0.465   0.715  -0.372  0.00  0.00    -0.005 C 
+ATOM      7  C   UNL d   1       0.221   0.288  -1.680  0.00  0.00    -0.002 C 
+ATOM      8  C   UNL d   1       1.709   0.682  -1.700  0.00  0.00    -0.034 C 
+ATOM      9  C   UNL d   1       2.496  -0.139  -0.665  0.00  0.00     0.048 C 
+ATOM     10  C   UNL d   1       3.976   0.282  -0.606  0.00  0.00     0.253 C 
+ATOM     11  C   UNL d   1       2.255   0.408  -3.098  0.00  0.00     0.016 C 
+ATOM     12  C   UNL d   1      -0.091  -1.179  -2.039  0.00  0.00     0.007 C 
+ATOM     13  C   UNL d   1      -1.607  -1.414  -2.252  0.00  0.00     0.012 C 
+ATOM     14  C   UNL d   1      -2.498  -0.353  -1.574  0.00  0.00    -0.011 C 
+ATOM     15  C   UNL d   1      -1.865   0.098  -0.277  0.00  0.00     0.003 C 
+ATOM     16  C   UNL d   1      -2.937   0.679   0.618  0.00  0.00     0.044 C 
+ATOM     17  C   UNL d   1      -4.244   0.040   0.116  0.00  0.00     0.253 C 
+ATOM     18  C   UNL d   1      -3.876  -0.827  -1.121  0.00  0.00     0.173 C 
+ATOM     19  C   UNL d   1      -2.695   0.819  -2.533  0.00  0.00     0.018 C 
+ENDROOT
+BRANCH  10  20
+ATOM     20  N   UNL d   1       4.739  -0.564   0.328  0.00  0.00     0.099 N 
+ATOM     21  C   UNL d   1       6.146  -0.107   0.358  0.00  0.00     0.301 C 
+ATOM     22  C   UNL d   1       7.080  -0.955  -0.518  0.00  0.00     0.266 C 
+ATOM     23  N   UNL d   1       7.066  -2.367  -0.116  0.00  0.00    -0.071 N 
+ATOM     24  C   UNL d   1       5.777  -2.825   0.419  0.00  0.00     0.266 C 
+ATOM     25  C   UNL d   1       7.403  -3.176  -1.274  0.00  0.00     0.272 C 
+ATOM     26  C   UNL d   1       8.088  -2.581   0.894  0.00  0.00     0.272 C 
+ATOM     27  C   UNL d   1       4.615  -1.972  -0.095  0.00  0.00     0.301 C 
+ENDBRANCH  10  20
+BRANCH   1  28
+ATOM     28  O   UNL d   1       3.600   1.992   1.094  0.00  0.00    -0.314 OA
+BRANCH  28  29
+ATOM     29  C   UNL d   1       3.914   3.143   1.818  0.00  0.00     0.255 C 
+ATOM     30  C   UNL d   1       3.364   3.319   3.187  0.00  0.00     0.126 C 
+ATOM     31  O   UNL d   1       4.661   4.032   1.328  0.00  0.00    -0.266 OA
+ENDBRANCH  28  29
+ENDBRANCH   1  28
+BRANCH  18  32
+ATOM     32  O   UNL d   1      -3.969  -2.247  -0.914  0.00  0.00    -0.313 OA
+BRANCH  32  33
+ATOM     33  C   UNL d   1      -3.266  -2.997   0.040  0.00  0.00     0.255 C 
+ATOM     34  O   UNL d   1      -2.488  -2.453   0.866  0.00  0.00    -0.266 OA
+ATOM     35  C   UNL d   1      -3.454  -4.470   0.082  0.00  0.00     0.126 C 
+ENDBRANCH  32  33
+ENDBRANCH  18  32
+BRANCH  17  36
+ATOM     36  N   UNL d   1      -4.959  -0.708   1.169  0.00  0.00     0.099 N 
+ATOM     37  C   UNL d   1      -5.163   0.112   2.373  0.00  0.00     0.301 C 
+ATOM     38  C   UNL d   1      -6.108   1.295   2.114  0.00  0.00     0.266 C 
+ATOM     39  N   UNL d   1      -7.396   0.857   1.572  0.00  0.00    -0.071 N 
+ATOM     40  C   UNL d   1      -7.225  -0.002   0.399  0.00  0.00     0.266 C 
+ATOM     41  C   UNL d   1      -8.182   0.180   2.596  0.00  0.00     0.272 C 
+ATOM     42  C   UNL d   1      -8.131   2.038   1.158  0.00  0.00     0.272 C 
+ATOM     43  C   UNL d   1      -6.266  -1.169   0.679  0.00  0.00     0.301 C 
+ENDBRANCH  17  36
+TORSDOF 6

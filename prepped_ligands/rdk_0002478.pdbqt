@@ -1,0 +1,20 @@
+REMARK  Name = fda_5659
+REMARK  1 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C_4  and  C_7
+REMARK                            x       y       z     vdW  Elec       q    Type
+REMARK                         _______ _______ _______ _____ _____    ______ ____
+ROOT
+ATOM      1  C   UNL A   1      -2.472   0.131  -0.019  0.00  0.00    +0.119 A 
+ATOM      2  C   UNL A   1      -1.757   0.242   1.175  0.00  0.00    +0.120 A 
+ATOM      3  N   UNL A   1      -0.400   0.166   1.149  0.00  0.00    -0.236 NA
+ATOM      4  C   UNL A   1       0.278  -0.017  -0.017  0.00  0.00    +0.157 A 
+ATOM      5  C   UNL A   1      -0.443  -0.128  -1.212  0.00  0.00    +0.123 A 
+ATOM      6  N   UNL A   1      -1.800  -0.051  -1.185  0.00  0.00    -0.239 NA
+ENDROOT
+BRANCH   4   7
+ATOM      7  C   UNL A   1       1.747  -0.096  -0.013  0.00  0.00    +0.303 C 
+ATOM      8  O   UNL A   1       2.381  -0.265  -1.089  0.00  0.00    -0.265 OA
+ATOM      9  N   UNL A   1       2.466   0.018   1.211  0.00  0.00    -0.082 NA
+ENDBRANCH   4   7
+TORSDOF 1

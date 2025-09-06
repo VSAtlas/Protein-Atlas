@@ -1,0 +1,44 @@
+REMARK  9 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C1_1  and  O1_2 
+REMARK    2  A    between atoms: C1_1  and  C2_4 
+REMARK    3  A    between atoms: C2_4  and  O2_5 
+REMARK    4  A    between atoms: O2_5  and  C3_6 
+REMARK    5  A    between atoms: C3_6  and  C4_7 
+REMARK    6  A    between atoms: C4_7  and  O3_12 
+REMARK    7  A    between atoms: O4_8  and  C6_10 
+REMARK    8  A    between atoms: C6_10  and  C5_11 
+REMARK    9  A    between atoms: C5_11  and  O3_12 
+ROOT
+HETATM    1  C3  PGE H 302      20.124   1.028  24.346  1.00 52.62     0.193 C 
+ENDROOT
+BRANCH   1   2
+HETATM    2  O2  PGE H 302      21.485   0.999  23.916  1.00 49.00    -0.387 OA
+BRANCH   2   3
+HETATM    3  C2  PGE H 302      22.401   0.850  25.002  1.00 44.17     0.193 C 
+BRANCH   3   4
+HETATM    4  C1  PGE H 302      23.813   1.078  24.477  1.00 44.22     0.190 C 
+BRANCH   4   5
+HETATM    5  O1  PGE H 302      24.765   0.611  25.431  1.00 42.80    -0.399 OA
+ATOM      6  H1  PGE H 302      25.645   0.753  25.104  1.00  0.00     0.209 HD
+ENDBRANCH   4   5
+ENDBRANCH   3   4
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1   7
+HETATM    7  C4  PGE H 302      19.181   1.059  23.145  1.00 54.46     0.193 C 
+BRANCH   7   8
+HETATM    8  O3  PGE H 302      19.475   0.003  22.222  1.00 53.73    -0.387 OA
+BRANCH   8   9
+HETATM    9  C5  PGE H 302      18.588  -0.036  21.099  1.00 52.24     0.193 C 
+BRANCH   9  10
+HETATM   10  C6  PGE H 302      19.408   0.145  19.826  1.00 53.39     0.190 C 
+BRANCH  10  11
+HETATM   11  O4  PGE H 302      18.581   0.496  18.712  1.00 54.89    -0.399 OA
+ATOM     12  H4  PGE H 302      19.092   0.609  17.919  1.00  0.00     0.209 HD
+ENDBRANCH  10  11
+ENDBRANCH   9  10
+ENDBRANCH   8   9
+ENDBRANCH   7   8
+ENDBRANCH   1   7
+TORSDOF 9

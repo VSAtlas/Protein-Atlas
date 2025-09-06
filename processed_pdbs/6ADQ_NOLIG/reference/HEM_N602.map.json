@@ -1,0 +1,172 @@
+{
+  "atoms": [
+    {
+      "name": "C1A",
+      "element": "C"
+    },
+    {
+      "name": "C1B",
+      "element": "C"
+    },
+    {
+      "name": "C1C",
+      "element": "C"
+    },
+    {
+      "name": "C1D",
+      "element": "C"
+    },
+    {
+      "name": "C2A",
+      "element": "C"
+    },
+    {
+      "name": "C2B",
+      "element": "C"
+    },
+    {
+      "name": "C2C",
+      "element": "C"
+    },
+    {
+      "name": "C2D",
+      "element": "C"
+    },
+    {
+      "name": "C3A",
+      "element": "C"
+    },
+    {
+      "name": "C3B",
+      "element": "C"
+    },
+    {
+      "name": "C3C",
+      "element": "C"
+    },
+    {
+      "name": "C3D",
+      "element": "C"
+    },
+    {
+      "name": "C4A",
+      "element": "C"
+    },
+    {
+      "name": "C4B",
+      "element": "C"
+    },
+    {
+      "name": "C4C",
+      "element": "C"
+    },
+    {
+      "name": "C4D",
+      "element": "C"
+    },
+    {
+      "name": "CAA",
+      "element": "C"
+    },
+    {
+      "name": "CAB",
+      "element": "C"
+    },
+    {
+      "name": "CAC",
+      "element": "C"
+    },
+    {
+      "name": "CAD",
+      "element": "C"
+    },
+    {
+      "name": "CBA",
+      "element": "C"
+    },
+    {
+      "name": "CBB",
+      "element": "C"
+    },
+    {
+      "name": "CBD",
+      "element": "C"
+    },
+    {
+      "name": "CGA",
+      "element": "C"
+    },
+    {
+      "name": "CGD",
+      "element": "C"
+    },
+    {
+      "name": "CHA",
+      "element": "C"
+    },
+    {
+      "name": "CHB",
+      "element": "C"
+    },
+    {
+      "name": "CHC",
+      "element": "C"
+    },
+    {
+      "name": "CHD",
+      "element": "C"
+    },
+    {
+      "name": "CMA",
+      "element": "C"
+    },
+    {
+      "name": "CMB",
+      "element": "C"
+    },
+    {
+      "name": "CMC",
+      "element": "C"
+    },
+    {
+      "name": "CMD",
+      "element": "C"
+    },
+    {
+      "name": "FE",
+      "element": "FE"
+    },
+    {
+      "name": "NA",
+      "element": "N"
+    },
+    {
+      "name": "NB",
+      "element": "N"
+    },
+    {
+      "name": "NC",
+      "element": "N"
+    },
+    {
+      "name": "ND",
+      "element": "N"
+    },
+    {
+      "name": "O1A",
+      "element": "O"
+    },
+    {
+      "name": "O1D",
+      "element": "O"
+    },
+    {
+      "name": "O2A",
+      "element": "O"
+    },
+    {
+      "name": "O2D",
+      "element": "O"
+    }
+  ]
+}

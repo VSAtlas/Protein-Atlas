@@ -1,0 +1,10 @@
+REMARK  4 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: N_1  and  CA_5 
+REMARK    2  A    between atoms: CA_5  and  C_6 
+REMARK    3  A    between atoms: CA_5  and  CB_8 
+REMARK    4  A    between atoms: CB_8  and  CG_9 
+ROOT
+HETATM    1  P   PTR A 393      67.801  81.470  51.475  1.00 60.58     0.000 P 
+ENDROOT
+TORSDOF 4

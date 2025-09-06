@@ -1,18 +1,22 @@
-# High-level pipeline for multi-stage docking.
-#
-# Phases per protein:
-# 1) Setup & logging
-# 2) Extract ligands and generate a ligand-free PDB
-# 3) Protein preparation (clean PDB + receptor PDBQT), reuse if cached
-# 4) Active-site detection (center, box size)
-# 5) Ligand preparation & filtering
-# 6) Multi-stage docking with early/fallback recenter heuristics + CenterSelector
-# 7) Final pose validation & optional screenshots
-# 8) Write per-protein score CSV
+"""High-level pipeline for multi-stage docking.
 
+Phases per protein:
+1) Setup & logging
+2) Extract ligands and generate a ligand-free PDB
+3) Protein preparation (clean PDB + receptor PDBQT), reuse if cached
+4) Active-site detection (center, box size)
+5) Ligand preparation & filtering
+6) Multi-stage docking with early/fallback recenter heuristics + CenterSelector
+7) Final pose validation & optional screenshots
+8) Write per-protein score CSV
+"""
 from __future__ import annotations
 
 import sys
+if hasattr(sys.stdout, "reconfigure"):  # Py3.7+
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 if hasattr(sys.stdout, "reconfigure"):  # Py3.7+
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -42,6 +46,24 @@ from pose_validation import (
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd   # <— NEW IMPORT
 )
 from run_vina import run_docking_task, validate_all_poses
+
+import platform, shutil, subprocess
+
+def is_wsl() -> bool:
+    try:
+        return "microsoft" in platform.release().lower()
+    except Exception:
+        return False
+
+def wsl_to_windows_path(p: str) -> str:
+    # Convert /home/... → \\wsl.localhost\Ubuntu\home\... (cmd-friendly) or drive mounts → E:\...
+    try:
+        cp = subprocess.run(["wslpath", "-w", p], capture_output=True, text=True)
+        if cp.returncode == 0:
+            return cp.stdout.strip()
+    except Exception:
+        pass
+    return p  # fallback – better than nothing
 
 # ======================
 # Data models & utilities
@@ -503,13 +525,39 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
             control_stems.add(Path(p).stem)
 
     return len(ligands_dict), control_stems
+    
 def robust_prepare_controls(paths: Paths, cfg: Dict, logger: logging.Logger) -> None:
-    import subprocess
+    import os, sys, platform, shutil, subprocess, textwrap
     from pathlib import Path
     from rdkit import Chem
 
+    timeout_s = float(cfg.get("SUBPROCESS_TIMEOUT_S", 120))
+    force = bool(cfg.get("FORCE_REPROCESS", False))
+
     out_dir = paths.prepped_ligands_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    def run_checked(cmd: list[str], timeout: float = timeout_s) -> tuple[int, str, str]:
+        try:
+            cp = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout, check=False)
+            return cp.returncode, (cp.stdout or ""), (cp.stderr or "")
+        except subprocess.TimeoutExpired:
+            return 124, "", "timeout"
+        except FileNotFoundError as e:
+            return 127, "", str(e)
+        except Exception as e:
+            return 1, "", f"{type(e).__name__}: {e}"
+
+    def resolve_obabel_exe(cfg: dict) -> str:
+        raw = (cfg.get("OPENBABEL_PATH") or "").strip()
+        if raw:
+            p = Path(raw)
+            if p.is_file(): return str(p)
+            if p.is_dir():
+                name = "obabel.exe" if platform.system().lower().startswith("win") else "obabel"
+                cand = p / name
+                if cand.exists(): return str(cand)
+        return shutil.which("obabel") or shutil.which("obabel.exe") or "obabel"
 
     def sanitized_path(p: Path) -> Path:
         return p.parent / f"{p.stem}.sanitized.pdb"
@@ -534,60 +582,593 @@ def robust_prepare_controls(paths: Paths, cfg: Dict, logger: logging.Logger) -> 
                 fout.write(ln); wrote_any = True
         if not wrote_any:
             logger.warning(f"[control-prep] {in_pdb.name}: no safe ATOM/HETATM lines kept.")
-        return out_pdb.exists()
+        return out_pdb.exists() and out_pdb.stat().st_size > 0
 
-    mgl_py = str(Path(cfg["MGLTOOLS_PYTHON"])) if cfg.get("MGLTOOLS_PYTHON") else None
-    prep_lig_script = cfg.get("PREPARE_LIGAND_SCRIPT")
-    if not prep_lig_script and cfg.get("PREPARE_RECEPTOR_SCRIPT"):
-        prep_lig_script = str(Path(cfg["PREPARE_RECEPTOR_SCRIPT"]).parent / "prepare_ligand4.py")
+    obabel_exe = resolve_obabel_exe(cfg)
+    prep_lig_script = (cfg.get("PREPARE_LIGAND_SCRIPT") or "").strip()
+    have_meeko = bool(cfg.get("USE_MEEKO")) and prep_lig_script.endswith("mk_prepare_ligand.py") and Path(prep_lig_script).is_file()
 
+    logger.info(f"[control-prep] route={'meeko' if have_meeko else 'rdkit+obabel'}; obabel='{obabel_exe}'")
+
+    for pdb_in in paths.ligand_output_dir.rglob("*.pdb"):
+        base = pdb_in.stem
+        out_pdbqt = out_dir / f"{base}.pdbqt"
+        if out_pdbqt.exists() and out_pdbqt.stat().st_size > 0 and not force:
+            continue
+
+        san = sanitized_path(pdb_in)
+        tmp_files: list[Path] = []
+        try:
+            if not sanitize_pdb(pdb_in, san):
+                logger.error(f"[control-prep] Failed to sanitize: {pdb_in.name}")
+                continue
+
+            wrote = False
+
+            # (A) Try Meeko (only if explicitly enabled) using SDF@pH
+            if have_meeko:
+                sdf = san.with_suffix(".sdf")
+                rc, so, se = run_checked([obabel_exe, "-ipdb", str(san), "-osdf", "-O", str(sdf),
+                                          "-p", "7.4", "--partialcharge", "gasteiger"])
+                if rc == 0 and sdf.exists() and sdf.stat().st_size > 0:
+                    tmp_files.append(sdf)
+                    rc2, so2, se2 = run_checked([sys.executable, prep_lig_script, "-v",
+                                                 "-i", str(sdf), "-o", str(out_pdbqt)])
+                    if rc2 == 0 and out_pdbqt.exists() and out_pdbqt.stat().st_size > 0:
+                        wrote = True
+                    else:
+                        msg = (se2 or so2 or "").strip()
+                        if msg: msg = "\n".join(textwrap.wrap(msg, 140)[:8])
+                        logger.warning(f"[control-prep] Meeko failed for {pdb_in.name} (rc={rc2}). {msg}")
+
+            # (B) Fallback: OpenBabel PDB -> PDBQT (adds H @pH 7.4, charges)
+            if not wrote:
+                rc, so, se = run_checked([obabel_exe, "-ipdb", str(san), "-opdbqt", "-O", str(out_pdbqt),
+                                          "-p", "7.4", "--partialcharge", "gasteiger"])
+                if rc != 0 or (not out_pdbqt.exists()) or (out_pdbqt.stat().st_size == 0):
+                    msg = (se or so or "").strip()
+                    if msg: msg = "\n".join(textwrap.wrap(msg, 140)[:8])
+                    logger.warning(f"[control-prep] OpenBabel PDB->PDBQT failed for {pdb_in.name} (rc={rc}). {msg}")
+
+            if not out_pdbqt.exists() or out_pdbqt.stat().st_size == 0:
+                logger.warning(f"[control-prep] Expected output not created or empty: {out_pdbqt}")
+
+        except Exception as e:
+            logger.warning(f"[control-prep] Unexpected failure for {pdb_in.name}: {e}")
+        finally:
+            try: san.unlink(missing_ok=True)
+            except Exception: pass
+            for t in tmp_files:
+                try: t.unlink(missing_ok=True)
+                except Exception: pass
+    import os, sys, platform, shutil, subprocess, textwrap
+    from pathlib import Path
+    from rdkit import Chem
+
+    timeout_s = float(cfg.get("SUBPROCESS_TIMEOUT_S", 120))
+    force = bool(cfg.get("FORCE_REPROCESS", False))
+
+    out_dir = paths.prepped_ligands_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- helpers -------------------------------------------------------------
+    def run_checked(cmd: list[str], timeout: float = timeout_s) -> tuple[int, str, str]:
+        try:
+            cp = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout, check=False)
+            return cp.returncode, (cp.stdout or ""), (cp.stderr or "")
+        except subprocess.TimeoutExpired:
+            return 124, "", "timeout"
+        except FileNotFoundError as e:
+            return 127, "", str(e)
+        except Exception as e:
+            return 1, "", f"{type(e).__name__}: {e}"
+
+    def resolve_obabel_exe(cfg: dict) -> str:
+        raw = (cfg.get("OPENBABEL_PATH") or "").strip()
+        # explicit file
+        if raw and Path(raw).is_file():
+            return raw
+        # explicit dir
+        if raw and Path(raw).is_dir():
+            name = "obabel.exe" if platform.system().lower().startswith("win") else "obabel"
+            cand = Path(raw) / name
+            if cand.exists():
+                return str(cand)
+        # PATH
+        return shutil.which("obabel") or shutil.which("obabel.exe") or "obabel"
+
+    def sanitized_path(p: Path) -> Path:
+        return p.parent / f"{p.stem}.sanitized.pdb"
+
+    def sanitize_pdb(in_pdb: Path, out_pdb: Path) -> bool:
+        out_pdb.parent.mkdir(parents=True, exist_ok=True)
+        wrote_any = False
+        with open(in_pdb, "r", encoding="utf-8", errors="ignore") as fin, \
+             open(out_pdb, "w", encoding="utf-8") as fout:
+            for ln in fin:
+                if not ln.startswith(("ATOM", "HETATM")):
+                    fout.write(ln); continue
+                altloc = ln[16].strip() if len(ln) > 16 else ""
+                if altloc and altloc.upper() not in ("A", ""):
+                    continue
+                try:
+                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                    if any([(x != x), (y != y), (z != z)]) or max(abs(x),abs(y),abs(z)) > 1e6:
+                        continue
+                except Exception:
+                    continue
+                fout.write(ln); wrote_any = True
+        if not wrote_any:
+            logger.warning(f"[control-prep] {in_pdb.name}: no safe ATOM/HETATM lines kept.")
+        return out_pdb.exists() and out_pdb.stat().st_size > 0
+
+    def convert_for_meeko(san_pdb: Path, obabel_exe: str) -> Path | None:
+        # Try SDF first (more forgiving), with hydrogens at pH 7.4
+        sdf = san_pdb.with_suffix(".sdf")
+        rc, so, se = run_checked([obabel_exe, "-ipdb", str(san_pdb), "-osdf", "-O", str(sdf), "-h", "-p", "7.4"])
+        if rc == 0 and sdf.exists() and sdf.stat().st_size > 0:
+            return sdf
+
+        # Fallback: MOL2 with hydrogens at pH 7.4
+        mol2 = san_pdb.with_suffix(".mol2")
+        rc, so, se = run_checked([obabel_exe, "-ipdb", str(san_pdb), "-omol2", "-O", str(mol2), "-h", "-p", "7.4"])
+        if rc == 0 and mol2.exists() and mol2.stat().st_size > 0:
+            return mol2
+
+        # Last resort: RDKit write SDF (may still be valence-brittle)
+        try:
+            mol = Chem.MolFromPDBFile(str(san_pdb), sanitize=False, removeHs=False)
+            if mol is not None:
+                sdf2 = san_pdb.with_suffix(".rdk.sdf")
+                w = Chem.SDWriter(str(sdf2)); w.write(mol); w.close()
+                if sdf2.exists() and sdf2.stat().st_size > 0:
+                    return sdf2
+        except Exception:
+            pass
+        return None
+
+        """
+        Try PDB->MOL2 via OpenBabel (best), else PDB->SDF via RDKit.
+        Returns the path to the converted file or None.
+        """
+        # 1) try OpenBabel -> MOL2 (preserves coords nicely)
+        mol2 = san_pdb.with_suffix(".mol2")
+        # OpenBabel fallback: PDB -> PDBQT with H at pH 7.4
+        rc, so, se = run_checked([obabel_exe, "-ipdb", str(tmp_pdb), "-opdbqt", "-O", str(out_pdbqt), "-h", "-p", "7.4"])
+        if rc == 0 and mol2.exists() and mol2.stat().st_size > 0:
+            return mol2
+        if rc != 0:
+            msg = (se or so).strip()
+            if msg:
+                msg = "\n".join(textwrap.wrap(msg, width=140)[:5])
+            logger.warning(f"[control-prep] obabel PDB->MOL2 failed (rc={rc}). {msg}")
+
+        # 2) fallback: RDKit -> SDF
+        sdf = san_pdb.with_suffix(".sdf")
+        try:
+            mol = Chem.MolFromPDBFile(str(san_pdb), sanitize=False, removeHs=False)
+            if mol is not None:
+                w = Chem.SDWriter(str(sdf))
+                w.write(mol); w.close()
+                if sdf.exists() and sdf.stat().st_size > 0:
+                    return sdf
+        except Exception as e:
+            logger.warning(f"[control-prep] RDKit PDB->SDF failed: {e}")
+
+        return None
+
+    # --- route selection ------------------------------------------------------
+    prep_lig_script = (cfg.get("PREPARE_LIGAND_SCRIPT") or "").strip()
+    mgl_py = (cfg.get("MGLTOOLS_PYTHON") or "").strip()
+    have_prep = bool(prep_lig_script) and Path(prep_lig_script).is_file()
+    script_name = Path(prep_lig_script).name.lower() if have_prep else ""
+    use_meeko = (bool(cfg.get("USE_MEEKO")) and have_prep and "mk_prepare_ligand" in script_name)
+    use_mgl = (not use_meeko) and have_prep and ("prepare_ligand4.py" in script_name) and Path(mgl_py).is_file()
+    obabel_exe = resolve_obabel_exe(cfg)
+
+    logger.info(f"[control-prep] route={'meeko' if use_meeko else ('mgltools' if use_mgl else 'rdkit+obabel')}; obabel='{obabel_exe}'")
+
+    # --- main loop ------------------------------------------------------------
+    for pdb_in in paths.ligand_output_dir.rglob("*.pdb"):
+        base = pdb_in.stem
+        out_pdbqt = out_dir / f"{base}.pdbqt"
+
+        if out_pdbqt.exists() and out_pdbqt.stat().st_size > 0 and not force:
+            continue
+
+        san = sanitized_path(pdb_in)
+        tmp_files: list[Path] = []
+
+        try:
+            if not sanitize_pdb(pdb_in, san):
+                logger.error(f"[control-prep] Failed to sanitize: {pdb_in.name}")
+                continue
+
+            if use_meeko:
+                # Convert to a format Meeko accepts (sdf/mol2/mol)
+                src = convert_for_meeko(san, obabel_exe, logger)
+                if not src:
+                    logger.warning(f"[control-prep] Could not convert {san.name} to sdf/mol2; falling back to RDKit+OpenBabel.")
+                else:
+                    tmp_files.append(src)
+                    # Meeko CLI (no MGL flags)
+                    rc, so, se = run_checked([sys.executable, prep_lig_script, "-v", "-i", str(src), "-o", str(out_pdbqt)])
+                    if rc != 0 or (not out_pdbqt.exists()) or out_pdbqt.stat().st_size == 0:
+                        msg = (se or so).strip()
+                        if msg:
+                            msg = "\n".join(textwrap.wrap(msg, width=140)[:8])
+                        logger.warning(f"[control-prep] Meeko failed for {pdb_in.name} (rc={rc}). {msg}")
+                        # fall through to RDKit+OpenBabel
+
+            if (not out_pdbqt.exists()) or out_pdbqt.stat().st_size == 0:
+                if use_mgl:
+                    # MGLTools route (prepare_ligand4.py)
+                    rc, so, se = run_checked([
+                        mgl_py, prep_lig_script,
+                        "-i", str(san),
+                        "-o", str(out_pdbqt),
+                        "-U", "nphs_lps",
+                        "-A", "checkhydrogens",
+                    ])
+                    if rc != 0:
+                        msg = (se or so).strip()
+                        logger.warning(f"[control-prep] prepare_ligand4.py failed for {pdb_in.name} (rc={rc}). {msg[:600]}")
+
+                # If still no file (or not using MGL), do RDKit+OpenBabel
+                if (not out_pdbqt.exists()) or out_pdbqt.stat().st_size == 0:
+                    mol = Chem.MolFromPDBFile(str(san), sanitize=False, removeHs=False)
+                    if mol is None:
+                        logger.warning(f"[control-prep] RDKit failed to read {san.name}")
+                        continue
+                    tmp_pdb = san.with_suffix(".tmp.pdb")
+                    tmp_files.append(tmp_pdb)
+                    Chem.MolToPDBFile(mol, str(tmp_pdb))
+                    rc, so, se = run_checked([obabel_exe, "-ipdb", str(tmp_pdb), "-opdbqt", "-O", str(out_pdbqt)])
+                    if rc != 0:
+                        msg = (se or so).strip()
+                        logger.warning(f"[control-prep] OpenBabel PDB->PDBQT failed for {pdb_in.name} (rc={rc}). {msg[:600]}")
+
+            if not out_pdbqt.exists() or out_pdbqt.stat().st_size == 0:
+                logger.warning(f"[control-prep] Expected output not created or empty: {out_pdbqt}")
+
+        except Exception as e:
+            logger.warning(f"[control-prep] Unexpected failure for {pdb_in.name}: {e}")
+        finally:
+            # clean temps
+            try: san.unlink(missing_ok=True)
+            except Exception: pass
+            for t in tmp_files:
+                try: t.unlink(missing_ok=True)
+                except Exception: pass
+
+    import os, sys, shutil, subprocess, textwrap
+    from pathlib import Path
+    from rdkit import Chem
+
+    out_dir = paths.prepped_ligands_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    force = bool(cfg.get("FORCE_REPROCESS", False))
+
+    def sanitized_path(p: Path) -> Path:
+        return p.parent / f"{p.stem}.sanitized.pdb"
+
+    def sanitize_pdb(in_pdb: Path, out_pdb: Path) -> bool:
+        out_pdb.parent.mkdir(parents=True, exist_ok=True)
+        wrote_any = False
+        with open(in_pdb, "r", encoding="utf-8", errors="ignore") as fin, \
+             open(out_pdb, "w", encoding="utf-8") as fout:
+            for ln in fin:
+                if not ln.startswith(("ATOM", "HETATM")):
+                    fout.write(ln); continue
+                altloc = ln[16].strip() if len(ln) > 16 else ""
+                if altloc and altloc.upper() not in ("A", ""):
+                    continue
+                try:
+                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                    if any([(x != x), (y != y), (z != z)]) or max(abs(x),abs(y),abs(z)) > 1e6:
+                        continue
+                except Exception:
+                    continue
+                fout.write(ln); wrote_any = True
+        if not wrote_any:
+            logger.warning(f"[control-prep] {in_pdb.name}: no safe ATOM/HETATM lines kept.")
+        return out_pdb.exists() and out_pdb.stat().st_size > 0
+
+    # --- Decide toolchain routes ---
+    prep_lig_script = (cfg.get("PREPARE_LIGAND_SCRIPT") or "").strip()
+    mgl_py = (cfg.get("MGLTOOLS_PYTHON") or "").strip()
+    have_prep_script = Path(prep_lig_script).is_file()
+    script_name = Path(prep_lig_script).name.lower()
+
+    use_meeko = bool(cfg.get("USE_MEEKO")) and have_prep_script and "mk_prepare_ligand" in script_name
+    use_mgltools = (not use_meeko) and have_prep_script and ("prepare_ligand4.py" in script_name) and Path(mgl_py).is_file()
+
+    # OpenBabel detection (Linux prefers `obabel`; Windows may be `obabel.exe`)
     obabel_cfg = (cfg.get("OPENBABEL_PATH") or "").strip()
-    obabel_exe = obabel_cfg if obabel_cfg.lower().endswith(".exe") else str(Path(obabel_cfg) / "obabel.exe")
+    candidates = []
+    # explicit path provided (file)
+    if obabel_cfg and Path(obabel_cfg).is_file() and os.access(obabel_cfg, os.X_OK):
+        candidates.append(obabel_cfg)
+    # explicit dir provided
+    if obabel_cfg and Path(obabel_cfg).is_dir():
+        candidates += [str(Path(obabel_cfg)/"obabel"), str(Path(obabel_cfg)/"obabel.exe")]
+    # PATH lookup
+    candidates += [shutil.which("obabel"), shutil.which("obabel.exe")]
+    obabel_exe = next((c for c in candidates if c and Path(c).exists()), None)
+    if not obabel_exe:
+        # final fallback: hope `obabel` is on PATH
+        obabel_exe = "obabel"
 
+    logger.info(f"[control-prep] route="
+                f"{'meeko' if use_meeko else ('mgltools' if use_mgltools else 'rdkit+obabel')}; "
+                f"obabel='{obabel_exe}'")
+
+    def run_checked(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
+        try:
+            cp = subprocess.run(
+                cmd,
+                cwd=cwd,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=300
+            )
+            return cp.returncode, (cp.stdout or ""), (cp.stderr or "")
+        except subprocess.TimeoutExpired:
+            return 124, "", "timeout"
+        except FileNotFoundError as e:
+            return 127, "", str(e)
+        except Exception as e:
+            return 1, "", f"{type(e).__name__}: {e}"
+
+    # --- Process ligands ---
     for p in paths.ligand_output_dir.rglob("*.pdb"):
         base = p.stem
+        out_pdbqt = out_dir / f"{base}.pdbqt"
+
+        if out_pdbqt.exists() and not force:
+            continue
+
         san = sanitized_path(p)
         try:
             if not sanitize_pdb(p, san):
                 logger.error(f"[control-prep] Failed to create sanitized: {san}")
                 continue
 
-            out_pdbqt = out_dir / f"{base}.pdbqt"
-            if (not san.exists()) or (san.stat().st_size == 0):
-                logger.error(f"[control-prep] Missing or empty just before MGLTools: {san}")
-                continue
+            if use_meeko:
+                rc, so, se = run_checked([
+                    sys.executable, prep_lig_script,
+                    "-v",                # verbose for diagnostics
+                    "-i", str(san),
+                    "-o", str(out_pdbqt)
+                ])
 
-            if mgl_py and prep_lig_script and Path(prep_lig_script).exists():
-                if not san.exists():
-                    logger.error(f"[control-prep] Missing just before MGLTools: {san}")
-                    continue
-                lig_basename = san.name
-                subprocess.check_call([mgl_py, prep_lig_script,
-                                       "-l", lig_basename,
-                                       "-o", str(out_pdbqt),
-                                       "-U", "nphs_lps",
-                                       "-A", "checkhydrogens"],
-                                      cwd=str(san.parent))
+                # If Meeko failed or produced an empty file, fall back to RDKit+OB
+                if (rc != 0) or (not out_pdbqt.exists()) or (out_pdbqt.stat().st_size == 0):
+                    msg = (se or so or "").strip()
+                    if msg:
+                        msg = "\n".join(textwrap.wrap(msg, width=140)[:5])
+                    logger.warning(f"[control-prep] Meeko failed for {p.name} (rc={rc}). Fallback to RDKit+OpenBabel. {msg}")
+
+                    mol = Chem.MolFromPDBFile(str(san), sanitize=False, removeHs=False)
+                    if mol is None:
+                        logger.warning(f"[control-prep] RDKit failed to read {san.name}")
+                        continue
+                    tmp_pdb = san.with_suffix(".tmp.pdb")
+                    Chem.MolToPDBFile(mol, str(tmp_pdb))
+                    rc2, so2, se2 = run_checked([obabel_exe, "-ipdb", str(tmp_pdb), "-opdbqt", "-O", str(out_pdbqt)])
+                    try: tmp_pdb.unlink(missing_ok=True)
+                    except Exception: pass
+                    if (rc2 != 0) or (not out_pdbqt.exists()) or (out_pdbqt.stat().st_size == 0):
+                        msg2 = (se2 or so2 or "").strip()
+                        if msg2:
+                            msg2 = "\n".join(textwrap.wrap(msg2, width=140)[:5])
+                        logger.warning(f"[control-prep] Fallback OpenBabel also failed for {p.name} (rc={rc2}). {msg2}")
+
+            elif use_mgltools:
+                rc, so, se = run_checked([
+                    mgl_py, prep_lig_script,
+                    "-i", str(san),
+                    "-o", str(out_pdbqt),
+                    "-U", "nphs_lps",
+                    "-A", "checkhydrogens"
+                ])
+                if rc != 0:
+                    msg = (se or so).strip()
+                    msg_short = "\n".join(textwrap.wrap(msg, width=140)[:5])
+                    logger.warning(f"[control-prep] Failed (MGL) for {p.name} (rc={rc}): {msg_short}")
+
             else:
-                # RDKit (no sanitize explosions) + obabel (no gen3D)
+                # RDKit (no sanitize explosions) → temp PDB → OpenBabel to PDBQT
                 mol = Chem.MolFromPDBFile(str(san), sanitize=False, removeHs=False)
                 if mol is None:
                     logger.warning(f"[control-prep] RDKit failed to read {san.name}")
                     continue
                 tmp_pdb = san.with_suffix(".tmp.pdb")
                 Chem.MolToPDBFile(mol, str(tmp_pdb))
-                subprocess.check_call([obabel_exe, "-ipdb", str(tmp_pdb), "-opdbqt", "-O", str(out_pdbqt)])
-                tmp_pdb.unlink(missing_ok=True)
+                rc, so, se = run_checked([obabel_exe, "-ipdb", str(tmp_pdb), "-opdbqt", "-O", str(out_pdbqt)])
+                try: tmp_pdb.unlink(missing_ok=True)
+                except Exception: pass
+                if rc != 0:
+                    msg = (se or so).strip()
+                    msg_short = "\n".join(textwrap.wrap(msg, width=140)[:5])
+                    logger.warning(f"[control-prep] Failed (obabel) for {p.name} (rc={rc}): {msg_short}")
 
-            if not out_pdbqt.exists():
+            if not out_pdbqt.exists() or out_pdbqt.stat().st_size == 0:
                 logger.warning(f"[control-prep] Expected output not created: {out_pdbqt}")
 
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"[control-prep] Failed for {p.name}: {e}")
         except Exception as e:
             logger.warning(f"[control-prep] Unexpected failure for {p.name}: {e}")
         finally:
-            san.unlink(missing_ok=True)
+            try: san.unlink(missing_ok=True)
+            except Exception: pass
+    """
+    Prepare control ligands as PDBQT:
+      - If Meeko is configured/selected, call mk_prepare_ligand.py (no MGLTools flags).
+      - Else if MGLTools is configured, call prepare_ligand4.py with -U/-A flags.
+      - Else fall back to RDKit (no sanitize explosions) + OpenBabel (no gen3D) to get PDBQT.
+
+    Respects:
+      cfg["USE_MEEKO"] (bool, optional)
+      cfg["PREPARE_LIGAND_SCRIPT"] (path to mk_prepare_ligand.py or prepare_ligand4.py)
+      cfg["PREPARE_RECEPTOR_SCRIPT"] (used to infer prepare_ligand4.py if ligand script unset)
+      cfg["MGLTOOLS_PYTHON"] (pythonsh for prepare_ligand4.py)
+      cfg["OPENBABEL_PATH"] (dir or full path to obabel; empty → use 'obabel' on PATH)
+      cfg["SUBPROCESS_TIMEOUT_S"] (optional int/float, default 90)
+    """
+    import os
+    import sys
+    import platform
+    import subprocess
+    from pathlib import Path
+    from rdkit import Chem
+
+    timeout_s = float(cfg.get("SUBPROCESS_TIMEOUT_S", 90))
+
+    out_dir = paths.prepped_ligands_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def sanitized_path(p: Path) -> Path:
+        return p.parent / f"{p.stem}.sanitized.pdb"
+
+    def sanitize_pdb(in_pdb: Path, out_pdb: Path) -> bool:
+        out_pdb.parent.mkdir(parents=True, exist_ok=True)
+        wrote_any = False
+        with open(in_pdb, "r", encoding="utf-8", errors="ignore") as fin, \
+             open(out_pdb, "w", encoding="utf-8") as fout:
+            for ln in fin:
+                if not ln.startswith(("ATOM", "HETATM")):
+                    fout.write(ln)
+                    continue
+                altloc = ln[16].strip() if len(ln) > 16 else ""
+                if altloc and altloc.upper() not in ("A", ""):
+                    continue
+                try:
+                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                    if any([(x != x), (y != y), (z != z)]) or max(abs(x), abs(y), abs(z)) > 1e6:
+                        continue
+                except Exception:
+                    continue
+                fout.write(ln); wrote_any = True
+        if not wrote_any:
+            logger.warning(f"[control-prep] {in_pdb.name}: no safe ATOM/HETATM lines kept.")
+        return out_pdb.exists() and out_pdb.stat().st_size > 0
+
+    def resolve_obabel_exe(cfg: dict) -> str:
+        raw = (cfg.get("OPENBABEL_PATH") or "").strip()
+        if not raw:
+            return "obabel"  # rely on PATH
+        p = Path(raw)
+        # If user gave a directory, append binary name depending on OS
+        if p.is_dir():
+            bin_name = "obabel.exe" if platform.system().lower().startswith("win") else "obabel"
+            cand = p / bin_name
+            return str(cand)
+        # If user gave a file, use it as-is
+        # Normalize ".exe" on Windows only; on Linux/WSL keep "obabel"
+        return str(p)
+
+    def is_meeko(prep_script: str | None) -> bool:
+        if bool(cfg.get("USE_MEEKO", False)):
+            return True
+        if not prep_script:
+            return False
+        return "mk_prepare_ligand.py" in Path(prep_script).name.lower()
+
+    def run_cmd(cmd: list[str]) -> tuple[str, str]:
+        cp = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_s
+        )
+        if cp.returncode != 0:
+            raise subprocess.CalledProcessError(cp.returncode, cmd, output=cp.stdout, stderr=cp.stderr)
+        return cp.stdout, cp.stderr
+
+    # Resolve tool paths/modes
+    mgl_py = str(Path(cfg["MGLTOOLS_PYTHON"])) if cfg.get("MGLTOOLS_PYTHON") else None
+
+    prep_lig_script = cfg.get("PREPARE_LIGAND_SCRIPT")
+    if not prep_lig_script and cfg.get("PREPARE_RECEPTOR_SCRIPT"):
+        # infer prepare_ligand4.py next to the receptor script if not explicitly set
+        prep_lig_script = str(Path(cfg["PREPARE_RECEPTOR_SCRIPT"]).parent / "prepare_ligand4.py")
+    prep_lig_script_path = Path(prep_lig_script) if prep_lig_script else None
+    have_prep_script = bool(prep_lig_script_path and prep_lig_script_path.exists())
+    use_meeko = is_meeko(prep_lig_script if have_prep_script else None)
+    obabel_exe = resolve_obabel_exe(cfg)
+
+    for p in paths.ligand_output_dir.rglob("*.pdb"):
+        base = p.stem
+        san = sanitized_path(p)
+        out_pdbqt = out_dir / f"{base}.pdbqt"
+        tmp_pdb = san.with_suffix(".tmp.pdb")
+
+        try:
+            # 1) sanitize input PDB
+            if not sanitize_pdb(p, san):
+                logger.error(f"[control-prep] Failed to create sanitized: {san}")
+                continue
+
+            if not san.exists() or san.stat().st_size == 0:
+                logger.error(f"[control-prep] Missing/empty after sanitize: {san}")
+                continue
+
+            # 2) choose route
+            if have_prep_script and use_meeko:
+                # Meeko CLI – no MGLTools flags
+                cmd = [sys.executable, str(prep_lig_script_path), "-i", str(san), "-o", str(out_pdbqt)]
+                try:
+                    run_cmd(cmd)
+                except subprocess.CalledProcessError as e:
+                    # Surface classic misconfig quickly
+                    if "-U" in (e.stderr or "") or "checkhydrogens" in (e.stderr or ""):
+                        logger.warning("[control-prep] Meeko was called but MGLTools flags detected in error; "
+                                       "remove -U/-A for Meeko.")
+                    raise
+
+            elif have_prep_script and mgl_py and Path(mgl_py).exists():
+                # MGLTools prepare_ligand4.py
+                cmd = [
+                    str(mgl_py), str(prep_lig_script_path),
+                    "-i", str(san),
+                    "-o", str(out_pdbqt),
+                    "-U", "nphs_lps",
+                    "-A", "checkhydrogens",
+                ]
+                run_cmd(cmd)
+
+            else:
+                # RDKit (no sanitize) + OpenBabel fallback
+                mol = Chem.MolFromPDBFile(str(san), sanitize=False, removeHs=False)
+                if mol is None:
+                    logger.warning(f"[control-prep] RDKit failed to read {san.name}")
+                    continue
+                Chem.MolToPDBFile(mol, str(tmp_pdb))
+                cmd = [obabel_exe, "-ipdb", str(tmp_pdb), "-opdbqt", "-O", str(out_pdbqt)]
+                run_cmd(cmd)
+
+            # 3) verify output
+            if not out_pdbqt.exists() or out_pdbqt.stat().st_size == 0:
+                logger.warning(f"[control-prep] Expected output not created or empty: {out_pdbqt}")
+
+        except subprocess.TimeoutExpired as e:
+            logger.warning(f"[control-prep] Timeout for {p.name} after {timeout_s:.0f}s: {e}")
+        except subprocess.CalledProcessError as e:
+            # keep logs compact but useful
+            err = (e.stderr or "").strip().splitlines()
+            err_preview = "\n".join(err[:10])  # first 10 lines
+            logger.warning(f"[control-prep] Failed for {p.name} (rc={e.returncode}): {err_preview}")
+        except Exception as e:
+            logger.warning(f"[control-prep] Unexpected failure for {p.name}: {e}")
+        finally:
+            # cleanup
+            try: san.unlink(missing_ok=True)
+            except Exception: pass
+            try: tmp_pdb.unlink(missing_ok=True)
+            except Exception: pass
 
 
 def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
@@ -694,8 +1275,6 @@ def detect_pocket(cleaned_pdb: str,
     else:
         logger.error("Active-site detection failed (no controls, P2Rank returned None).")
         return None, None, "none"
-
-
 
 
 def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:

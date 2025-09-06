@@ -1,0 +1,20 @@
+REMARK  3 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C1_1  and  O1_2 
+REMARK    2  A    between atoms: C1_1  and  C2_4 
+REMARK    3  A    between atoms: C2_4  and  O2_5 
+ROOT
+HETATM    1  C1  EDO A1002     -15.810   9.473 -36.561  1.00 33.51     0.190 C 
+ENDROOT
+BRANCH   1   2
+HETATM    2  O1  EDO A1002     -14.734   8.602 -36.922  1.00 36.39    -0.399 OA
+ATOM      3  H1  EDO A1002     -15.156   7.762 -37.061  1.00  0.00     0.209 HD
+ENDBRANCH   1   2
+BRANCH   1   4
+HETATM    4  C2  EDO A1002     -15.137  10.813 -36.340  1.00 32.90     0.190 C 
+BRANCH   4   5
+HETATM    5  O2  EDO A1002     -14.138  10.567 -35.342  1.00 31.81    -0.399 OA
+ATOM      6  H2  EDO A1002     -13.716  11.407 -35.203  1.00  0.00     0.209 HD
+ENDBRANCH   4   5
+ENDBRANCH   1   4
+TORSDOF 3

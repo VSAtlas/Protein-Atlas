@@ -1,0 +1,5 @@
+/mnt/e/PythonProject/protein_automation/processed_pdbs/1T46/ligands_raw/PO4_A4.pdb	excluded_crystal_additive:PO4
+/mnt/e/PythonProject/protein_automation/processed_pdbs/1T46/ligands_raw/PO4_A5.pdb	excluded_crystal_additive:PO4
+/mnt/e/PythonProject/protein_automation/prepped_ligands/1T46/STI_A3.pdbqt	pdbqt_postcheck_fail_or_small
+/mnt/e/PythonProject/protein_automation/prepped_ligands/2E2B/406_A1001.pdbqt	pdbqt_postcheck_fail_or_small
+/mnt/e/PythonProject/protein_automation/prepped_ligands/2E2B/406_B1002.pdbqt	pdbqt_postcheck_fail_or_small

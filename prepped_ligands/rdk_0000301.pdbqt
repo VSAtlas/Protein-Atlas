@@ -1,0 +1,74 @@
+REMARK  10 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C_3  and  C_4 
+REMARK    2  A    between atoms: C_3  and  N_37 
+REMARK    3  A    between atoms: C_4  and  N_5 
+REMARK    4  A    between atoms: C_6  and  S_12 
+REMARK    5  A    between atoms: S_12  and  C_13 
+REMARK    6  A    between atoms: C_13  and  C_14 
+REMARK    7  A    between atoms: CA_15  and  C_35 
+REMARK    8  A    between atoms: CA_18  and  N_21 
+REMARK       I    between atoms: N_21  and  C_23 
+REMARK    9  A    between atoms: C_23  and  C_25 
+REMARK   10  A    between atoms: C_25  and  C_26 
+ROOT
+ATOM      1  C   UNL d   1       1.853   0.128   1.107  0.00  0.00    -0.027 C 
+ATOM      2  CA  UNL d   1       1.251   0.530  -0.039  0.00  0.00     0.119 C 
+ATOM      3  N   UNL d   1      -0.144   0.840   0.027  0.00  0.00    -0.293 N 
+ATOM      4  C   UNL d   1      -1.095   0.691   1.098  0.00  0.00     0.187 A 
+ATOM      5  CA  UNL d   1      -1.951   1.728   0.601  0.00  0.00     0.210 A 
+ATOM      6  C   UNL d   1      -1.041   1.844  -0.580  0.00  0.00     0.251 A 
+ATOM      7  O   UNL d   1      -1.022   2.546  -1.625  0.00  0.00    -0.271 OA
+ATOM      8  S   UNL d   1      -0.256   1.172   2.636  0.00  0.00    -0.136 SA
+ATOM      9  C   UNL d   1       1.048  -0.092   2.369  0.00  0.00     0.113 C 
+ENDROOT
+BRANCH   1  10
+ATOM     10  C   UNL d   1       3.318  -0.170   1.187  0.00  0.00     0.120 C 
+BRANCH  10  11
+ATOM     11  S   UNL d   1       3.611  -1.955   1.413  0.00  0.00    -0.087 SA
+BRANCH  11  12
+ATOM     12  C   UNL d   1       3.430  -2.315  -0.333  0.00  0.00     0.175 A 
+ATOM     13  N   UNL d   1       4.411  -2.253  -1.246  0.00  0.00    -0.255 N 
+ATOM     14  N   UNL d   1       3.870  -2.601  -2.398  0.00  0.00    -0.222 N 
+ATOM     15  N   UNL d   1       2.586  -2.866  -2.196  0.00  0.00    -0.004 NA
+ATOM     16  HN  UNL d   1       4.357  -2.656  -3.292  1.00  0.00     0.206 HD
+ATOM     17  N   UNL d   1       2.280  -2.700  -0.916  0.00  0.00    -0.261 N 
+ATOM     18  HN  UNL d   1       1.372  -2.835  -0.470  1.00  0.00     0.186 HD
+BRANCH  13  19
+ATOM     19  C   UNL d   1       5.813  -1.923  -1.043  0.00  0.00     0.182 C 
+BRANCH  19  20
+ATOM     20  C   UNL d   1       6.646  -3.192  -0.910  0.00  0.00     0.293 C 
+BRANCH  20  21
+ATOM     21  N   UNL d   1       6.325  -3.880   0.330  0.00  0.00     0.081 N 
+ATOM     22  C   UNL d   1       7.322  -3.483   1.308  0.00  0.00     0.309 C 
+ATOM     23  C   UNL d   1       6.526  -5.297   0.087  0.00  0.00     0.309 C 
+ENDBRANCH  20  21
+ENDBRANCH  19  20
+ENDBRANCH  13  19
+ENDBRANCH  11  12
+ENDBRANCH  10  11
+ENDBRANCH   1  10
+BRANCH   2  24
+ATOM     24  C   UNL d   1       1.973   0.761  -1.314  0.00  0.00     0.227 C 
+ATOM     25  O   UNL d   1       1.322   0.886  -2.385  0.00  0.00    -0.643 OA
+ATOM     26  OXT UNL d   1       3.358   0.870  -1.359  0.00  0.00    -0.643 OA
+ENDBRANCH   2  24
+BRANCH   5  27
+ATOM     27  N   UNL d   1      -3.228   1.166   0.187  0.00  0.00    -0.345 N 
+ATOM     28  C   UNL d   1      -4.290   0.925   1.113  0.00  0.00     0.224 C 
+ATOM     29  O   UNL d   1      -4.147   1.194   2.335  0.00  0.00    -0.273 OA
+ATOM     30  HN  UNL d   1      -3.371   0.937  -0.797  1.00  0.00     0.163 HD
+BRANCH  28  31
+ATOM     31  C   UNL d   1      -5.590   0.388   0.624  0.00  0.00     0.160 C 
+BRANCH  31  32
+ATOM     32  C   UNL d   1      -6.458   1.498   0.139  0.00  0.00     0.026 A 
+ATOM     33  N   UNL d   1      -7.098   2.335   1.002  0.00  0.00    -0.342 N 
+ATOM     34  C   UNL d   1      -7.798   3.272   0.338  0.00  0.00     0.158 A 
+ATOM     35  HN  UNL d   1      -7.052   2.261   2.018  1.00  0.00     0.167 HD
+ATOM     36  S   UNL d   1      -7.646   3.108  -1.321  0.00  0.00    -0.067 SA
+ATOM     37  N   UNL d   1      -8.547   4.293   0.984  0.00  0.00    -0.074 NA
+ATOM     38  C   UNL d   1      -6.630   1.764  -1.221  0.00  0.00     0.078 A 
+ENDBRANCH  31  32
+ENDBRANCH  28  31
+ENDBRANCH   5  27
+TORSDOF 10

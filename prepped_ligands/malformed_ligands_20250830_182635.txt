@@ -1,0 +1,10 @@
+PTR_A393.pdbqt - PDBQT validation failed: too_few_heavy_atoms_in_pdbqt(1)
+AY7_A602.pdbqt - PDBQT validation failed: too_few_heavy_atoms_in_pdbqt(1)
+HEA_F601.pdbqt - PDBQT validation failed: monoatomic_counterion
+HEA_F602.pdbqt - PDBQT validation failed: monoatomic_counterion
+HEA_R601.pdbqt - PDBQT validation failed: monoatomic_counterion
+HEA_R602.pdbqt - PDBQT validation failed: monoatomic_counterion
+HEC_C301.pdbqt - PDBQT validation failed: monoatomic_counterion
+HEC_C302.pdbqt - PDBQT validation failed: monoatomic_counterion
+HEC_O301.pdbqt - PDBQT validation failed: monoatomic_counterion
+HEC_O302.pdbqt - PDBQT validation failed: monoatomic_counterion

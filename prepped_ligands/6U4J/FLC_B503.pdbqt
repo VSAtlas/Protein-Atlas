@@ -1,0 +1,37 @@
+REMARK  6 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: CAC_1  and  CA_2 
+REMARK    2  A    between atoms: CA_2  and  CB_3 
+REMARK    3  A    between atoms: CB_3  and  CBC_4 
+REMARK    4  A    between atoms: CB_3  and  CG_5 
+REMARK    5  A    between atoms: CB_3  and  OHB_13 
+REMARK    6  A    between atoms: CG_5  and  CGC_6 
+ROOT
+HETATM    1  CB  FLC B 503      10.306 -17.932  44.181  1.00111.16     0.164 C 
+ENDROOT
+BRANCH   1   2
+HETATM    2  CBC FLC B 503       9.704 -18.750  43.016  1.00112.90     0.210 C 
+HETATM    3  OB2 FLC B 503       8.509 -18.537  42.737  1.00112.26    -0.646 OA
+HETATM    4  OB1 FLC B 503      10.447 -19.562  42.439  1.00114.82    -0.646 OA
+ENDBRANCH   1   2
+BRANCH   1   5
+HETATM    5  CG  FLC B 503      10.837 -18.870  45.278  1.00109.78     0.163 C 
+BRANCH   5   6
+HETATM    6  CGC FLC B 503       9.832 -19.761  45.997  1.00108.40     0.176 C 
+HETATM    7  OG1 FLC B 503       9.408 -20.779  45.403  1.00108.15    -0.648 OA
+HETATM    8  OG2 FLC B 503       9.511 -19.449  47.167  1.00106.91    -0.648 OA
+ENDBRANCH   5   6
+ENDBRANCH   1   5
+BRANCH   1   9
+HETATM    9  OHB FLC B 503       9.303 -17.072  44.723  1.00110.81    -0.378 OA
+ATOM     10  HHB FLC B 503       9.673 -16.569  45.439  1.00  0.00     0.211 HD
+ENDBRANCH   1   9
+BRANCH   1  11
+HETATM   11  CA  FLC B 503      11.504 -17.083  43.721  1.00111.17     0.163 C 
+BRANCH  11  12
+HETATM   12  CAC FLC B 503      11.492 -16.554  42.291  1.00110.19     0.176 C 
+HETATM   13  OA2 FLC B 503      10.996 -15.423  42.086  1.00110.04    -0.648 OA
+HETATM   14  OA1 FLC B 503      12.011 -17.269  41.399  1.00108.81    -0.648 OA
+ENDBRANCH  11  12
+ENDBRANCH   1  11
+TORSDOF 6

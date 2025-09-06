@@ -1,0 +1,132 @@
+{
+  "atoms": [
+    {
+      "name": "C1'",
+      "element": "C"
+    },
+    {
+      "name": "C2",
+      "element": "C"
+    },
+    {
+      "name": "C2'",
+      "element": "C"
+    },
+    {
+      "name": "C3'",
+      "element": "C"
+    },
+    {
+      "name": "C4",
+      "element": "C"
+    },
+    {
+      "name": "C4'",
+      "element": "C"
+    },
+    {
+      "name": "C5",
+      "element": "C"
+    },
+    {
+      "name": "C5'",
+      "element": "C"
+    },
+    {
+      "name": "C6",
+      "element": "C"
+    },
+    {
+      "name": "C8",
+      "element": "C"
+    },
+    {
+      "name": "N1",
+      "element": "N"
+    },
+    {
+      "name": "N2",
+      "element": "N"
+    },
+    {
+      "name": "N3",
+      "element": "N"
+    },
+    {
+      "name": "N3B",
+      "element": "N"
+    },
+    {
+      "name": "N7",
+      "element": "N"
+    },
+    {
+      "name": "N9",
+      "element": "N"
+    },
+    {
+      "name": "O1A",
+      "element": "O"
+    },
+    {
+      "name": "O1B",
+      "element": "O"
+    },
+    {
+      "name": "O1G",
+      "element": "O"
+    },
+    {
+      "name": "O2'",
+      "element": "O"
+    },
+    {
+      "name": "O2A",
+      "element": "O"
+    },
+    {
+      "name": "O2B",
+      "element": "O"
+    },
+    {
+      "name": "O2G",
+      "element": "O"
+    },
+    {
+      "name": "O3'",
+      "element": "O"
+    },
+    {
+      "name": "O3A",
+      "element": "O"
+    },
+    {
+      "name": "O3G",
+      "element": "O"
+    },
+    {
+      "name": "O4'",
+      "element": "O"
+    },
+    {
+      "name": "O5'",
+      "element": "O"
+    },
+    {
+      "name": "O6",
+      "element": "O"
+    },
+    {
+      "name": "PA",
+      "element": "P"
+    },
+    {
+      "name": "PB",
+      "element": "P"
+    },
+    {
+      "name": "PG",
+      "element": "P"
+    }
+  ]
+}

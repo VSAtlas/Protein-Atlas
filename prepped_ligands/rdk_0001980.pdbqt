@@ -1,0 +1,148 @@
+REMARK WARNING: 32 MAX_TORS EXCEEDED!!!
+REMARK  33 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C_2  and  C_3 
+REMARK    2  A    between atoms: C_3  and  C_4 
+REMARK    3  A    between atoms: C_4  and  N_5 
+REMARK    4  A    between atoms: N_5  and  C_7 
+REMARK    5  A    between atoms: C_10  and  C_13 
+REMARK    6  A    between atoms: C_13  and  O_15 
+REMARK    7  A    between atoms: O_15  and  C_16 
+REMARK    8  A    between atoms: C_16  and  C_17 
+REMARK    9  A    between atoms: C_17  and  O_18 
+REMARK   10  A    between atoms: O_18  and  C_19 
+REMARK   11  A    between atoms: C_19  and  C_20 
+REMARK   12  A    between atoms: C_20  and  O_21 
+REMARK   13  A    between atoms: O_21  and  C_22 
+REMARK   14  A    between atoms: C_22  and  C_23 
+REMARK   15  A    between atoms: C_23  and  O_24 
+REMARK   16  A    between atoms: O_24  and  C_25 
+REMARK   17  A    between atoms: C_25  and  C_26 
+REMARK   18  A    between atoms: C_26  and  O_27 
+REMARK   19  A    between atoms: O_27  and  C_28 
+REMARK   20  A    between atoms: C_28  and  C_29 
+REMARK   21  A    between atoms: C_29  and  O_30 
+REMARK   22  A    between atoms: O_30  and  C_31 
+REMARK   23  A    between atoms: C_31  and  C_32 
+REMARK   24  A    between atoms: C_32  and  O_33 
+REMARK   25  A    between atoms: O_33  and  C_34 
+REMARK   26  A    between atoms: C_34  and  C_35 
+REMARK   27  A    between atoms: C_35  and  O_36 
+REMARK   28  A    between atoms: O_36  and  C_37 
+REMARK   29  A    between atoms: C_37  and  C_38 
+REMARK   30  A    between atoms: C_38  and  O_39 
+REMARK   31  A    between atoms: O_39  and  C_40 
+REMARK   32  A    between atoms: C_40  and  C_41 
+REMARK   33  A    between atoms: C_41  and  O_42 
+ROOT
+ATOM      1  C   UNL d   1      -0.711  -1.697  -3.046  0.00  0.00     0.193 C 
+ENDROOT
+BRANCH   1   2
+ATOM      2  O   UNL d   1      -1.996  -1.346  -2.635  0.00  0.00    -0.387 OA
+BRANCH   2   3
+ATOM      3  C   UNL d   1      -2.809  -1.624  -3.736  0.00  0.00     0.193 C 
+BRANCH   3   4
+ATOM      4  C   UNL d   1      -3.542  -0.367  -4.172  0.00  0.00     0.193 C 
+BRANCH   4   5
+ATOM      5  O   UNL d   1      -4.409   0.052  -3.164  0.00  0.00    -0.387 OA
+BRANCH   5   6
+ATOM      6  C   UNL d   1      -4.588   1.414  -3.401  0.00  0.00     0.194 C 
+BRANCH   6   7
+ATOM      7  C   UNL d   1      -4.851   2.144  -2.095  0.00  0.00     0.205 C 
+BRANCH   7   8
+ATOM      8  O   UNL d   1      -6.144   1.823  -1.596  0.00  0.00    -0.315 OA
+BRANCH   8   9
+ATOM      9  C   UNL d   1      -6.372   0.749  -0.730  0.00  0.00     0.293 C 
+ATOM     10  O   UNL d   1      -5.408   0.037  -0.331  0.00  0.00    -0.259 OA
+BRANCH   9  11
+ATOM     11  C   UNL d   1      -7.740   0.460  -0.273  0.00  0.00     0.039 A 
+ATOM     12  C   UNL d   1      -8.809   1.257  -0.704  0.00  0.00     0.020 A 
+ATOM     13  C   UNL d   1     -10.111   0.991  -0.268  0.00  0.00     0.030 A 
+ATOM     14  C   UNL d   1     -10.359  -0.076   0.601  0.00  0.00     0.028 A 
+ATOM     15  C   UNL d   1      -9.292  -0.875   1.035  0.00  0.00     0.030 A 
+ATOM     16  C   UNL d   1      -7.990  -0.609   0.600  0.00  0.00     0.020 A 
+BRANCH  14  17
+ATOM     17  N   UNL d   1     -11.699  -0.324   1.036  0.00  0.00    -0.390 N 
+ATOM     18  HN  UNL d   1     -12.433   0.309   0.719  1.00  0.00     0.159 HD
+BRANCH  17  19
+ATOM     19  C   UNL d   1     -12.076  -1.432   1.906  0.00  0.00     0.119 C 
+BRANCH  19  20
+ATOM     20  C   UNL d   1     -12.045  -2.753   1.147  0.00  0.00     0.019 C 
+BRANCH  20  21
+ATOM     21  C   UNL d   1     -13.237  -2.885   0.213  0.00  0.00    -0.003 C 
+ATOM     22  C   UNL d   1     -12.955  -2.200  -1.111  0.00  0.00     0.005 C 
+ENDBRANCH  20  21
+ENDBRANCH  19  20
+ENDBRANCH  17  19
+ENDBRANCH  14  17
+ENDBRANCH   9  11
+ENDBRANCH   8   9
+ENDBRANCH   7   8
+ENDBRANCH   6   7
+ENDBRANCH   5   6
+ENDBRANCH   4   5
+ENDBRANCH   3   4
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1  23
+ATOM     23  C   UNL d   1       0.298  -0.786  -2.378  0.00  0.00     0.193 C 
+BRANCH  23  24
+ATOM     24  O   UNL d   1       1.576  -1.081  -2.849  0.00  0.00    -0.387 OA
+BRANCH  24  25
+ATOM     25  C   UNL d   1       2.296   0.102  -2.669  0.00  0.00     0.193 C 
+BRANCH  25  26
+ATOM     26  C   UNL d   1       3.527   0.096  -3.554  0.00  0.00     0.193 C 
+BRANCH  26  27
+ATOM     27  O   UNL d   1       4.430  -0.869  -3.106  0.00  0.00    -0.387 OA
+BRANCH  27  28
+ATOM     28  C   UNL d   1       5.677  -0.398  -3.521  0.00  0.00     0.193 C 
+BRANCH  28  29
+ATOM     29  C   UNL d   1       6.756  -0.885  -2.573  0.00  0.00     0.193 C 
+BRANCH  29  30
+ATOM     30  O   UNL d   1       6.557  -0.346  -1.302  0.00  0.00    -0.387 OA
+BRANCH  30  31
+ATOM     31  C   UNL d   1       7.704   0.412  -1.055  0.00  0.00     0.193 C 
+BRANCH  31  32
+ATOM     32  C   UNL d   1       7.934   0.531   0.441  0.00  0.00     0.193 C 
+BRANCH  32  33
+ATOM     33  O   UNL d   1       8.290  -0.713   0.964  0.00  0.00    -0.387 OA
+BRANCH  33  34
+ATOM     34  C   UNL d   1       9.257  -0.425   1.925  0.00  0.00     0.193 C 
+BRANCH  34  35
+ATOM     35  C   UNL d   1       9.213  -1.471   3.021  0.00  0.00     0.193 C 
+BRANCH  35  36
+ATOM     36  O   UNL d   1      10.214  -1.205   3.955  0.00  0.00    -0.387 OA
+BRANCH  36  37
+ATOM     37  C   UNL d   1       9.628  -1.457   5.198  0.00  0.00     0.193 C 
+BRANCH  37  38
+ATOM     38  C   UNL d   1       9.331  -0.149   5.913  0.00  0.00     0.193 C 
+BRANCH  38  39
+ATOM     39  O   UNL d   1      10.512   0.570   6.111  0.00  0.00    -0.387 OA
+BRANCH  39  40
+ATOM     40  C   UNL d   1      10.267   1.820   5.544  0.00  0.00     0.193 C 
+BRANCH  40  41
+ATOM     41  C   UNL d   1      11.199   2.035   4.369  0.00  0.00     0.193 C 
+BRANCH  41  42
+ATOM     42  O   UNL d   1      10.897   3.245   3.748  0.00  0.00    -0.394 OA
+ATOM     43  C   UNL d   1      11.584   3.196   2.537  0.00  0.00     0.201 C 
+ENDBRANCH  41  42
+ENDBRANCH  40  41
+ENDBRANCH  39  40
+ENDBRANCH  38  39
+ENDBRANCH  37  38
+ENDBRANCH  36  37
+ENDBRANCH  35  36
+ENDBRANCH  34  35
+ENDBRANCH  33  34
+ENDBRANCH  32  33
+ENDBRANCH  31  32
+ENDBRANCH  30  31
+ENDBRANCH  29  30
+ENDBRANCH  28  29
+ENDBRANCH  27  28
+ENDBRANCH  26  27
+ENDBRANCH  25  26
+ENDBRANCH  24  25
+ENDBRANCH  23  24
+ENDBRANCH   1  23
+TORSDOF 33

@@ -1,0 +1,10 @@
+REMARK  0 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+ROOT
+HETATM    1  P   PO4 A   5      30.371  15.448  52.139  1.00 81.45     0.436 P 
+HETATM    2  O1  PO4 A   5      29.550  16.031  51.014  1.00 80.63    -0.609 OA
+HETATM    3  O2  PO4 A   5      29.990  16.106  53.443  1.00 81.22    -0.609 OA
+HETATM    4  O3  PO4 A   5      30.113  13.961  52.227  1.00 81.34    -0.609 OA
+HETATM    5  O4  PO4 A   5      31.837  15.691  51.880  1.00 80.65    -0.609 OA
+ENDROOT
+TORSDOF 0

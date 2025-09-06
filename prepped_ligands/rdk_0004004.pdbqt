@@ -1,0 +1,14 @@
+REMARK  0 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+ROOT
+ATOM      1  N   UNL d   1       2.298  -0.394  -0.453  0.00  0.00    -0.063 NA
+ATOM      2  C   UNL d   1       0.907  -0.258  -0.182  0.00  0.00     0.193 A 
+ATOM      3  N   UNL d   1       0.305   0.975   0.201  0.00  0.00    -0.351 N 
+ATOM      4  C   UNL d   1       0.951   2.275   0.204  0.00  0.00     0.152 C 
+ATOM      5  C   UNL d   1      -1.118   0.748   0.361  0.00  0.00     0.228 A 
+ATOM      6  C   UNL d   1      -1.187  -0.706   0.059  0.00  0.00     0.241 A 
+ATOM      7  O   UNL d   1      -2.242  -1.391   0.081  0.00  0.00    -0.271 OA
+ATOM      8  N   UNL d   1       0.087  -1.250  -0.269  0.00  0.00    -0.300 N 
+ATOM      9  HN  UNL d   1       0.304  -2.214  -0.520  1.00  0.00     0.171 HD
+ENDROOT
+TORSDOF 0

@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "/home/michael/miniconda3/envs/docking-env/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.envFile": "${workspaceFolder}/.env.wsl",
+  "python.condaAutoActivateBase": false
+}

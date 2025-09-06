@@ -1,0 +1,60 @@
+REMARK  13 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: C1_1  and  O1_2 
+REMARK    2  A    between atoms: C1_1  and  C2_4 
+REMARK    3  A    between atoms: C2_4  and  C3_5 
+REMARK    4  A    between atoms: C3_5  and  C4_6 
+REMARK    5  A    between atoms: C4_6  and  C5_7 
+REMARK    6  A    between atoms: C5_7  and  C6_8 
+REMARK    7  A    between atoms: C6_8  and  C7_9 
+REMARK    8  A    between atoms: C7_9  and  C8_10 
+REMARK    9  A    between atoms: C8_10  and  C9_11 
+REMARK   10  A    between atoms: C9_11  and  C10_12 
+REMARK   11  A    between atoms: C10_12  and  C11_13 
+REMARK   12  A    between atoms: C11_13  and  C12_14 
+REMARK   13  A    between atoms: C12_14  and  C13_15 
+ROOT
+HETATM    1  C6  MYR B   2      24.816  21.903  26.883  1.00 50.57     0.000 C 
+ENDROOT
+BRANCH   1   2
+HETATM    2  C5  MYR B   2      26.243  21.475  26.515  1.00 53.09     0.000 C 
+BRANCH   2   3
+HETATM    3  C4  MYR B   2      26.742  20.314  27.390  1.00 54.77     0.000 C 
+BRANCH   3   4
+HETATM    4  C3  MYR B   2      28.168  19.863  27.055  1.00 56.16     0.002 C 
+BRANCH   4   5
+HETATM    5  C2  MYR B   2      28.379  18.358  27.264  1.00 56.33     0.026 C 
+BRANCH   5   6
+HETATM    6  C1  MYR B   2      29.593  18.037  28.143  1.00 56.75     0.164 C 
+BRANCH   6   7
+HETATM    7  O1  MYR B   2      30.266  16.894  27.674  1.00 56.65    -0.401 OA
+ATOM      8  H1  MYR B   2      31.018  16.695  28.219  1.00  0.00     0.209 HD
+ENDBRANCH   6   7
+ENDBRANCH   5   6
+ENDBRANCH   4   5
+ENDBRANCH   3   4
+ENDBRANCH   2   3
+ENDBRANCH   1   2
+BRANCH   1   9
+HETATM    9  C7  MYR B   2      24.189  22.881  25.891  1.00 49.00     0.000 C 
+BRANCH   9  10
+HETATM   10  C8  MYR B   2      23.866  24.235  26.517  1.00 46.39     0.000 C 
+BRANCH  10  11
+HETATM   11  C9  MYR B   2      22.746  24.958  25.788  1.00 44.55     0.000 C 
+BRANCH  11  12
+HETATM   12  C10 MYR B   2      22.416  26.296  26.412  1.00 42.39     0.000 C 
+BRANCH  12  13
+HETATM   13  C11 MYR B   2      22.196  27.386  25.385  1.00 41.29     0.000 C 
+BRANCH  13  14
+HETATM   14  C12 MYR B   2      21.075  28.324  25.788  1.00 39.12    -0.000 C 
+BRANCH  14  15
+HETATM   15  C13 MYR B   2      21.456  29.792  25.665  1.00 38.57    -0.005 C 
+HETATM   16  C14 MYR B   2      20.233  30.688  25.473  1.00 37.66     0.005 C 
+ENDBRANCH  14  15
+ENDBRANCH  13  14
+ENDBRANCH  12  13
+ENDBRANCH  11  12
+ENDBRANCH  10  11
+ENDBRANCH   9  10
+ENDBRANCH   1   9
+TORSDOF 13

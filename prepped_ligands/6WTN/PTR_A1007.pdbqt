@@ -1,0 +1,42 @@
+REMARK  6 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+REMARK    1  A    between atoms: N_1  and  CA_5 
+REMARK    2  A    between atoms: CA_5  and  CB_8 
+REMARK    3  A    between atoms: CA_5  and  C_6 
+REMARK    4  A    between atoms: CB_8  and  CG_9 
+REMARK    5  A    between atoms: CZ_14  and  OH_15 
+REMARK    6  A    between atoms: OH_15  and  P_16 
+ROOT
+HETATM    1  CG  PTR A1007      35.059 -10.276   3.108  1.00 33.22    -0.056 A 
+HETATM    2  CD1 PTR A1007      36.013 -11.214   3.474  1.00 40.78     0.010 A 
+HETATM    3  CD2 PTR A1007      34.253 -10.547   2.006  1.00 34.74     0.010 A 
+HETATM    4  CE1 PTR A1007      36.165 -12.390   2.773  1.00 46.29     0.038 A 
+HETATM    5  CE2 PTR A1007      34.398 -11.728   1.292  1.00 39.71     0.038 A 
+HETATM    6  CZ  PTR A1007      35.369 -12.637   1.681  1.00 48.47     0.082 A 
+ENDROOT
+BRANCH   1   7
+HETATM    7  CB  PTR A1007      34.893  -9.004   3.907  1.00 30.41     0.078 C 
+BRANCH   7   8
+HETATM    8  CA  PTR A1007      33.839  -9.126   5.024  1.00 28.87     0.248 C 
+BRANCH   8   9
+HETATM    9  C   PTR A1007      32.471  -9.371   4.420  1.00 27.75     0.264 C 
+HETATM   10  O   PTR A1007      31.961 -10.497   4.453  1.00 31.93    -0.305 OA
+ENDBRANCH   8   9
+BRANCH   8  11
+HETATM   11  N   PTR A1007      34.128 -10.197   5.971  1.00 32.02    -0.069 N 
+ATOM     12  HN3 PTR A1007      34.249 -11.087   5.487  1.00  0.00     0.275 HD
+ATOM     13  HN2 PTR A1007      35.063 -10.092   6.364  1.00  0.00     0.275 HD
+ATOM     14  HN1 PTR A1007      33.430 -10.278   6.711  1.00  0.00     0.275 HD
+ENDBRANCH   8  11
+ENDBRANCH   7   8
+ENDBRANCH   1   7
+BRANCH   6  15
+HETATM   15  OH  PTR A1007      35.534 -13.772   1.068  1.00 65.32    -0.240 OA
+BRANCH  15  16
+HETATM   16  P   PTR A1007      36.113 -13.946  -0.412  1.00 68.99     0.427 P 
+HETATM   17  O3P PTR A1007      37.641 -13.759  -0.392  1.00 66.88    -0.617 OA
+HETATM   18  O2P PTR A1007      35.763 -15.321  -0.834  1.00 74.30    -0.617 OA
+HETATM   19  O1P PTR A1007      35.446 -12.923  -1.354  1.00 69.67    -0.617 OA
+ENDBRANCH  15  16
+ENDBRANCH   6  15
+TORSDOF 6

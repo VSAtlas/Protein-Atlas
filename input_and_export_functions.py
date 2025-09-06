@@ -1,10 +1,48 @@
-import os
-import csv
+import os, sys, logging, csv
 from pathlib import Path
-import win32api  # Requires: pip install pywin32
-import win32file
 from collections import defaultdict
 from distutils.util import strtobool
+
+IS_WINDOWS = sys.platform.startswith("win")
+
+# Windows-only modules (pywin32). Guard them so Linux/WSL can import this file.
+try:
+    if IS_WINDOWS:
+        import win32api      # type: ignore
+        import win32file     # type: ignore
+    else:
+        win32api = None
+        win32file = None
+except Exception:
+    win32api = None
+    win32file = None
+
+
+def list_local_drives():
+    """Return a list of drive/mount roots on this OS."""
+    if IS_WINDOWS and win32api:
+        return [d for d in win32api.GetLogicalDriveStrings().split("\000") if d]
+    # Linux/macOS: collect mount roots (WSL exposes Windows drives under /mnt/*)
+    drives = []
+    for base in ("/mnt", "/media"):
+        if os.path.isdir(base):
+            for name in os.listdir(base):
+                p = os.path.join(base, name)
+                if os.path.ismount(p):
+                    # mimic 'C:\\' style ending with separator for callers that expect it
+                    drives.append(p if p.endswith(os.sep) else p + os.sep)
+    # always include home as a last-resort root
+    drives.append(str(Path.home()))
+    return drives
+
+def get_short_path(path: str) -> str:
+    """Windows short path if available; otherwise the original path."""
+    if IS_WINDOWS and win32api:
+        try:
+            return win32api.GetShortPathName(path)
+        except Exception:
+            return path
+    return path
 
 def _to_bool(x):
     try:
@@ -27,10 +65,7 @@ def _to_float(x, default=None):
 # === Tool Locator ===
 def find_tool_on_any_drive(possible_subpaths):
     """Search through all fixed drives for given relative subpaths."""
-    drives = [
-        d for d in win32api.GetLogicalDriveStrings().split('\000')
-        if d and win32file.GetDriveType(d) == win32file.DRIVE_FIXED
-    ]
+    drives = list_local_drives()
     for drive in drives:
         for subpath in possible_subpaths:
             candidate = Path(drive) / subpath
@@ -38,78 +73,73 @@ def find_tool_on_any_drive(possible_subpaths):
                 return str(candidate.resolve())
     return None
 
-# === Config Loader === currently overwrites the actual config AAAAAAA
-def get_default_config():
+# === Config Loader (non-interactive) ===
+def get_default_config(prompt=True):
     from pathlib import Path
-    import os
+    import os, shutil, sys
 
-    user_home = Path.home()
-    base_dir = Path(__file__).resolve().parent
+    NONINTERACTIVE = (not prompt) or (not sys.stdin.isatty())
+
+    def which_or_exists(candidates):
+        """Return first existing absolute path or which() result for a name."""
+        for c in candidates:
+            p = Path(c)
+            if p.is_absolute() and p.exists():
+                return str(p)
+            w = shutil.which(Path(c).name)
+            if w:
+                return w
+        return None
 
     def get_or_prompt(name, candidates):
-        path = find_tool_on_any_drive(candidates)
-        if path:
-            return path
-        manual = input(f"[!] {name} not found. Please paste full path or leave blank to skip: ").strip()
-        return manual if manual else f"{name.lower()}_not_found"
+        found = find_tool_on_any_drive(candidates) or which_or_exists(candidates)
+        if found:
+            return found
+        if NONINTERACTIVE:
+            return f"{name.upper().replace(' ','_')}_NOT_FOUND"
+        try:
+            manual = input(f"[!] {name} not found. Please paste full path or leave blank to skip: ").strip()
+        except EOFError:
+            manual = ""
+        return manual if manual else f"{name.upper().replace(' ','_')}_NOT_FOUND"
+
+    base_dir = Path(__file__).resolve().parent
 
     vina_path = get_or_prompt("AutoDock Vina", [
-        "AutoDock-Vina-1.2.7/vina_1.2.7_win.exe",
-        "Users/Public/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe",
-        "vina_1.2.7_win.exe"
+        "/home/michael/miniconda3/envs/docking-env/bin/vina", "vina"
     ])
 
     phenix_dir = get_or_prompt("Phenix bin", [
-        "phenix-1.21.2-5419/Library/bin",
-        "Program Files/Phenix/Library/bin",
-        "phenix/Library/bin",
-        "Library/bin",
-        "Phenix/Library/bin",  # Capitalization may matter
-        "E:/phenix/Library/bin"
+        "/mnt/e/phenix/Library/bin"
     ])
-
     phenix_lib_path = get_or_prompt("Phenix site-packages", [
-        "phenix-1.21.2-5419/Lib/site-packages",
-        "phenix/Lib/site-packages",
-        "Program Files/Phenix/Lib/site-packages",
-        "Lib/site-packages"
+        "/mnt/e/phenix/Lib/site-packages"
     ])
 
-    p2rank_path = get_or_prompt("P2Rank", [
-        "p2rank_2.5",
-        "Users/Public/p2rank_2.5",
-        "Program Files/p2rank_2.5"
-    ])
+    p2rank_path = get_or_prompt("P2Rank", ["/mnt/e/p2rank_2.5", "p2rank_2.5"])
 
-    mgltools_path = get_or_prompt("MGLTools", [
-        "MGLTools-1.5.7",
-        "Program Files (x86)/MGLTools-1.5.7",
-        "Programs/MGLTools-1.5.7"
+    # Prefer CONDA MGL/ADT scripts if present
+    mgltools_python = get_or_prompt("MGLTools Python", [
+        "/home/michael/miniconda3/envs/docking-env/bin/python"
+    ])
+    prepare_ligand_script = get_or_prompt("prepare_ligand4.py", [
+        "/home/michael/miniconda3/envs/docking-env/bin/prepare_ligand4.py", "prepare_ligand4.py"
+    ])
+    prepare_receptor_script = get_or_prompt("prepare_receptor4.py", [
+        "/home/michael/miniconda3/envs/docking-env/bin/prepare_receptor4.py", "prepare_receptor4.py"
     ])
 
     openbabel_path = get_or_prompt("OpenBabel", [
-        "OpenBabel-3.1.1/obabel.exe",
-        "Program Files (x86)/OpenBabel-3.1.1/obabel.exe",
-        "Program Files/OpenBabel-3.1.1/obabel.exe"
+        "/home/michael/miniconda3/envs/docking-env/bin/obabel", "obabel"
     ])
 
     reduce_exe = get_or_prompt("Reduce", [
-        "miniconda3/envs/docking-env/Library/bin/reduce.exe",
-        "Library/bin/reduce.exe",
-        "Program Files/reduce.exe",
-        "reduce.exe",
-        "phenix/Library/bin/reduce.exe",
-        "E:/phenix/Library/bin/reduce.exe",
-    ])
-    pymol_exe = get_or_prompt("PyMOL Python", [
-        "E:/pymol/python.exe",
-        "E:/Program Files/PyMOL/python.exe",
-        "C:/Program Files/PyMOL/python.exe",
-        "python.exe",
+        "/mnt/e/phenix/Library/bin/reduce.exe", "reduce"
     ])
 
-    mgltools_python = str(Path(mgltools_path) / "python.exe") if "not_found" not in mgltools_path else "MGLTOOLS_PYTHON_NOT_FOUND"
-    prepare_receptor_script = str(Path(mgltools_path) / "Lib/site-packages/AutoDockTools/Utilities24/prepare_receptor4.py") if "not_found" not in mgltools_path else "PREPARE_RECEPTOR_SCRIPT_NOT_FOUND"
+    pymol_path = get_or_prompt("PyMOL", [
+        "/home/michael/miniconda3/envs/docking-env/bin/pymol", "pymol"
+    ])
 
     config = {
         "OVERALL_DIR": str(base_dir),
@@ -122,66 +152,88 @@ def get_default_config():
         "OUTPUT_DIR": str(base_dir / "processed_pdbs"),
         "PDBQT_DIR": str(base_dir / "pdbqts"),
         "DOCKED_DIR": str(base_dir / "docked"),
+
         "PHENIX_CLEAN_SCRIPT": str(base_dir / "phenix_clean.py"),
+
         "VINA_PATH": vina_path,
         "VINA_EXE": vina_path,
+
         "PHENIX_DIR": phenix_dir,
         "PHENIX_LIB_PATH": phenix_lib_path,
+
         "P2RANK_PATH": p2rank_path,
-        "MGLTOOLS_PATH": mgltools_path,
+
+        "MGLTOOLS_PATH": "/home/michael/miniconda3/envs/docking-env",  # logical home
         "MGLTOOLS_PYTHON": mgltools_python,
+        "MGLTOOLS_DIR": mgltools_python,
+        "PREPARE_LIGAND_SCRIPT": prepare_ligand_script,
         "PREPARE_RECEPTOR_SCRIPT": prepare_receptor_script,
-        "MGLTOOLS_DIR": mgltools_path,
+
         "OPENBABEL_PATH": openbabel_path,
         "REDUCE_EXE": reduce_exe,
+
         "CPU_ONLY": True,
         "CPU": 12,
         "MAX_PARALLEL_JOBS": 6,
         "FORCE_REPROCESS": False,
-        "PYMOL_PATH": pymol_exe,
+        "PYMOL_PATH": pymol_path,
         "DOCKING_MODE": "discovery",
     }
-
-    # Ensure all keys are uppercase
     return {k.upper(): v for k, v in config.items()}
 
 
 def load_inputs():
+    import os
     config_path = Path("config.txt")
+    parsed = {}
+
     if config_path.exists():
-        config = {}
         with open(config_path) as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith("#"):  # skip blanks/comments
+                if not line or line.startswith("#"):
                     continue
                 if "=" in line:
                     k, v = line.split("=", 1)
-                    config[k.strip().upper()] = v.strip()
+                    parsed[k.strip().upper()] = v.strip()
 
-        default_cfg = get_default_config()
-        merged_cfg = {**default_cfg, **config}
+    # Normalize common aliases from config
+    if "PYMOL_EXE" in parsed and "PYMOL_PATH" not in parsed:
+        parsed["PYMOL_PATH"] = parsed["PYMOL_EXE"]
 
-        # coerce types
-        for k in ["CPU_ONLY", "FORCE_REPROCESS", "ALLOW_BOX_EXPAND",
-                  "QUIET_CONSOLE", "RECEPTOR_SANITY_CHECK", "CHECKPOINT_ENABLE",
-                  "FILTER_VINA_STDOUT"]:
-            if k in merged_cfg:
-                merged_cfg[k] = _to_bool(merged_cfg[k])
+    # Overlay environment variables (from .env.wsl)
+    for k, v in os.environ.items():
+        K = k.upper()
+        if K in {
+            "VINA_EXE","VINA_PATH","OPENBABEL_PATH","MGLTOOLS_PYTHON",
+            "PREPARE_LIGAND_SCRIPT","PREPARE_RECEPTOR_SCRIPT","PYMOL_PATH",
+            "P2RANK_PATH","PHENIX_DIR","PHENIX_LIB_PATH","PHENIX_CLEAN_SCRIPT",
+            "INPUT_DIR","OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","LIGAND_DIR",
+            "LIGAND_EXTRACTED_DIR","LIGANDS_MOL2_DIR","OUTPUT_LIGANDS_DIR",
+            "CPU","CPU_ONLY","MAX_PARALLEL_JOBS","DOCKING_MODE","REDUCE_EXE","USE_MEEKO",  
+        }:
+            parsed[K] = v
 
-        for k in ["MAX_PARALLEL_JOBS", "CPU", "MAX_RECENTER_ATTEMPTS", "EARLY_RECENTER_MIN_EVAL"]:
-            if k in merged_cfg:
-                merged_cfg[k] = _to_int(merged_cfg[k], merged_cfg[k])
+    default_cfg = get_default_config(prompt=False)
+    merged_cfg = {**default_cfg, **parsed}  # user/env overrides defaults
 
-        for k in ["EARLY_RECENTER_RATIO", "EARLY_RECENTER_FAR_A", "EARLY_RECENTER_MEDIAN_A"]:
-            if k in merged_cfg:
-                merged_cfg[k] = _to_float(merged_cfg[k], merged_cfg[k])
+    # Coerce types
+    for k in ["CPU_ONLY","FORCE_REPROCESS","ALLOW_BOX_EXPAND",
+              "QUIET_CONSOLE","RECEPTOR_SANITY_CHECK","CHECKPOINT_ENABLE",
+              "FILTER_VINA_STDOUT","USE_MEEKO"]:
+        if k in merged_cfg:
+            merged_cfg[k] = _to_bool(merged_cfg[k])
 
-        merged_cfg["DOCKING_MODE"] = merged_cfg.get("DOCKING_MODE", "discovery").lower()
-        return merged_cfg
-    else:
-        return get_default_config()
+    for k in ["MAX_PARALLEL_JOBS","CPU","MAX_RECENTER_ATTEMPTS","EARLY_RECENTER_MIN_EVAL"]:
+        if k in merged_cfg:
+            merged_cfg[k] = _to_int(merged_cfg[k], merged_cfg[k])
 
+    for k in ["EARLY_RECENTER_RATIO","EARLY_RECENTER_FAR_A","EARLY_RECENTER_MEDIAN_A"]:
+        if k in merged_cfg:
+            merged_cfg[k] = _to_float(merged_cfg[k], merged_cfg[k])
+
+    merged_cfg["DOCKING_MODE"] = str(merged_cfg.get("DOCKING_MODE","discovery")).lower()
+    return merged_cfg
 
 
 # === Config Validation ===
@@ -308,10 +360,8 @@ def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand
     return config_path, out_path
 
 import re
-# NEW: helpers for structured scores
 import math
 
-# input_and_export_functions.py
 from typing import Any
 def record_score(score_history, stage_name, ligand, score: Any, valid, reason=None):
     def coerce_score(x):

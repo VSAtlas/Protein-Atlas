@@ -1,0 +1,10 @@
+REMARK  0 active torsions:
+REMARK  status: ('A' for Active; 'I' for Inactive)
+ROOT
+HETATM    1  S   SO4 A1004     -19.105 -13.831 -40.435  1.00 78.14     0.261 S 
+HETATM    2  O1  SO4 A1004     -19.013 -12.956 -41.631  1.00 68.93    -0.565 OA
+HETATM    3  O2  SO4 A1004     -18.893 -15.256 -40.799  1.00 78.30    -0.565 OA
+HETATM    4  O3  SO4 A1004     -18.083 -13.418 -39.448  1.00 74.10    -0.565 OA
+HETATM    5  O4  SO4 A1004     -20.449 -13.676 -39.854  1.00 58.13    -0.565 OA
+ENDROOT
+TORSDOF 0
