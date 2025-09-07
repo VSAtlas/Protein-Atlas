@@ -13,10 +13,10 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path 
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import os
 # -------- Optional heavy deps are imported lazily where needed --------
 
 # ---- limit simultaneous PyMOL renders (override via env PYMOL_PARALLEL) ----
@@ -1196,7 +1196,12 @@ def run_benchmark_for_protein(
             heavy_atom_counts=heavy_atom_counts,
             initial_center=center,
         )
-        box_size: Tuple[float, float, float] = tuple(center*0 + 0)  # placeholder to appease type checkers
+
+        try:
+            cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
+        except Exception:
+            cx, cy, cz = 0.0, 0.0, 0.0  # fallback
+
         box_size = tuple(min(28.0, float(s)) for s in (cfg.get("BOX_SIZE_OVERRIDE", None) or (24.0, 24.0, 24.0)))
         logger.info(f"[stage] {pdb_id}/{pocket_name} center={center} box={box_size}")
 
@@ -1549,7 +1554,7 @@ def _run_auto_analysis(
             center_tol=center_tol,
             rmsd_tol=rmsd_tol,
             include_identity=include_identity,
-            out_dir=out_dir,
+            out_dir=out_dir, 
         )
     except Exception as e:
         print(f"[analysis] ERROR running run_analysis(): {e}")
@@ -1595,9 +1600,10 @@ def build_argparser() -> argparse.ArgumentParser:
                help="Quieter console: keep progress/docking notes; hide prep spam. Full logs still in files.")
     p.add_argument("--silent", action="store_true",
                help="Like --quiet but also hides non-allowlisted WARNING lines (ERRORs still show).")
-
+    p.add_argument("--analysis-no-identity",
+                   action="store_true",
+                   help="Skip identity analysis (sets args.analysis_no_identity=True)")
     return p
-
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
@@ -1609,31 +1615,88 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         datefmt="%H:%M:%S",
     )
 
+    # ---- global console level clamp (INFO default, WARNING for --quiet, ERROR for --silent)
+    root = logging.getLogger()
+    if args.silent:
+        root.setLevel(logging.ERROR)
+        for h in root.handlers:
+            h.setLevel(logging.ERROR)
+    elif args.quiet:
+        root.setLevel(logging.WARNING)
+        for h in root.handlers:
+            h.setLevel(logging.WARNING)
+    else:
+        root.setLevel(logging.INFO)
+        for h in root.handlers:
+            h.setLevel(logging.INFO)
+
+    # ---- altLoc noise filter (hide per-atom chatter; keep summaries)
+    class _AltlocNoiseFilter(logging.Filter):
+        """Hide per-atom altLoc chatter while keeping summary lines."""
+        def __init__(self, suppress=True):
+            super().__init__()
+            self.suppress = suppress
+            self._drop_prefixes = ("AltLocs found for", "Keeping altLoc ")
+
+        def filter(self, record: logging.LogRecord) -> bool:
+            if not self.suppress:
+                return True
+            try:
+                msg = record.getMessage()
+            except Exception:
+                msg = str(record.msg)
+            return not any(msg.startswith(p) for p in self._drop_prefixes)
+
+    suppress_altloc = (
+        bool(getattr(args, "silent", False)) or
+        bool(getattr(args, "quiet", False)) or
+        os.environ.get("ALTLOC_QUIET_DETAILS", "1").lower() not in ("0", "false")
+    )
+    for _h in root.handlers:
+        _h.addFilter(_AltlocNoiseFilter(suppress=suppress_altloc))
+
+    # ---- third-party noise gates (RDKit deprecations, urllib3, etc.)
+    try:
+        from rdkit import RDLogger
+        RDLogger.DisableLog("rdApp.*")           # kills "DEPRECATION WARNING: please use MorganGenerator"
+        os.environ.setdefault("RDKIT_LOG_LEVEL", "ERROR")
+    except Exception:
+        pass
+    for name, level in [
+        ("rdkit", logging.ERROR),
+        ("urllib3", logging.ERROR),
+        ("PIL", logging.ERROR),
+        ("matplotlib", logging.ERROR),
+        ("asyncio", logging.ERROR),
+    ]:
+        logging.getLogger(name).setLevel(level)
+
     # Resolve/normalize paths (support Windows paths on Linux)
     input_dir = _resolve_existing_path(args.input_dir)
     out_root = _resolve_existing_path(args.out_root)
     prepped = _resolve_existing_path(args.prepped)
     mapping_path = _resolve_existing_path(args.mapping)
 
-    print("\n[paths] Resolved CLI paths:")
-    _echo_path("input_dir", input_dir)
-    _echo_path("out_root", out_root)
-    _echo_path("prepped", prepped)
-    _echo_path("mapping", mapping_path)
-    print("")
+    if not args.silent:
+        print("\n[paths] Resolved CLI paths:")
+        _echo_path("input_dir", input_dir)
+        _echo_path("out_root", out_root)
+        _echo_path("prepped", prepped)
+        _echo_path("mapping", mapping_path)
+        print("")
 
     try:
         mapping_index = MappingIndex(mapping_path)
     except Exception as e:
-        print(f"[fatal] Could not initialize MappingIndex: {e}")
+        logging.error(f"[fatal] Could not initialize MappingIndex: {e}")
         return
 
     out_root.mkdir(parents=True, exist_ok=True)
     if not input_dir.exists():
-        print(f"[benchmark] INPUT_DIR does not exist: {input_dir}")
+        logging.error(f"[benchmark] INPUT_DIR does not exist: {input_dir}")
         return
     if not prepped.exists():
-        print(f"[benchmark] PREPPED library does not exist: {prepped}")
+        logging.error(f"[benchmark] PREPPED library does not exist: {prepped}")
         return
 
     cfg = load_inputs()
@@ -1647,17 +1710,22 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     cfg.setdefault("OVERALL_DIR", str(Path(out_root).parent))
 
     # feed quiet/silent CLI into cfg so the per-protein logger can read it
-    cfg["_QUIET_CONSOLE"] = bool(args.quiet or args.silent)
-    cfg["_SILENT_CONSOLE"] = bool(args.silent)
+    cfg["_QUIET_CONSOLE"] = bool(cfg.get("_QUIET_CONSOLE", False)
+                             or cfg.get("quiet_console", False)
+                             or (args.quiet or args.silent))
+    cfg["_SILENT_CONSOLE"] = bool(cfg.get("_SILENT_CONSOLE", False)
+                              or cfg.get("silent_console", False)
+                              or args.silent)
 
     pdb_files = [f for f in os.listdir(cfg["INPUT_DIR"]) if f.lower().endswith(".pdb") and "_nolig" not in f.lower()]
-    print(f"[benchmark] proteins queued: {len(pdb_files)} from {cfg['INPUT_DIR']}")
+    logging.info(f"[benchmark] proteins queued: {len(pdb_files)} from {cfg['INPUT_DIR']}")
     if args.dry_run:
-        for f in pdb_files[:50]:
-            print("  -", f)
-        if len(pdb_files) > 50:
-            print(f"  ... ({len(pdb_files)-50} more)")
-        print("[dry-run] Exiting without docking.")
+        if not args.silent:
+            for f in pdb_files[:50]:
+                print("  -", f)
+            if len(pdb_files) > 50:
+                print(f"  ... ({len(pdb_files)-50} more)")
+            print("[dry-run] Exiting without docking.")
         return
 
     # Build resolver index once
@@ -1668,7 +1736,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     base_inner = int(cfg.get("MAX_PARALLEL_JOBS", 4))
     inner_for_each = max(1, base_inner // jobs)
 
-    print(f"[benchmark] jobs={jobs} inner_workers={inner_for_each}")
+    logging.info(f"[benchmark] jobs={jobs} inner_workers={inner_for_each}")
 
     # Worker
     def _work(pdb_file: str):
@@ -1699,20 +1767,21 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 try:
                     fut.result()
                     done += 1
-                    print(f"[benchmark]  finished {pdb} ({done}/{len(pdb_files)})")
+                    logging.info(f"[benchmark]  finished {pdb} ({done}/{len(pdb_files)})")
                 except Exception as e:
                     failed += 1
-                    print(f"[benchmark]  error on {pdb}: {e} ({done+failed}/{len(pdb_files)})")
+                    logging.error(f"[benchmark]  error on {pdb}: {e} ({done+failed}/{len(pdb_files)})")
     except KeyboardInterrupt:
-        print("\n[benchmark] Interrupted by user.")
+        logging.error("[benchmark] Interrupted by user.")
 
-    print(f"[benchmark] All done: finished={done}, failed={failed}, elapsed={time.time()-t0:.1f}s")
+    elapsed = time.time() - t0
+    logging.info(f"[benchmark] All done: finished={done}, failed={failed}, elapsed={elapsed:.1f}s")
 
     # Auto-Analysis pass (optional)
     if args.run_analysis:
         docked_root = Path(cfg.get("OVERALL_DIR", str(Path(out_root).parent))) / "docked"
         if not docked_root.is_dir():
-            print(f"[analysis] Docked root not found at {docked_root} — skipping.")
+            logging.warning(f"[analysis] Docked root not found at {docked_root} — skipping.")
         else:
             details, summary = _run_auto_analysis(
                 docked_root=docked_root,
@@ -1725,10 +1794,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 out_dir=(Path(args.analysis_out) if args.analysis_out else None),
             )
             if details and summary:
-                print(f"[analysis] Details: {details}")
-                print(f"[analysis] Summary: {summary}")
+                logging.info(f"[analysis] Details: {details}")
+                logging.info(f"[analysis] Summary: {summary}")
             else:
-                print("[analysis]  Analysis did not produce outputs.")
+                logging.warning("[analysis]  Analysis did not produce outputs.")
 
 
 if __name__ == "__main__":

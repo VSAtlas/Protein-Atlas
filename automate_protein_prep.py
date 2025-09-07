@@ -1,23 +1,23 @@
 """
-Automated protein preparation pipeline (Windows/WSL‑friendly)
+Automated protein preparation pipeline (Windows/WSL-friendly)
 
 This module prepares a receptor structure from a raw PDB by performing:
-  1) Alternate‑conformation filtering (altLoc) with deterministic selection
-  2) Removal of nonstandard residues (policy‑aware keep/drop of cofactors/metals/waters)
-  3) Element‑column fixes to ensure PDB compliance
+  1) Alternate-conformation filtering (altLoc) with deterministic selection
+  2) Removal of nonstandard residues (policy-aware keep/drop of cofactors/metals/waters)
+  3) Element-column fixes to ensure PDB compliance
   4) Optional loop/residue completion via MODELLER
   5) Sanity checks for incomplete residues
-  6) Phenix cleaning passes (auto‑detect Linux Phenix, Windows Phenix, or skip—WSL‑safe)
-  7) Hydrogen sanity cleanup (CONECT‑ and geometry‑based)
-  8) Chain validation (ensure at least one CA‑containing chain)
+  6) Phenix cleaning passes (auto-detect Linux Phenix, Windows Phenix, or skip—WSL-safe)
+  7) Hydrogen sanity cleanup (CONECT- and geometry-based)
+  8) Chain validation (ensure at least one CA-containing chain)
   9) Protonation via Reduce with automatic fallbacks (temp retry/OpenBabel)
  10) Final polish via phenix.pdbtools when available; otherwise degrade gracefully
  11) Receptor PDBQT preparation (Meeko if available/selected; else ADT)
 
 Design notes
 ------------
-• WSL‑aware: Phenix calls are auto‑selected: Linux binaries, Windows .bat via PowerShell + wslpath, or skipped.
-• Config keys are case‑insensitive (PHENIX_LIB_PATH vs phenix_lib_path, etc.).
+• WSL-aware: Phenix calls are auto-selected: Linux binaries, Windows .bat via PowerShell + wslpath, or skipped.
+• Config keys are case-insensitive (PHENIX_LIB_PATH vs phenix_lib_path, etc.).
 • Logging instead of prints; short, numbered steps for readability and easier debugging.
 • No functionality intentionally removed; behavior is clarified and guarded.
 
@@ -44,10 +44,9 @@ from math import sqrt
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
-# -------- Project‑local imports (assumed available in your repo) --------
+# -------- Project-local imports (assumed available in your repo) --------
 from installation import load_config
 from activesite import fix_pdb_elements  # element column rewriter (trusted external impl)
-from activesite import ensure_model_records  # imported for parity with original file (unused here)
 from logger_setup import setup_logger  # assumed to be called by the entrypoint
 
 # =============================
@@ -55,15 +54,14 @@ from logger_setup import setup_logger  # assumed to be called by the entrypoint
 # =============================
 config = load_config()  # load once at import time (matches original behavior)
 
-# Case‑insensitive lookup with alias support
-
+# Case-insensitive lookup with alias support
 def _cfg(key: str, default=None, *aliases: str):
     if key in config:
         return config[key]
     for a in aliases:
         if a in config:
             return config[a]
-    # case‑insensitive fallbacks
+    # case-insensitive fallbacks
     lk = key.lower()
     uk = key.upper()
     if lk in config:
@@ -127,7 +125,7 @@ if not REDUCE_EXE:
     else:
         REDUCE_EXE = shutil.which("reduce") or shutil.which("reduce.exe") or "reduce"
 
-# Two‑letter elements commonly encountered in PDBs (for element inference)
+# Two-letter elements commonly encountered in PDBs (for element inference)
 _TWO_LETTER = {
     "ZN","FE","MG","MN","CL","NA","CA","CU","CO","BR","SI","PT","PD","NI","AL",
     "AG","AU","IR","SR","BA","BE","LI","RB","CS","MO","SE","TE","TI","CR","VD",
@@ -151,13 +149,11 @@ def _is_wsl() -> bool:
     except Exception:
         return False
 
-
 def _bin_on_path(name: str) -> bool:
     return shutil.which(name) is not None
 
-
 def _win_path(p: str | Path) -> str:
-    """Convert WSL path to Windows path (no‑op outside WSL)."""
+    """Convert WSL path to Windows path (no-op outside WSL)."""
     s = str(p)
     if not _is_wsl():
         return s
@@ -166,7 +162,6 @@ def _win_path(p: str | Path) -> str:
         return out
     except Exception:
         return s
-
 
 def _powershell(cmd: str) -> subprocess.CompletedProcess:
     return subprocess.run([
@@ -205,7 +200,7 @@ def _write_pristine_reference(pdb_lig_path: Path) -> None:
         out.write("$$$$\n")
 
 # =============================
-# Canonical per‑protein directory layout
+# Canonical per-protein directory layout
 # =============================
 
 def canon_paths(pdb_id: str, output_root: str | Path) -> dict[str, Path]:
@@ -213,16 +208,15 @@ def canon_paths(pdb_id: str, output_root: str | Path) -> dict[str, Path]:
     base = root / pdb_id.upper()
     return {
         "protein_root": base,                      # processed_pdbs/1IEP
-        "raw":          base / "raw",              # working copy, altloc‑filtered
+        "raw":          base / "raw",              # working copy, altloc-filtered
         "work":         base / "work",             # intermediates
         "ligands_raw":  base / "ligands_raw",      # extracted ligands
-        "nolig":        base / "nolig",            # ligand‑stripped protein + phenix outputs
+        "nolig":        base / "nolig",            # ligand-stripped protein + phenix outputs
         "receptor":     base / "receptor",         # final cleaned receptor & PDBQT
     }
 
-
 def fold_legacy_layout(pdb_id: str, output_root: str | Path) -> None:
-    """Best‑effort migration of legacy sibling dirs into the canonical tree (non‑fatal)."""
+    """Best-effort migration of legacy sibling dirs into the canonical tree (non-fatal)."""
     root = Path(output_root).resolve()
     base = root / pdb_id.upper()
     base.mkdir(parents=True, exist_ok=True)
@@ -261,7 +255,7 @@ def fold_legacy_layout(pdb_id: str, output_root: str | Path) -> None:
 # =============================
 
 def extract_ligands_from_filtered(filtered_pdb: str | Path, out_dir: str | Path) -> list[Path]:
-    """Extract non‑water HETATM residues into individual PDBs (RES_CHAINRESI.pdb)."""
+    """Extract non-water HETATM residues into individual PDBs (RES_CHAINRESI.pdb)."""
     outd = Path(out_dir)
     outd.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -315,8 +309,7 @@ def extract_ligands_from_filtered(filtered_pdb: str | Path, out_dir: str | Path)
 
 def looks_like_hydrogen_name(line: str) -> bool:
     name = line[12:16]
-    return name[0] == " " and name[1].upper() == "H"
-
+    return name[0] == " " and name[1].upper() in {"H", "D", "T"} or name.lstrip()[:1].upper() in {"H","D","T"}
 
 def infer_element(line: str) -> str:
     el = line[76:78].strip().upper()
@@ -328,15 +321,15 @@ def infer_element(line: str) -> str:
     cand2 = (c1 + c2).upper()
     return cand2 if cand2 in _TWO_LETTER else c1.upper()
 
-
 def count_atoms_by_element(pdb_path: str | Path) -> Tuple[int, int]:
     h = heavy = 0
-    with open(pdb_path) as f:
+    with open(pdb_path, encoding="utf-8", errors="ignore") as f:
         for line in f:
             if not line.startswith(("ATOM", "HETATM")):
                 continue
             el = infer_element(line)
             if el == "H":
+                # If element field blank and name doesn't look like H, treat as heavy
                 if line[76:78].strip() == "" and not looks_like_hydrogen_name(line):
                     heavy += 1
                 else:
@@ -344,7 +337,6 @@ def count_atoms_by_element(pdb_path: str | Path) -> Tuple[int, int]:
             else:
                 heavy += 1
     return h, heavy
-
 
 def hydrogenation_status(pdb_path: str | Path) -> Tuple[str, int, int, float]:
     h, heavy = count_atoms_by_element(pdb_path)
@@ -355,30 +347,32 @@ def hydrogenation_status(pdb_path: str | Path) -> Tuple[str, int, int, float]:
         return "SUSPECT_LOW_H", h, heavy, ratio
     return "HAS_H", h, heavy, ratio
 
-
 def file_contains_hydrogens(pdb_path: str | Path) -> bool:
     try:
-        with open(pdb_path, "r") as f:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
-                if line.startswith(("ATOM", "HETATM")):
-                    el = line[76:78].strip().upper()
-                    if el in {"H", "D", "T"}:
-                        return True
+                if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                el = line[76:78].strip().upper()
+                if el in {"H", "D", "T"}:
+                    return True
+                # also detect from atom name if element field is blank/misplaced
+                name = line[12:16]
+                if (name[0] == " " and name[1].upper() in {"H","D","T"}) or name.lstrip()[:1].upper() in {"H","D","T"}:
+                    return True
     except Exception as e:
         logging.warning("Could not read %s to check for H atoms: %s", pdb_path, e)
     return False
 
-
 def file_was_reduced(pdb_path: str | Path) -> bool:
     try:
-        with open(pdb_path, "r") as f:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 if "Reduce" in line and "protonation" in line.lower():
                     return True
     except Exception as e:
         logging.warning("Could not read %s to check for Reduce header: %s", pdb_path, e)
     return False
-
 
 def fix_element_columns_in_file(src: str | Path, dst: str | Path) -> None:
     METALS = {"ZN","FE","MG","MN","CU","NI","CO","NA","K","CA","CL","BR","SR","BA","CD","HG"}
@@ -449,7 +443,7 @@ def filter_altlocs(pdb_input_path: str | Path, pdb_output_path: str | Path) -> N
     atoms = {}
     removed_count = 0
 
-    with open(pdb_input_path, 'r') as f:
+    with open(pdb_input_path, 'r', encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith(('ATOM  ', 'HETATM')):
                 atom_name = line[12:16]
@@ -485,14 +479,13 @@ def filter_altlocs(pdb_input_path: str | Path, pdb_output_path: str | Path) -> N
 
     filtered_atoms.sort(key=lambda l: (l[21], _int_safe(l[22:26]), l[26], l[12:16].strip()))
 
-    with open(pdb_output_path, 'w') as f:
+    with open(pdb_output_path, 'w', encoding="utf-8") as f:
         for line in lines:
             f.write(line)
         for atom_line in filtered_atoms:
             f.write(atom_line)
 
     logging.info("Filtered altLocs in %s → %s (removed %d alternates)", pdb_input_path, pdb_output_path, removed_count)
-
 
 def build_missing_loops(input_pdb: str | Path, output_dir: str | Path) -> str:
     """Fill missing loops/residues using MODELLER; return output PDB path."""
@@ -524,7 +517,6 @@ def build_missing_loops(input_pdb: str | Path, output_dir: str | Path) -> str:
         logging.warning("MODELLER failed on %s: %s", input_pdb, e)
         return str(input_pdb)
 
-
 def find_invalid_atoms(pdb_path: str | Path) -> List[Tuple[str, str, int]]:
     """Flag residues that contain CA but have ≤2 atoms (likely malformed)."""
     from Bio.PDB import PDBParser
@@ -541,13 +533,12 @@ def find_invalid_atoms(pdb_path: str | Path) -> List[Tuple[str, str, int]]:
                     flagged.append((chain.id, residue.get_resname(), residue.id[1]))
     return flagged
 
-
 def filter_invalid_chains(pdb_path: str | Path, output_path: str | Path) -> None:
     """Remove entire chains lacking backbone atoms (CA/N/C/O)."""
     chains: dict[str, List[str]] = defaultdict(list)
     valid_chains: set[str] = set()
 
-    with open(pdb_path, 'r') as f:
+    with open(pdb_path, 'r', encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith(('ATOM  ', 'HETATM')):
                 chain_id = line[21]
@@ -558,18 +549,17 @@ def filter_invalid_chains(pdb_path: str | Path, output_path: str | Path) -> None
             else:
                 chains["HEADER"].append(line)
 
-    with open(output_path, 'w') as f:
+    with open(output_path, 'w', encoding="utf-8") as f:
         for chain_id in chains:
             if chain_id == "HEADER" or chain_id in valid_chains:
                 f.writelines(chains[chain_id])
             else:
                 logging.warning("Skipping invalid chain '%s' (no CA atoms)", chain_id)
 
-
 def remove_implausible_hydrogens_by_distance(pdb_path: str | Path) -> None:
     """Remove H atoms >1.35Å from any heavy atom (conservative geometry filter)."""
     atoms: List[Tuple[str, str, Tuple[float | None, float | None, float | None]]] = []
-    with open(pdb_path) as f:
+    with open(pdb_path, encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith(("ATOM", "HETATM")):
                 try:
@@ -602,13 +592,12 @@ def remove_implausible_hydrogens_by_distance(pdb_path: str | Path) -> None:
         else:
             logging.info("Removed implausible H: %s", line.strip())
 
-    with open(pdb_path, "w") as out:
+    with open(pdb_path, "w", encoding="utf-8") as out:
         out.writelines(kept)
-
 
 def conect_coverage(pdb_path: str | Path) -> float:
     atom_ids, conect_ids = set(), set()
-    with open(pdb_path) as f:
+    with open(pdb_path, encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith(("ATOM", "HETATM")):
                 atom_ids.add(line[6:11].strip())
@@ -617,11 +606,10 @@ def conect_coverage(pdb_path: str | Path) -> float:
                 conect_ids.update(parts[1:])
     return len(conect_ids & atom_ids) / max(len(atom_ids), 1)
 
-
 def remove_unbonded_atoms(pdb_path: str | Path) -> None:
     bonded_atoms: set[str] = set()
     all_atoms: List[str] = []
-    with open(pdb_path, 'r') as f:
+    with open(pdb_path, 'r', encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith("CONECT"):
                 parts = line.split()
@@ -638,9 +626,8 @@ def remove_unbonded_atoms(pdb_path: str | Path) -> None:
         else:
             logging.info("Removed unbonded hydrogen: %s", line.strip())
 
-    with open(pdb_path, 'w') as f:
+    with open(pdb_path, 'w', encoding="utf-8") as f:
         f.writelines(filtered)
-
 
 def clean_hydrogens(pdb_path: str | Path, use_conect_if_reliable: bool = True, conect_min_cov: float = 0.6) -> None:
     cov = conect_coverage(pdb_path) if use_conect_if_reliable else 0.0
@@ -648,13 +635,13 @@ def clean_hydrogens(pdb_path: str | Path, use_conect_if_reliable: bool = True, c
         remove_unbonded_atoms(pdb_path)
     remove_implausible_hydrogens_by_distance(pdb_path)
 
-
 def has_valid_chain(pdb_path: str | Path) -> bool:
-    with open(pdb_path, 'r') as f:
+    with open(pdb_path, 'r', encoding="utf-8", errors="ignore") as f:
         for line in f:
             if line.startswith("ATOM") and line[12:16].strip() == "CA":
                 return True
     return False
+
 def _classify_and_rename_histidines(pdb_in: str | Path, pdb_out: str | Path) -> None:
     """
     Inspect each HIS residue's side-chain hydrogens and rename:
@@ -720,7 +707,6 @@ def _classify_and_rename_histidines(pdb_in: str | Path, pdb_out: str | Path) -> 
         for ln in out_lines:
             w.write(ln)
 
-
 def _rewrite_his_default(pdb_in: str | Path, pdb_out: str | Path, default: str = "HIE") -> None:
     """Rewrite any residual HIS → <default> (HIE/HID/HIP) without inspecting hydrogens."""
     pdb_in, pdb_out = str(pdb_in), str(pdb_out)
@@ -756,12 +742,21 @@ def run_prepare_receptor(input_pdb: str | Path, output_pdbqt: str | Path, cfg: d
     if his_default not in {"HIE", "HID", "HIP"}:
         his_default = "HIE"
 
-    allow_bad_res = bool(cfg.get("MEEKO_ALLOW_BAD_RES", True))
+    # improved truthiness parsing
+    allow_bad_res = str(cfg.get("MEEKO_ALLOW_BAD_RES", "true")).lower() in ("1", "true", "yes")
     default_altloc = (cfg.get("MEEKO_DEFAULT_ALTLOC") or "").strip()  # e.g. "A" or ""
 
-    def _meeko_bin():
-        return shutil.which("mk_prepare_receptor") or shutil.which("mk_prepare_receptor.py")
-
+    def _meeko_cmd() -> list[str]:
+        # Prefer a “bare” executable on PATH
+        exe = shutil.which("mk_prepare_receptor") or shutil.which("mk_prepare_receptor.py")
+        if exe:
+            return [exe]
+        # Fallback to calling the script with this Python
+        abs_py = "/home/michael/miniconda3/envs/docking-env/bin/mk_prepare_receptor.py"
+        if os.path.exists(abs_py):
+            return [sys.executable, abs_py]
+        raise FileNotFoundError("Meeko not found: mk_prepare_receptor(.py) not on PATH and no known absolute path.")
+    
     def _run(cmd: list[str]) -> subprocess.CompletedProcess:
         logging.info("Meeko: %s", " ".join(cmd))
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -795,30 +790,27 @@ def run_prepare_receptor(input_pdb: str | Path, output_pdbqt: str | Path, cfg: d
         return (",".join(sorted(targets)) + f"={his_default}") if targets else ""
 
     def _modern_meeko(pdb_path: str, extra_flags: list[str] | None = None) -> subprocess.CompletedProcess:
-        meeko = _meeko_bin()
-        if not meeko:
-            # craft a dummy cp-like object
-            class _R: returncode=127; stdout=""; stderr="mk_prepare_receptor not found"
+        try:
+            cmd = _meeko_cmd() + ["--read_pdb", pdb_path, "-p", output_pdbqt]
+        except FileNotFoundError as e:
+            class _R:  # little stub so the calling code keeps working
+                returncode = 127; stdout = ""; stderr = str(e)
             return _R()
         flags = extra_flags or []
-        return _run([meeko, "--read_pdb", pdb_path, "-p", output_pdbqt] + flags)
+        return _run(cmd + flags)
 
     def _legacy_meeko(pdb_path: str, extra_flags: list[str] | None = None) -> bool:
-        meeko = _meeko_bin()
-        if not meeko:
+        try:
+            base = _meeko_cmd()
+        except FileNotFoundError:
             return False
         flags = extra_flags or []
         tried = False
-        # ProDy reader (if user has it)
-        r = _run([meeko, "-i", pdb_path, "-p", output_pdbqt] + flags)
-        tried = True
+        r = _run(base + ["-i", pdb_path, "-p", output_pdbqt] + flags); tried = True
         if r.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
             return True
-        # Older -r/-o style
-        r = _run([meeko, "-r", pdb_path, "-o", output_pdbqt] + flags)
-        if r.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
-            return True
-        return tried and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0
+        r = _run(base + ["-r", pdb_path, "-o", output_pdbqt] + flags)
+        return r.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0
 
     # --- Step 0: classify HIS by existing hydrogens (best-case, no coord change)
     with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp1:
@@ -924,256 +916,6 @@ def run_prepare_receptor(input_pdb: str | Path, output_pdbqt: str | Path, cfg: d
         return False
     logging.info("Receptor prepared (ADT).")
     return True
-    """
-    Robust Meeko/ADT wrapper:
-      1) Try Meeko modern CLI
-      2) On HIS ambiguity ('tied for fewest missing H: HIE HID'), build a global -n mapping
-         for all HIS lacking HD1/HE2 and retry (default = cfg['HIS_DEFAULT'] or HIE)
-      3) If still failing, rewrite HIS -> <default> and retry Meeko
-      4) Try legacy Meeko CLIs
-      5) Fall back to ADT (prepare_receptor4.py)
-    """
-    import re
-    from tempfile import NamedTemporaryFile
-
-    input_pdb = str(input_pdb)
-    output_pdbqt = str(output_pdbqt)
-    his_default = str(cfg.get("HIS_DEFAULT", "HIE")).upper()
-    if his_default not in {"HIE", "HID", "HIP"}:
-        his_default = "HIE"
-
-    def _meeko_bin():
-        return shutil.which("mk_prepare_receptor") or shutil.which("mk_prepare_receptor.py")
-
-    def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-        logging.info("Meeko: %s", " ".join(cmd))
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        log_fn = logging.info if r.returncode == 0 else logging.warning
-        log_fn("rc=%s\nSTDOUT:\n%s\nSTDERR:\n%s", r.returncode, (r.stdout or ""), (r.stderr or ""))
-        return r
-
-    def _build_his_override_mapping(pdb_path: str) -> str:
-        """Return a single -n mapping like 'A:27,A:94=HIE' for HIS with no HD1/HE2."""
-        from collections import defaultdict
-        by_res = defaultdict(set)
-        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
-            for ln in f:
-                if not ln.startswith(("ATOM  ", "HETATM")):
-                    continue
-                if ln[17:20] != "HIS":
-                    continue
-                chain = ln[21]
-                resi = ln[22:26].strip()
-                aname = ln[12:16].strip().upper()
-                by_res[(chain, resi)].add(aname)
-        targets = []
-        for (chain, resi), names in by_res.items():
-            if ("HD1" not in names) and ("HE2" not in names):
-                # Only override truly ambiguous HIS
-                try:
-                    rnum = int(resi)
-                except Exception:
-                    rnum = int(resi.strip() or "0")
-                targets.append(f"{chain}:{rnum}")
-        return (",".join(sorted(targets)) + f"={his_default}") if targets else ""
-
-    def _try_meeko_variants(pdb_path: str, extra_flags: list[str] | None = None) -> tuple[bool, str, str, int]:
-        meeko = _meeko_bin()
-        if not meeko:
-            return False, "", "mk_prepare_receptor not found on PATH.", 127
-        flags = extra_flags or []
-        candidates = [
-            [meeko, "--read_pdb", pdb_path, "-p", output_pdbqt] + flags,  # modern
-            [meeko, "-i",          pdb_path, "-p", output_pdbqt] + flags,  # ProDy reader (needs prody)
-            [meeko, "-r",          pdb_path, "-o", output_pdbqt] + flags,  # older examples
-        ]
-        last = None
-        for cmd in candidates:
-            r = _run(cmd)
-            last = r
-            if r.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
-                return True, r.stdout, r.stderr, r.returncode
-        if last is None:
-            return False, "", "No Meeko commands attempted.", 2
-        return False, last.stdout or "", last.stderr or "", last.returncode
-
-    # --- Step 0: classify HIS by existing hydrogens (best-case, no coordinate changes)
-    with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp1:
-        tmp1_path = tmp1.name
-    try:
-        _classify_and_rename_histidines(input_pdb, tmp1_path)  # leaves non-diagnostic HIS as HIS
-    except Exception as e:
-        logging.warning("HIS classify/rename step failed (continuing with original): %s", e)
-        tmp1_path = input_pdb
-
-    # --- Step 1: Meeko (plain)
-    ok, so, se, rc = _try_meeko_variants(tmp1_path)
-    if ok:
-        logging.info("Receptor prepared (Meeko).")
-        if tmp1_path != input_pdb:
-            try: os.remove(tmp1_path)
-            except Exception: pass
-        return True
-
-    # --- Step 2: If HIS ambiguity, build an -n override for ambiguous HIS only and retry
-    ambiguous = ("tied for fewest missing H" in (se or "")) and ("HIE" in (se or "") and "HID" in (se or ""))
-    if ambiguous:
-        mapping = _build_his_override_mapping(tmp1_path)
-        if not mapping:
-            # Try to salvage residue_key hint from stderr (e.g., residue_key='A:94')
-            m = re.search(r"residue_key='([A-Za-z]):(\d+)'", se or "")
-            if m:
-                mapping = f"{m.group(1)}:{int(m.group(2))}={his_default}"
-        if mapping:
-            logging.warning("Meeko histidine ambiguity -> retry with -n %s", mapping)
-            ok2, so2, se2, rc2 = _try_meeko_variants(tmp1_path, extra_flags=["-n", mapping])
-            if ok2:
-                logging.info("Receptor prepared after tautomer override (Meeko).")
-                if tmp1_path != input_pdb:
-                    try: os.remove(tmp1_path)
-                    except Exception: pass
-                return True
-            else:
-                logging.warning("Meeko retry with -n failed (rc=%s)", rc2)
-
-    # --- Step 3: Heavy-handed fallback: rewrite any remaining HIS -> default and retry Meeko
-    logging.warning("Retrying Meeko after rewriting residual HIS -> %s", his_default)
-    with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp2:
-        tmp2_path = tmp2.name
-    try:
-        _rewrite_his_default(input_pdb, tmp2_path, default=his_default)
-        ok3, so3, se3, rc3 = _try_meeko_variants(tmp2_path)
-    finally:
-        try: os.remove(tmp2_path)
-        except Exception: pass
-
-    # Clean temp from Step 0
-    if tmp1_path != input_pdb:
-        try: os.remove(tmp1_path)
-        except Exception: pass
-
-    if ok3:
-        logging.info("Receptor prepared after HIS rewrite (Meeko).")
-        return True
-
-    # --- Step 4: ADT fallback
-    mgltools_python = cfg.get("MGLTOOLS_PYTHON")
-    prepare_script   = cfg.get("PREPARE_RECEPTOR_SCRIPT")
-    if not mgltools_python or not prepare_script or not os.path.exists(prepare_script):
-        logging.error("ADT receptor prep unavailable (MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT missing/not found)")
-        return False
-
-    cmd = [
-        mgltools_python, prepare_script,
-        "-r", input_pdb, "-o", output_pdbqt,
-        "-A", "none", "-U", "nphs_lps_nonstdres"
-    ]
-    logging.info("Running prepare_receptor4.py: %s", " ".join(cmd))
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if r.returncode != 0:
-        logging.error("prepare_receptor4 failed:\n%s", r.stderr or r.stdout or "")
-        return False
-    logging.info("Receptor prepared (ADT).")
-    return True
-
-    """
-    Robust Meeko/ADT wrapper:
-      - Normalizes histidines based on actual hydrogens (Reduce output) to avoid Meeko ambiguity.
-      - Tries several Meeko CLIs (modern/legacy).
-      - If still ambiguous (pre-Reduce cases), retries with HIS→HIE.
-      - Falls back to ADT if configured.
-    """
-    input_pdb = str(input_pdb)
-    output_pdbqt = str(output_pdbqt)
-
-    # --- Make a temp file where HIS are classified from hydrogens (best outcome) ---
-    from tempfile import NamedTemporaryFile
-    import os
-
-    with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp1:
-        tmp1_path = tmp1.name
-    try:
-        _classify_and_rename_histidines(input_pdb, tmp1_path)
-    except Exception as e:
-        logging.warning("HIS classify/rename step failed (continuing with original): %s", e)
-        tmp1_path = input_pdb  # fall back to original if something odd happens
-
-    # --- Prefer Meeko if requested ---
-    use_meeko = str(cfg.get("USE_MEEKO", "")).lower() in ("1", "true", "yes")
-    if use_meeko:
-        meeko = shutil.which("mk_prepare_receptor") or shutil.which("mk_prepare_receptor.py")
-        if meeko:
-            def _try_meeko(pdb_path: str) -> tuple[bool, str, str, int]:
-                # Try common CLIs (modern first)
-                candidates = [
-                    [meeko, "--read_pdb", pdb_path, "-p", output_pdbqt],  # modern
-                    [meeko, "-i", pdb_path, "-p", output_pdbqt],          # ProDy reader
-                    [meeko, "-r", pdb_path, "-o", output_pdbqt],          # older examples
-                ]
-                for cmd in candidates:
-                    logging.info("Trying Meeko receptor prep: %s", " ".join(cmd))
-                    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                    if r.returncode == 0 and os.path.exists(output_pdbqt):
-                        return True, r.stdout, r.stderr, r.returncode
-                    logging.warning("Meeko attempt failed (rc=%s)\nSTDOUT:\n%s\nSTDERR:\n%s",
-                                    r.returncode, r.stdout, r.stderr)
-                return False, r.stdout, r.stderr, r.returncode
-
-            ok, out, err, rc = _try_meeko(tmp1_path)
-            if ok:
-                logging.info("Receptor prepared (Meeko): %s", output_pdbqt)
-                if tmp1_path != input_pdb:
-                    try: os.remove(tmp1_path)
-                    except Exception: pass
-                return True
-
-            # If ambiguity remains (e.g., pre-Reduce HIS with no HD1/HE2 present), force a default
-            if "tied for fewest missing H" in (err or "") and ("HIE" in err and "HID" in err):
-                logging.warning("Meeko histidine ambiguity persists; retrying with HIS→HIE default.")
-                with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp2:
-                    tmp2_path = tmp2.name
-                try:
-                    _rewrite_his_default(input_pdb, tmp2_path, default="HIE")
-                    ok2, out2, err2, rc2 = _try_meeko(tmp2_path)
-                finally:
-                    try: os.remove(tmp2_path)
-                    except Exception: pass
-                if ok2:
-                    logging.info("Receptor prepared after HIS→HIE fallback: %s", output_pdbqt)
-                    if tmp1_path != input_pdb:
-                        try: os.remove(tmp1_path)
-                        except Exception: pass
-                    return True
-                logging.error("Meeko retry (HIS→HIE) failed (rc=%s)\nSTDOUT:\n%s\nSTDERR:\n%s", rc2, out2, err2)
-            else:
-                logging.error("Meeko receptor prep failed (rc=%s):\n%s", rc, err or "")
-
-        else:
-            logging.warning("USE_MEEKO=True but mk_prepare_receptor not found on PATH; will try ADT fallback.")
-
-    # --- ADT fallback (unchanged) ---
-    mgltools_python = cfg.get("MGLTOOLS_PYTHON")
-    prepare_script   = cfg.get("PREPARE_RECEPTOR_SCRIPT")
-    if not mgltools_python or not prepare_script or not os.path.exists(prepare_script):
-        logging.error("ADT receptor prep unavailable (MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT missing/not found)")
-        if tmp1_path != input_pdb:
-            try: os.remove(tmp1_path)
-            except Exception: pass
-        return False
-
-    cmd = [mgltools_python, prepare_script, "-r", input_pdb, "-o", output_pdbqt, "-A", "none", "-U", "nphs_lps_nonstdres"]
-    logging.info("Running prepare_receptor4.py: %s", " ".join(cmd))
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if tmp1_path != input_pdb:
-        try: os.remove(tmp1_path)
-        except Exception: pass
-    if r.returncode != 0:
-        logging.error("prepare_receptor4 failed:\n%s", r.stderr)
-        return False
-    logging.info("Receptor prepared (ADT): %s", output_pdbqt)
-    return True
-
-
 
 def run_phenix_pdbtools(input_pdb: str | Path, output_pdb: str | Path, remove_waters: bool = True) -> bool:
     """Run Phenix pdbtools if available (Linux, or Windows via PowerShell under WSL). Return True if successful."""
@@ -1217,7 +959,6 @@ def run_phenix_pdbtools(input_pdb: str | Path, output_pdb: str | Path, remove_wa
     logging.warning("Phenix not available; skipping pdbtools polish")
     return False
 
-
 def run_windows_phenix_clean_script(loop_fixed_pdb: str | Path, nolig_dir: str | Path) -> int:
     """Call your PHENIX_CLEAN_SCRIPT using Windows Phenix Python from WSL. Returns returncode."""
     if not PHENIX_PYTHON_BAT or not Path(PHENIX_PYTHON_BAT).exists() or not PHENIX_CLEAN_SCRIPT:
@@ -1235,7 +976,6 @@ def run_windows_phenix_clean_script(loop_fixed_pdb: str | Path, nolig_dir: str |
     r = _powershell(ps)
     return r.returncode
 
-
 def run_openbabel_add_h(input_pdb: str | Path, output_pdb: str | Path) -> None:
     obabel = OPENBABEL_PATH or shutil.which("obabel")
     if not obabel or not shutil.which(Path(obabel).name):
@@ -1245,7 +985,6 @@ def run_openbabel_add_h(input_pdb: str | Path, output_pdb: str | Path) -> None:
     if r.returncode != 0:
         raise RuntimeError(f"Open Babel failed:\n{r.stderr}")
     logging.info("Open Babel hydrogenation succeeded")
-
 
 def assign_protonation_states(input_pdb: str | Path, output_pdb: str | Path, reduce_exe: str | None = None) -> str:
     import uuid
@@ -1259,14 +998,14 @@ def assign_protonation_states(input_pdb: str | Path, output_pdb: str | Path, red
     exe_dir = os.path.dirname(exe) or None
 
     def run_reduce(in_pdb: str, stage_name: str) -> str:
-        with open(output_pdb, "w") as out:
+        with open(output_pdb, "w", encoding="utf-8") as out:
             cp = subprocess.run([exe] + reduce_flags + [in_pdb], stdout=out, stderr=subprocess.PIPE, text=True, cwd=exe_dir)
         if cp.returncode != 0:
             raise RuntimeError(f"{stage_name} reduce failed: {cp.stderr.strip()}")
         return output_pdb
 
     status_before, h0, hv0, r0 = hydrogenation_status(input_pdb)
-    logging.info("[H‑Scan before] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_before, h0, hv0, r0)
+    logging.info("[H-Scan before] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_before, h0, hv0, r0)
 
     try:
         run_reduce(input_pdb, "Reduce#1")
@@ -1300,11 +1039,31 @@ def assign_protonation_states(input_pdb: str | Path, output_pdb: str | Path, red
                 shutil.copy(input_pdb, output_pdb)
                 logging.warning("Hydrogenation skipped; copied input to output.")
 
+    # ⬇⬇⬇ everything below stays INSIDE the function ⬇⬇⬇
     status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
-    logging.info("[H‑Scan after ] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_after, h1, hv1, r1)
+    logging.info("[H-Scan after ] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_after, h1, hv1, r1)
+
     if status_after == "NO_H":
-        raise RuntimeError("Protonation produced no hydrogens.")
+        logging.warning("Reduce produced no hydrogens; trying Open Babel fallback.")
+        try:
+            tmp_babel = output_pdb + ".babel.pdb"
+            run_openbabel_add_h(input_pdb, tmp_babel)
+            shutil.move(tmp_babel, output_pdb)
+            status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
+            logging.info("[H-Scan babel] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_after, h1, hv1, r1)
+        except Exception as e:
+            logging.error("OpenBabel fallback failed after Reduce: %s", e)
+
+        if hydrogenation_status(output_pdb)[0] == "NO_H":
+            # Optional: allow pipeline to continue if you want (unset to keep strict)
+            if str(config.get("ALLOW_NO_HYDROGENS", "")).lower() in ("1","true","yes"):
+                logging.warning("Continuing with NO_H due to ALLOW_NO_HYDROGENS config.")
+                return output_pdb
+            raise RuntimeError("Protonation produced no hydrogens.")
+
+    # make sure we return the path on success
     return output_pdb
+
 
 # =============================
 # Residue & Policy utilities
@@ -1312,7 +1071,6 @@ def assign_protonation_states(input_pdb: str | Path, output_pdb: str | Path, red
 
 def _is_metal(resname: str) -> bool:
     return (resname or "").upper() in _METALS
-
 
 def _cofactor_policy_keep(resname: str) -> bool:
     rn = (resname or "").upper()
@@ -1330,13 +1088,11 @@ def _cofactor_policy_keep(resname: str) -> bool:
     # auto: keep likely cofactors unless blacklisted
     return rn not in _COFACTOR_DROP
 
-
 def _parse_xyz(line: str):
     try:
         return (float(line[30:38]), float(line[38:46]), float(line[46:54]))
     except Exception:
         return None
-
 
 def _should_keep_water(line: str, pocket_center: Tuple[float, float, float] | None) -> bool:
     pol = (config.get("WATER_POLICY", "site_only") or "site_only").lower()
@@ -1359,7 +1115,6 @@ def _should_keep_water(line: str, pocket_center: Tuple[float, float, float] | No
     except Exception:
         pass
     return True
-
 
 def strip_nonstandard_residues(input_pdb: str | Path, output_pdb: str | Path) -> Tuple[int, str]:
     """Remove nonstandard residues while keeping cofactors/metals/waters per policy.
@@ -1428,11 +1183,10 @@ def strip_nonstandard_residues(input_pdb: str | Path, output_pdb: str | Path) ->
         logging.info("Estimated pocket center: (%.2f, %.2f, %.2f)", *pocket_center)
     return len(removed), str(output_pdb)
 
-
 def log_metal_mislabels(pdb_path: str | Path):
     metal_names = {"NA","K","CA","MG","MN","FE","CO","NI","CU","ZN","CL","BR"}
     mis = {}
-    with open(pdb_path) as f:
+    with open(pdb_path, encoding="utf-8", errors="ignore") as f:
         for ln in f:
             if not ln.startswith(("ATOM","HETATM")):
                 continue
@@ -1444,7 +1198,6 @@ def log_metal_mislabels(pdb_path: str | Path):
     if mis:
         logging.warning("Possible mislabels in metal residues: %s", mis)
 
-
 def quick_element_histogram(pdb_path: str | Path) -> None:
     cnt = Counter()
     with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -1453,7 +1206,6 @@ def quick_element_histogram(pdb_path: str | Path) -> None:
                 el = ln[76:78].strip().upper()
                 cnt[el or ""] += 1
     logging.info("[Elem histogram %s] %s", os.path.basename(str(pdb_path)), dict(sorted(cnt.items())))
-
 
 def assert_no_metal_in_peptidic(pdb_path: str | Path) -> None:
     METALS = {"NA","K","CA","MG","MN","FE","CO","NI","CU","ZN","CL","BR"}
@@ -1480,17 +1232,17 @@ def assert_no_metal_in_peptidic(pdb_path: str | Path) -> None:
             offenders.append(key)
 
     if offenders:
-        logging.warning("Peptide‑like residues contain metal elements (check upstream labeling): %s", offenders)
+        logging.warning("Peptide-like residues contain metal elements (check upstream labeling): %s", offenders)
 
 # =============================
-# End‑to‑end Cleaning Pipeline
+# End-to-end Cleaning Pipeline
 # =============================
 
 def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
     """Run the full cleaning pipeline and return path to final cleaned PDB (receptor)."""
     output_root = str(output_root)
-    if not os.access(output_root, os.W_OK):
-        raise PermissionError(f"Cannot write to output directory: {output_root}")
+    # Ensure base directory exists instead of pre-checking writability
+    Path(output_root).mkdir(parents=True, exist_ok=True)
 
     pdb_id = os.path.splitext(os.path.basename(str(pdb_file)))[0].upper()
     fold_legacy_layout(pdb_id, output_root)
@@ -1557,7 +1309,6 @@ def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
     else:
         logging.info("No PHENIX_CLEAN_SCRIPT configured; skipping script stage")
 
-
     src_for_step = phenix_out_pdb if ran_clean and phenix_out_pdb.is_file() else loop_fixed_pdb
 
     # (7) Hydrogen cleanup & chain validation
@@ -1593,14 +1344,14 @@ def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
     assert_no_metal_in_peptidic(receptor_pdb)
     assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
-    # (10) MolProbity (non‑blocking)
+    # (10) MolProbity (non-blocking)
     try:
         if _bin_on_path("phenix.molprobity"):
             subprocess.run(["phenix.molprobity", str(receptor_pdb)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         elif _is_wsl() and PHENIX_DIR and Path(MOLPROBITY_BAT).exists():
             _powershell(f"& '{_win_path(MOLPROBITY_BAT)}' '{_win_path(receptor_pdb)}'")
     except Exception as e:
-        logging.warning("MolProbity stage failed (non‑fatal): %s", e)
+        logging.warning("MolProbity stage failed (non-fatal): %s", e)
 
     logging.info("Cleaned receptor: %s", receptor_pdb)
     return str(receptor_pdb)
@@ -1610,7 +1361,7 @@ def clean_pdb(pdb_file: str | Path, output_root: str | Path) -> str | None:
 # =============================
 
 def main(pdb_filename: str, output_dir: str | Path = r"./processed_pdbs") -> tuple[str, str] | None:
-    """High‑level wrapper: clean a PDB and prepare the receptor PDBQT."""
+    """High-level wrapper: clean a PDB and prepare the receptor PDBQT."""
     try:
         # Resolve input path (abs path takes precedence)
         if os.path.isabs(pdb_filename) and os.path.isfile(pdb_filename):
