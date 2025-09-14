@@ -1,18 +1,17 @@
+# --- snip header / your docstring stays the same ---
+
 from __future__ import annotations
 
 import argparse
 import csv
-import glob
 import os
 import re
-import threading
 import time
+import glob
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from capture_pose import (
     pick_control_and_nearest_rdk,
     _render_native_on_original_pdb,
@@ -25,32 +24,20 @@ from metabolite_resolver import (
     resolve_corresponding_name_for_rdk,
     resolve_corresponding_name_from_text,
 )
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Limit simultaneous PyMOL renders (1 by default; override with env PYMOL_PARALLEL)
 _RENDER_LOCK = threading.Semaphore(int(os.environ.get("PYMOL_PARALLEL", "1")))
 
 # ---- import pipeline pieces from your main so we reuse logic verbatim ----
 from main import (
-    run_one_stage,
-    make_protein_logger,
-    make_paths,
-    extract_ligands_to_nolig,
-    robust_prepare_controls,
-    prepare_receptor,
-    _count_heavy_atoms_from_pdbqt,
-    CenterSelector,
-    GlobalCenterGuard,
-    get_recenter_params,
-    early_recenter_decision,
-    fallback_recentering_if_empty,
-    record_score,
-    record_le,
-    final_pose_validation_and_screenshots,
-    RetryManager,
-    build_control_lookup,
-    _fingerprint_stage,
-    checkpoint_should_skip,
-    checkpoint_mark_done,
+    run_one_stage, make_protein_logger, make_paths, extract_ligands_to_nolig,
+    robust_prepare_controls, prepare_receptor, _count_heavy_atoms_from_pdbqt,
+    CenterSelector, GlobalCenterGuard, get_recenter_params, early_recenter_decision,
+    fallback_recentering_if_empty, record_score, record_le,
+    final_pose_validation_and_screenshots, RetryManager, build_control_lookup,
+    _fingerprint_stage, checkpoint_should_skip, checkpoint_mark_done,
     checkpoint_invalidate_from,
     detect_pocket,
 )
@@ -58,19 +45,18 @@ from main import (
 from input_and_export_functions import load_inputs, validate_config
 from protein_functions import detect_active_site
 
-
 # ------------------------
 # Defaults (your Windows paths)
 # ------------------------
-DEFAULT_INPUT_DIR = r"E:\PythonProject\protein_automation\input_pdbs"
-DEFAULT_OUT_ROOT = r"E:\PythonProject\protein_automation\benchmarks"
+DEFAULT_INPUT_DIR   = r"E:\PythonProject\protein_automation\input_pdbs"
+DEFAULT_OUT_ROOT    = r"E:\PythonProject\protein_automation\benchmarks"
 DEFAULT_PREPPED_DIR = r"E:\PythonProject\protein_automation\prepped_ligands"
 DEFAULT_MAPPING_CSV = r"E:\PythonProject\protein_automation\fda_mapping_from_pdbqt.csv"
-
 
 # ------------------------
 # Util: normalization + PDB hint parsing
 # ------------------------
+
 def _norm(s: Optional[str]) -> str:
     """
     Normalize a free-text string for fuzzy matching.
@@ -84,7 +70,6 @@ def _norm(s: Optional[str]) -> str:
     s = re.sub(r"[-_/\\,;:\|\[\]\(\)\{\}\.\+\*'\"]+", " ", s)
     return s
 
-
 def _tokenize(s: str) -> List[str]:
     """
     Tokenize into alnum chunks (plus '+').
@@ -95,7 +80,6 @@ def _tokenize(s: str) -> List[str]:
     toks = re.split(r"[^a-z0-9\+]+", s.lower())
     return [t for t in toks if t]
 
-
 def _extract_rdk_id(text: str) -> Optional[str]:
     """
     Extract an 'rdk_######' id from a filename/path if present.
@@ -105,8 +89,6 @@ def _extract_rdk_id(text: str) -> Optional[str]:
         return None
     m = re.search(r"(rdk_\d{6,8})", Path(text).stem.lower())
     return m.group(1) if m else None
-
-
 def parse_pdb_het_hints(pdb_path: Path) -> Tuple[List[str], List[str]]:
     """
     Collect ligand hint signals from a PDB file.
@@ -169,8 +151,8 @@ def parse_pdb_het_hints(pdb_path: Path) -> Tuple[List[str], List[str]]:
 
     # Filter: standard residues/junk that we never want as “controls”
     STANDARD_RES = {
-        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET",
-        "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "MSE", "SEC", "PYL"
+        "ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE","LEU","LYS","MET",
+        "PHE","PRO","SER","THR","TRP","TYR","VAL","MSE","SEC","PYL"
     }
     het_ids = {
         h for h in het_ids
@@ -203,17 +185,16 @@ def parse_pdb_het_hints(pdb_path: Path) -> Tuple[List[str], List[str]]:
 
     return sorted(het_ids), dedup_names
 
-
 # ------------------------
 # Alias augmentation from prior runs (details CSV)
 # ------------------------
+
 def _norm_text(s: Optional[str]) -> str:
     """
     Aggressive normalization (alphanum only).
     Why: used in simple heuristics that don't want punctuation differences.
     """
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
-
 
 def _looks_like_brand_or_generic(name: str) -> bool:
     """
@@ -227,7 +208,6 @@ def _looks_like_brand_or_generic(name: str) -> bool:
         return False
     noisy = len(re.findall(r"[0-9\[\]\(\)\/\.\-\,;:]", n))
     return (noisy / max(1, len(n))) < 0.40
-
 
 def _clean_alias(name: str) -> Optional[str]:
     """
@@ -246,7 +226,6 @@ def _clean_alias(name: str) -> Optional[str]:
         return s_low
     return None
 
-
 def _expand_globs(paths: Sequence[str]) -> List[Path]:
     """
     Expand any glob patterns into Paths.
@@ -259,7 +238,6 @@ def _expand_globs(paths: Sequence[str]) -> List[Path]:
         else:
             out.append(Path(p))
     return out
-
 
 def load_aliases_from_details_csv(paths: Sequence[str]) -> Dict[str, List[str]]:
     """
@@ -276,14 +254,13 @@ def load_aliases_from_details_csv(paths: Sequence[str]) -> Dict[str, List[str]]:
                 reader = csv.DictReader(fh)
                 for row in reader:
                     het = (row.get("control_het") or "").strip().upper()
-                    nm = _clean_alias(row.get("rdk_name") or "")
+                    nm  = _clean_alias(row.get("rdk_name") or "")
                     if not het or not nm:
                         continue
                     exp.setdefault(het, set()).add(nm)
         except Exception as e:
             print(f"[alias] WARN: failed to parse {csv_path}: {e}")
     return {k: sorted(v) for k, v in exp.items()}
-
 
 def merge_aliases_into_chemcomp(base: Dict[str, List[str]], extra: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """
@@ -300,80 +277,61 @@ def merge_aliases_into_chemcomp(base: Dict[str, List[str]], extra: Dict[str, Lis
         out[het] = sorted(merged)
     return out
 
-
 # ------------------------
 # Exclusions (expanded)
 # ------------------------
+
 EXCLUDE_HET_IDS = {
     # waters
-    "HOH", "WAT", "DOD",
+    "HOH","WAT","DOD",
 
     # monoatomic / simple ions (halides, alkali, alkaline earth, transition, lanthanides, etc.)
-    "F", "CL", "BR", "I",
-    "LI", "NA", "K", "RB", "CS", "FR",
-    "MG", "CA", "SR", "BA", "RA",
-    "SC", "TI", "V", "CR", "MN", "FE", "CO", "NI", "CU", "ZN",
-    "Y", "ZR", "NB", "MO", "TC", "RU", "RH", "PD", "AG", "CD", "HGA", "HG", "PT", "AU",
-    "AL", "GA", "IN", "TL", "PB", "BI", "SN", "SB", "AS", "SE",
-    "LA", "CE", "PR", "ND", "PM", "SM", "EU", "GD", "TB", "DY", "HO", "ER", "TM", "YB", "LU",
-
+    "F","CL","BR","I",
+    "LI","NA","K","RB","CS","FR",
+    "MG","CA","SR","BA","RA",
+    "SC","TI","V","CR","MN","FE","CO","NI","CU","ZN",
+    "Y","ZR","NB","MO","TC","RU","RH","PD","AG","CD","HGA","HG","PT","AU",
+    "AL","GA","IN","TL","PB","BI","SN","SB","AS","SE",
+    "LA","CE","PR","ND","PM","SM","EU","GD","TB","DY","HO","ER","TM","YB","LU",
     # common oxyanions / salts / crystallization additives
-    "SO4", "SUL", "PO4", "HPO", "DPO", "CO3", "NO3", "SCN", "CYN", "BCT", "CAC", "IOD", "BR", "NCO", "CLO",
-
+    "SO4","SUL","PO4","HPO","DPO","CO3","NO3","SCN","CYN","BCT","CAC","IOD","BR","NCO","CLO",
     # buffers / pH agents / precipitants / scavengers / reducing agents
-    "TRS", "TES", "BES", "HEP", "HEZ", "MES", "MOP", "PIP", "ADA", "CHES", "CAPS", "BTP", "POP", "MOPS", "PIPES",
-    "DTT", "BME", "TCEP", "IMD", "IPR", "IPA", "ACN", "ACT", "ACE", "FMT", "CIT", "TAR", "TLA", "GLY", "HIS", "ARG", "LYS",
-
+    "TRS","TES","BES","HEP","HEZ","MES","MOP","PIP","ADA","CHES","CAPS","BTP","POP","MOPS","PIPES",
+    "DTT","BME","TCEP","IMD","IPR","IPA","ACN","ACT","ACE","FMT","CIT","TAR","TLA","GLY","HIS","ARG","LYS",
     # cryo / solvents / polyols
-    "GOL", "EDO", "PGO", "MPD", "DMS", "DMF", "EOH", "ETOH", "MEO", "PEO", "BU3", "TBA", "2MO", "1PE",
-    "PE8", "PEU", "PG4", "PG5", "PG6", "PGE", "P33",
-
+    "GOL","EDO","PGO","MPD","DMS","DMF","EOH","ETOH","MEO","PEO","BU3","TBA","2MO","1PE","PE8","PEU","PG4","PG5","PG6","PGE","P33",
     # PEG fragments & glymes (very common false "controls")
-    "PEG", "1PG", "2PG", "3PG", "TEG", "P4G", "P6G", "P8G", "P10", "P20",
-
+    "PEG","1PG","2PG","3PG","TEG","P4G","P6G","P8G","P10","P20",
     # sugars & glycans (frequent cryo/osmolytes; usually not small-molecule drugs)
-    "NAG", "NDG", "BMA", "MAN", "GLC", "GAL", "FUC", "SIA", "SLB", "BGC", "BOG", "TRE", "SUC", "MAL", "LMT", "XYP", "ARA", "RIB", "FRU",
-
+    "NAG","NDG","BMA","MAN","GLC","GAL","FUC","SIA","SLB","BGC","BOG","TRE","SUC","MAL","LMT","XYP","ARA","RIB","FRU",
     # lipids / fatty acids / sterols (often membrane additives)
-    "CLR", "CHL", "OLA", "OLE", "STE", "PLM", "MYR", "PAL", "LDA", "LDAO", "DOD", "C8E", "C10E", "C12", "C14",
-
+    "CLR","CHL","OLA","OLE","STE","PLM","MYR","PAL","LDA","LDAO","DOD","C8E","C10E","C12","C14",
     # nucleotides / energy carriers / CoA / common cofactors
-    "ATP", "ADP", "AMP", "GTP", "GDP", "GMP", "CTP", "CDP", "CMP", "UTP", "UDP", "UMP", "TTP", "TDP", "TMP",
-    "NAD", "NAP", "NADH", "NADP", "FAD", "FMN", "PLP", "TPP", "COA", "ACP", "SAM", "SAH", "THF", "FOL",
-
+    "ATP","ADP","AMP","GTP","GDP","GMP","CTP","CDP","CMP","UTP","UDP","UMP","TTP","TDP","TMP",
+    "NAD","NAP","NADH","NADP","FAD","FMN","PLP","TPP","COA","ACP","SAM","SAH","THF","FOL",
     # heme and variants / porphyrins / quinones / retinal etc.
-    "HEM", "HEC", "HEB", "HEA", "UQ1", "UQ2", "UQ5", "MEN", "RET", "BCR",
-
+    "HEM","HEC","HEB","HEA","UQ1","UQ2","UQ5","MEN","RET","BCR",
     # phospholipid headgroups / detergents
-    "CHO", "CHX", "CHD", "TRI", "CHAP", "CHAPSO", "DDM", "DM", "UDM", "MNG", "LMG", "NG",
+    "CHO","CHX","CHD","TRI","CHAP","CHAPSO","DDM","DM","UDM","MNG","LMG","NG",
 }
 
 # Optional: simple name-based screen to catch variants without fixed 3-letter IDs
 EXCLUDE_HET_NAME_KEYWORDS = {
     # salts / buffers / small inorganic
-    "SULFATE", "PHOSPHATE", "CHLORIDE", "BROMIDE", "IODIDE", "NITRATE", "CARBONATE", "BICARBONATE", "THIOCYANATE", "CACODYLATE",
-
-    "ACETATE", "FORMATE", "CITRATE", "TARTRATE", "IMIDAZOLE", "AMMONIUM",
-
+    "SULFATE","PHOSPHATE","CHLORIDE","BROMIDE","IODIDE","NITRATE","CARBONATE","BICARBONATE","THIOCYANATE","CACODYLATE",
+    "ACETATE","FORMATE","CITRATE","TARTRATE","IMIDAZOLE","AMMONIUM",
     # solvents / cryo
-    "ETHYLENE GLYCOL", "DIETHYLENE GLYCOL", "TRIETHYLENE GLYCOL", "GLYCEROL", "MPD", "ISOPROPANOL",
-    "ETHANOL", "METHANOL", "DMSO", "DMF", "PEG", "POLYETHYLENE GLYCOL", "GLYME",
-
+    "ETHYLENE GLYCOL","DIETHYLENE GLYCOL","TRIETHYLENE GLYCOL","GLYCEROL","MPD","ISOPROPANOL","ETHANOL","METHANOL","DMSO","DMF",
+    "PEG","POLYETHYLENE GLYCOL","GLYME",
     # sugars & glycans
-    "GLUCOSE", "GALACTOSE", "MANNOSE", "FRUCTOSE", "MALTOSE", "TREHALOSE", "SUCROSE", "N-ACETYLGLUCOSAMINE",
-
+    "GLUCOSE","GALACTOSE","MANNOSE","FRUCTOSE","MALTOSE","TREHALOSE","SUCROSE","N-ACETYLGLUCOSAMINE",
     # detergents / lipids
-    "DODECYL", "MALTOSIDE", "NEOPENTYL GLYCOL", "DIGITONIN", "TWEEN", "TRITON",
-    "OCTYLGLUCOSIDE", "LAURYLDIMETHYLAMINE-OXIDE", "LDAO", "CHOLESTEROL", "OLEATE", "PALMITATE", "STEARATE",
-
+    "DODECYL","MALTOSIDE","NEOPENTYL GLYCOL","DIGITONIN","TWEEN","TRITON","OCTYLGLUCOSIDE","LAURYLDIMETHYLAMINE-OXIDE","LDAO",
+    "CHOLESTEROL","OLEATE","PALMITATE","STEARATE",
     # nucleotides / cofactors
-    "ATP", "ADP", "AMP", "GTP", "GDP", "GMP", "NAD", "NADP", "FAD", "FMN", "COENZYME A",
-    "S-ADENOSYLMETHIONINE", "PYRIDOXAL PHOSPHATE", "THIAMINE PYROPHOSPHATE",
-
-    # others
-    "HEME", "UBIQUINONE", "RETINAL",
+    "ATP","ADP","AMP","GTP","GDP","GMP","NAD","NADP","FAD","FMN","COENZYME A","S-ADENOSYLMETHIONINE","PYRIDOXAL PHOSPHATE","THIAMINE PYROPHOSPHATE",
+    "HEME","UBIQUINONE","RETINAL",
 }
-
 
 # --- Per-PDB manual hints and hard-coded FDA controls -----------------
 # These get injected into the search hints (PER_PDB_HINTS) and, if found in your
@@ -419,150 +377,150 @@ HARD_FDA_CONTROL_BY_PDB: Dict[str, List[str]] = {
 # ------------------------
 CHEMCOMP_ALIAS: Dict[str, List[str]] = {
     # ABL / BCR-ABL / KIT / VEGFR TKIs
-    "STI": ["imatinib", "gleevec", "sti571"],
-    "NIL": ["nilotinib", "tasigna"],
-    "ABL": ["asciminib", "abl001", "scemblix"],
-    "DAS": ["dasatinib", "sprycel"],
-    "BOS": ["bosutinib", "bosulif"],
-    "PON": ["ponatinib", "iclusig"],
-    "AXI": ["axitinib", "inlyta"],
-    "SFB": ["sorafenib", "nexavar", "bay 43-9006", "bay439006"],
-    "SU1": ["sunitinib", "sutent", "su11248"],
-    "PAZ": ["pazopanib", "votrient"],
-    "CAB": ["cabozantinib", "cabometyx", "cometriq"],
-    "REG": ["regorafenib", "stivarga"],
-    "VAN": ["vandetanib", "zd6474", "caprelsa"],
+    "STI": ["imatinib","gleevec","sti571"],
+    "NIL": ["nilotinib","tasigna"],
+    "ABL": ["asciminib","abl001","scemblix"],
+    "DAS": ["dasatinib","sprycel"],
+    "BOS": ["bosutinib","bosulif"],
+    "PON": ["ponatinib","iclusig"],
+    "AXI": ["axitinib","inlyta"],
+    "SFB": ["sorafenib","nexavar","bay 43-9006","bay439006"],
+    "SU1": ["sunitinib","sutent","su11248"],
+    "PAZ": ["pazopanib","votrient"],
+    "CAB": ["cabozantinib","cabometyx","cometriq"],
+    "REG": ["regorafenib","stivarga"],
+    "VAN": ["vandetanib","zd6474","caprelsa"],
 
     # EGFR / ERBB2
-    "ERL": ["erlotinib", "tarceva"],
-    "GEF": ["gefitinib", "iressa"],
-    "AFN": ["afatinib", "gilotrif"],
-    "OSM": ["osimertinib", "tagrisso", "azd9291"],
-    "LAP": ["lapatinib", "tykerb"],
+    "ERL": ["erlotinib","tarceva"],
+    "GEF": ["gefitinib","iressa"],
+    "AFN": ["afatinib","gilotrif"],
+    "OSM": ["osimertinib","tagrisso","azd9291"],
+    "LAP": ["lapatinib","tykerb"],
 
     # ALK/ROS1/MET/RET
-    "CRZ": ["crizotinib", "xalkori"],
-    "CER": ["ceritinib", "zykadia"],
-    "ALE": ["alectinib", "alecenza"],
-    "LOR": ["lorlatinib", "lorbrena", "lorviqua"],
-    "BRG": ["brigatinib", "ap26113"],
-    "ENT": ["entrectinib", "rxdx-101"],
+    "CRZ": ["crizotinib","xalkori"],
+    "CER": ["ceritinib","zykadia"],
+    "ALE": ["alectinib","alecenza"],
+    "LOR": ["lorlatinib","lorbrena","lorviqua"],
+    "BRG": ["brigatinib","ap26113"],
+    "ENT": ["entrectinib","rxdx-101"],
     # NOTE: 'CAP' merged to include both capmatinib (oncology) and capecitabine (antimetabolite).
     # This is intentionally broad so HET=CAP in PDBs still yields helpful hints.
-    "CAP": ["capmatinib", "tabrecta", "capecitabine", "xeloda"],
-    "SELr": ["selpercatinib", "rxdx-105", "ret inhibitor"],  # avoid clash with 'SEL' (selumetinib)
-    "PRT": ["pralsetinib", "blud-667", "gavripranib", "gprc"],
+    "CAP": ["capmatinib","tabrecta","capecitabine","xeloda"],
+    "SELr": ["selpercatinib","rxdx-105","ret inhibitor"],  # avoid clash with 'SEL' (selumetinib)
+    "PRT": ["pralsetinib","blud-667","gavripranib","gprc"],
 
     # RAS/RAF/MEK
-    "VEM": ["vemurafenib", "zelboraf"],
-    "DAB": ["dabrafenib", "tafinlar"],
-    "ENC": ["encorafenib", "braftovi"],
-    "COB": ["cobimetinib", "cotellic"],
-    "BIN": ["binimetinib", "mektovi"],
-    "TRM": ["trametinib", "mekinist"],
-    "SEL": ["selumetinib", "koselugo"],
+    "VEM": ["vemurafenib","zelboraf"],
+    "DAB": ["dabrafenib","tafinlar"],
+    "ENC": ["encorafenib","braftovi"],
+    "COB": ["cobimetinib","cotellic"],
+    "BIN": ["binimetinib","mektovi"],
+    "TRM": ["trametinib","mekinist"],
+    "SEL": ["selumetinib","koselugo"],
 
     # JAK
-    "RUX": ["ruxolitinib", "jakafi"],
-    "TOF": ["tofacitinib", "xeljanz"],
-    "BAR": ["baricitinib", "olumiant"],
-    "UPA": ["upadacitinib", "rinvoq"],
-    "FED": ["fedratinib", "inoma", "indra", "indra-280"],
+    "RUX": ["ruxolitinib","jakafi"],
+    "TOF": ["tofacitinib","xeljanz"],
+    "BAR": ["baricitinib","olumiant"],
+    "UPA": ["upadacitinib","rinvoq"],
+    "FED": ["fedratinib","inoma","indra","indra-280"],
 
     # PI3K/mTOR
-    "IDA": ["idelalisib", "zydelig"],
-    "DUV": ["duvelisib", "copiktra"],
-    "COP": ["copanlisib", "aliqopa"],
-    "API": ["alpelisib", "piqray", "byl719"],
-    "EVR": ["everolimus", "afinitor"],
-    "TMS": ["temsirolimus", "torisel"],
-    "RAP": ["rapamycin", "sirolimus"],
+    "IDA": ["idelalisib","zydelig"],
+    "DUV": ["duvelisib","copiktra"],
+    "COP": ["copanlisib","aliqopa"],
+    "API": ["alpelisib","piqray","byl719"],
+    "EVR": ["everolimus","afinitor"],
+    "TMS": ["temsirolimus","torisel"],
+    "RAP": ["rapamycin","sirolimus"],
 
     # CDK4/6
-    "P31": ["palbociclib", "pd-0332991", "ibrance"],
-    "RIB": ["ribociclib", "lee011", "kiskali"],
-    "ABE": ["abemaciclib", "ly2835219", "verzenio"],
+    "P31": ["palbociclib","pd-0332991","ibrance"],
+    "RIB": ["ribociclib","lee011","kiskali"],
+    "ABE": ["abemaciclib","ly2835219","verzenio"],
 
     # BCL2 / apoptosis
-    "ABT": ["venetoclax", "abt-199", "venclexta"],
-    "NAV": ["navitoclax", "abt-263"],
+    "ABT": ["venetoclax","abt-199","venclexta"],
+    "NAV": ["navitoclax","abt-263"],
 
     # BTK
-    "IBR": ["ibrutinib", "imbruvica"],
-    "ACB": ["acalabrutinib", "calquence"],
-    "ZAN": ["zanubrutinib", "brukinsa"],
+    "IBR": ["ibrutinib","imbruvica"],
+    "ACB": ["acalabrutinib","calquence"],
+    "ZAN": ["zanubrutinib","brukinsa"],
 
     # FLT3 (AML)
-    "QUI": ["quizartinib", "ac220", "vantictumab"],
-    "GIL": ["gilteritinib", "asp2215", "xospata"],
-    "CRE": ["crenolanib", "cp-868596"],
-    "MID": ["midostaurin", "pkc412", "rydapt"],
-    "LST": ["lestaurtinib", "cep-701"],
+    "QUI": ["quizartinib","ac220","vantictumab"],
+    "GIL": ["gilteritinib","asp2215","xospata"],
+    "CRE": ["crenolanib","cp-868596"],
+    "MID": ["midostaurin","pkc412","rydapt"],
+    "LST": ["lestaurtinib","cep-701"],
 
     # IDH (AML)
-    "ENA": ["enasidenib", "ag-221", "idhifa"],
-    "IVO": ["ivosidenib", "ag-120", "tibsovo"],
+    "ENA": ["enasidenib","ag-221","idhifa"],
+    "IVO": ["ivosidenib","ag-120","tibsovo"],
 
     # Hedgehog (AML)
-    "GLB": ["glasdegib", "pf-04449913", "daurismo"],
-    "VIS": ["vismodegib", "erivedge", "gdc-0449"],
-    "SON": ["sonidegib", "odenzo", "lde225"],
+    "GLB": ["glasdegib","pf-04449913","daurismo"],
+    "VIS": ["vismodegib","erivedge","gdc-0449"],
+    "SON": ["sonidegib","odenzo","lde225"],
 
     # HMAs / cytotoxics used in AML
-    "AZA": ["azacitidine", "vidaza"],
-    "DAC": ["decitabine", "dacogen"],
-    "ATO": ["arsenic trioxide", "trisenox"],
+    "AZA": ["azacitidine","vidaza"],
+    "DAC": ["decitabine","dacogen"],
+    "ATO": ["arsenic trioxide","trisenox"],
     "DNR": ["daunorubicin"],
     "IDR": ["idarubicin"],
-    "DXR": ["doxorubicin", "adriamycin"],
-    "ETO": ["etoposide", "vp-16"],
+    "DXR": ["doxorubicin","adriamycin"],
+    "ETO": ["etoposide","vp-16"],
     "TPT": ["topotecan"],
-    "IRI": ["irinotecan", "cpt-11"],
+    "IRI": ["irinotecan","cpt-11"],
 
     # PARP inhibitors
-    "OLP": ["olaparib", "lynparza"],
-    "NIR": ["niraparib", "zejula"],
-    "RUC": ["rucaparib", "rubraca"],
-    "TLZ": ["talazoparib", "talzenna"],
-    "VLP": ["veliparib", "abt-888"],
+    "OLP": ["olaparib","lynparza"],
+    "NIR": ["niraparib","zejula"],
+    "RUC": ["rucaparib","rubraca"],
+    "TLZ": ["talazoparib","talzenna"],
+    "VLP": ["veliparib","abt-888"],
 
     # HDAC inhibitors
-    "48D": ["vorinostat", "saha", "zolinza"],
-    "PNB": ["panobinostat", "farydak"],
-    "BEL": ["belinostat", "beleodaq"],
-    "ROM": ["romidepsin", "istodax"],
+    "48D": ["vorinostat","saha","zolinza"],
+    "PNB": ["panobinostat","farydak"],
+    "BEL": ["belinostat","beleodaq"],
+    "ROM": ["romidepsin","istodax"],
 
     # HRT / ER / AR axis
     "TAM": ["tamoxifen"],
-    "OHT": ["4-hydroxytamoxifen", "hydroxytamoxifen", "endoxifen", "tamoxifen"],
-    "BAX": ["bazedoxifene", "conbriza", "duavive"],
-    "FUL": ["fulvestrant", "faslodex"],
-    "E2": ["estradiol", "17beta-estradiol", "estrogen"],
-    "EST": ["estradiol", "estrogen"],
-    "E1": ["estrone"],
-    "DHT": ["dihydrotestosterone", "androstanolone"],
+    "OHT": ["4-hydroxytamoxifen","hydroxytamoxifen","endoxifen","tamoxifen"],
+    "BAX": ["bazedoxifene","conbriza","duavive"],
+    "FUL": ["fulvestrant","faslodex"],
+    "E2" : ["estradiol","17beta-estradiol","estrogen"],
+    "EST": ["estradiol","estrogen"],
+    "E1" : ["estrone"],
+    "DHT": ["dihydrotestosterone","androstanolone"],
     "TES": ["testosterone"],
     "PRG": ["progesterone"],
-    "LET": ["letrozole", "femara"],
-    "ANA": ["anastrozole", "arimidex"],
-    "EXE": ["exemestane", "aromasin"],
-    "BIC": ["bicalutamide", "casodex"],
-    "ENZ": ["enzalutamide", "xtandi"],
-    "APA": ["apalutamide", "erleada"],
-    "DAR": ["darolutamide", "nubeqa"],
+    "LET": ["letrozole","femara"],
+    "ANA": ["anastrozole","arimidex"],
+    "EXE": ["exemestane","aromasin"],
+    "BIC": ["bicalutamide","casodex"],
+    "ENZ": ["enzalutamide","xtandi"],
+    "APA": ["apalutamide","erleada"],
+    "DAR": ["darolutamide","nubeqa"],
 
     # antimetabolites
     "MTX": ["methotrexate"],
-    "5FU": ["5-fluorouracil", "fluorouracil"],
+    "5FU": ["5-fluorouracil","fluorouracil"],
     # "CAP" merged above
-    "GEM": ["gemcitabine", "gemzar"],
-    "FLUa": ["fludarabine", "f-ara-a"],
-    "CLD": ["cladribine", "2-cda"],
+    "GEM": ["gemcitabine","gemzar"],
+    "FLUa": ["fludarabine","f-ara-a"],
+    "CLD": ["cladribine","2-cda"],
 
     # proteasome
-    "BOR": ["bortezomib", "velcade"],
-    "CFZ": ["carfilzomib", "kyprolis"],
-    "IXA": ["ixazomib", "ninlaro"],
+    "BOR": ["bortezomib","velcade"],
+    "CFZ": ["carfilzomib","kyprolis"],
+    "IXA": ["ixazomib","ninlaro"],
 
     # HIV antivirals (kept because they often show up as co-crystals and in FDA libraries)
     "RTV": ["ritonavir"],
@@ -573,10 +531,10 @@ CHEMCOMP_ALIAS: Dict[str, List[str]] = {
     # others seen frequently
     "MET": ["metformin"],
     "DXN": ["dexamethasone"],
-    "CPT": ["camptothecin", "topotecan", "irinotecan"],
+    "CPT": ["camptothecin","topotecan","irinotecan"],
 
     # endocrine/other
-    "EVE": ["everolimus", "afinitor"],  # alt key to EVR
+    "EVE": ["everolimus","afinitor"],  # alt key to EVR
 }
 
 # --- Benchmark-derived expansions (from benchmark_analysis_details.csv) ---
@@ -639,7 +597,6 @@ EXCLUDE_HET_NAME_KEYWORDS |= {
 for _k, _vals in list(CHEMCOMP_ALIAS.items()):
     CHEMCOMP_ALIAS[_k] = sorted(set(v.lower() for v in _vals))
 
-
 # ------------------------
 # Mapping index (reads your fda_mapping_from_pdbqt.csv)
 # ------------------------
@@ -682,7 +639,6 @@ class MappingRow:
             ("remark_name", self.remark_name),
             ("sdf_title", self.sdf_title),
         ]
-
 
 class MappingIndex:
     """
@@ -732,12 +688,8 @@ class MappingIndex:
                 out.append(row)
         return out
 
-    def search(
-        self,
-        hints: Sequence[str],
-        inchikey: Optional[str] = None,
-        max_results: int = 6
-    ) -> List[Tuple["MappingRow", int, str]]:
+    def search(self, hints: Sequence[str], inchikey: Optional[str] = None, max_results: int = 6) -> List[
+        Tuple["MappingRow", int, str]]:
         """
         Score all rows against text hints (and optional InChIKey).
         Why: select the best candidates per protein by path/name overlap.
@@ -768,14 +720,11 @@ class MappingIndex:
             if best < 100 and raw_het_codes:
                 for code in raw_het_codes:
                     if re.search(rf"\b{re.escape(code)}\b", stem_upper) or re.search(rf"\b{re.escape(code)}\b", parents_upper):
-                        sc = 93
-                        rs = f"path_token:{code}"
+                        sc = 93; rs = f"path_token:{code}"
                     elif code in base_upper:
-                        sc = 88
-                        rs = f"path_substr:{code}"
+                        sc = 88; rs = f"path_substr:{code}"
                     else:
-                        sc = 0
-                        rs = ""
+                        sc = 0; rs = ""
                     if sc > best:
                         best, why = sc, rs
 
@@ -786,11 +735,9 @@ class MappingIndex:
                     if not v:
                         continue
                     if v in hints_norm:
-                        sc = 95
-                        rs = f"{field}_exact"
+                        sc = 95; rs = f"{field}_exact"
                     elif any(h in v for h in hints_norm if len(h) >= 3):
-                        sc = 85
-                        rs = f"{field}_substr"
+                        sc = 85; rs = f"{field}_substr"
                     else:
                         vtok = set(_tokenize(v))
                         overlap = len(vtok & hint_tokens)
@@ -805,18 +752,15 @@ class MappingIndex:
         out.sort(key=lambda t: t[1], reverse=True)
         return out[:max_results]
 
-
 # ------------------------
 # Pocket detection helpers
 # ------------------------
 # (unchanged)
 
-
 # ------------------------
 # Safe CSV writer (handles Excel-lock on Windows)
 # ------------------------
 # (unchanged)
-
 
 # ------------------------
 # Helper: resolve best human name for an RDK path or a control-like name
@@ -835,7 +779,6 @@ def _resolve_name_for_path_or_text(p_or_text: str, fda_index) -> str:
     stem = Path(p_or_text).stem if os.path.exists(p_or_text) else str(p_or_text)
     name = resolve_corresponding_name_from_text(stem, fda_index) or ""
     return name
-
 
 def select_candidates_for_protein(
     mapping: "MappingIndex",
@@ -879,7 +822,6 @@ def select_candidates_for_protein(
     cand_rows.sort(key=lambda t: t[1], reverse=True)
     return cand_rows[:max_candidates]
 
-
 def split_controls_and_whitelist(
     whitelist_paths: Sequence[str],
     prepped_control_pdbqts: Sequence[str],
@@ -920,7 +862,6 @@ def split_controls_and_whitelist(
 
     return ctrls, non_ctrls
 
-
 def _merge_per_pdb_hints(pdb_id: str, hints: List[str]) -> List[str]:
     """
     Blend global hints with per-PDB overrides and hard-coded controls.
@@ -933,15 +874,12 @@ def _merge_per_pdb_hints(pdb_id: str, hints: List[str]) -> List[str]:
     if pdb_id.upper() in HARD_FDA_CONTROL_BY_PDB:
         add.extend(HARD_FDA_CONTROL_BY_PDB[pdb_id.upper()])
     # re-dedupe by normalized tokenization
-    seen = set()
-    merged: List[str] = []
+    seen = set(); merged: List[str] = []
     for h in (out + add):
         hn = _norm(h)
         if hn and hn not in seen:
-            seen.add(hn)
-            merged.append(h)
+            seen.add(hn); merged.append(h)
     return merged
-
 
 def _promote_forced_controls_to_ctrls(
     pdb_id: str,
@@ -973,7 +911,6 @@ def _promote_forced_controls_to_ctrls(
     if logger and not promoted_paths:
         logger.warning(f"[forced-control] {pdb_id}: requested {list(names)} but none were found in prepped library '{prepped_dir}'.")
     return promoted_paths, promoted_stems_lower
-
 
 def collect_prepped_controls_for_protein(
     paths,
@@ -1007,20 +944,16 @@ def collect_prepped_controls_for_protein(
 
     return prepped_control_pdbqts, control_stems_lower
 
-
 def _dedupe_str(seq: Sequence[str]) -> List[str]:
     """
     Stable dedupe for lists of strings (keeps first occurrence).
     Why: prevents redundant work and noisy logs while preserving order.
     """
-    seen = set()
-    out: List[str] = []
+    seen = set(); out: List[str] = []
     for s in seq:
         if s not in seen:
-            seen.add(s)
-            out.append(s)
+            seen.add(s); out.append(s)
     return out
-
 
 def _path_is_within(child: Path, parent: Path) -> bool:
     """
@@ -1034,7 +967,6 @@ def _path_is_within(child: Path, parent: Path) -> bool:
         return True
     except Exception:
         return False
-
 
 # ------------------------
 # Benchmark driver — single ultra-stage per pocket
@@ -1061,17 +993,14 @@ def run_benchmark_for_protein(
     # Logger + ASCII filter for Windows consoles
     logger = make_protein_logger(cfg["DOCKED_DIR"], pdb_id, cfg)
     import logging, sys
-
     def _sanitize_msg(s: str) -> str:
         return (s.replace("≤", "<=").replace("≥", ">=").replace("Å", " Angstrom")
                  .replace("µ", "u").replace("°", " deg"))
-
     class _AsciiFilter(logging.Filter):
         def filter(self, record):
             if isinstance(record.msg, str):
                 record.msg = _sanitize_msg(record.msg)
             return True
-
     for h in logger.handlers:
         h.addFilter(_AsciiFilter())
     for stream_name in ("stdout", "stderr"):
@@ -1578,27 +1507,16 @@ def run_benchmark_for_protein(
                             if ctrl_pose_path and rdk_pose_path and Path(ctrl_pose_path).is_file() and Path(
                                     rdk_pose_path).is_file():
                                 rdk_id_short = _extract_rdk_id(Path(rdk_pose_path).stem) or "RDKclosest"
-                                outprefix = str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+{rdk_id_short}_PAIR")
-                                try:
-                                    from capture_pose import render_pair_only_three_views_with_pymol
-                                    render_pair_only_three_views_with_pymol(
-                                        ligand_paths_and_colors=[
-                                            (ctrl_pose_path, "control", "green"),
-                                            (rdk_pose_path, "rdk_closest", "magenta"),
-                                        ],
-                                        outprefix=outprefix,
-                                    )
-                                except ImportError:
-                                    # Back-compat fallback: still create files using the older renderer (receptor visible)
-                                    _render_three_views_with_pymol(
-                                        receptor_path=cleaned_pdb_path,
-                                        ligand_paths_and_colors=[
-                                            (ctrl_pose_path, "control", "green"),
-                                            (rdk_pose_path, "rdk_closest", "magenta"),
-                                        ],
-                                        outprefix=outprefix,
-                                        label_top_n_res=0,
-                                    )
+                                _render_three_views_with_pymol(
+                                    receptor_path=cleaned_pdb_path,  # load but hide it (see patch B)
+                                    ligand_paths_and_colors=[
+                                        (ctrl_pose_path, "control", "green"),
+                                        (rdk_pose_path, "rdk_closest", "magenta"),
+                                    ],
+                                    outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+{rdk_id_short}_PAIR"),
+                                    hide_receptor=True,  # <— new kwarg added in patch B
+                                    label_top_n_res=0,  # off for ligand-only shots
+                                )
                         except Exception as e:
                             logger.warning(f"[PyMOL] pair-only render failed: {e}")
 
@@ -1627,7 +1545,6 @@ def run_benchmark_for_protein(
             w.writerow(["pocket", "center_x", "center_y", "center_z", "best_score", "n_valid", "n_tested"])
             for row in pocket_strength_rows:
                 w.writerow(row)
-
 
 def _run_auto_analysis(
     docked_root: Path,
@@ -1668,7 +1585,6 @@ def _run_auto_analysis(
         print(f"[analysis] ERROR running run_analysis(): {e}")
         return None, None
 
-
 # ------------------------
 # CLI
 # ------------------------
@@ -1677,32 +1593,23 @@ def build_argparser() -> argparse.ArgumentParser:
     Define CLI for benchmark driver and optional auto-analysis.
     Why: make the workflow reproducible and batch-friendly.
     """
-    p = argparse.ArgumentParser(
-        description="Benchmark mode: single ultra-stage docking of likely co-crystal FDA ligands, per pocket."
-    )
+    p = argparse.ArgumentParser(description="Benchmark mode: single ultra-stage docking of likely co-crystal FDA ligands, per pocket.")
     p.add_argument("--input-dir", default=DEFAULT_INPUT_DIR)
-    p.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
-    p.add_argument("--prepped", default=DEFAULT_PREPPED_DIR)
-    p.add_argument("--mapping", default=DEFAULT_MAPPING_CSV)
+    p.add_argument("--out-root",  default=DEFAULT_OUT_ROOT)
+    p.add_argument("--prepped",   default=DEFAULT_PREPPED_DIR)
+    p.add_argument("--mapping",   default=DEFAULT_MAPPING_CSV)
     p.add_argument("--max-candidates", type=int, default=3)
     p.add_argument("--exhaustiveness", type=int, default=24)
     p.add_argument("--num-modes", type=int, default=20)
     p.add_argument("--hints", help="Optional manual comma-separated hints (e.g., 'imatinib,STI571')")
-    p.add_argument(
-        "--jobs",
-        type=int,
-        default=max(1, (os.cpu_count()-2 or 4)),
-        help="Number of proteins to process in parallel"
-    )
-    #  harvest aliases from benchmark_analysis_details.csv
+    p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4)//2),
+                   help="Number of proteins to process in parallel")
+    # NEW: harvest aliases from benchmark_analysis_details.csv
     p.add_argument(
         "--alias-from-details",
         nargs="*",
         default=[],
-        help=(
-            "Path(s) or glob(s) to benchmark_analysis_details.csv to harvest aliases "
-            "(e.g., E:\\PythonProject\\protein_automation\\benchmarks\\*\\_analysis\\benchmark_analysis_details.csv)"
-        )
+        help="Path(s) or glob(s) to benchmark_analysis_details.csv to harvest aliases (e.g., E:\\PythonProject\\protein_automation\\benchmarks\\*\\_analysis\\benchmark_analysis_details.csv)"
     )
     # --- Auto-Analysis options ---
     p.add_argument("--skip-analysis", dest="run_analysis", action="store_false",
@@ -1723,7 +1630,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
     return p
 
-
 def main(argv: Optional[Sequence[str]] = None) -> None:
     """
     Entry point: parse args, build indices/config, run benchmark(s), run analysis.
@@ -1732,9 +1638,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
 
     input_dir = Path(args.input_dir)
-    out_root = Path(args.out_root)
-    prepped = Path(args.prepped)
-    mapping = MappingIndex(Path(args.mapping))
+    out_root  = Path(args.out_root)
+    prepped   = Path(args.prepped)
+    mapping   = MappingIndex(Path(args.mapping))
 
     # Harvest and merge aliases from prior analysis CSV(s) — expands CHEMCOMP_ALIAS
     alias_sources = args.alias_from_details or []
@@ -1760,8 +1666,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print(f"[benchmark] PREPPED library does not exist: {prepped}")
         return
 
-    cfg = load_inputs()
-    validate_config(cfg)
+    cfg = load_inputs(); validate_config(cfg)
     cfg = dict(cfg)
     cfg["INPUT_DIR"] = str(input_dir)
     cfg["DOCKED_DIR"] = str(out_root)
@@ -1840,7 +1745,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 print(f"[analysis] ✅ Summary: {summary}")
             else:
                 print("[analysis] ❌ Analysis did not produce outputs.")
-
 
 if __name__ == "__main__":
     # DEV: uncomment while iterating in IDE
