@@ -829,6 +829,7 @@ def run_one_stage(
     logger: logging.Logger,
     retry_mgr: RetryManager,
     control_lookup: Dict[str, Path],        # maps ligand basename -> crystal ref PDB
+    budget_guards: Optional[Dict[str, BudgetGuard]] = None,  # <<< NEW: external per-ligand guards (Option B)
 ) -> Tuple[
     Dict[str, float],
     List[str],
@@ -849,7 +850,7 @@ def run_one_stage(
 
     surface_coords = extract_surface_atoms(pdbqt_path=receptor_pdbqt, center=center)
 
-    # --- helper: extract first/best MODEL from a PDBQT to a temporary PDB for RDKit RMSD ---
+    # ---- helpers (unchanged in spirit) ----
     def _best_pose_pdb_from_pdbqt(pdbqt_path: str, obabel_path: Optional[str] = None) -> Optional[str]:
         try:
             from pathlib import Path
@@ -864,30 +865,27 @@ def run_one_stage(
             if not obabel:
                 raise RuntimeError("OpenBabel not found; set OPENBABEL_PATH/OPENBABEL_EXE")
 
-            # -f/-l first model; -d remove hydrogens so heavy-atom counts line up
+            # first model only; strip H so heavy-atom counts line up
             cmd = [obabel, "-ipdbqt", str(pdbqt_path), "-opdb", "-O", str(out_pdb), "-f", "1", "-l", "1", "-d"]
             subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
             return str(out_pdb) if out_pdb.exists() and out_pdb.stat().st_size > 0 else None
         except Exception as e:
             logger.warning(f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}")
             return None
 
     def _validate_with_rmsd_gate(
-            lig_path: str,
-            lig_name: str,
-            out_pdbqt_path: str,
-            score_val: float
+        lig_path: str,
+        lig_name: str,
+        out_pdbqt_path: str,
+        score_val: float
     ) -> Tuple[bool, Optional[str]]:
         """
-        RMSD validation:
-          - Controls (have a crystal reference): gate by redock RMSD vs the crystal pose.
-          - Non-controls: compute self-RMSD and LOG it only (never reject).
+        Controls: crystal redock RMSD is a hard gate.
+        Non-controls: self-RMSD is logged in upstream code; do not gate here.
         """
         base = Path(lig_path).stem.split("_stage")[0]
         crystal_ref = control_lookup.get(base)
 
-        # --- Controls: keep redock RMSD as a hard gate ---
         if crystal_ref:
             best_pdb = _best_pose_pdb_from_pdbqt(out_pdbqt_path, obabel_path=cfg.get("OPENBABEL_PATH"))
             if not best_pdb:
@@ -908,282 +906,101 @@ def run_one_stage(
             else:
                 return False, "rmsd_fail"
 
-        # --- Non-controls: self-RMSD is *log-only* (never a hard gate) ---
-        try:
-            sr = compute_self_rmsd(out_pdbqt_path)
-            if isinstance(sr, (int, float)):
-                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (selfRMSD={sr:.2f} Å)")
-            else:
-                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (selfRMSD=n/a)")
-        except Exception as _e:
-            logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (selfRMSD=error: {_e})")
-
-        # Always accept here; geometry/clash/centroid checks already passed
+        # Non-controls: redock gate not applicable here (geometry checks already passed).
         return True, None
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {}
-        for lig in ligands:
-            stage_for_cfg = dict(stage)
-            stage_for_cfg["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
+    # ---- scheduling & submission ----
+    # default budget used only if caller didn't supply a guard for a ligand
+    default_budget_seconds = float(
+        cfg.get("MAX_RETRY_SECONDS_PER_LIGAND",
+                cfg.get("BENCH_MAX_SECONDS", 300.0))
+    )
 
-            conf_path, out_path = generate_config(
-                cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
-                lig, stage["name"], stage_for_cfg, threads_per_vina
-            )
+    submit_queue = []
+    guards_for_ligand: Dict[str, BudgetGuard] = {}
 
-            lig_n, out_n = norm(lig), norm(out_path)
-            raw_docked_ligands[lig_n] = out_n
-            futures[pool.submit(run_docking_task, cfg["VINA_EXE"], conf_path, lig, out_path)] = (lig_n, out_n)
+    for lig in ligands:
+        # pick external guard if provided; else create a local one so code stays robust
+        guard = (budget_guards.get(lig) if budget_guards else None)
+        if guard is None:
+            guard = BudgetGuard(default_budget_seconds)
+        guards_for_ligand[lig] = guard
 
-        # audit file
-        try:
-            audit_path = Path(cfg["DOCKED_DIR"]) / pdb_id / f"{stage['name']}_ligand_audit.txt"
-            audit_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(audit_path, "w", encoding="utf-8") as af:
-                af.write(f"Total ligands queued: {len(ligands)}\n")
-                af.write("First 10 queued:\n")
-                for ln in ligands[:10]:
-                    af.write(f" - {os.path.basename(ln)}\n")
-        except Exception as _e:
-            logger.warning(f"Audit hook failed: {_e}")
+        # if the ligand's budget is already exhausted (e.g., earlier wave), don’t even submit
+        if guard.expired():
+            invalids[lig] = (None, "budget_exceeded")
+            continue
+        submit_queue.append(lig)
 
-        processed = 0
-        with tqdm(
-            total=len(futures),
-            desc=f"Docking ({stage['name']})",
-            unit="ligand",
-            position=1,           # keep nested bar separate from outer "Processing Proteins"
-            dynamic_ncols=True,   # adapt to terminal width
-            mininterval=0.2,      # refresh often
-            leave=True,
-            file=_stdout          # write to same stream as any prints/logging
-        ) as pbar:
-            for fut in as_completed(futures):
-                lig, out_path = futures[fut]
-                lig_name = os.path.basename(lig)
-                try:
-                    _, score = fut.result()
-                except Exception as e:
-                    logger.warning(f"Docking crashed for {lig_name}: {e}")
-                    invalids[lig] = (None, "docking_exception")
-                    processed += 1
-                    if (processed % 25 == 0) or (processed == len(futures)):
-                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                    pbar.update(1)
-                    continue
+    futures = {}
+    if submit_queue:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for lig in submit_queue:
+                stage_for_cfg = dict(stage)
+                stage_for_cfg["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
 
-                if score is None:
-                    logger.warning(f"No score for {lig_name}")
-                    invalids[lig] = (None, "no_score")
-                    processed += 1
-                    if (processed % 25 == 0) or (processed == len(futures)):
-                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                    pbar.update(1)
-                    continue
-
-                # Pose de-dup
-                try:
-                    kept, removed = filter_and_rewrite_poses_by_rmsd(
-                        out_path,
-                        rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
-                        max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
-                    )
-                    if removed > 0:
-                        logger.info(f"{os.path.basename(out_path)}: RMSD filter kept {kept}, removed {removed}")
-                except Exception as e:
-                    logger.warning(f"RMSD filtering failed for {os.path.basename(out_path)}: {e}")
-
-                # Geometric validation
-                result = validate_first_valid_pose(
-                    receptor_pdbqt=receptor_pdbqt,
-                    ligand_pdbqt=out_path,
-                    pocket_center=center,
-                    surface_coords=surface_coords,
-                    max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
-                    clash_threshold=2.0,
-                    clash_tol=3,
-                    dist_surf=6.0,
-                    dist_centroid=4.5,
+                conf_path, out_path = generate_config(
+                    cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
+                    lig, stage["name"], stage_for_cfg, threads_per_vina
                 )
-                dist = result.get("distance_to_pocket")
-                if isinstance(dist, (int, float)):
-                    all_distances.append(dist)
 
-                logger.info(f"{lig_name} validation: {result}")
-                guard = BudgetGuard(float(cfg.get("MAX_RETRY_SECONDS_PER_LIGAND", 300)))
+                lig_n, out_n = norm(lig), norm(out_path)
+                raw_docked_ligands[lig_n] = out_n
+                futures[pool.submit(run_docking_task, cfg["VINA_EXE"], conf_path, lig, out_path)] = (lig_n, out_n)
 
-                if result.get("valid", False):
-                    ok, reason = _validate_with_rmsd_gate(lig, lig_name, out_path, float(score))
-                    if ok:
-                        scores[lig] = float(score)
-                        validated_ligands.append(lig)
-                    else:
-                        invalids[lig] = (float(score), reason or "rmsd_fail")
+            processed = 0
+            from tqdm import tqdm as _tqdm
+            with _tqdm(
+                total=len(futures),
+                desc=f"Docking ({stage['name']})",
+                unit="ligand",
+                position=1,
+                dynamic_ncols=True,
+                mininterval=0.2,
+                leave=True,
+                file=_stdout
+            ) as pbar:
+                for fut in as_completed(futures):
+                    lig, out_path = futures[fut]
+                    lig_name = os.path.basename(lig)
+                    guard = guards_for_ligand.get(lig) or BudgetGuard(default_budget_seconds)
 
-                    processed += 1
-                    if (processed % 25 == 0) or (processed == len(futures)):
-                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                    pbar.update(1)
-                    continue  # move to next ligand
-
-                # --------------------------
-                # Geometrically invalid path
-                # --------------------------
-                did_retry = False
-                # Bail early if we've already blown the budget
-                if guard.expired():
-                    invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
-                    processed += 1
-                    if (processed % 25 == 0) or (processed == len(futures)):
-                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                    pbar.update(1)
-                    continue
-                if bool(cfg.get("RETRY_NEAR_MISS", True)):
                     try:
-                        dthr = float(cfg.get("RETRY_DIST_THRESH", 7.0))
-                        sthr = float(cfg.get("RETRY_SCORE_THRESH", -7.5))
-                        if (dist is not None) and (dist < dthr) and (float(score) <= sthr):
-                            did_retry = True
-                            stage_retry = dict(stage)
-                            stage_retry["name"] = f"{stage['name']}_retry"
-                            stage_retry["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
-                            try:
-                                ex0 = int(stage_retry.get("exhaustiveness", 8))
-                            except Exception:
-                                ex0 = 8
-                            ex_mult = int(cfg.get("RETRY_EXHAUST_MULT", 2))
-                            stage_retry["exhaustiveness"] = max(8, ex0 * ex_mult)
-
-                            conf_path2, out_path2 = generate_config(
-                                cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
-                                lig, stage_retry["name"], stage_retry, threads_per_vina
-                            )
-                            if guard.expired():
-                                invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
-                                processed += 1
-                                if (processed % 25 == 0) or (processed == len(futures)):
-                                    pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                                pbar.update(1)
-                                continue
-                            _, score2 = run_docking_task(cfg["VINA_EXE"], conf_path2, lig, out_path2)
-
-                            try:
-                                filter_and_rewrite_poses_by_rmsd(
-                                    out_path2,
-                                    rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
-                                    max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
-                                )
-                            except Exception:
-                                pass
-
-                            result2 = validate_first_valid_pose(
-                                receptor_pdbqt=receptor_pdbqt,
-                                ligand_pdbqt=out_path2,
-                                pocket_center=center,
-                                surface_coords=surface_coords,
-                                max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
-                                clash_threshold=2.0,
-                                clash_tol=3,
-                                dist_surf=6.0,
-                                dist_centroid=4.5,
-                            )
-
-                            if result2.get("valid", False) and score2 is not None:
-                                # apply RMSD gate here too
-                                ok2, reason2 = _validate_with_rmsd_gate(lig, lig_name, out_path2, float(score2))
-                                if ok2:
-                                     scores[lig] = float(score2)
-                                     validated_ligands.append(lig)
-                                     raw_docked_ligands[lig] = norm(out_path2)
-                                     logger.info(f"{lig_name} | {stage_retry['name']} score: {score2:.2f} kcal/mol (rescued)")
-                                     processed += 1
-                                     if (processed % 25 == 0) or (processed == len(futures)):
-                                         pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                                     pbar.update(1)
-                                     continue
-                                else:
-                                     invalids[lig] = (float(score2), reason2 or "rmsd_fail")
-                                     processed += 1
-                                     if (processed % 25 == 0) or (processed == len(futures)):
-                                         pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                                     pbar.update(1)
-                                     continue
-                    except Exception as _e:
-                        logger.warning(f"Retry path failed for {lig_name}: {_e}")
-
-                err_cat = _map_reason_to_category(result.get("reason", ""))
-                attempt = 0
-                retained_invalid = True
-
-                while attempt < retry_mgr.max_retries:
-                    # Budget guard for recipe retries
-                    if guard.expired():
-                        invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
-                        break
-                    recipe = retry_mgr.apply(stage, err_cat, attempt)
-                    if not recipe:
-                        break
-
-                    stage_retry2 = dict(stage)
-                    stage_retry2["name"] = f"{stage['name']}_r{attempt + 1}"
-                    stage_retry2["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
-
-                    if "exhaustiveness" in recipe:
-                        stage_retry2["exhaustiveness"] = recipe["exhaustiveness"]
-                    if "num_modes" in recipe:
-                        stage_retry2["num_modes"] = recipe["num_modes"]
-                    if recipe.get("seed_jitter", False):
-                        try:
-                            base_seed = int(stage_retry2.get("seed", 0)) if "seed" in stage_retry2 else 0
-                        except Exception:
-                            base_seed = 0
-                        stage_retry2["seed"] = base_seed + (attempt + 1) * 137
-
-                    retry_center = center
-                    retry_box = box_size
-                    try:
-                        if recipe.get("recenter", False):
-                            fb_pose, new_c, _bs, _ch = attempt_fallback_recenter(
-                                fallback_ligands={lig: out_path},
-                                receptor_pdbqt=receptor_pdbqt,
-                                docking_dir=os.path.join(cfg['DOCKED_DIR'], pdb_id),
-                                stage_name=stage_retry2["name"],
-                                pocket_center=center,
-                                logger=logger,
-                                exclude_basenames=set(),
-                            )
-                            if new_c is not None:
-                                retry_center = new_c
-                        if "box_pad_delta" in recipe and isinstance(recipe["box_pad_delta"], (int, float)):
-                            dx = float(recipe["box_pad_delta"])
-                            retry_box = tuple(min(28.0, s + dx) for s in box_size)
-                    except Exception as _e:
-                        logger.warning(f"Retry recenter/box tweak failed: {_e}")
-
-                    conf_path3, out_path3 = generate_config(
-                        cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, retry_center, retry_box,
-                        lig, stage_retry2["name"], stage_retry2, threads_per_vina
-                    )
-                    try:
-                        _, score_r = run_docking_task(cfg["VINA_EXE"], conf_path3, lig, out_path3)
-                    except Exception as _e:
-                        logger.warning(f"Retry docking crashed for {lig_name}: {_e}")
-                        attempt += 1
+                        _, score = fut.result()
+                    except Exception as e:
+                        logger.warning(f"Docking crashed for {lig_name}: {e}")
+                        invalids[lig] = (None, "docking_exception")
+                        processed += 1
+                        if (processed % 25 == 0) or (processed == len(futures)):
+                            pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                        pbar.update(1)
                         continue
 
+                    if score is None:
+                        logger.warning(f"No score for {lig_name}")
+                        invalids[lig] = (None, "no_score")
+                        processed += 1
+                        if (processed % 25 == 0) or (processed == len(futures)):
+                            pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                        pbar.update(1)
+                        continue
+
+                    # Pose de-dup
                     try:
-                        filter_and_rewrite_poses_by_rmsd(
-                            out_path3,
+                        kept, removed = filter_and_rewrite_poses_by_rmsd(
+                            out_path,
                             rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
                             max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
                         )
-                    except Exception:
-                        pass
+                        if removed > 0:
+                            logger.info(f"{os.path.basename(out_path)}: RMSD filter kept {kept}, removed {removed}")
+                    except Exception as e:
+                        logger.warning(f"RMSD filtering failed for {os.path.basename(out_path)}: {e}")
 
-                    result_r = validate_first_valid_pose(
+                    # Geometric validation (early-exit through first valid pose)
+                    result = validate_first_valid_pose(
                         receptor_pdbqt=receptor_pdbqt,
-                        ligand_pdbqt=out_path3,
+                        ligand_pdbqt=out_path,
                         pocket_center=center,
                         surface_coords=surface_coords,
                         max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
@@ -1192,32 +1009,222 @@ def run_one_stage(
                         dist_surf=6.0,
                         dist_centroid=4.5,
                     )
+                    dist = result.get("distance_to_pocket")
+                    if isinstance(dist, (int, float)):
+                        all_distances.append(dist)
 
-                    logger.info(f"{lig_name} retry#{attempt + 1} ({err_cat}) -> {result_r}")
-                    if result_r.get("valid", False) and score_r is not None:
-                        ok_r, reason_r = _validate_with_rmsd_gate(lig, lig_name, out_path3, float(score_r))
-                        if ok_r:
-                            scores[lig] = float(score_r)
+                    logger.info(f"{lig_name} validation: {result}")
+
+                    # if pose valid → RMSD gate for controls; non-controls accepted
+                    if result.get("valid", False):
+                        ok, reason = _validate_with_rmsd_gate(lig, lig_name, out_path, float(score))
+                        if ok:
+                            scores[lig] = float(score)
                             validated_ligands.append(lig)
-                            raw_docked_ligands[lig] = norm(out_path3)
-                            logger.info(f"{lig_name} | {stage_retry2['name']} score: {score_r:.2f} kcal/mol (retry rescued)")
-                            retained_invalid = False
-                            break
                         else:
-                            invalids[lig] = (float(score_r), reason_r or "rmsd_fail")
-                            retained_invalid = False
+                            invalids[lig] = (float(score), reason or "rmsd_fail")
+
+                        processed += 1
+                        if (processed % 25 == 0) or (processed == len(futures)):
+                            pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                        pbar.update(1)
+                        continue
+
+                    # --------------------------
+                    # Geometrically invalid path
+                    # --------------------------
+                    # stop if we blew the budget for this ligand
+                    if guard.expired():
+                        invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
+                        processed += 1
+                        if (processed % 25 == 0) or (processed == len(futures)):
+                            pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                        pbar.update(1)
+                        continue
+
+                    # Near-miss, single heavier retry
+                    did_retry = False
+                    if bool(cfg.get("RETRY_NEAR_MISS", True)):
+                        try:
+                            dthr = float(cfg.get("RETRY_DIST_THRESH", 7.0))
+                            sthr = float(cfg.get("RETRY_SCORE_THRESH", -7.5))
+                            if (dist is not None) and (dist < dthr) and (float(score) <= sthr) and not guard.expired():
+                                did_retry = True
+                                stage_retry = dict(stage)
+                                stage_retry["name"] = f"{stage['name']}_retry"
+                                stage_retry["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
+                                try:
+                                    ex0 = int(stage_retry.get("exhaustiveness", 8))
+                                except Exception:
+                                    ex0 = 8
+                                ex_mult = int(cfg.get("RETRY_EXHAUST_MULT", 2))
+                                stage_retry["exhaustiveness"] = max(8, ex0 * ex_mult)
+
+                                conf_path2, out_path2 = generate_config(
+                                    cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
+                                    lig, stage_retry["name"], stage_retry, threads_per_vina
+                                )
+
+                                if guard.expired():
+                                    invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
+                                    processed += 1
+                                    if (processed % 25 == 0) or (processed == len(futures)):
+                                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                                    pbar.update(1)
+                                    continue
+
+                                _, score2 = run_docking_task(cfg["VINA_EXE"], conf_path2, lig, out_path2)
+
+                                try:
+                                    filter_and_rewrite_poses_by_rmsd(
+                                        out_path2,
+                                        rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
+                                        max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
+                                    )
+                                except Exception:
+                                    pass
+
+                                result2 = validate_first_valid_pose(
+                                    receptor_pdbqt=receptor_pdbqt,
+                                    ligand_pdbqt=out_path2,
+                                    pocket_center=center,
+                                    surface_coords=surface_coords,
+                                    max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
+                                    clash_threshold=2.0,
+                                    clash_tol=3,
+                                    dist_surf=6.0,
+                                    dist_centroid=4.5,
+                                )
+
+                                if result2.get("valid", False) and score2 is not None:
+                                    ok2, reason2 = _validate_with_rmsd_gate(lig, lig_name, out_path2, float(score2))
+                                    if ok2:
+                                        scores[lig] = float(score2)
+                                        validated_ligands.append(lig)
+                                        raw_docked_ligands[lig] = norm(out_path2)
+                                        logger.info(f"{lig_name} | {stage_retry['name']} score: {score2:.2f} kcal/mol (rescued)")
+                                        processed += 1
+                                        if (processed % 25 == 0) or (processed == len(futures)):
+                                            pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                                        pbar.update(1)
+                                        continue
+                                    else:
+                                        invalids[lig] = (float(score2), reason2 or "rmsd_fail")
+                                        processed += 1
+                                        if (processed % 25 == 0) or (processed == len(futures)):
+                                            pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                                        pbar.update(1)
+                                        continue
+                        except Exception as _e:
+                            logger.warning(f"Retry path failed for {lig_name}: {_e}")
+
+                    # Structured recipe retries (BudgetGuard enforced each loop)
+                    err_cat = _map_reason_to_category(result.get("reason", ""))
+                    attempt = 0
+                    retained_invalid = True
+
+                    while attempt < retry_mgr.max_retries:
+                        if guard.expired():
+                            invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
                             break
 
-                    attempt += 1
+                        recipe = retry_mgr.apply(stage, err_cat, attempt)
+                        if not recipe:
+                            break
 
-                if retained_invalid:
-                    invalids[lig] = (float(score), result.get("reason", "pose_invalid"))
-                    logger.info(f"{lig_name} | pose invalid (after retries)")
+                        stage_retry2 = dict(stage)
+                        stage_retry2["name"] = f"{stage['name']}_r{attempt + 1}"
+                        stage_retry2["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
 
-                processed += 1
-                if (processed % 25 == 0) or (processed == len(futures)):
-                    pbar.set_postfix(ok=len(scores), inv=len(invalids))
-                pbar.update(1)
+                        if "exhaustiveness" in recipe:
+                            stage_retry2["exhaustiveness"] = recipe["exhaustiveness"]
+                        if "num_modes" in recipe:
+                            stage_retry2["num_modes"] = recipe["num_modes"]
+                        if recipe.get("seed_jitter", False):
+                            try:
+                                base_seed = int(stage_retry2.get("seed", 0)) if "seed" in stage_retry2 else 0
+                            except Exception:
+                                base_seed = 0
+                            stage_retry2["seed"] = base_seed + (attempt + 1) * 137
+
+                        retry_center = center
+                        retry_box = box_size
+                        try:
+                            if recipe.get("recenter", False):
+                                fb_pose, new_c, _bs, _ch = attempt_fallback_recenter(
+                                    fallback_ligands={lig: out_path},
+                                    receptor_pdbqt=receptor_pdbqt,
+                                    docking_dir=os.path.join(cfg['DOCKED_DIR'], pdb_id),
+                                    stage_name=stage_retry2["name"],
+                                    pocket_center=center,
+                                    logger=logger,
+                                    exclude_basenames=set(),
+                                )
+                                if new_c is not None:
+                                    retry_center = new_c
+                            if "box_pad_delta" in recipe and isinstance(recipe["box_pad_delta"], (int, float)):
+                                dx = float(recipe["box_pad_delta"])
+                                retry_box = tuple(min(28.0, s + dx) for s in box_size)
+                        except Exception as _e:
+                            logger.warning(f"Retry recenter/box tweak failed: {_e}")
+
+                        conf_path3, out_path3 = generate_config(
+                            cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, retry_center, retry_box,
+                            lig, stage_retry2["name"], stage_retry2, threads_per_vina
+                        )
+                        try:
+                            _, score_r = run_docking_task(cfg["VINA_EXE"], conf_path3, lig, out_path3)
+                        except Exception as _e:
+                            logger.warning(f"Retry docking crashed for {lig_name}: {_e}")
+                            attempt += 1
+                            continue
+
+                        try:
+                            filter_and_rewrite_poses_by_rmsd(
+                                out_path3,
+                                rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
+                                max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
+                            )
+                        except Exception:
+                            pass
+
+                        result_r = validate_first_valid_pose(
+                            receptor_pdbqt=receptor_pdbqt,
+                            ligand_pdbqt=out_path3,
+                            pocket_center=center,
+                            surface_coords=surface_coords,
+                            max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
+                            clash_threshold=2.0,
+                            clash_tol=3,
+                            dist_surf=6.0,
+                            dist_centroid=4.5,
+                        )
+
+                        logger.info(f"{lig_name} retry#{attempt + 1} ({err_cat}) -> {result_r}")
+                        if result_r.get("valid", False) and score_r is not None:
+                            ok_r, reason_r = _validate_with_rmsd_gate(lig, lig_name, out_path3, float(score_r))
+                            if ok_r:
+                                scores[lig] = float(score_r)
+                                validated_ligands.append(lig)
+                                raw_docked_ligands[lig] = norm(out_path3)
+                                logger.info(f"{lig_name} | {stage_retry2['name']} score: {score_r:.2f} kcal/mol (retry rescued)")
+                                retained_invalid = False
+                                break
+                            else:
+                                invalids[lig] = (float(score_r), reason_r or "rmsd_fail")
+                                retained_invalid = False
+                                break
+
+                        attempt += 1
+
+                    if retained_invalid:
+                        invalids[lig] = (float(score), result.get("reason", "pose_invalid"))
+                        logger.info(f"{lig_name} | pose invalid (after retries)")
+
+                    processed += 1
+                    if (processed % 25 == 0) or (processed == len(futures)):
+                        pbar.set_postfix(ok=len(scores), inv=len(invalids))
+                    pbar.update(1)
 
     return scores, validated_ligands, all_distances, raw_docked_ligands, invalids
 

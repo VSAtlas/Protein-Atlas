@@ -26,13 +26,14 @@ MGLTOOLS_DIR = E:/MGLTOOLS-1.5.7
 MAX_PARALLEL_JOBS = 28
 OPENBABEL_PATH = E:/OpenBabel-3.1.1/obabel.exe
 PYMOL_PATH = E:\pymol\python.exe
+PYMOL_EXE = E:/pymol/python.exe
 DOCKING_MODE = polypharmacology
 
 
 CPU = 32
 OVERALL_DIR = E:/PythonProject/protein_automation
 REDUCE_EXE = E:/phenix/Library/bin/reduce.exe
-FORCE_REPROCESS = False
+FORCE_REPROCESS = True
 
 
 EARLY_RECENTER_RATIO = 0.70

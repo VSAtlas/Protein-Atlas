@@ -76,7 +76,7 @@ _METALS        = {s.strip().upper() for s in config.get("METAL_LIST", "").split(
 
 # Required paths from config
 PHENIX_DIR: str = config["PHENIX_DIR"]
-PHENIX_LIB_PATH: str = config["phenix_lib_path"]
+PHENIX_LIB_PATH: str = config["PHENIX_LIB_PATH"]
 PHENIX_CLEAN_SCRIPT: str = config["PHENIX_CLEAN_SCRIPT"]
 INPUT_DIR: str = config["INPUT_DIR"]
 
