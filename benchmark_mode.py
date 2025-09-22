@@ -1,4 +1,3 @@
-
 """
 Benchmark mode: single ultra-stage docking of likely co-crystal FDA ligands, per pocket.
 
@@ -1251,8 +1250,8 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--prepped", default=DEFAULT_PREPPED_DIR)
     p.add_argument("--mapping", default=DEFAULT_MAPPING_CSV)
     p.add_argument("--max-candidates", type=int, default=3)
-    p.add_argument("--exhaustiveness", type=int, default=1)
-    p.add_argument("--num-modes", type=int, default=1)
+    p.add_argument("--exhaustiveness", type=int, default=3)
+    p.add_argument("--num-modes", type=int, default=3)
     p.add_argument("--hints", help="Optional manual comma-separated hints (e.g., 'imatinib,STI571')")
     p.add_argument(
         "--jobs",

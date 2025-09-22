@@ -321,6 +321,151 @@ def _to_parent_mol(m: Chem.Mol) -> Optional[Chem.Mol]:
     except Exception:
         return None
 
+# Intial SCAM Filter (post-cleaning)
+from rdkit.Chem import Crippen
+from pkasolver import pkasolver
+# SCAM substructure alerts
+SCAM_SMARTS: Dict[str, str] = {
+    # electrophiles / reactive
+    "epoxide":            "[OX2r3]",
+    "aziridine":          "[NX3r3]",
+    "alkyl_halide":       "[CX4;H0,H1,H2][Cl,Br,I,F]",
+    "michael_acceptor":   "[C,c]=[C,c]-[C,S](=O)[O,N,S] | [C,c]=[C,c]-C(=O)[O,N,S]",  # generic
+    "acrylamide":         "C=CC(=O)N",
+    "isothiocyanate":     "N=C=S",
+    "sulfonyl_fluoride":  "S(=O)(=O)F",
+
+    # redox / interference
+    "p_quinone":          "O=C1C=CC(=O)C=C1",
+    "o_quinone":          "O=c1ccc(=O)[cH][cH]1",
+    "phenothiazine_like": "n2c1ccccn1Sc3ccccc23",
+
+    # chelators / aggregators
+    "catechol":           "c1cc(O)c(O)cc1",
+    "hydroxamate":        "C(=O)N[OH]",
+    "8_hydroxyquinoline": "Oc1cccc2ncccc12",
+    "tannin_polyphenol":  "c(O)c(O)c(O)",
+
+    # nucleophiles / potentially reactive
+    "hydrazine":          "NN",
+    "hydroxylamine":      "N[OH]",
+    "thiol":              "[SH]",
+    "dithiol":            "SCCS",
+
+    # rhodanine / known hitters
+    "rhodanine":          "O=C1NC(=S)SC1",
+    "barbiturate_like":   "O=C1NC(=O)NC(=O)1",
+}
+
+# converts substructures to RDKit Mol objects
+
+SCAM_QUERIES = {name: Chem.MolFromSmarts(s) for name, s in SCAM_SMARTS.items()}
+
+# check molecules for matches to SCAM motifs listed in dictionary and apply 'hard' flag if necessary
+
+def scam_flags(mol: Chem.Mol) -> List[str]:
+    flags = []
+    for name, patt in SCAM_QUERIES.items():
+        if patt is not None and mol.HasSubstructMatch(patt):
+            flags.append(f"hard: {name}")
+    return flags
+
+# pKa prediction to calculate dissociation constant for ligands ionizable at biological pH (7.4)
+# I guess we can discuss if this is really necessary, because it might break when we introduce novel compounds unless we introduce some kind of ML model
+
+def predict_logD(mol: Chem.Mol, ph: float = 7.4) -> float:
+    # need to integrate a more robust pkA-prediction model
+    # especially since we will ultimatly use this pipeline for novel ligands
+
+    try:
+        smiles = Chem.MolToSmiles(mol)
+        # pka prediction
+        pka_results = pkasolver.predict(smiles)
+        #compute fractional ionization and return logD
+        logd_val = pkasolver.calculate_logd(smiles, ph = ph)
+        return logd_val
+    except Exception as e:
+        print(f"[WARN] logD prediction failed for {Chem.MolToSmiles(mol)}: {e}")
+        # fallback to clogP
+        return Crippen.MolLogP(mol)
+
+
+# helper function to integrate with input_export_functions
+def annotate_ligand_with_scam(lig_path: str, ligand_record: Dict) -> Dict:
+    """
+    Annotates the ligand record with the SCAM filter results (cLogP, logD7.4, SCAM_Flags, SMILES).
+
+    cLogP = 'calculated partition coefficient'
+        - measure of hydrophpobicity
+        - needs to be hydrophobic enough to cross membranes
+        - needs to be hydrophillic enough to circulate in blood
+        - right now we cutoff at 3.5 with a soft flag
+
+    logD7.4 = 'distribution coefficient at pH 7.4 (biological pH)
+        - like LogP but takes into account ionization at bio pH
+
+    Parameters
+    ----------
+    lig_path : str
+        Path to the ligand file (.sdf, .mol, .mol2).
+    ligand_record : dict
+        exsisting dictionary in input_and_export_functions for the ligand (from record_score).
+
+    Returns
+    -------
+    dict
+        The same dictionary, enriched with SCAM annotations.
+    """
+
+    try:
+        # load molecule from file
+        if lig_path.endswith(".sdf") or lig_path.endswith(".mol"):
+            mol = Chem.MolFromMolFile(lig_path, sanitize=True)
+        elif lig_path.endswith(".mol2"):
+            mol = Chem.MolFromMol2File(lig_path, sanitize=True)
+        else:
+            raise ValueError(f"Unsupported ligand format: {lig_path}")
+
+        if mol is None:
+            ligand_record["SCAM_Flags"] = "InvalidMol"
+            return ligand_record
+
+        # get ligand descriptors
+        smiles = Chem.MolToSmiles(mol)
+        clogp = Crippen.MolLogP(mol)
+        logd = predict_logD(mol, ph=7.4)
+
+        # check for typical SCAM substructures
+        flags = scam_flags(mol)
+
+        # soft flags based on property cutoffs
+        if clogp is not None and clogp > 3.5:
+            flags.append(f"soft:high_logP({clogp:.2f})")
+
+        if logd is not None:
+            if logd < 0:
+                flags.append(f"soft:low_logD({logd:.2f})")
+            elif logd > 3.5:
+                flags.append(f"soft:high_logD({logd:.2f})")
+            if logd > 5:
+                flags.append(f"hard:very_high_logD({logd:.2f})")
+
+        flag_str = ";".join(flags) if flags else "None"
+
+        # update the ligand record dict
+        # we can condense this if need be
+        ligand_record.update({
+            "SMILES": smiles,
+            "cLogP": clogp,
+            "logD7.4": logd,
+            "SCAM_Flags": flag_str
+        })
+
+    except Exception as e:
+        ligand_record["SCAM_Flags"] = f"Error:{e}"
+
+    return ligand_record
+
 # =========================
 # OBabel-friendly SDF writer (NEW)
 # =========================

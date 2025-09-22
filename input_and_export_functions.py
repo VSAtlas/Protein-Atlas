@@ -313,7 +313,13 @@ import math
 
 # input_and_export_functions.py
 from typing import Any
-def record_score(score_history, stage_name, ligand, score: Any, valid, reason=None):
+
+#import SCAM filter
+from prep_ligands import annotate_ligand_with_scam
+
+# added 'lig_path' argument so the SCAM filter has access to the mol structure
+def record_score(score_history, stage_name, ligand, score: Any, valid, reason=None,
+                 lig_path = None):
     def coerce_score(x):
         # numeric already?
         if isinstance(x, (int, float)):
@@ -331,11 +337,25 @@ def record_score(score_history, stage_name, ligand, score: Any, valid, reason=No
             return None
 
     s = coerce_score(score)
+
+    # create / update the ligand entry
+    if stage_name not in score_history:
+        score_history[stage_name] = {}
+
     score_history[stage_name][ligand] = {
         "score": s,
         "valid": bool(valid),
         "reason": reason,
     }
+
+    # if we have a ligand file, the SCAM annotation will run
+    if lig_path:
+        score_history[stage_name][ligand] = annotate_ligand_with_scam(
+            lig_path,
+            score_history[stage_name][ligand],
+        )
+
+    return score_history
 
 
 

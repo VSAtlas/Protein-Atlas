@@ -131,15 +131,15 @@ def _iter_pdbqt_models(pdbqt_path: str):
             yield ""
 
 def validate_first_valid_pose(
-    receptor_pdbqt: str,
-    ligand_pdbqt: str,
-    pocket_center: tuple[float, float, float],
-    surface_coords,
-    max_models: int = 3,
-    clash_threshold: float = 2.0,
-    clash_tol: int = 3,
-    dist_surf: float = 6.0,
-    dist_centroid: float = 4.5,
+        receptor_pdbqt: str,
+        ligand_pdbqt: str,
+        pocket_center: tuple[float, float, float],
+        surface_coords,
+        max_models: int = 3,
+        clash_threshold: float = 2.0,
+        clash_tol: int = 3,
+        dist_surf: float = 6.0,
+        dist_centroid: float = 4.5,
 ):
     """
     Validate poses in order and return as soon as one passes.
@@ -518,7 +518,7 @@ def robust_prepare_controls(paths: Paths, cfg: Dict, logger: logging.Logger) -> 
         out_pdb.parent.mkdir(parents=True, exist_ok=True)
         wrote_any = False
         with open(in_pdb, "r", encoding="utf-8", errors="ignore") as fin, \
-             open(out_pdb, "w", encoding="utf-8") as fout:
+                open(out_pdb, "w", encoding="utf-8") as fout:
             for ln in fin:
                 if not ln.startswith(("ATOM", "HETATM")):
                     fout.write(ln); continue
@@ -644,10 +644,10 @@ import numpy as np        # (top-level; you already have it)
 def detect_pocket(cleaned_pdb: str,
                   ligand_dir: Path,
                   logger: logging.Logger) -> Tuple[
-                      Optional[Tuple[float,float,float]],
-                      Optional[Tuple[float,float,float]],
-                      str  # <— source ("control" or "p2rank" or "none")
-                  ]:
+    Optional[Tuple[float,float,float]],
+    Optional[Tuple[float,float,float]],
+    str  # <— source ("control" or "p2rank" or "none")
+]:
     """
     Prefer control ligands for docking center/box. If none, fall back to P2Rank.
     """
@@ -829,7 +829,7 @@ def run_one_stage(
     logger: logging.Logger,
     retry_mgr: RetryManager,
     control_lookup: Dict[str, Path],        # maps ligand basename -> crystal ref PDB
-    budget_guards: Optional[Dict[str, BudgetGuard]] = None,  # <<< NEW: external per-ligand guards (Option B)
+    budget_guards: Optional[Dict[str, BudgetGuard]] = None,  # <<< external per-ligand guards
 ) -> Tuple[
     Dict[str, float],
     List[str],
@@ -850,7 +850,7 @@ def run_one_stage(
 
     surface_coords = extract_surface_atoms(pdbqt_path=receptor_pdbqt, center=center)
 
-    # ---- helpers (unchanged in spirit) ----
+    # ---- helpers  ----
     def _best_pose_pdb_from_pdbqt(pdbqt_path: str, obabel_path: Optional[str] = None) -> Optional[str]:
         try:
             from pathlib import Path
@@ -1230,21 +1230,21 @@ def run_one_stage(
 
 
 def early_recenter_decision(
-    i: int,
-    scores: Dict[str, float],
-    all_distances: List[float],
-    box_size: Tuple[float, float, float],
-    center: Tuple[float, float, float],
-    stage1_original: List[str],
-    attempts_used: int,
-    params: RecenterParams,
-    cfg: Dict,
-    pdb_id: str,
-    receptor_pdbqt: str,
-    logger: logging.Logger,
-    raw_docked: Dict[str, str],
-    guard: GlobalCenterGuard,
-    control_anchor_hit: bool
+        i: int,
+        scores: Dict[str, float],
+        all_distances: List[float],
+        box_size: Tuple[float, float, float],
+        center: Tuple[float, float, float],
+        stage1_original: List[str],
+        attempts_used: int,
+        params: RecenterParams,
+        cfg: Dict,
+        pdb_id: str,
+        receptor_pdbqt: str,
+        logger: logging.Logger,
+        raw_docked: Dict[str, str],
+        guard: GlobalCenterGuard,
+        control_anchor_hit: bool
 ) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str], int]:
     """
     Stage-1 heuristic for expanding box or recentering when everything docks far from the pocket.
@@ -1305,13 +1305,13 @@ def early_recenter_decision(
 
 
 def select_ligands_for_next(
-    docking_mode: str,
-    i: int,
-    stages: List[Dict],
-    scores: Dict[str, float],
-    logger: logging.Logger,
-    base_pool_n: Optional[int] = None,          #  if provided, select % of this
-    force_include: Optional[set] = None         #  always add these
+        docking_mode: str,
+        i: int,
+        stages: List[Dict],
+        scores: Dict[str, float],
+        logger: logging.Logger,
+        base_pool_n: Optional[int] = None,          #  if provided, select % of this
+        force_include: Optional[set] = None         #  always add these
 ) -> List[str]:
     if not scores:
         # Still allow force-carry if provided and next stage exists
@@ -1351,18 +1351,18 @@ def select_ligands_for_next(
 
 
 def fallback_recentering_if_empty(
-    cfg: Dict,
-    pdb_id: str,
-    stage_name: str,
-    scores: Dict[str, float],
-    raw_docked_ligands: Dict[str, str],
-    receptor_pdbqt: str,
-    center: Tuple[float, float, float],
-    box_size: Tuple[float, float, float],
-    stage1_original: List[str],
-    logger: logging.Logger,
-    guard: GlobalCenterGuard,
-    control_anchor_hit: bool
+        cfg: Dict,
+        pdb_id: str,
+        stage_name: str,
+        scores: Dict[str, float],
+        raw_docked_ligands: Dict[str, str],
+        receptor_pdbqt: str,
+        center: Tuple[float, float, float],
+        box_size: Tuple[float, float, float],
+        stage1_original: List[str],
+        logger: logging.Logger,
+        guard: GlobalCenterGuard,
+        control_anchor_hit: bool
 ) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str]]:
     """
     If a stage yields no valid ligands, attempt a fallback recenter and restart stage1.
@@ -1631,16 +1631,16 @@ class CenterSelector:
 # Phase 7–8: Finalization
 # ======================
 def final_pose_validation_and_screenshots(
-    cfg: Dict,
-    pdb_id: str,
-    stages: List[Dict],
-    receptor_pdbqt: str,
-    center: Tuple[float, float, float],
-    validated_ligands_last: List[str],
-    score_history: Dict[str, Dict[str, Dict]],
-    cleaned_pdb: str,
-    docking_mode: str,
-    logger: logging.Logger,
+        cfg: Dict,
+        pdb_id: str,
+        stages: List[Dict],
+        receptor_pdbqt: str,
+        center: Tuple[float, float, float],
+        validated_ligands_last: List[str],
+        score_history: Dict[str, Dict[str, Dict]],
+        cleaned_pdb: str,
+        docking_mode: str,
+        logger: logging.Logger,
 ) -> None:
     if not validated_ligands_last:
         return
@@ -1853,12 +1853,12 @@ def compute_rmsd(ref_path: str, docked_path: str) -> float:
 
 
 def validate_ligand(
-    ligand_name: str,
-    docked_path: str,
-    crystal_path: str = None,
-    rmsd_thresh: float = 2.0,
-    self_rmsd: float = None,
-    logger=None
+        ligand_name: str,
+        docked_path: str,
+        crystal_path: str = None,
+        rmsd_thresh: float = 2.0,
+        self_rmsd: float = None,
+        logger=None
 ) -> bool:
     """
     Validate ligand docking.
