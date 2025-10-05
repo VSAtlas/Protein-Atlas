@@ -1,10 +1,15 @@
-java 17
-python 3.10
+Python 3.10
+rdkit, meeko (plus stdlib deps)
 
-phenix-1.21.2
+AutoDock Vina (>= 1.2.x)
+
+Open Babel (= 3.1.0)
+Miniconda/Mamba (for env & packages)
+MGLTools 1.5.7 
+Reduce (command-line binary) + wwPDB het dict
+Java 17
 p2rank 2.5
-
-AutoDock Vina
-openbabel 3.1.1
-
-miniconda3
+Phenix 1.21.2
+PyMOL
+ADFRsuite (optional)
+pkasolver (optional)

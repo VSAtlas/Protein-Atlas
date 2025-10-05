@@ -1,0 +1,6 @@
+mkdir -p logs
+ts=$(date +%Y%m%d_%H%M%S)
+LOG="logs/bench_${ts}.log"
+
+python -u benchmark_mode.py 2>&1 | tee "$LOG"
+echo "Log -> $LOG"

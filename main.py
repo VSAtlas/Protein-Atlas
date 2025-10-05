@@ -13,7 +13,8 @@
 from __future__ import annotations
 
 import sys
-if hasattr(sys.stdout, "reconfigure"):  # Py3.7+
+
+if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
@@ -21,25 +22,27 @@ import os
 import time
 import json
 import logging
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import hashlib
 from typing import Dict, List, Optional, Tuple, Any
+import shutil
+
 import numpy as np
 from tqdm import tqdm
 
 from input_and_export_functions import (
     load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, generate_config, record_score, score_key,_to_bool
+    extract_best_score, generate_config, record_score, score_key, _to_bool
 )
 from protein_functions import detect_active_site
 from activesite import extract_and_remove_ligands
 from prep_ligands import prep_ligands_from_pdb, is_valid_ligand
 from pose_validation import (
     validate_pose_pdbqt, extract_surface_atoms, attempt_fallback_recenter,
-    filter_and_rewrite_poses_by_rmsd, compute_self_rmsd   # <— NEW IMPORT
+    filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
 )
 from run_vina import run_docking_task, validate_all_poses
 
@@ -51,7 +54,7 @@ from run_vina import run_docking_task, validate_all_poses
 class RetryManager:
     max_retries: int = 2
     recipes: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
-        # If we docked far from the pocket, try small geometry tweaks — not more modes
+        # If we docked far from the pocket, try small geometry tweaks � not more modes
         "too_far_from_pocket": [
             {"recenter": True, "box_pad_delta": +1.0, "num_modes": 4},
             {"recenter": True, "box_pad_delta": +2.0, "exhaustiveness": 6, "num_modes": 4},
@@ -82,9 +85,6 @@ class RetryManager:
                 p[k] = v
         return p
 
-from dataclasses import dataclass
-import time
-from pathlib import Path
 
 @dataclass
 class BudgetGuard:
@@ -97,6 +97,7 @@ class BudgetGuard:
 
     def expired(self) -> bool:
         return time.time() >= self._deadline
+
 
 def _iter_pdbqt_models(pdbqt_path: str):
     """
@@ -130,22 +131,22 @@ def _iter_pdbqt_models(pdbqt_path: str):
         except Exception:
             yield ""
 
+
 def validate_first_valid_pose(
-        receptor_pdbqt: str,
-        ligand_pdbqt: str,
-        pocket_center: tuple[float, float, float],
-        surface_coords,
-        max_models: int = 3,
-        clash_threshold: float = 2.0,
-        clash_tol: int = 3,
-        dist_surf: float = 6.0,
-        dist_centroid: float = 4.5,
+    receptor_pdbqt: str,
+    ligand_pdbqt: str,
+    pocket_center: tuple[float, float, float],
+    surface_coords,
+    max_models: int = 3,
+    clash_threshold: float = 2.0,
+    clash_tol: int = 3,
+    dist_surf: float = 6.0,
+    dist_centroid: float = 4.5,
 ):
     """
     Validate poses in order and return as soon as one passes.
     Falls back to the last invalid result if none pass.
     """
-    from pose_validation import validate_pose_pdbqt  # local import to avoid cycles
     tmp_dir = Path(ligand_pdbqt).parent
     best_invalid = None
     count = 0
@@ -159,7 +160,6 @@ def validate_first_valid_pose(
         try:
             tmp.write_text(model_text, encoding="utf-8")
         except Exception:
-            # If we can't write a temp file, just fall back to validating the whole file once
             tmp = Path(ligand_pdbqt)
 
         try:
@@ -230,6 +230,7 @@ class GlobalCenterGuard:
         """Hard-lock: disallow any further center changes for the remainder of the run."""
         self.locked = True
 
+
 @dataclass
 class Paths:
     """File/dir paths relevant to one protein."""
@@ -286,8 +287,6 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
     env_override = os.environ.get("QUIET_CONSOLE_OVERRIDE", "").strip()
     quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else _to_bool(cfg.get("QUIET_CONSOLE", False))
     ch.setLevel(logging.WARNING if quiet else logging.INFO)
-    ch_level = logging.WARNING if quiet else logging.INFO
-    ch.setLevel(ch_level)
     ch.setFormatter(formatter)
 
     logger.addHandler(fh)
@@ -316,11 +315,12 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
     nolig_pdb_path     = str(nolig_dir / f"{pdb_id}_nolig.pdb")                 # intermediate nolig
     cleaned_pdb_path   = receptor_dir / f"{pdb_id}_cleaned.pdb"                 # final cleaned PDB
     receptor_pdbqt     = receptor_dir / f"{pdb_id}.pdbqt"                       # final receptor PDBQT
-    ligand_output_dir  = lig_raw_dir                                            # <— IMPORTANT: was *_cleaned_ligands
-    ligands_mol2_dir   = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id                 # keep as-is
+    ligand_output_dir  = lig_raw_dir                                            # extracted controls
+    ligands_mol2_dir   = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
     prepped_lig_dir    = Path(cfg["OUTPUT_LIGANDS_DIR"]) / pdb_id               # prepped .pdbqt library
 
     prepped_lig_dir.mkdir(parents=True, exist_ok=True)
+    ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
 
     return Paths(
         pdb_id=pdb_id,
@@ -364,12 +364,10 @@ def build_control_lookup(paths: Paths) -> dict:
             if p and _is_readable_ref(p):
                 picked = p
                 break
-        # if none are readable, skip this base
         if picked:
             chosen[base] = picked
 
     return chosen
-
 
 
 # --------- extra helpers (easy-win features) ---------
@@ -387,6 +385,7 @@ def _map_reason_to_category(reason: str) -> str:
         return "no_valid_pose"
     return "no_valid_pose"
 
+
 # --------- improved checkpointing (fingerprinted) ---------
 def _file_md5(path: str, blocksize: int = 1 << 20) -> Optional[str]:
     try:
@@ -401,8 +400,10 @@ def _file_md5(path: str, blocksize: int = 1 << 20) -> Optional[str]:
     except Exception:
         return None
 
+
 def _round_tuple(t: Tuple[float, float, float], ndp: int = 1) -> Tuple[float, float, float]:
     return tuple(None if (x is None) else round(float(x), ndp) for x in t)
+
 
 def _fingerprint_stage(cfg: Dict,
                        receptor_pdbqt: str,
@@ -422,8 +423,10 @@ def _fingerprint_stage(cfg: Dict,
         "version_tag": "ckpt_v2",
     }
 
+
 def _checkpoint_path(cfg: Dict, pdb_id: str, stage_name: str) -> Path:
     return Path(cfg["DOCKED_DIR"]) / pdb_id / f".ckpt_{stage_name}.json"
+
 
 def checkpoint_should_skip(cfg: Dict,
                            pdb_id: str,
@@ -438,6 +441,7 @@ def checkpoint_should_skip(cfg: Dict,
         return False
     return prev == fingerprint
 
+
 def checkpoint_mark_done(cfg: Dict,
                          pdb_id: str,
                          stage_name: str,
@@ -449,12 +453,14 @@ def checkpoint_mark_done(cfg: Dict,
     except Exception:
         pass
 
+
 def checkpoint_invalidate_from(cfg: Dict, pdb_id: str, stages: List[Dict], start_index: int) -> None:
     for j in range(start_index, len(stages)):
         try:
             _checkpoint_path(cfg, pdb_id, stages[j]["name"]).unlink(missing_ok=True)
         except Exception:
             pass
+
 
 def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
     try:
@@ -465,6 +471,7 @@ def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
         out.write_text(json.dumps(summary, indent=2))
     except Exception:
         pass
+
 
 def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
     try:
@@ -484,8 +491,9 @@ def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
     except Exception:
         return False
 
+
 # ======================
-# Phase 1–5: Prep steps
+# Phase 1�5: Prep steps
 # ======================
 def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int, set]:
     malformed_log = paths.ligands_mol2_dir / "malformed_ligands.txt"
@@ -503,91 +511,6 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
             control_stems.add(Path(p).stem)
 
     return len(ligands_dict), control_stems
-def robust_prepare_controls(paths: Paths, cfg: Dict, logger: logging.Logger) -> None:
-    import subprocess
-    from pathlib import Path
-    from rdkit import Chem
-
-    out_dir = paths.prepped_ligands_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    def sanitized_path(p: Path) -> Path:
-        return p.parent / f"{p.stem}.sanitized.pdb"
-
-    def sanitize_pdb(in_pdb: Path, out_pdb: Path) -> bool:
-        out_pdb.parent.mkdir(parents=True, exist_ok=True)
-        wrote_any = False
-        with open(in_pdb, "r", encoding="utf-8", errors="ignore") as fin, \
-                open(out_pdb, "w", encoding="utf-8") as fout:
-            for ln in fin:
-                if not ln.startswith(("ATOM", "HETATM")):
-                    fout.write(ln); continue
-                altloc = ln[16].strip() if len(ln) > 16 else ""
-                if altloc and altloc.upper() not in ("A", ""):
-                    continue
-                try:
-                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
-                    if any([(x != x), (y != y), (z != z)]) or max(abs(x),abs(y),abs(z)) > 1e6:
-                        continue
-                except Exception:
-                    continue
-                fout.write(ln); wrote_any = True
-        if not wrote_any:
-            logger.warning(f"[control-prep] {in_pdb.name}: no safe ATOM/HETATM lines kept.")
-        return out_pdb.exists()
-
-    mgl_py = str(Path(cfg["MGLTOOLS_PYTHON"])) if cfg.get("MGLTOOLS_PYTHON") else None
-    prep_lig_script = cfg.get("PREPARE_LIGAND_SCRIPT")
-    if not prep_lig_script and cfg.get("PREPARE_RECEPTOR_SCRIPT"):
-        prep_lig_script = str(Path(cfg["PREPARE_RECEPTOR_SCRIPT"]).parent / "prepare_ligand4.py")
-
-    obabel_cfg = (cfg.get("OPENBABEL_PATH") or "").strip()
-    obabel_exe = obabel_cfg if obabel_cfg.lower().endswith(".exe") else str(Path(obabel_cfg) / "obabel.exe")
-
-    for p in paths.ligand_output_dir.rglob("*.pdb"):
-        base = p.stem
-        san = sanitized_path(p)
-        try:
-            if not sanitize_pdb(p, san):
-                logger.error(f"[control-prep] Failed to create sanitized: {san}")
-                continue
-
-            out_pdbqt = out_dir / f"{base}.pdbqt"
-            if (not san.exists()) or (san.stat().st_size == 0):
-                logger.error(f"[control-prep] Missing or empty just before MGLTools: {san}")
-                continue
-
-            if mgl_py and prep_lig_script and Path(prep_lig_script).exists():
-                if not san.exists():
-                    logger.error(f"[control-prep] Missing just before MGLTools: {san}")
-                    continue
-                lig_basename = san.name
-                subprocess.check_call([mgl_py, prep_lig_script,
-                                       "-l", lig_basename,
-                                       "-o", str(out_pdbqt),
-                                       "-U", "nphs_lps",
-                                       "-A", "checkhydrogens"],
-                                      cwd=str(san.parent))
-            else:
-                # RDKit (no sanitize explosions) + obabel (no gen3D)
-                mol = Chem.MolFromPDBFile(str(san), sanitize=False, removeHs=False)
-                if mol is None:
-                    logger.warning(f"[control-prep] RDKit failed to read {san.name}")
-                    continue
-                tmp_pdb = san.with_suffix(".tmp.pdb")
-                Chem.MolToPDBFile(mol, str(tmp_pdb))
-                subprocess.check_call([obabel_exe, "-ipdb", str(tmp_pdb), "-opdbqt", "-O", str(out_pdbqt)])
-                tmp_pdb.unlink(missing_ok=True)
-
-            if not out_pdbqt.exists():
-                logger.warning(f"[control-prep] Expected output not created: {out_pdbqt}")
-
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"[control-prep] Failed for {p.name}: {e}")
-        except Exception as e:
-            logger.warning(f"[control-prep] Unexpected failure for {p.name}: {e}")
-        finally:
-            san.unlink(missing_ok=True)
 
 
 def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
@@ -638,26 +561,22 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
-from pathlib import Path  # (top-level import; you already have it)
-import numpy as np        # (top-level; you already have it)
 
 def detect_pocket(cleaned_pdb: str,
                   ligand_dir: Path,
                   logger: logging.Logger) -> Tuple[
     Optional[Tuple[float,float,float]],
     Optional[Tuple[float,float,float]],
-    str  # <— source ("control" or "p2rank" or "none")
+    str  # source ("control" | "p2rank" | "none")
 ]:
     """
     Prefer control ligands for docking center/box. If none, fall back to P2Rank.
     """
 
-    import numpy as np
-
     def find_control_pdbs(d: Path) -> list[Path]:
         return sorted([p for p in d.glob("*.pdb") if p.is_file()])
 
-    # --- 1) Controls check ---
+    # 1) Controls check
     ctrl_files = find_control_pdbs(ligand_dir)
 
     # Also check sibling if this is *_NOLIG
@@ -685,7 +604,7 @@ def detect_pocket(cleaned_pdb: str,
             logger.info(f"[Control-center] Using control centroid {ctrl_center} with box {box_size}")
             return ctrl_center, box_size, "control"
 
-    # --- 2) Fallback to P2Rank ---
+    # 2) Fallback to P2Rank
     center, box_size = detect_active_site(cleaned_pdb)
     if center:
         box_size = tuple(min(28.0, float(s)) for s in box_size)
@@ -694,8 +613,6 @@ def detect_pocket(cleaned_pdb: str,
     else:
         logger.error("Active-site detection failed (no controls, P2Rank returned None).")
         return None, None, "none"
-
-
 
 
 def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
@@ -714,7 +631,55 @@ def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
                     heavy += 1
     return heavy
 
-def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int]]:
+
+from rdkit import Chem
+from rdkit.Chem import FilterCatalog
+from rdkit.Chem.MolStandardize import rdMolStandardize
+import subprocess, tempfile
+
+
+def _load_mol_any(pdbqt_path: Path, obabel_exe: str | None) -> Chem.Mol | None:
+    base = pdbqt_path.with_suffix("")
+    # prefer SDF, then MOL2, then PDB
+    sdf = base.with_suffix(".sdf"); mol2 = base.with_suffix(".mol2"); pdb = base.with_suffix(".pdb")
+    if sdf.exists():
+        supp = Chem.SDMolSupplier(str(sdf), removeHs=False, sanitize=True)
+        for m in supp:
+            if m: return m
+    for fp, reader in [(mol2, Chem.MolFromMol2File), (pdb, Chem.MolFromPDBFile)]:
+        if fp.exists():
+            m = reader(str(fp), sanitize=True, removeHs=False)
+            if m: return m
+    # fallback: PDBQT -> SDF via obabel (Linux-friendly)
+    if obabel_exe:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td, "tmp.sdf")
+            try:
+                subprocess.check_call([obabel_exe, "-ipdbqt", str(pdbqt_path), "-osdf", "-O", str(out), "--retype", "--addh"])
+                supp = Chem.SDMolSupplier(str(out), removeHs=False, sanitize=True)
+                for m in supp:
+                    if m: return m
+            except Exception:
+                return None
+    return None
+
+
+def _standardize(m: Chem.Mol) -> Chem.Mol:
+    parent = rdMolStandardize.ChargeParent(m)   # neutralize/parent
+    rdMolStandardize.Normalize(parent)          # FG normalization
+    Chem.SanitizeMol(parent)
+    return parent
+
+
+# Build catalog with PAINS A/B/C
+params = FilterCatalog.FilterCatalogParams()
+params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
+params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
+params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
+pains_catalog = FilterCatalog.FilterCatalog(params)
+
+
+def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
     # Keep your existing prep step (controls/extracted); harmless if nothing to do
     prep_ligands_from_pdb(
         ligand_output_dir=paths.ligand_output_dir,
@@ -722,16 +687,14 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         prepped_ligands_dir=paths.prepped_ligands_dir,
     )
 
-    # --- NEW: scan multiple roots ---
+    # Gather from multiple roots
     roots = []
     global_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
     if global_root.exists():
         roots.append(global_root)
-    # also include the per-protein folder (controls you just prepared land here)
     if paths.prepped_ligands_dir.exists():
         roots.append(paths.prepped_ligands_dir)
 
-    # optional extras (semicolon-separated absolute paths)
     extra = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
     if extra:
         for d in extra.split(";"):
@@ -741,7 +704,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
                 if p.exists():
                     roots.append(p)
 
-    # Gather all .pdbqt files from all roots (deduped by normalized absolute path)
     logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
     seen_paths: set[str] = set()
     all_pdbqt_paths: list[Path] = []
@@ -754,25 +716,21 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     if not all_pdbqt_paths:
         logger.warning("No .pdbqt ligands found in any library roots; nothing to dock.")
-        return [], {}
+        return [], {}, {}
 
     # Validate each ligand and collect heavy atom counts
     valid_pdbqt: Dict[str, Path] = {}
-    valid_count = 0
     for p in all_pdbqt_paths:
-        stem = p.stem
         try:
-            # use the global root as "library root" for path-based checks
             lib_root_for_checks = str(global_root if global_root.exists() else paths.prepped_ligands_dir.parent)
             if is_valid_ligand(p, lib_root_for_checks):
                 valid_pdbqt[norm(p)] = p
-                valid_count += 1
             else:
                 logger.debug(f"Excluded malformed ligand (pdbqt check failed): {p}")
         except Exception:
             logger.debug(f"Excluded malformed ligand (exception): {p}")
 
-    logger.info(f"Valid .pdbqt ligands (union of roots): {valid_count}")
+    logger.info(f"Valid .pdbqt ligands (union of roots): {len(valid_pdbqt)}")
 
     # Optional blacklist by name prefix (PAINS_NAMES)
     pains_tokens = [t.strip().upper() for t in str(cfg.get("PAINS_NAMES", "")).split(",") if t.strip()]
@@ -797,6 +755,25 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
             ha = 0
         heavy_atom_counts[k] = int(ha)
 
+    # PAINS filter (structural)
+    pains_flags: Dict[str, bool] = {}
+
+    # Resolve OpenBabel path (file name or explicit path)
+    obabel_exe = (cfg.get("OPENBABEL_PATH") or "obabel")
+
+    for k, p in valid_pdbqt.items():
+        try:
+            mol = _load_mol_any(Path(p), obabel_exe=obabel_exe)
+            if mol is None:
+                logger.debug(f"[PAINS] Could not load molecule for {p}; skipping PAINS check.")
+                pains_flags[k] = False
+                continue
+            std = _standardize(mol)  # neutralize / normalize / aromaticity
+            pains_flags[k] = bool(pains_catalog.GetFirstMatch(std))
+        except Exception as e:
+            logger.debug(f"[PAINS] Error on {p}: {e}")
+            pains_flags[k] = False
+
     # Sampling / limits for Stage1
     import random
     sample_n = int(cfg.get("LIBRARY_SAMPLE_N", 0) or 0)
@@ -813,7 +790,8 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         logger.info(f"[Debug] Limiting library to first {limit_n} ligands for stage1.")
 
     logger.info(f"Ligands queued for docking (union roots): {len(ligands_to_dock)}")
-    return ligands_to_dock, heavy_atom_counts
+    return ligands_to_dock, heavy_atom_counts, pains_flags
+
 
 # ======================
 # Phase 6: Docking loop
@@ -829,7 +807,7 @@ def run_one_stage(
     logger: logging.Logger,
     retry_mgr: RetryManager,
     control_lookup: Dict[str, Path],        # maps ligand basename -> crystal ref PDB
-    budget_guards: Optional[Dict[str, BudgetGuard]] = None,  # <<< external per-ligand guards
+    budget_guards: Optional[Dict[str, BudgetGuard]] = None,  # external per-ligand guards
 ) -> Tuple[
     Dict[str, float],
     List[str],
@@ -837,7 +815,9 @@ def run_one_stage(
     Dict[str, str],
     Dict[str, Tuple[Optional[float], str]]
 ]:
-    from sys import stdout as _stdout
+    from sys import stdout as _stdout  # for tqdm
+    import shutil
+    import subprocess
 
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     max_workers = int(cfg["MAX_PARALLEL_JOBS"])
@@ -850,22 +830,18 @@ def run_one_stage(
 
     surface_coords = extract_surface_atoms(pdbqt_path=receptor_pdbqt, center=center)
 
-    # ---- helpers  ----
+    # ---- helpers (nested) ----
     def _best_pose_pdb_from_pdbqt(pdbqt_path: str, obabel_path: Optional[str] = None) -> Optional[str]:
+        """Convert first model of PDBQT -> PDB (no hydrogens) using OpenBabel."""
         try:
-            from pathlib import Path
-            import subprocess, shutil
             out_pdb = Path(pdbqt_path).with_suffix(".best.pdb")
-
-            obabel = obabel_path or os.environ.get("OPENBABEL_EXE") or ""
-            if os.name == "nt" and obabel and not obabel.lower().endswith(".exe"):
-                obabel = str(Path(obabel) / "obabel.exe")
-            if not obabel or not shutil.which(obabel):
-                obabel = shutil.which("obabel")
-            if not obabel:
-                raise RuntimeError("OpenBabel not found; set OPENBABEL_PATH/OPENBABEL_EXE")
-
-            # first model only; strip H so heavy-atom counts line up
+            obabel = (
+                obabel_path
+                or os.environ.get("OPENBABEL_EXE")
+                or cfg.get("OPENBABEL_PATH", "").strip()
+                or shutil.which("obabel")
+                or "obabel"
+            )
             cmd = [obabel, "-ipdbqt", str(pdbqt_path), "-opdb", "-O", str(out_pdb), "-f", "1", "-l", "1", "-d"]
             subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return str(out_pdb) if out_pdb.exists() and out_pdb.stat().st_size > 0 else None
@@ -881,7 +857,7 @@ def run_one_stage(
     ) -> Tuple[bool, Optional[str]]:
         """
         Controls: crystal redock RMSD is a hard gate.
-        Non-controls: self-RMSD is logged in upstream code; do not gate here.
+        Non-controls: self-RMSD is logged upstream; do not gate here.
         """
         base = Path(lig_path).stem.split("_stage")[0]
         crystal_ref = control_lookup.get(base)
@@ -910,23 +886,19 @@ def run_one_stage(
         return True, None
 
     # ---- scheduling & submission ----
-    # default budget used only if caller didn't supply a guard for a ligand
     default_budget_seconds = float(
-        cfg.get("MAX_RETRY_SECONDS_PER_LIGAND",
-                cfg.get("BENCH_MAX_SECONDS", 300.0))
+        cfg.get("MAX_RETRY_SECONDS_PER_LIGAND", cfg.get("BENCH_MAX_SECONDS", 300.0))
     )
 
     submit_queue = []
     guards_for_ligand: Dict[str, BudgetGuard] = {}
 
     for lig in ligands:
-        # pick external guard if provided; else create a local one so code stays robust
         guard = (budget_guards.get(lig) if budget_guards else None)
         if guard is None:
             guard = BudgetGuard(default_budget_seconds)
         guards_for_ligand[lig] = guard
 
-        # if the ligand's budget is already exhausted (e.g., earlier wave), don’t even submit
         if guard.expired():
             invalids[lig] = (None, "budget_exceeded")
             continue
@@ -1015,7 +987,7 @@ def run_one_stage(
 
                     logger.info(f"{lig_name} validation: {result}")
 
-                    # if pose valid → RMSD gate for controls; non-controls accepted
+                    # Valid pose -> optional RMSD hard gate for controls
                     if result.get("valid", False):
                         ok, reason = _validate_with_rmsd_gate(lig, lig_name, out_path, float(score))
                         if ok:
@@ -1033,7 +1005,6 @@ def run_one_stage(
                     # --------------------------
                     # Geometrically invalid path
                     # --------------------------
-                    # stop if we blew the budget for this ligand
                     if guard.expired():
                         invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
                         processed += 1
@@ -1118,7 +1089,7 @@ def run_one_stage(
                         except Exception as _e:
                             logger.warning(f"Retry path failed for {lig_name}: {_e}")
 
-                    # Structured recipe retries (BudgetGuard enforced each loop)
+                    # Structured recipe retries
                     err_cat = _map_reason_to_category(result.get("reason", ""))
                     attempt = 0
                     retained_invalid = True
@@ -1228,7 +1199,6 @@ def run_one_stage(
 
     return scores, validated_ligands, all_distances, raw_docked_ligands, invalids
 
-
 def early_recenter_decision(
         i: int,
         scores: Dict[str, float],
@@ -1248,8 +1218,8 @@ def early_recenter_decision(
 ) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str], int]:
     """
     Stage-1 heuristic for expanding box or recentering when everything docks far from the pocket.
-    De-duped and control-anchored: will not fire if (a) a control validated this stage, (b) a global switch already occurred this stage,
-    or (c) global switch cap reached.
+    De-duped and control-anchored: will not fire if (a) a control validated this stage, (b) a global switch already
+    occurred this stage, or (c) global switch cap reached.
     """
     if i != 0:
         return False, center, box_size, [], attempts_used
@@ -1262,7 +1232,7 @@ def early_recenter_decision(
 
     evaluated = len(all_distances)
     valid_count = len(scores)
-    if evaluated < max(params.EARLY_RECENTER_MIN_EVAL, 15):  # slightly stricter
+    if evaluated < max(params.EARLY_RECENTER_MIN_EVAL, 15):
         logger.info(f"Early recenter skipped: evaluated={evaluated} < threshold.")
         return False, center, box_size, [], attempts_used
 
@@ -1274,7 +1244,10 @@ def early_recenter_decision(
     if params.ALLOW_BOX_EXPAND and (0.55 <= far_ratio < params.EARLY_RECENTER_RATIO) and (9.0 <= med_dist < params.EARLY_RECENTER_MEDIAN_A) and (valid_count == 0):
         new_box = tuple(min(28.0, s + 4.0) for s in box_size)
         if new_box != box_size:
-            logger.info(f"Borderline far_ratio={far_ratio:.2f}, median={med_dist:.1f} Å -> expand box to {new_box} and redo stage1.")
+            logger.info(
+                f"Borderline far_ratio={far_ratio:.2f}, median={med_dist:.1f} A -> "
+                f"expand box to {new_box} and redo stage1."
+            )
             # Note: not counted as a global switch
             return True, center, new_box, stage1_original[:], attempts_used
 
@@ -1283,7 +1256,7 @@ def early_recenter_decision(
             logger.warning("Early recenter max attempts reached; proceeding without recenter.")
             return False, center, box_size, [], attempts_used
 
-        logger.warning(f"Early recenter trigger: far_ratio={far_ratio:.2f}, median={med_dist:.1f} Å, valid=0 -> recentering.")
+        logger.warning(f"Early recenter trigger: far_ratio={far_ratio:.2f}, median={med_dist:.1f} �, valid=0 -> recentering.")
         fb_pose, new_center, _best_score, _chosen = attempt_fallback_recenter(
             fallback_ligands=raw_docked,
             receptor_pdbqt=receptor_pdbqt,
@@ -1686,20 +1659,36 @@ def final_pose_validation_and_screenshots(
                 record_score(score_history, last_stage, lig, None, False, reason="all_poses_invalid_no_score")
             print(f"{Path(lig).name} | all poses invalid (kept for logs)")
 
-    try:
-        import subprocess
-        top = validated_ligands_last[0]
-        pose = Path(cfg["DOCKED_DIR"]) / pdb_id / last_stage / f"{Path(top).stem}_{last_stage}.pdbqt"
-        if pose.exists():
-            out_prefix = Path(cfg["DOCKED_DIR"]) / pdb_id / "top_pose"
-            out_prefix.parent.mkdir(parents=True, exist_ok=True)
-            cmd = [str(Path(cfg["PYMOL_PATH"])), "capture_pose.py", cleaned_pdb, str(pose), str(out_prefix)]
-            print("Running PyMOL:", cmd)
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            print("PyMOL stdout:", res.stdout)
-            print("PyMOL stderr:", res.stderr)
-    except Exception as e:
-        logger.warning(f"Screenshot generation failed: {e}")
+        try:
+            import subprocess
+            top = validated_ligands_last[0]
+            pose = Path(cfg["DOCKED_DIR"]) / pdb_id / last_stage / f"{Path(top).stem}_{last_stage}.pdbqt"
+            if pose.exists():
+                out_prefix = Path(cfg["DOCKED_DIR"]) / pdb_id / "top_pose"
+                out_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+                # -- PyMOL screenshot block (Option A: -r + -d python) --
+                cap_py = Path(__file__).with_name("capture_pose.py")
+
+                py_cfg = str(cfg.get("PYMOL_PATH", "")).strip()
+                pymol_exe = py_cfg if (py_cfg and Path(py_cfg).is_file()) else (shutil.which("pymol") or "pymol")
+
+                d_arg = f"""python
+                from __main__ import capture_pose
+                capture_pose({repr(cleaned_pdb)}, {repr(str(pose))}, {repr(str(out_prefix))})
+                python end
+                quit
+                """
+
+                # -cq keeps PyMOL headless/quiet; keep -r to load helper script
+                cmd = [pymol_exe, "-cq", "-r", str(cap_py), "-d", d_arg]
+                print("Running PyMOL:", cmd)
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                print("PyMOL stdout:", res.stdout)
+                print("PyMOL stderr:", res.stderr)
+
+        except Exception as e:
+            logger.warning(f"Screenshot generation failed: {e}")
 
 
 def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str) -> str:
@@ -1732,7 +1721,7 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
     csv_out_long = os.path.join(dock_dir, "docking_score_long.csv")
     with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd"])
+        writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd", "pains_flag"])
 
         for stage_name, stage_map in score_history.items():
             for lig, rec in stage_map.items():
@@ -1743,6 +1732,7 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
 
                 ha = rec.get("heavy_atoms", None)
                 le = rec.get("le", None)
+                pains_hit = rec.get("pains_flag", False)
 
                 # Compute self-RMSD from the saved pose for this stage (if present)
                 pose_path = _pose_path_for(cfg, pdb_id, stage_name, lig)
@@ -1760,7 +1750,7 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
                 le_str = f"{le:.4f}" if isinstance(le, (int, float)) else ""
                 reason_str = str(reason) if reason is not None else ""
 
-                writer.writerow([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str, sr_str])
+                writer.writerow([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str, sr_str, int(pains_hit)])
 
     return csv_out_wide
 
@@ -1905,7 +1895,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
     # 1) Extract ligands → produce nolig PDB
     _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
-    robust_prepare_controls(paths, cfg, logger)
     ctrl_pdbqts: list[Path] = []
     for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
         if root.exists():
@@ -1923,6 +1912,15 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     if not cleaned_pdb or not receptor_pdbqt:
         logger.warning("Skipping protein due to prep failure.")
         return
+
+
+    # insert: strip monoatomic ions (Na+, K+, Cl-, etc.) before Meeko uses the PDB
+    try:
+        from automate_protein_prep import _strip_monoatomic_ions_inplace
+        _strip_monoatomic_ions_inplace(Path(cleaned_pdb))
+        logger.info("Stripped monoatomic ions from cleaned PDB before pocket detection/Meeko.")
+    except Exception as e:
+        logger.warning(f"Strip monoatomic ions skipped: {e}")
 
     # 3) Pocket detection
     center, box_size, center_source = detect_pocket(cleaned_pdb, paths.ligand_output_dir, logger)
@@ -1942,37 +1940,17 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         pass
 
     # 4) Ligand prep & filtering
-    ligands, heavy_atom_counts = prepare_and_filter_ligands(cfg, paths, logger)
+    ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
     # Force-inject control PDBQTs if they exist on disk but weren't selected
     control_stems_lower = {s.lower() for s in control_stems}
+    # Re-scan now that prep_ligands_from_pdb has run
     prepped_control_pdbqts = []
     for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
-        if not root.exists():
-            continue
-        for p in root.glob("*.pdbqt"):
-            if p.stem.split("_stage")[0].lower() in control_stems_lower:
-                prepped_control_pdbqts.append(norm(p))
+        if root.exists():
+            for p in root.glob("*.pdbqt"):
+                if p.stem.split("_stage")[0].lower() in control_stems_lower:
+                    prepped_control_pdbqts.append(norm(p))
 
-    # Fallback: if any extracted control stems are missing as PDBQT, try on-the-fly obabel convert
-    missing_stems = {s.lower() for s in control_stems} - {Path(p).stem.split("_stage")[0].lower() for p in
-                                                          prepped_control_pdbqts}
-    if missing_stems:
-        logger.warning(
-            f"[Controls] {len(missing_stems)} extracted ligand(s) missing as PDBQT; attempting quick obabel convert.")
-        obabel = cfg.get("OPENBABEL_PATH", "").strip()
-        if obabel and not obabel.lower().endswith(".exe"):
-            obabel = str(Path(obabel) / "obabel.exe")
-        for p in paths.ligand_output_dir.glob("*.pdb"):
-            stem = p.stem.split("_stage")[0].lower()
-            if stem not in missing_stems:
-                continue
-            out_pdbqt = paths.prepped_ligands_dir / f"{p.stem}.pdbqt"
-            try:
-                subprocess.check_call([obabel, "-ipdb", str(p), "-opdbqt", "-O", str(out_pdbqt)])
-                if out_pdbqt.exists():
-                    logger.info(f"[Controls] Quick-converted {p.name} -> {out_pdbqt.name}")
-            except Exception as e:
-                logger.warning(f"[Controls] Quick obabel failed for {p.name}: {e}")
 
     lig_set = {norm(x) for x in ligands}
     missing_controls = [x for x in prepped_control_pdbqts if norm(x) not in lig_set]

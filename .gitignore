@@ -1,0 +1,28 @@
+# === large generated / HPC outputs ===
+ligands_mol2/
+prepped_ligands/
+logs/
+docked/
+input_ligands/
+extracted_ligands/
+hide/
+input_pdbs/
+p2rank_out/
+pdbqts/
+processed_pdbs/
+configs/
+temp/
+# caches / scratch
+pubchem_name_cache.json
+malformed_ligands*.txt
+
+# common heavy chemistry artifacts
+*.pdbqt
+*.mol2
+*.pdb
+*.sdf
+
+# misc
+__pycache__/
+*.pyc
+*.log

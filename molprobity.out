@@ -2,12 +2,12 @@
 =============================== Model properties ==============================
 
    Number of:
-     all atoms      : 16453
-     H or D atoms   : 8137
-     chains         : 4
-     a.a. residues  : 1017
+     all atoms      : 4725
+     H or D atoms   : 2365
+     chains         : 1
+     a.a. residues  : 297
      nucleotides    : 0
-     water          : 1
+     water          : 0
      other (ligands): 0
    Ligands: None
 
@@ -16,116 +16,59 @@
 
                         ----------Bond lengths----------                       
 
-  atoms                 ideal   model   delta   sigma   slack  residual   deviation
-   C 566  MET  SD
-   C 566  MET  CE          1.79     1.45     0.34  2.50e-02  1.82e+02  13.5*sigma
-   C 619  MET  SD
-   C 619  MET  CE          1.79     1.55     0.24  2.50e-02  9.33e+01   9.7*sigma
-   A 107  MET  SD
-   A 107  MET  CE          1.79     1.60     0.19  2.50e-02  5.89e+01   7.7*sigma
-   B 483  MET  SD
-   B 483  MET  CE          1.79     1.64     0.15  2.50e-02  3.84e+01   6.2*sigma
-   A  54  MET  SD
-   A  54  MET  CE          1.79     1.93    -0.14  2.50e-02  3.20e+01   5.7*sigma
-   C 730  MET  SD
-   C 730  MET  CE          1.79     1.67     0.12  2.50e-02  2.33e+01   4.8*sigma
-   A 260  MET  SD
-   A 260  MET  CE          1.79     1.67     0.12  2.50e-02  2.30e+01   4.8*sigma
-   A 236  MET  SD
-   A 236  MET  CE          1.79     1.67     0.12  2.50e-02  2.26e+01   4.8*sigma
-   B 380  MET  SD
-   B 380  MET  CE          1.79     1.67     0.12  2.50e-02  2.18e+01   4.7*sigma
-   B 507  MET  SD
-   B 507  MET  CE          1.79     1.69     0.11  2.50e-02  1.78e+01   4.2*sigma
-   B 307  MET  SD
-   B 307  MET  CE          1.79     1.90    -0.10  2.50e-02  1.76e+01   4.2*sigma
+  All restrained atoms within 4.0 sigma of ideal values.
 
   Min. delta:    0.000 (Z=  0.000)
-  Max. delta:    0.337 (Z= 13.497)
-  Mean delta:    0.019 (Z=  0.816)
+  Max. delta:    0.055 (Z=  2.111)
+  Mean delta:    0.007 (Z=  0.304)
 
                         ----------Bond angles----------                        
 
   atoms                   ideal    model    delta   sigma  residual   deviation
-   C 755  PHE  O
-   C 755  PHE  C
-   C 755  PHE  OXT       118.00    42.21    75.79  3.00e+00  6.38e+02  25.3*sigma
-   B 484  ARG  NE
-   B 484  ARG  CZ
-   B 484  ARG  NH2       119.20   114.67     4.53  9.00e-01  2.53e+01   5.0*sigma
-   D 919  PHE  C
-   D 919  PHE  CA
-   D 919  PHE  CB        110.10   101.59     8.51  1.90e+00  2.01e+01   4.5*sigma
-   A   5  MET  CB
-   A   5  MET  CG
-   A   5  MET  SD        112.70    99.57    13.13  3.00e+00  1.92e+01   4.4*sigma
-   B 482  LEU  CA
-   B 482  LEU  CB
-   B 482  LEU  CG        116.30   130.63   -14.33  3.50e+00  1.68e+01   4.1*sigma
-   A 158  THR  OG1
-   A 158  THR  CB
-   A 158  THR  CG2       109.30   101.15     8.15  2.00e+00  1.66e+01   4.1*sigma
+   A 297  ASN  O
+   A 297  ASN  C
+   A 297  ASN  OXT       118.00    96.27    21.73  3.00e+00  5.24e+01   7.2*sigma
 
   Min. delta:    0.000 (Z=  0.000)
-  Max. delta:   75.787 (Z= 25.262)
-  Mean delta:    1.773 (Z=  0.809)
+  Max. delta:   21.727 (Z=  7.242)
+  Mean delta:    1.242 (Z=  0.560)
 
                       ----------Dihedral angles----------                      
 
-  atoms                   ideal    model    delta   sigma  residual   deviation
-   A  41  LEU  CA
-   A  41  LEU  C
-   A  42  LYS  N
-   A  42  LYS  CA        180.00  -152.47   -27.53  5.00e+00  3.03e+01   5.5*sigma
-   B 341  TYR  CA
-   B 341  TYR  C
-   B 342  ILE  N
-   B 342  ILE  CA        180.00   155.03    24.97  5.00e+00  2.49e+01   5.0*sigma
-   A  76  TYR  CA
-   A  76  TYR  C
-   A  77  ILE  N
-   A  77  ILE  CA        180.00   158.08    21.92  5.00e+00  1.92e+01   4.4*sigma
-   C 530  GLY  CA
-   C 530  GLY  C
-   C 531  GLY  N
-   C 531  GLY  CA        180.00  -158.30   -21.70  5.00e+00  1.88e+01   4.3*sigma
-   C 553  THR  CA
-   C 553  THR  C
-   C 554  LEU  N
-   C 554  LEU  CA        180.00  -159.89   -20.11  5.00e+00  1.62e+01   4.0*sigma
+  All restrained atoms within 4.0 sigma of ideal values.
 
-  Min. delta:    0.001
-  Max. delta:   89.723
-  Mean delta:   16.201
+  Min. delta:    0.005
+  Max. delta:   87.344
+  Mean delta:   15.612
 
                        ----------Chiral volumes----------                      
 
   All restrained atoms within 4.0 sigma of ideal values.
 
   Min. delta:    0.000
-  Max. delta:    0.335
-  Mean delta:    0.099
+  Max. delta:    0.279
+  Mean delta:    0.084
 
                        ----------Planar groups----------                       
 
   atoms                 rms_deltas   delta_max    residual   deviation
-   C 755  PHE  CA
-   C 755  PHE  C
-   C 755  PHE  O
-   C 755  PHE  OXT           0.275       0.459      753.87  23.0*sigma
+   A 297  ASN  CA
+   A 297  ASN  C
+   A 297  ASN  O
+   A 297  ASN  OXT           0.169       0.101      284.36   5.1*sigma
 
   Min. delta:    0.000
-  Max. delta:    0.275
-  Mean delta:    0.011
+  Max. delta:    0.169
+  Mean delta:    0.009
 
 ============================= Hydrogen validation =============================
 
 
                 ----------H/D atoms in the input model----------               
 
-  Total number of hydrogen atoms : 8137
+  Total number of hydrogen atoms : 2365
   Total number of deuterium atoms: 0
-  Number of H atoms (protein)    : 8137
+  Number of H atoms (protein)    : 2365
   Number of D atoms (protein)    : 0
   Number of H atoms (water)      : 0
   Number of D atoms (water)      : 0
@@ -134,8 +77,8 @@
 
                       ----------Water molecules----------                      
 
-  Number of water                            : 1
-  Number of water with 0 H (or D)            : 1
+  Number of water                            : 0
+  Number of water with 0 H (or D)            : 0
   Number of water with 1 H (or D)            : 0
   Number of water with 2 H (or D)            : 0
   Number of water in alternative conformation: 0
@@ -143,78 +86,68 @@
 
              ----------H (or D) atoms with occupancy < 1----------             
 
-  pdb=" HB2 PHE B 388 " with occupancy 0.7
-  pdb=" HB3 PHE B 388 " with occupancy 0.7
-  pdb=" HD1 PHE B 388 " with occupancy 0.7
-  pdb=" HD2 PHE B 388 " with occupancy 0.7
-  pdb=" HE1 PHE B 388 " with occupancy 0.7
-  pdb=" HE2 PHE B 388 " with occupancy 0.7
-  pdb=" HZ  PHE B 388 " with occupancy 0.7
-  pdb=" HB2 GLU B 470 " with occupancy 0.6
-  pdb=" HB3 GLU B 470 " with occupancy 0.6
-  pdb=" HG2 GLU B 470 " with occupancy 0.6
-  pdb=" HG3 GLU B 470 " with occupancy 0.6
+  pdb=" HB2 ASN A  88 " with occupancy 0.65
+  pdb=" HB3 ASN A  88 " with occupancy 0.65
+  pdb="HD21 ASN A  88 " with occupancy 0.65
+  pdb="HD22 ASN A  88 " with occupancy 0.65
+  pdb=" HB  VAL A  90 " with occupancy 0.65
+  pdb="HG11 VAL A  90 " with occupancy 0.65
+  pdb="HG12 VAL A  90 " with occupancy 0.65
+  pdb="HG13 VAL A  90 " with occupancy 0.65
+  pdb="HG21 VAL A  90 " with occupancy 0.65
+  pdb="HG22 VAL A  90 " with occupancy 0.65
+  pdb="HG23 VAL A  90 " with occupancy 0.65
+  pdb=" HB2 ASP A 113 " with occupancy 0.65
+  pdb=" HB3 ASP A 113 " with occupancy 0.65
+  pdb=" HB2 SER A 137 " with occupancy 0.65
+  pdb=" HB3 SER A 137 " with occupancy 0.65
+  pdb=" HG  SER A 137 " with occupancy 0.65
+  pdb=" HB2 CYS A 152 " with occupancy 0.65
+  pdb=" HB3 CYS A 152 " with occupancy 0.65
+  pdb=" HG  CYS A 152 " with occupancy 0.65
+  pdb=" HB2 SER A 228 " with occupancy 0.65
+  pdb=" HB3 SER A 228 " with occupancy 0.65
+  pdb=" HG  SER A 228 " with occupancy 0.65
+  pdb=" HB2 GLU A 289 " with occupancy 0.65
+  pdb=" HB3 GLU A 289 " with occupancy 0.65
+  pdb=" HG2 GLU A 289 " with occupancy 0.65
+  pdb=" HG3 GLU A 289 " with occupancy 0.65
 
                     ----------MISSING H or D atoms----------                   
 
-  HIS A  14  conformer  : HD1 
-  GLU A  43  conformer  : H 
-  HIS A  59  conformer  : HD1 
-  HIS A 125  conformer  : HD1 
-  HIS A 139  conformer  : HD1 
-  HIS A 160  conformer  : HD1 
-  HIS A 254  conformer  : HD1 
-  ASP B 265  conformer  : H 
-  HIS B 278  conformer  : HD1 
-  THR B 306  conformer  : H 
-  HIS B 324  conformer  : HD1 
-  HIS B 390  conformer  : HD1 
-  HIS B 404  conformer  : HD1 
-  HIS B 501  conformer  : HD1 
-  TYR C 513  conformer  : H 
-  HIS C 527  conformer  : HE2 
-  GLU C 555  conformer  : H 
-  HIS C 571  conformer  : HD1 
-  HIS C 637  conformer  : HD1 
-  HIS C 651  conformer  : HD1 
-  HIS C 748  conformer  : HD1 
-  ASP D 756  conformer  : H 
-  THR D 785  conformer  : H 
-  HIS D 813  conformer  : HD1 
-  HIS D 879  conformer  : HD1 
-  HIS D 893  conformer  : HD1 
-  HIS D 914  conformer  : HD1 
-  HIS D1008  conformer  : HD1 
-
-                       ----------Angle outliers----------                      
-
-   C 534  TYR  HA , Angle N-CA-HA, observed: 97.787, delta from target: 12.213
+  HIS A  16  conformer  : HD1 
+  HIS A  66  conformer  : HD1 
+  HIS A  86  conformer  : HD1 
+  LEU A 126  conformer  : H 
+  HIS A 154  conformer  : HD1 
+  HIS A 166  conformer  : HD1 
+  HIS A 258  conformer  : HD1 
 
 ============================ Molprobity validation ============================
 
 
   Geometry Restraints Library: GeoStd + Monomer Library
   Deviations from Ideal Values - rmsd, rmsZ for bonds and angles.
-    Bond      :  0.019   0.337   8527  Z= 0.816
-    Angle     :  1.773  75.787  11536  Z= 0.809
-    Chirality :  0.099   0.335   1224
-    Planarity :  0.011   0.275   1459
-    Dihedral  : 16.201  89.723   3156
-    Min Nonbonded Distance : 1.779
+    Bond      :  0.007   0.055   2417  Z= 0.304
+    Angle     :  1.242  21.727   3269  Z= 0.560
+    Chirality :  0.084   0.279    358
+    Planarity :  0.009   0.169    413
+    Dihedral  : 15.612  87.344    891
+    Min Nonbonded Distance : 2.457
   
   Molprobity Statistics.
-    All-atom Clashscore : 4.38
+    All-atom Clashscore : 1.69
     Ramachandran Plot:
-      Outliers :  0.10 %
-      Allowed  :  4.61 %
-      Favored  : 95.29 %
+      Outliers :  0.00 %
+      Allowed  :  1.37 %
+      Favored  : 98.63 %
     Rotamer:
-      Outliers :  2.24 %
-      Allowed  :  5.16 %
-      Favored  : 92.59 %
+      Outliers :  3.91 %
+      Allowed  :  4.69 %
+      Favored  : 91.41 %
     Cbeta Deviations :  0.00 %
     Peptide Plane:
-      Cis-proline     : 9.52 %
+      Cis-proline     : 0.00 %
       Cis-general     : 0.00 %
       Twisted Proline : 0.00 %
       Twisted General : 0.00 %
@@ -223,18 +156,18 @@
   Interpretation: bad |Rama-Z| > 3; suspicious 2 < |Rama-Z| < 3; good |Rama-Z| < 2.
   Scores for whole/helix/sheet/loop are scaled independently;
   therefore, the values are not related in a simple manner.
-    whole: -1.26 (0.25), residues: 997
-    helix: -1.43 (0.21), residues: 420
-    sheet: -0.55 (0.47), residues: 131
-    loop : -0.04 (0.29), residues: 446
+    whole:  0.40 (0.46), residues: 293
+    helix:  0.40 (0.43), residues: 118
+    sheet: -0.84 (0.83), residues: 26
+    loop :  0.59 (0.51), residues: 149
   
   Max deviation from planes:
      Type  MaxDev  MeanDev LineInFile
-   ARG   0.032   0.003   ARG A 237 
-   TYR   0.054   0.008   TYR A 220 
-   PHE   0.041   0.007   PHE D 919 
-   TRP   0.029   0.007   TRP B 434 
-   HIS   0.013   0.004   HIS A 254 
+   ARG   0.003   0.001   ARG A  24 
+   TYR   0.016   0.003   TYR A  45 
+   PHE   0.034   0.004   PHE A 212 
+   TRP   0.008   0.003   TRP A 217 
+   HIS   0.008   0.002   HIS A 154 
 
                      ----------Asn/Gln/His flips----------                     
 
@@ -242,11 +175,11 @@
 
 =================================== Summary ===================================
 
-  Ramachandran outliers =   0.10 %
-                favored =  95.29 %
-  Rotamer outliers      =   2.24 %
+  Ramachandran outliers =   0.00 %
+                favored =  98.63 %
+  Rotamer outliers      =   3.91 %
   C-beta deviations     =     0
-  Clashscore            =   4.38
-  RMS(bonds)            =   0.0188
-  RMS(angles)           =   1.77
-  MolProbity score      =   1.81
+  Clashscore            =   1.69
+  RMS(bonds)            =   0.0071
+  RMS(angles)           =   1.24
+  MolProbity score      =   1.37

@@ -1,0 +1,7 @@
+# Runs forever; checks every 2 seconds and bumps any new Vina to High
+while ($true) {
+  Get-Process -Name 'vina*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.PriorityClass -ne 'High' } |
+    ForEach-Object { $_.PriorityClass = 'High' }
+  Start-Sleep -Seconds 2
+}

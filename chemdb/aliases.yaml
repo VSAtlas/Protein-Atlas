@@ -1,0 +1,736 @@
+version: 1 
+
+chemcomp_alias:
+  # --- ABL / KIT / VEGFR TKIs ---
+  STI: ["imatinib","gleevec","sti571"]
+  NIL: ["nilotinib","tasigna"]
+  ABL: ["asciminib","abl001","scemblix"]
+  DAS: ["dasatinib","sprycel"]
+  BOS: ["bosutinib","bosulif"]
+  PON: ["ponatinib","iclusig","ap24534"]
+  AXI: ["axitinib","inlyta"]
+  SFB: ["sorafenib","nexavar","bay 43-9006","bay439006"]
+  SU1: ["sunitinib","sutent","su11248"]
+  PAZ: ["pazopanib","votrient"]
+  CAB: ["cabozantinib","cabometyx","cometriq"]
+  REG: ["regorafenib","stivarga"]
+  VAN: ["vandetanib","zd6474","caprelsa"]
+
+  # --- EGFR / ERBB2 ---
+  ERL: ["erlotinib","tarceva"]
+  GEF: ["gefitinib","iressa"]
+  AFN: ["afatinib","gilotrif"]
+  OSM: ["osimertinib","tagrisso","azd9291"]
+  LAP: ["lapatinib","tykerb"]
+
+  # --- ALK/ROS1/MET/RET ---
+  CRZ: ["crizotinib","xalkori"]
+  CER: ["ceritinib","zykadia"]
+  ALE: ["alectinib","alecenza"]
+  LOR: ["lorlatinib","lorbrena","lorviqua"]
+  BRG: ["brigatinib","ap26113"]
+  ENT: ["entrectinib","rxdx-101"]
+  CAP: ["capmatinib","tabrecta"]
+  SELr: ["selpercatinib","rxdx-105"]
+  PRT: ["pralsetinib","blu-667","gavreto"]
+
+  # --- RAS/RAF/MEK ---
+  VEM: ["vemurafenib","zelboraf"]
+  DAB: ["dabrafenib","tafinlar"]
+  ENC: ["encorafenib","braftovi"]
+  COB: ["cobimetinib","cotellic"]
+  BIN: ["binimetinib","mektovi"]
+  TRM: ["trametinib","mekinist"]
+  SEL: ["selumetinib","koselugo"]
+
+  # --- JAK ---
+  RUX: ["ruxolitinib","jakafi"]
+  TOF: ["tofacitinib","xeljanz"]
+  BAR: ["baricitinib","olumiant"]
+  UPA: ["upadacitinib","rinvoq"]
+  FED: ["fedratinib","inoma","indra","indra-280"]
+
+  # --- PI3K/mTOR ---
+  IDA: ["idelalisib","zydelig"]
+  DUV: ["duvelisib","copiktra"]
+  COP: ["copanlisib","aliqopa"]
+  API: ["alpelisib","piqray","byl719"]
+  EVR: ["everolimus","afinitor"]
+  TMS: ["temsirolimus","torisel"]
+  RAP: ["rapamycin","sirolimus"]
+
+  # --- CDK4/6 ---
+  P31: ["palbociclib","pd-0332991","ibrance"]
+  RIB: ["ribociclib","lee011","kiskali"]
+  ABE: ["abemaciclib","ly2835219","verzenio"]
+
+  # --- BCL2 / apoptosis ---
+  ABT: ["venetoclax","abt-199","venclexta"]
+  NAV: ["navitoclax","abt-263"]
+
+  # --- BTK ---
+  IBR: ["ibrutinib","imbruvica"]
+  ACB: ["acalabrutinib","calquence"]
+  ZAN: ["zanubrutinib","brukinsa"]
+
+  # --- FLT3 (AML) ---
+  QUI: ["quizartinib","ac220"]
+  GIL: ["gilteritinib","asp2215","xospata"]
+  CRE: ["crenolanib","cp-868596"]
+  MID: ["midostaurin","pkc412","rydapt"]
+  LST: ["lestaurtinib","cep-701"]
+
+  # --- IDH (AML) ---
+  ENA: ["enasidenib","ag-221","idhifa"]
+  IVO: ["ivosidenib","ag-120","tibsovo"]
+
+  # --- Hedgehog (AML) ---
+  GLB: ["glasdegib","pf-04449913","daurismo"]
+  VIS: ["vismodegib","erivedge","gdc-0449"]
+  SON: ["sonidegib","odenzo","lde225"]
+
+  # --- HMAs / cytotoxics ---
+  AZA: ["azacitidine","vidaza"]
+  DAC: ["decitabine","dacogen"]
+  ATO: ["arsenic trioxide","trisenox"]
+  DNR: ["daunorubicin"]
+  IDR: ["idarubicin"]
+  DXR: ["doxorubicin","adriamycin"]
+  ETO: ["etoposide","vp-16"]
+  TPT: ["topotecan"]
+  IRI: ["irinotecan","cpt-11"]
+
+  # --- PARP inhibitors ---
+  OLP: ["olaparib","lynparza"]
+  NIR: ["niraparib","zejula"]
+  RUC: ["rucaparib","rubraca"]
+  TLZ: ["talazoparib","talzenna"]
+  VLP: ["veliparib","abt-888"]
+
+  # --- HDAC inhibitors ---
+  48D: ["vorinostat","saha","zolinza"]
+  PNB: ["panobinostat","farydak"]
+  BEL: ["belinostat","beleodaq"]
+  ROM: ["romidepsin","istodax"]
+
+  # --- HRT / ER / AR axis ---
+  TAM: ["tamoxifen"]
+  OHT: ["4-hydroxytamoxifen","hydroxytamoxifen","endoxifen","tamoxifen"]
+  BAX: ["bazedoxifene","conbriza","duavive"]
+  FUL: ["fulvestrant","faslodex"]
+  E2:  ["estradiol","17beta-estradiol","estrogen"]
+  EST: ["estradiol","estrogen"]
+  E1:  ["estrone"]
+  DHT: ["dihydrotestosterone","androstanolone"]
+  TES: ["testosterone"]
+  PRG: ["progesterone"]
+  LET: ["letrozole","femara"]
+  ANA: ["anastrozole","arimidex"]
+  EXE: ["exemestane","aromasin"]
+  BIC: ["bicalutamide","casodex"]
+  ENZ: ["enzalutamide","xtandi"]
+  APA: ["apalutamide","erleada"]
+  DAR: ["darolutamide","nubeqa"]
+
+  # --- Antimetabolites ---
+  MTX: ["methotrexate"]
+  5FU: ["5-fluorouracil","fluorouracil"]
+  GEM: ["gemcitabine","gemzar"]
+  FLUa: ["fludarabine","f-ara-a"]
+  CLD: ["cladribine","2-cda"]
+  CPB: ["capecitabine","xeloda"]
+
+  # --- Proteasome ---
+  BOR: ["bortezomib","velcade"]
+  CFZ: ["carfilzomib","kyprolis"]
+  IXA: ["ixazomib","ninlaro"]
+
+  # --- HIV antivirals ---
+  RTV: ["ritonavir"]
+  LPV: ["lopinavir"]
+  ATV: ["atazanavir"]
+  EFV: ["efavirenz"]
+
+  # --- others ---
+  MET: ["metformin"]
+  DXN: ["dexamethasone"]
+  CPT: ["camptothecin"]
+
+  # --- corrections ---
+  "0LI": ["ponatinib","iclusig"]
+  "1BQ": ["pf-562271","defactinib","vs-6063","fak inhibitor"]
+  "69Q": ["enasidenib"]
+  B49: ["sunitinib","sutent","su11248"]
+  BRL: ["cloxacillin","orbenin"]
+  C6F: ["gilteritinib","xospata","asp2215"]
+  CXS: ["gilteritinib","xospata","asp2215"]
+  FLC: ["pempidine"]
+  LQQ: ["palbociclib isethiolate","palbociclib"]
+  MI1: ["xeljanz","tofacitinib"]
+  P06: ["dabrafenib","tafinlar"]
+  RXT: ["jakafi","ruxolitinib"]
+  VGH: ["crizotinib","xalkori"]
+  "406": ["bafetinib","inno-406"]
+
+  # --- extra ---
+  LEV: ["lenvatinib","lenvima"]
+  ANT: ["antimycin a"]
+  STG: ["stigmatellin"]
+  ATOx: ["atovaquone"]        # avoid collision with ATO (arsenic trioxide)
+  F0K: ["bi-2852"]
+
+  # --- singletons ---
+  SOT: ["sotorasib","lumakras"]
+  ADA: ["adagrasib","krazati"]
+  ACV: ["acyclovir","zovirax"]
+  ZDV: ["zidovudine","azt"]
+
+exclude_het_ids:
+  - HOH
+  - WAT
+  - DOD
+  - F
+  - CL
+  - BR
+  - I
+  - LI
+  - NA
+  - K
+  - RB
+  - CS
+  - FR
+  - MG
+  - CA
+  - SR
+  - BA
+  - RA
+  - SC
+  - TI
+  - V
+  - CR
+  - MN
+  - FE
+  - CO
+  - NI
+  - CU
+  - ZN
+  - Y
+  - ZR
+  - NB
+  - MO
+  - TC
+  - RU
+  - RH
+  - PD
+  - AG
+  - CD
+  - HGA
+  - HG
+  - PT
+  - AU
+  - AL
+  - GA
+  - IN
+  - TL
+  - PB
+  - BI
+  - SN
+  - SB
+  - AS
+  - SE
+  - LA
+  - CE
+  - PR
+  - ND
+  - PM
+  - SM
+  - EU
+  - GD
+  - TB
+  - DY
+  - HO
+  - ER
+  - TM
+  - YB
+  - LU
+  - SO4
+  - SUL
+  - PO4
+  - HPO
+  - DPO
+  - CO3
+  - NO3
+  - SCN
+  - CYN
+  - BCT
+  - CAC
+  - IOD
+  - BR
+  - NCO
+  - CLO
+  - TRS
+  - TES
+  - BES
+  - HEP
+  - HEZ
+  - MES
+  - MOP
+  - PIP
+  - ADA
+  - CHES
+  - CAPS
+  - BTP
+  - POP
+  - MOPS
+  - PIPES
+  - DTT
+  - BME
+  - TCEP
+  - IMD
+  - IPR
+  - IPA
+  - ACN
+  - ACT
+  - ACE
+  - FMT
+  - CIT
+  - TAR
+  - TLA
+  - GLY
+  - HIS
+  - ARG
+  - LYS
+  - GOL
+  - EDO
+  - PGO
+  - MPD
+  - DMS
+  - DMF
+  - EOH
+  - ETOH
+  - MEO
+  - PEO
+  - BU3
+  - TBA
+  - 2MO
+  - 1PE
+  - PE8
+  - PEU
+  - PG4
+  - PG5
+  - PG6
+  - PGE
+  - P33
+  - PEG
+  - 1PG
+  - 2PG
+  - 3PG
+  - TEG
+  - P4G
+  - P6G
+  - P8G
+  - P10
+  - P20
+  - NAG
+  - NDG
+  - NDP
+  - BMA
+  - MAN
+  - GLC
+  - GAL
+  - FUC
+  - SIA
+  - SLB
+  - BGC
+  - BOG
+  - TRE
+  - SUC
+  - MAL
+  - LMT
+  - XYP
+  - ARA
+  - RIB
+  - FRU
+  - CLR
+  - CHL
+  - OLA
+  - OLE
+  - STE
+  - PLM
+  - MYR
+  - PAL
+  - LDA
+  - LDAO
+  - DOD
+  - C8E
+  - C10E
+  - C12
+  - C14
+  - ATP
+  - ADP
+  - AMP
+  - GTP
+  - GDP
+  - GMP
+  - CTP
+  - CDP
+  - CMP
+  - UTP
+  - UDP
+  - UMP
+  - TTP
+  - TDP
+  - TMP
+  - NAD
+  - NAP
+  - NADH
+  - NADP
+  - FAD
+  - FMN
+  - PLP
+  - TPP
+  - COA
+  - ACP
+  - SAM
+  - SAH
+  - THF
+  - FOL
+  - HEM
+  - HEC
+  - HEB
+  - HEA
+  - UQ1
+  - UQ2
+  - UQ5
+  - MEN
+  - RET
+  - BCR
+  - CHO
+  - CHX
+  - CHD
+  - TRI
+  - CHAP
+  - CHAPSO
+  - DDM
+  - DM
+  - UDM
+  - MNG
+  - LMG
+  - NG
+  - 2PE
+
+exclude_het_name_keywords:
+  - SULFATE
+  - PHOSPHATE
+  - CHLORIDE
+  - BROMIDE
+  - IODIDE
+  - NITRATE
+  - CARBONATE
+  - BICARBONATE
+  - THIOCYANATE
+  - CACODYLATE
+  - ACETATE
+  - FORMATE
+  - CITRATE
+  - TARTRATE
+  - IMIDAZOLE
+  - AMMONIUM
+  - ETHYLENE GLYCOL
+  - DIETHYLENE GLYCOL
+  - TRIETHYLENE GLYCOL
+  - GLYCEROL
+  - MPD
+  - ISOPROPANOL
+  - ETHANOL
+  - METHANOL
+  - DMSO
+  - DMF
+  - PEG
+  - POLYETHYLENE GLYCOL
+  - GLYME
+  - GLUCOSE
+  - GALACTOSE
+  - MANNOSE
+  - FRUCTOSE
+  - MALTOSE
+  - TREHALOSE
+  - SUCROSE
+  - N-ACETYLGLUCOSAMINE
+  - DODECYL
+  - MALTOSIDE
+  - NEOPENTYL GLYCOL
+  - DIGITONIN
+  - TWEEN
+  - TRITON
+  - OCTYLGLUCOSIDE
+  - LAURYLDIMETHYLAMINE-OXIDE
+  - LDAO
+  - CHOLESTEROL
+  - OLEATE
+  - PALMITATE
+  - STEARATE
+  - ATP
+  - ADP
+  - AMP
+  - GTP
+  - GDP
+  - GMP
+  - NAD
+  - NADP
+  - FAD
+  - FMN
+  - COENZYME A
+  - S-ADENOSYLMETHIONINE
+  - PYRIDOXAL PHOSPHATE
+  - THIAMINE PYROPHOSPHATE
+  - HEME
+  - UBIQUINONE
+  - RETINAL
+  - SCHEMBL
+  - CARBOXYLATE
+  - CARBOXAMIDE
+  - PROPANOATE
+  - BENZAMIDE
+  - GUANIDIN
+  - IMINIUM
+  - IMINIUM
+  - PIPERIDINIUM
+  - PYRIDINIUM
+  - AZONIA
+  - OXAN
+
+per_pdb_hints:
+  "1M17": ["erlotinib", "gefitinib", "afatinib", "osimertinib"]
+  "2E2B": ["bafetinib", "imatinib", "dasatinib", "nilotinib", "ponatinib"]
+  "2GQG": ["dasatinib"]
+  "2ITN": ["erlotinib", "gefitinib", "afatinib", "osimertinib", "dacomitinib"]
+  "3OG7": ["vemurafenib", "dabrafenib", "Vemurafenib"]
+  "3QX3": ["etoposide", "doxorubicin"]
+  "3G0E": ["sunitinib"]
+  "4RT7": ["quizartinib"]
+  "4XUF": ["quizartinib"]
+  "4I4E": ["defactinib", "PF-562271"]
+  "5C7X": []  # antibody complex; no small-molecule control
+  "6GQO": ["axitinib", "sunitinib", "pazopanib", "cabozantinib", "regorafenib"]
+  "6O0L": ["venetoclax", "navitoclax"]
+  "6JQR": ["gilteritinib"]
+  "6WTN": ["ruxolitinib", "Ruxolitinib"]
+  "4XV2": ["dabrafenib", "vemurafenib"]
+  "3OXZ": ["ponatinib"]
+  "5I96": ["enasidenib"]
+  "4U5J": ["ruxolitinib", "jakafi"]
+  "3LXK": ["tofacitinib", "xeljanz"]
+  "3ZOS": ["ponatinib", "Ponatinib"]
+  "3WZD": ["lenvatinib"]
+  "2WGJ": ["crizotinib"]
+  "2XP2": [ "crizotinib"]
+  "3DZY": ["osiglitazone", "alitretinoin", "Rosiglitazone"]
+  "3WZE": ["sorafenib"]
+  "3ZBF" : ["Crizotinib"]
+  "4AG8": ["axitinib"]
+  "4ASD": ["sorafenib"]
+
+
+hard_fda_control_by_pdb:
+  "1M17": ["erlotinib", "gefitinib", "afatinib", "osimertinib"]
+  "2E2B": ["imatinib", "dasatinib", "nilotinib", "bosutinib", "ponatinib", "asciminib"]
+  "2GQG": ["dasatinib"]
+  "2ITN": ["erlotinib", "gefitinib", "afatinib", "osimertinib", "dacomitinib"]
+  "3OG7": ["vemurafenib", "Vemurafenib"]
+  "3QX3": ["etoposide", "doxorubicin"]
+  "3G0E": ["sunitinib"]
+  "3ERT": ["tamoxifen"]
+  "4RT7": ["quizartinib"]
+  "4XUF": ["quizartinib"]
+  "4I4E": ["defactinib"]  # FDA-approved (2025) in combo with avutometinib
+  "5C7X": []
+  "6GQO": ["axitinib", "sunitinib", "pazopanib", "cabozantinib", "regorafenib"]
+  "6O0L": ["venetoclax"]  # navitoclax is not FDA-approved
+  "6JQR": ["gilteritinib"]
+  "6WTN": ["ruxolitinib"]
+  "4XV2": ["dabrafenib", "vemurafenib"]
+  "3OXZ": ["ponatinib", "Ponatinib"]
+  "5I96": ["enasidenib"]
+  "4U5J": ["ruxolitinib", "jakafi"]
+  "3LXK": ["tofacitinib"]
+  "3ZOS": ["ponatinib", "Ponatinib"]
+  "3WZD": ["lenvatinib"]
+  "3WZE": ["sorafenib"]
+  "2WGJ": ["crizotinib"]
+  "2XP2": ["crizotinib"]
+  "3DZY": ["osiglitazone", "alitretinoin", "Rosiglitazone"]
+  "3ZBF" : ["Crizotinib"]
+  "4AG8": ["axitinib"]
+  "4ASD": ["sorafenib"]
+  "5L2I": ["palbociclib"]
+  "5MO4": ["asciminib", "nilotinib"]
+
+# === atom & element rules ===
+element_sets:
+  # Atom names that make a HET look peptide-like; in these, derive by atom name.
+  peptide_like_names:
+    - N; CA; C; O; OXT; CB; CG; CG1; CG2; CD; CD1; CD2; CE; CE1; CE2; CE3; CZ; CZ1; CZ2; CZ3; CH; CH1; CH2; OH
+    - ND; ND1; ND2; NE; NE1; NE2; NZ; NH; NH1; NH2
+    - OD; OD1; OD2; OE; OE1; OE2; OG; OG1
+    - SD; SG
+
+  # Map leading name prefixes to elements (first two chars of atom name)
+  derive_prefix_map:
+    # Oxygen (side chains, nucleic acids, legacy variants)
+    OE: O
+    OG: O
+    OH: O
+    OD: O
+    OT: O
+    OP: O
+    O1: O
+    O2: O
+    O3: O
+    O4: O
+    O5: O
+    # Nitrogen
+    NE: N
+    ND: N
+    NH: N
+    NZ: N
+    N1: N
+    N2: N
+    # Sulfur
+    SD: S
+    SG: S
+    # Carbon (aliphatic/aromatic)
+    CE: C
+    CD: C
+    CG: C
+    CZ: C
+    CH: C
+    # Phosphorus (incl. alt labels seen in nucleotides)
+    P:  P
+    PA: P
+    PB: P
+    PG: P
+    PN: P
+
+  # Special atom names → element (exact matches; covers nucleic-acid primes and P variants)
+  special_atom_names:
+    OXT: O
+    SE: Se
+    O1P: O
+    O2P: O
+    O3P: O
+    "O5'": O
+    "O3'": O
+    "O2'": O
+    "C5'": C
+    "C4'": C
+    "C3'": C
+    "C2'": C
+    "C1'": C
+    PA: P
+    PB: P
+    PG: P
+    PN: P
+    P1: P
+    P2: P
+    P3: P
+
+  # One-letter PDB element symbols (incl. D/U/W/Y/V commonly seen)
+  one_letter_elements: [H, C, N, O, F, P, S, K, V, I, B, Y, W, U, D]
+
+  # Two-letter symbols (full IUPAC; case normalized by code)
+  two_letter_elements:
+    - He; Li; Be; Ne; Na; Mg; Al; Si; Cl; Ar; Ca; Sc; Ti; Cr; Mn; Fe; Co; Ni; Cu; Zn
+    - Ga; Ge; As; Se; Br; Kr; Rb; Sr; Zr; Nb; Mo; Tc; Ru; Rh; Pd; Ag; Cd; In; Sn; Sb; Te; Xe
+    - Cs; Ba; La; Ce; Pr; Nd; Pm; Sm; Eu; Gd; Tb; Dy; Ho; Er; Tm; Yb; Lu
+    - Hf; Ta; Re; Os; Ir; Pt; Au; Hg; Tl; Pb; Bi; Po; At; Rn; Fr; Ra
+    - Ac; Th; Pa; Np; Pu; Am; Cm; Bk; Cf; Es; Fm; Md; No; Lr
+    - Rf; Db; Sg; Bh; Hs; Mt; Ds; Rg; Cn; Nh; Fl; Mc; Lv; Ts; Og
+
+  # Halide residue names to treat as elemental ions
+  halide_resnames: [CL, BR, I, F, AT]
+
+  # Aliases/charged forms → canonical halide
+  halide_resname_aliases:
+    IOD: I
+    BRO: BR
+    CLO: CL
+    FLO: F
+    "CL-": CL
+    "BR-": BR
+    "I-": I
+    "F-": F
+    "AT-": AT
+
+  # Cation aliases (common PDB variations)
+  cation_resname_aliases:
+    "K+": K
+    "NA+": NA
+    "CA2+": CA
+    "MG2+": MG
+    "ZN2+": ZN
+    "FE2+": FE
+    "FE3+": FE
+    "MN2+": MN
+    "CU2+": CU
+    "CO2+": CO
+    "NI2+": NI
+    SOD: NA
+    POT: K
+    CES: CS
+    RUB: RB
+    CAL: CA
+    MAG: MG
+
+  # Safety toggles / defaults
+  treat_backbone_CA_as_C: true
+  default_element: C
+
+# Keep these in the receptor (not extracted as small ligands)
+retain_in_receptor_resnames:
+  # Water
+  - HOH; WAT; DOD; H2O; TIP; TIP3; SOL
+  # Monatomic ions (alkali, alkaline earth, transition, coinage, halides, heavy)
+  - LI; NA; K; RB; CS
+  - MG; CA; SR; BA
+  - ZN; MN; FE; CO; NI; CU
+  - AL; CD; HG; PB; AG; AU; PT
+  - MO; RU; RH; PD
+  - CL; BR; I; F; AT
+  # Lanthanides / actinides sometimes present
+  - LA; CE; PR; ND; PM; SM; EU; GD; TB; DY; HO; ER; TM; YB; LU
+  - U; TH
+  # Metal clusters
+  - FES; SF4; F3S; F4S; FE2; FE3; CU1; CU2; ZN2; 3NI; 2FE; 4FE; 3CO
+  # Cofactors / prosthetic groups
+  - HEM; HEC; HEB; HEA; HEME
+  - FAD; FMN; FADH; FMNH
+  - NAD; NADH; NADP; NAP; NMN
+  - SAM; SAH
+  - PLP; TPP
+  - ATP; ADP; AMP; GTP; GDP; CTP; UTP; TTP
+  - COA
+  - BTN
+  - MGD; MPT
+  # Modified amino acids / capping
+  - MSE
+  - SEC; PYL
+  - SEP; TPO; PTR
+  - ACE; NME
+
+# Common solvents / buffers / cryo / detergents that should be extracted (never chosen as ligand)
+remove_as_solvent_resnames:
+  - GOL; EDO; PG4; PGO; PEO; PEG; MPD; ACT; ACY; CIT; TLA
+  - TRS; MES; HEP; HEPES; MOPS; PIP; PIPES; BIS; BIC; BME; DTT
+  - IPA; IPAH; DMS; DMSO; ACN; EOH; ETH; LAC; FMT; MLI
+  - BOG; BDN; LDAO; DDM; CHS; CHOL; OLA; OLC; OCT; UND
+  - SO4; PO4; EPE; MPD; NME; ACE
+  - CL; BR; I; F  # (kept as ions if monatomic; here stops them being ligand picks)
+
+# Glycans / sugars (usually remove from ligand ranking; keep if your project needs them)
+remove_as_glycan_resnames:
+  - NAG; NDG; BMA; MAN; FUC; GAL; GLC; NNN; SIA; SIR; A2G; A2M
+
+# Labels to help protonation decisions (used by your pipeline logic if present)
+nucleotide_like_resnames:
+  - NAD; NADH; NADP; NAP; NMN; FAD; FMN; AMP; ADP; ATP

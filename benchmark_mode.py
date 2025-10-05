@@ -1,11 +1,14 @@
+# benchmark_mode.py
 """
 Benchmark mode: single ultra-stage docking of likely co-crystal FDA ligands, per pocket.
 
 This version:
-- Sources CHEMCOMP_ALIAS / EXCLUDE_* / PER_PDB_HINTS / HARD_FDA_CONTROL_BY_PDB from YAML via `chemdb.chem_alias_db`
-- Removes in-file hard-coded alias/exclusion blocks
-- Keeps your optional "augment aliases from details CSV" flow
-- Improves structure, readability, and adds lightweight robustness checks
+- Resolves INPUT/OUTPUT/PREPPED from YAML config or CLI; no Windows paths.
+- Resolves FDA mapping CSV from CLI -> YAML (FDA_MAPPING_CSV) -> alongside library -> OVERALL_DIR -> CWD
+  -> fixed BRCF fallback: /stor/home/mpg2352/atlas/code/protein_automation/fda_mapping_from_pdbqt.csv
+- Sources CHEMCOMP_ALIAS / EXCLUDE_* / PER_PDB_HINTS / HARD_FDA_CONTROL_BY_PDB from chemdb.chem_alias_db
+- Keeps optional alias augmentation from prior benchmark details CSVs
+- Uses  logic from main.py for docking/validation/switching
 """
 
 from __future__ import annotations
@@ -22,24 +25,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+# Rendering helpers
 from capture_pose import (
     _render_native_on_original_pdb,
     _render_three_views_with_pymol,
     _safe_open_csv_for_write,
     pick_control_and_nearest_rdk,
 )
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Config
 from input_and_export_functions import load_inputs, validate_config
+
+# Library resolution helpers
 from metabolite_resolver import (
     ensure_parent_drugs_for_controls,
     load_library_index,
     resolve_corresponding_name_for_rdk,
     resolve_corresponding_name_from_text,
 )
+
+# Fallback active-site detector
 from protein_functions import detect_active_site
 
-# Unified chem/alias config (now YAML-backed)
+# Unified chem/alias config (YAML-backed)
 from chemdb.chem_alias_db import (
     CHEMCOMP_ALIAS,
     EXCLUDE_HET_IDS,
@@ -48,10 +58,10 @@ from chemdb.chem_alias_db import (
     PER_PDB_HINTS,
 )
 
-# Limit simultaneous PyMOL renders (1 by default; override with env PYMOL_PARALLEL)
+# Limit simultaneous PyMOL renders (1 by default; override via env PYMOL_PARALLEL)
 _RENDER_LOCK = threading.Semaphore(int(os.environ.get("PYMOL_PARALLEL", "1")))
 
-# ---- import pipeline pieces from your main so we reuse logic verbatim ----
+# Import core pipeline pieces from main.py (reuses logic verbatim)
 from main import (  # noqa: E402
     BudgetGuard,
     CenterSelector,
@@ -69,29 +79,227 @@ from main import (  # noqa: E402
     prepare_receptor,
     record_le,
     record_score,
-    robust_prepare_controls,
     run_one_stage,
     _count_heavy_atoms_from_pdbqt,
     _fingerprint_stage,
     early_recenter_decision,
     RetryManager,
 )
-
-# ------------------------
-# Defaults (your Windows paths)
-# ------------------------
-DEFAULT_INPUT_DIR = r"E:\PythonProject\protein_automation\input_pdbs"
-DEFAULT_OUT_ROOT = r"E:\PythonProject\protein_automation\benchmarks"
-DEFAULT_PREPPED_DIR = r"E:\PythonProject\protein_automation\prepped_ligands"
-DEFAULT_MAPPING_CSV = r"E:\PythonProject\protein_automation\fda_mapping_from_pdbqt.csv"
+from prep_ligands import prep_ligands_from_pdb
 
 
-# ============================================================================
-# Utility helpers
-# ============================================================================
+
+# ----- Deferred render queue (global) -----
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List
+import threading
+from contextlib import contextmanager
+
+@contextmanager
+def _acquire(sem: threading.Semaphore):
+    sem.acquire()
+    try:
+        yield
+    finally:
+        sem.release()
+
+
+
+
+# ---- Re-entrant patch for main.ThreadPoolExecutor ----
+import threading
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor as _RealTPE
+
+_GLOBAL_LIGAND_SEM = None  # unchanged
+class _GuardedTPE(_RealTPE):
+    def submit(self, fn, *args, **kwargs):
+        sem = _GLOBAL_LIGAND_SEM
+        if sem is None:
+            return super().submit(fn, *args, **kwargs)
+        def _wrapped(*a, **k):
+            with _acquire(sem):
+                return fn(*a, **k)
+        return super().submit(_wrapped, *args, **kwargs)
+
+# re-entrant state
+_TP_PATCH_LOCK   = threading.Lock()
+_TP_PATCH_COUNT  = 0
+_TP_PREV_EXEC    = None
+
+@contextmanager
+def _patch_main_threadpool(sem):
+    """
+    Temporarily replace main.ThreadPoolExecutor with a guarded one.
+    Re-entrant and thread-safe: multiple overlapping uses are OK.
+    """
+    import main as _main_mod
+    global _GLOBAL_LIGAND_SEM, _TP_PATCH_COUNT, _TP_PREV_EXEC
+    with _TP_PATCH_LOCK:
+        _GLOBAL_LIGAND_SEM = sem
+        if _TP_PATCH_COUNT == 0:
+            _TP_PREV_EXEC = getattr(_main_mod, "ThreadPoolExecutor", None)
+            setattr(_main_mod, "ThreadPoolExecutor", _GuardedTPE)
+        _TP_PATCH_COUNT += 1
+    try:
+        yield
+    finally:
+        with _TP_PATCH_LOCK:
+            _TP_PATCH_COUNT -= 1
+            if _TP_PATCH_COUNT == 0:
+                setattr(_main_mod, "ThreadPoolExecutor", _TP_PREV_EXEC)
+                _GLOBAL_LIGAND_SEM = None
+
+
+# ---- Re-entrant deferral for capture_pose PyMOL functions ----
+import capture_pose as _cap
+from concurrent.futures import ThreadPoolExecutor as _RealTPE2
+from contextlib import contextmanager
+
+_DEFERRED_PYMOL_CALLS = []
+_ORIG_RENDER_THREE = getattr(_cap, "_render_three_views_with_pymol")
+_ORIG_RENDER_NATIVE = getattr(_cap, "_render_native_on_original_pdb")
+
+_PYMOL_DEFER_LOCK  = threading.Lock()
+_PYMOL_DEFER_COUNT = 0
+
+@contextmanager
+def _defer_pymol_capture_calls(enable: bool = True):
+    """
+    Queue PyMOL renders instead of running them immediately.
+    Re-entrant: only restore originals when the outermost context exits.
+    """
+    global _PYMOL_DEFER_COUNT
+    if not enable:
+        yield
+        return
+    with _PYMOL_DEFER_LOCK:
+        if _PYMOL_DEFER_COUNT == 0:
+            def _enqueue_three(*args, **kwargs):
+                _DEFERRED_PYMOL_CALLS.append(("three", args, kwargs))
+            def _enqueue_native(*args, **kwargs):
+                _DEFERRED_PYMOL_CALLS.append(("native", args, kwargs))
+            _cap._render_three_views_with_pymol = _enqueue_three
+            _cap._render_native_on_original_pdb = _enqueue_native
+        _PYMOL_DEFER_COUNT += 1
+    try:
+        yield
+    finally:
+        with _PYMOL_DEFER_LOCK:
+            _PYMOL_DEFER_COUNT -= 1
+            if _PYMOL_DEFER_COUNT == 0:
+                _cap._render_three_views_with_pymol = _ORIG_RENDER_THREE
+                _cap._render_native_on_original_pdb = _ORIG_RENDER_NATIVE
+
+def run_deferred_captures(max_workers: int):
+    """Replay queued mid-run captures in parallel."""
+    if not _DEFERRED_PYMOL_CALLS:
+        print("[render] no mid-run captures to replay.")
+        return
+    print(f"[render] replaying deferred mid-run captures: n={len(_DEFERRED_PYMOL_CALLS)} | workers={max_workers}")
+    def _do(task):
+        kind, args, kwargs = task
+        if kind == "three":
+            return _ORIG_RENDER_THREE(*args, **kwargs)
+        elif kind == "native":
+            return _ORIG_RENDER_NATIVE(*args, **kwargs)
+    with _RealTPE2(max_workers=max_workers) as pool:
+        list(pool.map(_do, _DEFERRED_PYMOL_CALLS))
+    _DEFERRED_PYMOL_CALLS.clear()
+    print("[render] deferred mid-run captures complete.")
+
+
+
+_DEFERRED_RENDER_TASKS: List[Dict[str, str]] = []
+
+def _enqueue_render_task(
+    *,
+    pdb_id: str,
+    stage_name: str,
+    root_project: str,
+    cleaned_pdb_path: str,
+    original_pdb_path: str,
+    ctrl_pose_path: str | None,
+    rdk_pose_path: str | None,
+    exclude_resns: List[str],
+) -> None:
+    _DEFERRED_RENDER_TASKS.append(
+        {
+            "pdb_id": pdb_id,
+            "stage_name": stage_name,
+            "root_project": root_project,
+            "cleaned_pdb_path": cleaned_pdb_path,
+            "original_pdb_path": original_pdb_path,
+            "ctrl_pose_path": ctrl_pose_path or "",
+            "rdk_pose_path": rdk_pose_path or "",
+            "exclude_resns": list(exclude_resns),
+        }
+    )
+
+def _execute_render_task(task: Dict[str, str]) -> None:
+    pdb_id = task["pdb_id"]
+    stage_name = task["stage_name"]
+    stage_dir_target = Path(task["root_project"]) / "docked" / pdb_id / stage_name
+    stage_dir_target.mkdir(parents=True, exist_ok=True)
+
+    # Always render native on original PDB
+    _render_native_on_original_pdb(
+        original_pdb=task["original_pdb_path"],
+        outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
+        exclude_resns=sorted(task["exclude_resns"]),
+    )
+
+    ctrl = task["ctrl_pose_path"] or ""
+    rdk  = task["rdk_pose_path"] or ""
+    cleaned = task["cleaned_pdb_path"]
+    orig    = task["original_pdb_path"]
+
+    if ctrl:
+        _render_three_views_with_pymol(
+            receptor_path=cleaned,
+            ligand_paths_and_colors=[(ctrl, "control", "green")],
+            outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL"),
+        )
+
+    if rdk:
+        _render_three_views_with_pymol(
+            receptor_path=cleaned,
+            ligand_paths_and_colors=[(rdk, "rdk_closest", "magenta")],
+            outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__RDKclosest"),
+        )
+        _render_three_views_with_pymol(
+            receptor_path=orig,
+            ligand_paths_and_colors=[(rdk, "rdk_closest", "magenta")],
+            outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-rdk__RDKclosest"),
+        )
+        if ctrl:
+            _render_three_views_with_pymol(
+                receptor_path=cleaned,
+                ligand_paths_and_colors=[(ctrl, "control", "green"), (rdk, "rdk_closest", "magenta")],
+                outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
+                label_top_n_res=5,
+                label_cutoff=5.0,
+            )
+
+def run_deferred_renders(max_workers: int) -> None:
+    if not _DEFERRED_RENDER_TASKS:
+        print("[render] nothing to render (queue empty).")
+        return
+    print(f"[render] starting deferred renders: {len(_DEFERRED_RENDER_TASKS)} tasks | workers={max_workers}")
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futs = [pool.submit(_execute_render_task, t) for t in _DEFERRED_RENDER_TASKS]
+        for _ in as_completed(futs):
+            pass
+    print("[render] all deferred renders complete.")
+
+
+
+# =============================
+# Small text/path helper utils
+# =============================
 
 def _norm(s: Optional[str]) -> str:
-    """Lowercase, trim, collapse spaces, and strip punctuation-ish separators."""
+    """Lowercase, trim, collapse spaces, and strip punctuation-like separators."""
     if s is None:
         return ""
     s = str(s).strip().lower()
@@ -100,14 +308,12 @@ def _norm(s: Optional[str]) -> str:
     s = re.sub(r"[-_/\\,;:\|\[\]\(\)\{\}\.\+\*'\"]+", " ", s)
     return s
 
-
 def _tokenize(s: str) -> List[str]:
     """Tokenize to [a-z0-9+] words used by search/ranking."""
     if not s:
         return []
     toks = re.split(r"[^a-z0-9\+]+", s.lower())
     return [t for t in toks if t]
-
 
 def _extract_rdk_id(text: str) -> Optional[str]:
     """Extract rdk_XXXXXX id from a filename-like string."""
@@ -116,11 +322,9 @@ def _extract_rdk_id(text: str) -> Optional[str]:
     m = re.search(r"(rdk_\d{6,8})", Path(text).stem.lower())
     return m.group(1) if m else None
 
-
 def _norm_text(s: Optional[str]) -> str:
     """Letters+digits only, for approximate comparisons."""
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
-
 
 def _looks_like_brand_or_generic(name: str) -> bool:
     n = (name or "").strip()
@@ -130,7 +334,6 @@ def _looks_like_brand_or_generic(name: str) -> bool:
         return False
     noisy = len(re.findall(r"[0-9\[\]\(\)\/\.\-\,;:]", n))
     return (noisy / max(1, len(n))) < 0.40
-
 
 def _clean_alias(name: str) -> Optional[str]:
     """Light cleanup and guardrails for text harvested from CSVs."""
@@ -143,7 +346,6 @@ def _clean_alias(name: str) -> Optional[str]:
     s = re.sub(r"\s+", " ", s)
     return s.lower() if _looks_like_brand_or_generic(s) else None
 
-
 def _expand_globs(paths: Sequence[str]) -> List[Path]:
     out: List[Path] = []
     for p in paths:
@@ -153,7 +355,6 @@ def _expand_globs(paths: Sequence[str]) -> List[Path]:
             out.append(Path(p))
     return out
 
-
 def _dedupe_str(seq: Sequence[str]) -> List[str]:
     seen = set()
     out: List[str] = []
@@ -162,7 +363,6 @@ def _dedupe_str(seq: Sequence[str]) -> List[str]:
             seen.add(s)
             out.append(s)
     return out
-
 
 def _path_is_within(child: Path, parent: Path) -> bool:
     """Return True if `child` is within `parent` (no strict existence requirement)."""
@@ -174,15 +374,14 @@ def _path_is_within(child: Path, parent: Path) -> bool:
     except Exception:
         return False
 
-
-# ============================================================================
+# =============================
 # PDB parsing / hint extraction
-# ============================================================================
+# =============================
 
 def parse_pdb_het_hints(pdb_path: Path) -> Tuple[List[str], List[str]]:
     """
     Parse HET / HETNAM / HETATM records from a PDB to extract plausible ligand HET codes
-    and human-readable names, applying your EXCLUDE_* filters.
+    and human-readable names, applying EXCLUDE_* filters.
     """
     pdb_path = Path(pdb_path)
     het_ids: set[str] = set()
@@ -257,10 +456,9 @@ def parse_pdb_het_hints(pdb_path: Path) -> Tuple[List[str], List[str]]:
 
     return sorted(het_ids), dedup_names
 
-
-# ============================================================================
-# Alias augmentation from prior runs (details CSV)
-# ============================================================================
+# =============================
+# Alias augmentation (details CSV)
+# =============================
 
 def load_aliases_from_details_csv(paths: Sequence[str]) -> Dict[str, List[str]]:
     """
@@ -283,7 +481,6 @@ def load_aliases_from_details_csv(paths: Sequence[str]) -> Dict[str, List[str]]:
             print(f"[alias] WARN: failed to parse {csv_path}: {e}")
     return {k: sorted(v) for k, v in exp.items()}
 
-
 def merge_aliases_into_chemcomp(base: Dict[str, List[str]], extra: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """Merge extra aliases into an existing chemcomp map. Output values are lowercased & deduped."""
     out: Dict[str, List[str]] = {k: sorted(set(vv.lower() for vv in vs)) for k, vs in base.items()}
@@ -296,10 +493,9 @@ def merge_aliases_into_chemcomp(base: Dict[str, List[str]], extra: Dict[str, Lis
         out[het] = sorted(merged)
     return out
 
-
-# ============================================================================
-# Mapping index (reads your fda_mapping_from_pdbqt.csv)
-# ============================================================================
+# =============================
+# Mapping index (FDA mapping CSV)
+# =============================
 
 @dataclass
 class MappingRow:
@@ -335,7 +531,6 @@ class MappingRow:
             ("remark_name", self.remark_name),
             ("sdf_title", self.sdf_title),
         ]
-
 
 class MappingIndex:
     def __init__(self, csv_path: Path):
@@ -450,10 +645,9 @@ class MappingIndex:
         out.sort(key=lambda t: t[1], reverse=True)
         return out[:max_results]
 
-
-# ============================================================================
-# Selection / orchestration helpers
-# ============================================================================
+# =============================
+# Selection / orchestration
+# =============================
 
 def _resolve_name_for_path_or_text(p_or_text: str, fda_index) -> str:
     """Prefer RDK-based resolution; fallback to filename text matching."""
@@ -466,6 +660,21 @@ def _resolve_name_for_path_or_text(p_or_text: str, fda_index) -> str:
     name = resolve_corresponding_name_from_text(stem, fda_index) or ""
     return name
 
+def _remap_to_prepped(p: Path, prepped_dir: Path) -> Path:
+    """If p isn't within prepped_dir, try to map it to a file that *is* there (by basename or rdk_* id)."""
+    if p.is_file() and p.resolve().parent == prepped_dir.resolve():
+        return p
+    # 1) Same basename inside prepped
+    q = prepped_dir / p.name
+    if q.is_file():
+        return q
+    # 2) rdk_* id match inside prepped
+    rid = _extract_rdk_id(p.name)
+    if rid:
+        hits = list(prepped_dir.glob(f"*{rid}*.pdbqt"))
+        if hits:
+            return hits[0]
+    return p  # unchanged if we couldn't remap
 
 def select_candidates_for_protein(
     mapping: MappingIndex,
@@ -476,8 +685,47 @@ def select_candidates_for_protein(
 ) -> List[Tuple[MappingRow, int, str]]:
     candidates = mapping.search(hints, inchikey=None, max_results=max(6, max_candidates * 4))
 
-    # pull parents for metabolite ids
     parent_rows: List[Tuple[MappingRow, int, str]] = []
+    prepped_dir_resolved = prepped_dir.resolve()
+    cand_rows: List[Tuple[MappingRow, int, str]] = []
+
+    _d_exist_fail = 0
+    _d_scope_fail = 0
+
+    for row, sc, why in (candidates + parent_rows):
+        p = Path(row.path)
+
+        # NEW: remap to the current prepped_dir if needed
+        p = _remap_to_prepped(p, prepped_dir_resolved)
+
+        # Keep only files that exist *and* live inside prepped_dir
+        if not p.is_file():
+            _d_exist_fail += 1
+            continue
+        if p.resolve().parent != prepped_dir_resolved and not _path_is_within(p, prepped_dir_resolved):
+            _d_scope_fail += 1
+            continue
+
+        cand_rows.append((MappingRow(path=str(p),  # keep the remapped, absolute path
+                                     display_name=row.display_name,
+                                     generic_name=row.generic_name,
+                                     brand_names=row.brand_names,
+                                     pubchem_name=row.pubchem_name,
+                                     pubchem_record_title=row.pubchem_record_title,
+                                     pubchem_iupac_name=row.pubchem_iupac_name,
+                                     pubchem_synonyms=row.pubchem_synonyms,
+                                     rxnorm_generic_name=row.rxnorm_generic_name,
+                                     rxnorm_brand_names=row.rxnorm_brand_names,
+                                     drugcentral_generic_name=row.drugcentral_generic_name,
+                                     drugcentral_brand_names=row.drugcentral_brand_names,
+                                     remark_name=row.remark_name,
+                                     sdf_title=row.sdf_title,
+                                     inchikey=row.inchikey),
+                           sc, why))
+
+    if _d_exist_fail or _d_scope_fail:
+        print(f"[DEBUG] select_candidates: dropped not_exist={_d_exist_fail}, out_of_scope={_d_scope_fail}, kept={len(cand_rows)}")
+
     for pid in extra_parent_ids or []:
         rid = _extract_rdk_id(pid or "")
         if rid:
@@ -502,7 +750,6 @@ def select_candidates_for_protein(
 
     cand_rows.sort(key=lambda t: t[1], reverse=True)
     return cand_rows[:max_candidates]
-
 
 def split_controls_and_whitelist(
     whitelist_paths: Sequence[str],
@@ -539,7 +786,6 @@ def split_controls_and_whitelist(
         ctrls = ctrls[:max_ctrls]
     return ctrls, non_ctrls
 
-
 def _merge_per_pdb_hints(pdb_id: str, hints: List[str]) -> List[str]:
     """Union (deduped) of existing hints with per-PDB and hard-control hints."""
     out = list(hints or [])
@@ -557,7 +803,6 @@ def _merge_per_pdb_hints(pdb_id: str, hints: List[str]) -> List[str]:
             seen.add(hn)
             merged.append(h)
     return merged
-
 
 def _promote_forced_controls_to_ctrls(
     pdb_id: str,
@@ -589,7 +834,6 @@ def _promote_forced_controls_to_ctrls(
         )
     return promoted_paths, promoted_stems_lower
 
-
 def collect_prepped_controls_for_protein(paths, control_stems: Sequence[str], logger=None) -> Tuple[List[str], set]:
     """Find control pdbqts colocated in the protein’s prepped ligands directory."""
     control_stems_lower = {s.lower() for s in control_stems if s}
@@ -609,10 +853,9 @@ def collect_prepped_controls_for_protein(paths, control_stems: Sequence[str], lo
                 logger.warning(f"  leak -> {pp}")
     return prepped_control_pdbqts, control_stems_lower
 
-
-# ============================================================================
-# Benchmark driver — single ultra-stage per pocket
-# ============================================================================
+# =============================
+# Benchmark driver
+# =============================
 
 def run_benchmark_for_protein(
     cfg: Dict,
@@ -629,17 +872,17 @@ def run_benchmark_for_protein(
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = base_id.replace("_cleaned", "").upper()
 
-    # Logger + ASCII filter for Windows consoles
+    # Logger + ASCII filter for mixed terminals
     logger = make_protein_logger(cfg["DOCKED_DIR"], pdb_id, cfg)
     import logging, sys
 
     def _sanitize_msg(s: str) -> str:
         return (
             s.replace("≤", "<=")
-            .replace("≥", ">=")
-            .replace("Å", " Angstrom")
-            .replace("µ", "u")
-            .replace("°", " deg")
+             .replace("≥", ">=")
+             .replace("Å", " Angstrom")
+             .replace("µ", "u")
+             .replace("°", " deg")
         )
 
     class _AsciiFilter(logging.Filter):
@@ -657,10 +900,44 @@ def run_benchmark_for_protein(
             pass
 
     paths = make_paths(cfg, base_id, pdb_file)
+    # --- DEBUG visibility ---
+    try:
+        logger.info("[DEBUG] prepped_dir=%s", str(paths.prepped_ligands_dir.resolve()))
+        # Mapping stats
+        try:
+            n_rows = len(mapping.rows)
+        except Exception:
+            n_rows = -1
+        logger.info("[DEBUG] mapping_rows=%d", n_rows)
+        if n_rows > 0:
+            # sample a few paths and whether they exist & are within prepped_dir
+            from pathlib import Path as _P
+            _pd = paths.prepped_ligands_dir.resolve()
+            sample = mapping.rows[:12]  # first dozen
+            bad_exist = 0
+            bad_scope = 0
+            for r in sample:
+                p = _P(r.path)
+                if not p.exists():
+                    bad_exist += 1
+                else:
+                    try:
+                        if p.resolve().parent != _pd and _pd not in p.resolve().parents:
+                            bad_scope += 1
+                    except Exception:
+                        bad_scope += 1
+            logger.info("[DEBUG] mapping sample: not_exist=%d, out_of_scope=%d (first 12)", bad_exist, bad_scope)
+    except Exception as _e:
+        logger.warning("[DEBUG] mapping-precheck failed: %s", _e)
 
     # 1) Extract controls & build nolig
     _, control_stems = extract_ligands_to_nolig(paths, logger)
-    robust_prepare_controls(paths, cfg, logger)
+    # Always prep the extracted crystal ligands with the same sanitizer/ADT flags (-A hydrogens)
+    prep_ligands_from_pdb(
+        ligand_output_dir=paths.ligand_output_dir,
+        ligands_mol2_dir=paths.ligands_mol2_dir,
+        prepped_ligands_dir=paths.prepped_ligands_dir,
+    )
 
     # 1b) metabolites -> parents
     extra_parent_ids: List[str] = []
@@ -719,6 +996,7 @@ def run_benchmark_for_protein(
             seen.add(hn)
     final_hints = _merge_per_pdb_hints(pdb_id, final_hints)
 
+    logger.info("[DEBUG] hint_count=%d | examples=%s", len(final_hints), ", ".join(map(str, final_hints[:8])))
     # 5) Candidate selection
     cand_rows = select_candidates_for_protein(
         mapping=mapping,
@@ -812,7 +1090,11 @@ def run_benchmark_for_protein(
             heavy_atom_counts=heavy_atom_counts,
             initial_center=center,
         )
-        box_size: Tuple[float, float, float] = pocket_box_size  # set from detect_pocket outcome
+        box_size: Tuple[float, float, float] = tuple(min(28.0, float(s)) for s in (24.0, 24.0, 24.0))
+        # prefer detect_pocket size
+        box_size = tuple(min(28.0, float(s)) for s in (box_size if not isinstance(center, tuple) else box_size))
+        if 'detected_box' in locals():
+            box_size = tuple(min(28.0, float(s)) for s in (detected_box or box_size))
 
         # Ligand pool
         ctrls, non_ctrls = split_controls_and_whitelist(
@@ -840,7 +1122,7 @@ def run_benchmark_for_protein(
         logger.info(f"[DEBUG] pools: ctrls={len(ctrls)}, whitelist={len(non_ctrls)}, total={len(ligands)}")
 
         # Per-ligand budget guards (persist across restarts/waves)
-        per_ligand_seconds = float(cfg.get("BENCH_MAX_SECONDS", 300.0))
+        per_ligand_seconds = float(cfg.get("BENCH_MAX_SECONDS", 9000.0))
         guards_all: Dict[str, BudgetGuard] = {lig: BudgetGuard(per_ligand_seconds) for lig in ligands}
 
         score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
@@ -869,19 +1151,20 @@ def run_benchmark_for_protein(
                 logger.info(f"Single-stage two-wave: {len(ctrls)} controls first, then {len(non_ctrls)} whitelist.")
 
                 # Wave A — controls
-                s1, v1, d1, rd1, inv1 = run_one_stage(
-                    cfg=cfg,
-                    pdb_id=pdb_id,
-                    receptor_pdbqt=receptor_pdbqt,
-                    center=center,
-                    box_size=box_size,
-                    stage=stage,
-                    ligands=ctrls,
-                    logger=logger,
-                    retry_mgr=RetryManager(),
-                    control_lookup=control_lookup,
-                    budget_guards={lig: guards_all[lig] for lig in ctrls},
-                )
+                with _patch_main_threadpool(cfg.get("GLOBAL_LIGAND_SEM")):
+                    s1, v1, d1, rd1, inv1 = run_one_stage(
+                        cfg=cfg,
+                        pdb_id=pdb_id,
+                        receptor_pdbqt=receptor_pdbqt,
+                        center=center,
+                        box_size=box_size,
+                        stage=stage,
+                        ligands=ctrls,
+                        logger=logger,
+                        retry_mgr=RetryManager(),
+                        control_lookup=control_lookup,
+                        budget_guards={lig: guards_all[lig] for lig in ctrls},
+                    )
 
                 # CenterSelector after controls
                 try:
@@ -917,7 +1200,6 @@ def run_benchmark_for_protein(
                     if c is None:
                         continue
                     import numpy as np
-
                     if np.linalg.norm(c - np.array(center, float)) <= lock_center_max:
                         qualified_controls.append(lig)
                 if len(qualified_controls) >= lock_min_hits and not guard.locked:
@@ -927,19 +1209,20 @@ def run_benchmark_for_protein(
                     )
 
                 # Wave B — whitelist
-                s2, v2, d2, rd2, inv2 = run_one_stage(
-                    cfg=cfg,
-                    pdb_id=pdb_id,
-                    receptor_pdbqt=receptor_pdbqt,
-                    center=center,
-                    box_size=box_size,
-                    stage=stage,
-                    ligands=non_ctrls,
-                    logger=logger,
-                    retry_mgr=RetryManager(),
-                    control_lookup=control_lookup,
-                    budget_guards={lig: guards_all[lig] for lig in non_ctrls},
-                )
+                with _patch_main_threadpool(cfg.get("GLOBAL_LIGAND_SEM")):
+                    s2, v2, d2, rd2, inv2 = run_one_stage(
+                        cfg=cfg,
+                        pdb_id=pdb_id,
+                        receptor_pdbqt=receptor_pdbqt,
+                        center=center,
+                        box_size=box_size,
+                        stage=stage,
+                        ligands=non_ctrls,
+                        logger=logger,
+                        retry_mgr=RetryManager(),
+                        control_lookup=control_lookup,
+                        budget_guards={lig: guards_all[lig] for lig in non_ctrls},
+                    )
 
                 # Merge
                 scores, validated, distances = ({**s1, **s2}, v1 + v2, d1 + d2)
@@ -947,19 +1230,20 @@ def run_benchmark_for_protein(
                 invalids = {**inv1, **inv2}
             else:
                 # Single wave
-                scores, validated, distances, raw_docked, invalids = run_one_stage(
-                    cfg=cfg,
-                    pdb_id=pdb_id,
-                    receptor_pdbqt=receptor_pdbqt,
-                    center=center,
-                    box_size=box_size,
-                    stage=stage,
-                    ligands=ligands,
-                    logger=logger,
-                    retry_mgr=RetryManager(),
-                    control_lookup=control_lookup,
-                    budget_guards={lig: guards_all[lig] for lig in ligands},
-                )
+                with _patch_main_threadpool(cfg.get("GLOBAL_LIGAND_SEM")):
+                    scores, validated, distances, raw_docked, invalids = run_one_stage(
+                        cfg=cfg,
+                        pdb_id=pdb_id,
+                        receptor_pdbqt=receptor_pdbqt,
+                        center=center,
+                        box_size=box_size,
+                        stage=stage,
+                        ligands=ligands,
+                        logger=logger,
+                        retry_mgr=RetryManager(),
+                        control_lookup=control_lookup,
+                        budget_guards={lig: guards_all[lig] for lig in ligands},
+                    )
 
             validated_ligands_last = validated
 
@@ -1015,7 +1299,6 @@ def run_benchmark_for_protein(
             try:
                 if cfg.get("ADAPTIVE_SHRINK_ENABLE", True) and validated:
                     import numpy as np
-
                     med = float(
                         np.median([d for d in distances if isinstance(d, (int, float))])
                     ) if distances else None
@@ -1079,100 +1362,72 @@ def run_benchmark_for_protein(
                     validated_ligands_last,
                     score_history,
                     cleaned_pdb,
-                    cfg.get("DOCKING_MODE", "discovery"),
+                    cfg.get("DOCKING_MODE", "benchmark"),
                     logger,
                 )
 
+            # Optional PyMOL renders (when DOCKING_MODE == "benchmark")
             if str(cfg.get("DOCKING_MODE", "")).lower() == "benchmark":
-                with _RENDER_LOCK:
-                    stage_name = stage["name"]
-                    root_project = Path(cfg.get("OVERALL_DIR", str(Path(cfg["OUTPUT_DIR"]).parent)))
-                    stage_dir_target = root_project / "docked" / pdb_id / stage_name
-                    stage_dir_target.mkdir(parents=True, exist_ok=True)
+                stage_name = stage["name"]
+                root_project = Path(cfg.get("OVERALL_DIR", str(Path(cfg["OUTPUT_DIR"]).parent)))
 
-                    results_for_stage = score_history.get(stage_name, {})
-                    best_ctrl_lig, nearest_rdk_lig = pick_control_and_nearest_rdk(
-                        results_for_stage, raw_docked, control_stems_lower
-                    )
+                results_for_stage = score_history.get(stage_name, {})
+                best_ctrl_lig, nearest_rdk_lig = pick_control_and_nearest_rdk(
+                    results_for_stage, raw_docked, control_stems_lower
+                )
 
-                    cleaned_pdb_path = str(cleaned_pdb)
-                    original_pdb_path = str(Path(paths.pdb_path))
-                    ctrl_pose_path = raw_docked.get(best_ctrl_lig) if best_ctrl_lig else None
-                    rdk_pose_path = raw_docked.get(nearest_rdk_lig) if nearest_rdk_lig else None
+                cleaned_pdb_path = str(cleaned_pdb)
+                original_pdb_path = str(Path(paths.pdb_path))
+                ctrl_pose_path = raw_docked.get(best_ctrl_lig) if best_ctrl_lig else None
+                rdk_pose_path = raw_docked.get(nearest_rdk_lig) if nearest_rdk_lig else None
 
-                    _render_native_on_original_pdb(
-                        original_pdb=original_pdb_path,
-                        outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
+                if bool(cfg.get("DEFER_PYMOL", True)):
+                    _enqueue_render_task(
+                        pdb_id=pdb_id,
+                        stage_name=stage_name,
+                        root_project=str(root_project),
+                        cleaned_pdb_path=cleaned_pdb_path,
+                        original_pdb_path=original_pdb_path,
+                        ctrl_pose_path=ctrl_pose_path,
+                        rdk_pose_path=rdk_pose_path,
                         exclude_resns=sorted(list(EXCLUDE_HET_IDS)),
                     )
+                else:
+                    with _RENDER_LOCK:
+                        stage_dir_target = root_project / "docked" / pdb_id / stage_name
+                        stage_dir_target.mkdir(parents=True, exist_ok=True)
 
-                    if ctrl_pose_path and Path(ctrl_pose_path).is_file():
-                        _render_three_views_with_pymol(
-                            receptor_path=cleaned_pdb_path,
-                            ligand_paths_and_colors=[(ctrl_pose_path, "control", "green")],
-                            outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL"),
-                        )
-
-                    if rdk_pose_path and Path(rdk_pose_path).is_file():
-                        _render_three_views_with_pymol(
-                            receptor_path=cleaned_pdb_path,
-                            ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "magenta")],
-                            outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__RDKclosest"),
-                        )
-                        _render_three_views_with_pymol(
-                            receptor_path=original_pdb_path,
-                            ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "magenta")],
-                            outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-rdk__RDKclosest"),
+                        _render_native_on_original_pdb(
+                            original_pdb=original_pdb_path,
+                            outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
+                            exclude_resns=sorted(list(EXCLUDE_HET_IDS)),
                         )
                         if ctrl_pose_path and Path(ctrl_pose_path).is_file():
                             _render_three_views_with_pymol(
                                 receptor_path=cleaned_pdb_path,
-                                ligand_paths_and_colors=[
-                                    (ctrl_pose_path, "control", "green"),
-                                    (rdk_pose_path, "rdk_closest", "magenta"),
-                                ],
-                                outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
-                                label_top_n_res=5,
-                                label_cutoff=5.0,
+                                ligand_paths_and_colors=[(ctrl_pose_path, "control", "green")],
+                                outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL"),
                             )
-                        try:
-                            from capture_pose import write_multiview_pml, launch_pymol_with_pml
-
-                            pml_path = stage_dir_target / f"{pdb_id}_{stage_name}__CONTROL+RDKclosest.pml"
-                            write_multiview_pml(
+                        if rdk_pose_path and Path(rdk_pose_path).is_file():
+                            _render_three_views_with_pymol(
                                 receptor_path=cleaned_pdb_path,
-                                control_path=(ctrl_pose_path or ""),
-                                rdk_path=(rdk_pose_path or ""),
-                                out_pml=pml_path,
-                                label_top_n_res=int(cfg.get("LABEL_TOP_N_RES", 5)),
-                                label_cutoff=float(cfg.get("LABEL_CUTOFF_ANG", 5.0)),
+                                ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "magenta")],
+                                outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__RDKclosest"),
                             )
-                            if bool(cfg.get("OPEN_PYMOL_INTERACTIVE", False)):
-                                launch_pymol_with_pml(pml_path, cfg.get("PYMOL_EXE"))
-                            else:
-                                logger.info(f"[PyMOL] Interactive .pml written: {pml_path.name} (double-click to open in PyMOL)")
-                        except Exception as e:
-                            logger.warning(f"[PyMOL] Failed to create/open interactive .pml: {e}")
-                        try:
-                            if (
-                                ctrl_pose_path
-                                and rdk_pose_path
-                                and Path(ctrl_pose_path).is_file()
-                                and Path(rdk_pose_path).is_file()
-                            ):
-                                rdk_id_short = _extract_rdk_id(Path(rdk_pose_path).stem) or "RDKclosest"
+                            _render_three_views_with_pymol(
+                                receptor_path=original_pdb_path,
+                                ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "magenta")],
+                                outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-rdk__RDKclosest"),
+                            )
+                            if ctrl_pose_path and Path(ctrl_pose_path).is_file():
                                 _render_three_views_with_pymol(
                                     receptor_path=cleaned_pdb_path,
-                                    ligand_paths_and_colors=[
-                                        (ctrl_pose_path, "control", "green"),
-                                        (rdk_pose_path, "rdk_closest", "magenta"),
-                                    ],
-                                    outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+{rdk_id_short}_PAIR"),
-                                    hide_receptor=True,
-                                    label_top_n_res=0,
+                                    ligand_paths_and_colors=[(ctrl_pose_path, "control", "green"),
+                                                             (rdk_pose_path, "rdk_closest", "magenta")],
+                                    outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
+                                    label_top_n_res=5,
+                                    label_cutoff=5.0,
                                 )
-                        except Exception as e:
-                            logger.warning(f"[PyMOL] pair-only render failed: {e}")
 
             scores_only = [rec.get("score") for rec in results.values() if isinstance(rec.get("score"), (int, float))]
             best = min(scores_only) if scores_only else None
@@ -1198,10 +1453,9 @@ def run_benchmark_for_protein(
             for row in pocket_strength_rows:
                 w.writerow(row)
 
-
-# ============================================================================
+# =============================
 # Analysis wrapper
-# ============================================================================
+# =============================
 
 def _run_auto_analysis(
     docked_root: Path,
@@ -1236,45 +1490,67 @@ def _run_auto_analysis(
         print(f"[analysis] ERROR running run_analysis(): {e}")
         return None, None
 
-
-# ============================================================================
+# =============================
 # CLI
-# ============================================================================
+# =============================
 
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Benchmark mode: single ultra-stage docking of likely co-crystal FDA ligands, per pocket."
     )
-    p.add_argument("--input-dir", default=DEFAULT_INPUT_DIR)
-    p.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
-    p.add_argument("--prepped", default=DEFAULT_PREPPED_DIR)
-    p.add_argument("--mapping", default=DEFAULT_MAPPING_CSV)
-    p.add_argument("--max-candidates", type=int, default=3)
-    p.add_argument("--exhaustiveness", type=int, default=3)
-    p.add_argument("--num-modes", type=int, default=3)
+    # Defaults are None; we resolve from YAML or fallbacks in main()
+    p.add_argument("--input-dir", default=None)
+    p.add_argument("--out-root", default=None)
+    p.add_argument("--prepped", default=None)
+    p.add_argument("--mapping", default=None)
+    p.add_argument("--max-candidates", type=int, default=999)
+    p.add_argument("--exhaustiveness", type=int, default=1)
+    p.add_argument("--num-modes", type=int, default=1)
     p.add_argument("--hints", help="Optional manual comma-separated hints (e.g., 'imatinib,STI571')")
+
+    # Outer (proteins) parallelism
     p.add_argument(
         "--jobs",
         type=int,
         default=max(1, (os.cpu_count() or 4) // 2),
         help="Number of proteins to process in parallel",
     )
+
+    # New CPU/parallel shaping flags
+    p.add_argument(
+        "--total-cpus",
+        type=int,
+        default=None,
+        help="Override: total logical CPUs available to this run (auto-detected if omitted).",
+    )
+    p.add_argument(
+        "--ligand-workers",
+        type=int,
+        default=None,
+        help="Max ligands per protein to dock concurrently. If omitted, auto = floor(total_cpus / jobs).",
+    )
+    p.add_argument(
+        "--blas-threads",
+        type=int,
+        default=1,
+        help="Set OMP/BLAS thread env (OMP/MKL/OPENBLAS/etc) to avoid oversubscription (default: 1).",
+    )
+
     p.add_argument(
         "--alias-from-details",
         nargs="*",
         default=[],
-        help=(
-            "Path(s) or glob(s) to benchmark_analysis_details.csv to harvest aliases "
-            "(e.g., E:\\PythonProject\\protein_automation\\benchmarks\\*\\_analysis\\benchmark_analysis_details.csv)"
-        ),
+        help=("Path(s) or glob(s) to benchmark_analysis_details.csv to harvest aliases"),
     )
+
     # Budget CLI flag
     p.add_argument(
         "--max-seconds",
         type=float,
-        default=300.0,
-        help="Per-ligand wall-clock budget in seconds for retries/validation (default: 300.0).",
+        default=9000.0,
+        help="Per-ligand wall-clock budget in seconds for retries/validation (default: 9000.0).",
     )
+
     # Auto-Analysis options
     p.add_argument(
         "--skip-analysis",
@@ -1288,18 +1564,147 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--analysis-center-tol", type=float, default=1.0, help="Centroid distance tolerance (Å).")
     p.add_argument("--analysis-rmsd-tol", type=float, default=3.0, help="RMSD tolerance (Å).")
     p.add_argument("--analysis-no-identity", action="store_true", help="Exclude identity-match from scoring.")
-    p.add_argument("--analysis-out", default=None, help="Optional output dir for analysis CSVs. Default: <DOCKED>\\_analysis")
+    p.add_argument("--analysis-out", default=None, help="Optional output dir for analysis CSVs.")
     p.add_argument("--only-pdb", default=None, help="Comma-separated PDB IDs to dock, e.g. '6GQO,4XUF'.")
     return p
 
 
+
+
+
+
+
+
+
+# =============================
+# CPU detection helpers
+# =============================
+
+def _env_int(*names: str) -> Optional[int]:
+    """Return the first present env var (int) among names, else None."""
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            try:
+                return int(v)
+            except Exception:
+                pass
+    return None
+
+def _detect_available_cpus() -> int:
+    """
+    Conservative CPU detector for clusters/desktops.
+    Priority:
+      1) SLURM_CPUS_PER_TASK
+      2) SLURM_CPUS_ON_NODE
+      3) NSLOTS / PBS_NP
+      4) OMP_NUM_THREADS
+      5) os.cpu_count()
+    """
+    for v in (
+        _env_int("SLURM_CPUS_PER_TASK"),
+        _env_int("SLURM_CPUS_ON_NODE"),
+        _env_int("NSLOTS", "PBS_NP"),
+        _env_int("OMP_NUM_THREADS"),
+        os.cpu_count() or 1,
+    ):
+        if v and v > 0:
+            return int(v)
+    return 1
+
+def _set_thread_env(n: int) -> None:
+    """Pin common threaded libs to n to avoid hidden oversubscription."""
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_MAX_THREADS",
+        "BLIS_NUM_THREADS",
+    ):
+        os.environ.setdefault(key, str(n))
+
+
+
+
+# =============================
+# Main (Linux/BRCF friendly)
+# =============================
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = build_argparser().parse_args(argv)
 
-    input_dir = Path(args.input_dir)
-    out_root = Path(args.out_root)
-    prepped = Path(args.prepped)
-    mapping = MappingIndex(Path(args.mapping))
+    # Load YAML config first so we can use BRCF paths by default
+    cfg = load_inputs()
+    validate_config(cfg)
+
+    # Helper: first existing path in a list (returns Path or None)
+    def _first_existing(*cands) -> Optional[Path]:
+        for c in cands:
+            if not c:
+                continue
+            p = Path(str(c))
+            if p.exists():
+                return p
+        return None
+
+    # 1) Resolve INPUT / OUTPUT / PREPPED
+    input_dir = Path(args.input_dir or cfg.get("INPUT_DIR", ""))
+    out_root  = Path(args.out_root  or cfg.get("DOCKED_DIR") or cfg.get("OUTPUT_DIR", ""))
+    prepped   = Path(args.prepped   or cfg.get("OUTPUT_LIGANDS_DIR", ""))
+
+    # 2) Resolve mapping CSV in priority order
+    brcf_fixed_mapping = Path("/stor/home/mpg2352/atlas/code/protein_automation/fda_mapping_from_pdbqt.csv")
+    mapping_path = (
+        Path(args.mapping) if args.mapping else
+        _first_existing(
+            cfg.get("FDA_MAPPING_CSV"),
+            prepped / "fda_mapping_from_pdbqt.csv",
+            Path(cfg.get("OVERALL_DIR", Path(out_root).parent if out_root else Path.cwd())) / "fda_mapping_from_pdbqt.csv",
+            Path.cwd() / "fda_mapping_from_pdbqt.csv",
+            brcf_fixed_mapping,
+        )
+    )
+
+    # 3) Sanity checks with helpful messages
+    if not input_dir.exists():
+        print(f"[benchmark] INPUT_DIR does not exist: {input_dir}")
+        return
+
+    if not prepped.exists():
+        print(f"[benchmark] PREPPED library does not exist: {prepped}")
+        return
+
+    if not out_root:
+        out_root = Path(cfg.get("OUTPUT_DIR", "")) if cfg.get("OUTPUT_DIR") else (Path.cwd() / "benchmarks")
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    if not mapping_path or not Path(mapping_path).exists():
+        print(
+            "[benchmark] Mapping CSV not found.\n"
+            "  Tried (in order):\n"
+            f"    --mapping={args.mapping}\n"
+            f"    cfg['FDA_MAPPING_CSV']={cfg.get('FDA_MAPPING_CSV')}\n"
+            f"    {prepped / 'fda_mapping_from_pdbqt.csv'}\n"
+            f"    {Path(cfg.get('OVERALL_DIR', Path(out_root).parent)) / 'fda_mapping_from_pdbqt.csv'}\n"
+            f"    {Path.cwd() / 'fda_mapping_from_pdbqt.csv'}\n"
+            f"    {brcf_fixed_mapping}\n"
+            "  Fix by passing --mapping /path/to/fda_mapping_from_pdbqt.csv or setting FDA_MAPPING_CSV in your YAML."
+        )
+        return
+
+    # 4) Build MappingIndex now that we know the file exists
+    mapping = MappingIndex(Path(mapping_path))
+
+    # 5) Freeze resolved paths back into cfg for downstream calls
+    cfg = dict(cfg)
+    cfg["INPUT_DIR"] = str(input_dir)
+    cfg["DOCKED_DIR"] = str(out_root)
+    cfg["OUTPUT_DIR"] = str(out_root)
+    cfg["OUTPUT_LIGANDS_DIR"] = str(prepped)
+    cfg["DOCKING_MODE"] = "benchmark"
+    cfg.setdefault("OVERALL_DIR", str(Path(out_root).parent))
+    cfg["BENCH_MAX_SECONDS"] = float(args.max_seconds)
 
     # Optionally harvest aliases from prior results
     alias_sources = args.alias_from_details or []
@@ -1317,25 +1722,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         except Exception as e:
             print(f"[alias] WARN: could not augment aliases: {e}")
 
-    out_root.mkdir(parents=True, exist_ok=True)
-    if not input_dir.exists():
-        print(f"[benchmark] INPUT_DIR does not exist: {input_dir}")
-        return
-    if not prepped.exists():
-        print(f"[benchmark] PREPPED library does not exist: {prepped}")
-        return
-
-    cfg = load_inputs()
-    validate_config(cfg)
-    cfg = dict(cfg)
-    cfg["INPUT_DIR"] = str(input_dir)
-    cfg["DOCKED_DIR"] = str(out_root)
-    cfg["OUTPUT_DIR"] = str(out_root)
-    cfg["OUTPUT_LIGANDS_DIR"] = str(prepped)
-    cfg["DOCKING_MODE"] = "benchmark"
-    cfg.setdefault("OVERALL_DIR", str(Path(out_root).parent))
-    cfg["BENCH_MAX_SECONDS"] = float(args.max_seconds)
-
     # enumerate PDBs
     pdb_files = [f for f in os.listdir(cfg["INPUT_DIR"]) if f.lower().endswith(".pdb") and "_nolig" not in f.lower()]
     print(f"[benchmark] proteins queued: {len(pdb_files)} from {cfg['INPUT_DIR']}")
@@ -1349,46 +1735,134 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         for f in pdb_files:
             print(f"  - {f}")
 
-    fda_index = load_library_index(Path(args.mapping))
+    fda_index = load_library_index(Path(mapping_path))
     manual_hints = [h.strip() for h in (args.hints or "").split(",") if h.strip()] or None
 
-    jobs = max(1, int(args.jobs))
-    base_inner = int(cfg.get("MAX_PARALLEL_JOBS", 4))
-    inner_for_each = max(1, base_inner // jobs)
+    # ---- Dynamic CPU-saturating scheduler (outer proteins × inner ligands) ----
+    from collections import deque
 
-    def _work(pdb_file: str):
+    total_cpus = int(args.total_cpus) if args.total_cpus else _detect_available_cpus()
+    _set_thread_env(int(args.blas_threads))
+
+    # We’ll defer PyMOL to the very end by default so docking never waits on renders.
+    cfg["DEFER_PYMOL"] = True
+    # <<< global token pool used by ALL ligand tasks (live rebalancing of cpu usage) >>>
+    global_ligand_sem = threading.BoundedSemaphore(total_cpus)
+    cfg["GLOBAL_LIGAND_SEM"] = global_ligand_sem
+    # Quick, cheap prescan: estimate per-protein candidate counts to weight scheduling.
+    # (We intentionally skip metabolite→parent expansion here for speed.)
+    prescan: List[Tuple[str, int]] = []
+    for pdb in pdb_files:
+        pdb_path = Path(cfg["INPUT_DIR"]) / pdb
+        try:
+            het_ids, het_names = parse_pdb_het_hints(pdb_path)
+        except Exception:
+            het_ids, het_names = [], []
+        hints = list(het_names) + list(het_ids)
+        for het in het_ids:
+            hints.extend(CHEMCOMP_ALIAS.get(het.upper(), []))
+        if manual_hints:
+            hints.extend(manual_hints)
+        try:
+            est = len(select_candidates_for_protein(
+                mapping=mapping,
+                hints=hints,
+                prepped_dir=prepped,
+                extra_parent_ids=[],            # keep fast
+                max_candidates=int(args.max_candidates),
+            ))
+        except Exception:
+            est = 8
+        prescan.append((pdb, max(1, est)))
+
+    # Big jobs first helps keep CPUs busy as small jobs finish.
+    prescan.sort(key=lambda t: t[1], reverse=True)
+    q = deque(prescan)
+
+    # Outer cap: how many proteins can run at once
+    max_protein_jobs = max(1, min(int(args.jobs) if args.jobs else total_cpus, len(pdb_files), total_cpus))
+
+    print(f"[parallel] total_cpus={total_cpus} | max_proteins={max_protein_jobs} | queued={len(prescan)}")
+
+    def _work(pdb_file: str, inner_for_this: int):
         cfg_local = dict(cfg)
-        cfg_local["MAX_PARALLEL_JOBS"] = inner_for_each
-        run_benchmark_for_protein(
-            cfg=cfg_local,
-            mapping=mapping,
-            pdb_file=pdb_file,
-            prepped_dir=prepped,
-            out_root=out_root,
-            exhaustiveness=int(args.exhaustiveness),
-            num_modes=int(args.num_modes),
-            max_candidates=int(args.max_candidates),
-            manual_hints=manual_hints,
-            fda_index=fda_index,
-        )
+        cfg_local["GLOBAL_LIGAND_SEM"] = cfg["GLOBAL_LIGAND_SEM"]
+        # Set a high per-protein cap so the semaphore (not the pool size) is the real limiter.
+        cfg_local["MAX_PARALLEL_JOBS"] = max(int(cfg_local.get("MAX_PARALLEL_JOBS") or 0), total_cpus)
+        with _defer_pymol_capture_calls(True):
+            run_benchmark_for_protein(
+                cfg=cfg_local,
+                mapping=mapping,
+                pdb_file=pdb_file,
+                prepped_dir=prepped,
+                out_root=out_root,
+                exhaustiveness=int(args.exhaustiveness),
+                num_modes=int(args.num_modes),
+                max_candidates=int(args.max_candidates),
+                manual_hints=manual_hints,
+                fda_index=fda_index,
+            )
         return pdb_file
 
     import traceback
-    # parallel execution
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = {pool.submit(_work, pdb): pdb for pdb in pdb_files}
-        done, failed = 0, 0
-        for fut in as_completed(futures):
-            pdb = futures[fut]
+
+    # Submit loop: we keep track of "CPU slots" allocated to each running protein.
+    running: Dict[object, Tuple[str, int]] = {}
+    sum_inner = 0
+
+    def _alloc_plan(remaining_slots: int, remaining_jobs: int) -> int:
+        """Greedy: give each new protein at least floor, first few get +1 to absorb remainder."""
+        base = max(1, remaining_slots // max(1, remaining_jobs))
+        extra = remaining_slots - base * max(1, remaining_jobs)
+        return base + (1 if extra > 0 else 0)
+
+    with ThreadPoolExecutor(max_workers=max_protein_jobs) as pool:
+        # Seed as many as we can to fill CPU budget
+        while q and len(running) < max_protein_jobs and sum_inner < total_cpus:
+            remaining_slots = total_cpus - sum_inner
+            remaining_jobs = max_protein_jobs - len(running)
+            inner = _alloc_plan(remaining_slots, remaining_jobs)
+            pdb, est = q.popleft()
+            fut = pool.submit(_work, pdb, inner)
+            running[fut] = (pdb, inner)
+            sum_inner += inner
+
+        done = failed = 0
+        total = len(pdb_files)
+
+        while running:
+            fut = next(as_completed(list(running.keys())))
+            pdb, inner = running.pop(fut)
+            sum_inner -= inner
             try:
                 fut.result()
                 done += 1
-                print(f"[benchmark] ✔ finished {pdb} ({done}/{len(pdb_files)})")
+                print(f"[benchmark] ✔ finished {pdb} (used_inner={inner}) ({done}/{total})")
             except Exception as e:
                 failed += 1
                 tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-                print(f"[benchmark] ✖ error on {pdb}: {e} ({done + failed}/{len(pdb_files)})\n{tb}")
+                print(f"[benchmark] ✖ error on {pdb} (used_inner={inner}): {e} ({done + failed}/{total})\n{tb}")
 
+            # Refill immediately, redistributing freed CPU to the next proteins
+            while q and len(running) < max_protein_jobs and sum_inner < total_cpus:
+                remaining_slots = total_cpus - sum_inner
+                remaining_jobs  = max_protein_jobs - len(running)
+                inner = _alloc_plan(remaining_slots, remaining_jobs)
+                next_pdb, _est = q.popleft()
+                fut2 = pool.submit(_work, next_pdb, inner)
+                running[fut2] = (next_pdb, inner)
+                sum_inner += inner
+
+    # ----- Post-run: render everything in parallel (no docking blocked) -----
+    # Default workers: env PYMOL_PARALLEL (if set) else 4 as a safe HPC default
+    try:
+        render_workers = int(os.environ.get("PYMOL_PARALLEL", ""))
+        if render_workers <= 0:
+            render_workers = 4
+    except Exception:
+        render_workers = 4
+    run_deferred_captures(render_workers)
+    run_deferred_renders(render_workers)
     # optional post-run analysis
     if args.run_analysis:
         docked_root = Path(cfg.get("OVERALL_DIR", str(Path(out_root).parent))) / "docked"
@@ -1397,7 +1871,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         else:
             details, summary = _run_auto_analysis(
                 docked_root=docked_root,
-                mapping_csv=Path(args.mapping),
+                mapping_csv=Path(mapping_path),
                 only_pdb=(args.analysis_only_pdb or None),
                 score_tol=float(args.analysis_score_tol),
                 center_tol=float(args.analysis_center_tol),
@@ -1410,7 +1884,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 print(f"[analysis] ✅ Summary: {summary}")
             else:
                 print("[analysis] ❌ Analysis did not produce outputs.")
-
 
 if __name__ == "__main__":
     main()

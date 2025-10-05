@@ -1,11 +1,28 @@
-import os
-import csv
+import os, sys, shutil
 from pathlib import Path
-import win32api  # Requires: pip install pywin32
-import win32file
-from collections import defaultdict
 from distutils.util import strtobool
+from typing import Any, Dict
+import re, csv, math
+from collections import defaultdict
 
+# -------------------------
+# OS guards (Windows-only)
+# -------------------------
+IS_WINDOWS = sys.platform.startswith("win")
+try:
+    if IS_WINDOWS:
+        import win32api  # type: ignore
+        import win32file  # type: ignore
+    else:
+        win32api = None
+        win32file = None
+except Exception:
+    win32api = None
+    win32file = None
+
+# -------------------------
+# Small helpers
+# -------------------------
 def _to_bool(x):
     try:
         return bool(strtobool(str(x)))
@@ -24,211 +41,254 @@ def _to_float(x, default=None):
     except Exception:
         return default
 
-# === Tool Locator ===
-def find_tool_on_any_drive(possible_subpaths):
-    """Search through all fixed drives for given relative subpaths."""
-    drives = [
-        d for d in win32api.GetLogicalDriveStrings().split('\000')
-        if d and win32file.GetDriveType(d) == win32file.DRIVE_FIXED
-    ]
-    for drive in drives:
-        for subpath in possible_subpaths:
-            candidate = Path(drive) / subpath
-            if candidate.exists():
-                return str(candidate.resolve())
+def which_or_exists(candidates):
+    """
+    Return the first path that exists (if absolute),
+    or the first found on PATH via shutil.which.
+    """
+    for c in candidates:
+        p = Path(str(c))
+        if p.is_absolute() and p.exists():
+            return str(p)
+        w = shutil.which(p.name)
+        if w:
+            return w
     return None
 
-# === Config Loader === currently overwrites the actual config AAAAAAA
-def get_default_config():
-    from pathlib import Path
-    import os
+# -------------------------
+# Defaults for BRCF layout
+# -------------------------
+def _default_base_dir() -> Path:
+    # env wins; else directory of this file
+    return Path(os.environ.get("PROTEIN_AUTOMATION_DIR", Path(__file__).resolve().parent))
 
-    user_home = Path.home()
-    base_dir = Path(__file__).resolve().parent
-
-    def get_or_prompt(name, candidates):
-        path = find_tool_on_any_drive(candidates)
-        if path:
-            return path
-        manual = input(f"[!] {name} not found. Please paste full path or leave blank to skip: ").strip()
-        return manual if manual else f"{name.lower()}_not_found"
-
-    vina_path = get_or_prompt("AutoDock Vina", [
-        "AutoDock-Vina-1.2.7/vina_1.2.7_win.exe",
-        "Users/Public/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe",
-        "vina_1.2.7_win.exe"
-    ])
-
-    phenix_dir = get_or_prompt("Phenix bin", [
-        "phenix-1.21.2-5419/Library/bin",
-        "Program Files/Phenix/Library/bin",
-        "phenix/Library/bin",
-        "Library/bin",
-        "Phenix/Library/bin",  # Capitalization may matter
-        "E:/phenix/Library/bin"
-    ])
-
-    phenix_lib_path = get_or_prompt("Phenix site-packages", [
-        "phenix-1.21.2-5419/Lib/site-packages",
-        "phenix/Lib/site-packages",
-        "Program Files/Phenix/Lib/site-packages",
-        "Lib/site-packages"
-    ])
-
-    p2rank_path = get_or_prompt("P2Rank", [
-        "p2rank_2.5",
-        "Users/Public/p2rank_2.5",
-        "Program Files/p2rank_2.5"
-    ])
-
-    mgltools_path = get_or_prompt("MGLTools", [
-        "MGLTools-1.5.7",
-        "Program Files (x86)/MGLTools-1.5.7",
-        "Programs/MGLTools-1.5.7"
-    ])
-
-    openbabel_path = get_or_prompt("OpenBabel", [
-        "OpenBabel-3.1.1/obabel.exe",
-        "Program Files (x86)/OpenBabel-3.1.1/obabel.exe",
-        "Program Files/OpenBabel-3.1.1/obabel.exe"
-    ])
-
-    reduce_exe = get_or_prompt("Reduce", [
-        "miniconda3/envs/docking-env/Library/bin/reduce.exe",
-        "Library/bin/reduce.exe",
-        "Program Files/reduce.exe",
-        "reduce.exe",
-        "phenix/Library/bin/reduce.exe",
-        "E:/phenix/Library/bin/reduce.exe",
-    ])
-    pymol_exe = get_or_prompt("PyMOL Python", [
-        "E:/pymol/python.exe",
-        "E:/Program Files/PyMOL/python.exe",
-        "C:/Program Files/PyMOL/python.exe",
-        "python.exe",
-    ])
-
-    mgltools_python = str(Path(mgltools_path) / "python.exe") if "not_found" not in mgltools_path else "MGLTOOLS_PYTHON_NOT_FOUND"
-    prepare_receptor_script = str(Path(mgltools_path) / "Lib/site-packages/AutoDockTools/Utilities24/prepare_receptor4.py") if "not_found" not in mgltools_path else "PREPARE_RECEPTOR_SCRIPT_NOT_FOUND"
-
-    config = {
-        "OVERALL_DIR": str(base_dir),
-        "INPUT_DIR": str(base_dir / "input_pdbs"),
-        "PROTEIN_DIR": str(base_dir / "pdbqts"),
-        "LIGAND_DIR": str(base_dir / "input_ligands"),
-        "LIGAND_EXTRACTED_DIR": str(base_dir / "extracted_ligands"),
-        "LIGANDS_MOL2_DIR": str(base_dir / "ligands_mol2"),
-        "OUTPUT_LIGANDS_DIR": str(base_dir / "prepped_ligands"),
-        "OUTPUT_DIR": str(base_dir / "processed_pdbs"),
-        "PDBQT_DIR": str(base_dir / "pdbqts"),
-        "DOCKED_DIR": str(base_dir / "docked"),
-        "PHENIX_CLEAN_SCRIPT": str(base_dir / "phenix_clean.py"),
-        "VINA_PATH": vina_path,
-        "VINA_EXE": vina_path,
-        "PHENIX_DIR": phenix_dir,
-        "PHENIX_LIB_PATH": phenix_lib_path,
-        "P2RANK_PATH": p2rank_path,
-        "MGLTOOLS_PATH": mgltools_path,
-        "MGLTOOLS_PYTHON": mgltools_python,
-        "PREPARE_RECEPTOR_SCRIPT": prepare_receptor_script,
-        "MGLTOOLS_DIR": mgltools_path,
-        "OPENBABEL_PATH": openbabel_path,
-        "REDUCE_EXE": reduce_exe,
-        "CPU_ONLY": True,
-        "CPU": 12,
-        "MAX_PARALLEL_JOBS": 6,
-        "FORCE_REPROCESS": False,
-        "PYMOL_PATH": pymol_exe,
-        "DOCKING_MODE": "discovery",
+def _default_dirs(base: Path) -> Dict[str, str]:
+    """
+    Opinionated defaults that match BRCF layout:
+      /stor/home/<user>/atlas/code/protein_automation/{subdirs}
+    """
+    return {
+        "OVERALL_DIR":            str(base),
+        "INPUT_DIR":              str(base / "input_pdbs"),
+        "PROTEIN_DIR":            str(base / "pdbqts"),
+        "LIGAND_DIR":             str(base / "input_ligands"),
+        "LIGAND_EXTRACTED_DIR":   str(base / "extracted_ligands"),
+        "LIGANDS_MOL2_DIR":       str(base / "ligands_mol2"),
+        "OUTPUT_LIGANDS_DIR":     str(base / "prepped_ligands"),
+        "OUTPUT_DIR":             str(base / "processed_pdbs"),
+        "PDBQT_DIR":              str(base / "pdbqts"),
+        "DOCKED_DIR":             str(base / "docked"),
+        # p2rank
+        "P2RANK_OUTPUT_DIR":      str(base / "p2rank_out"),
+        # cleanup script (kept in repo)
+        "PHENIX_CLEAN_SCRIPT":    str(base / "phenix_clean.py"),
     }
 
-    # Ensure all keys are uppercase
-    return {k.upper(): v for k, v in config.items()}
+def _default_tools() -> Dict[str, str]:
+    """
+    Tool defaults prefer environment & PATH.
+    """
+    return {
+        "VINA_PATH": which_or_exists(["vina"]),
+        "VINA_EXE": which_or_exists(["vina"]),
+        "OPENBABEL_PATH": which_or_exists(["obabel"]),
+        "PYMOL_PATH": which_or_exists(["pymol"]),
+        "REDUCE_EXE": which_or_exists(["reduce"]),
+        # prefer env MGLTOOLS_* if set; otherwise try ADFRsuite pythonsh on PATH
+        "MGLTOOLS_PYTHON": os.environ.get("MGL_PYTHON") or which_or_exists(["pythonsh"]),
+        "PREPARE_LIGAND_SCRIPT": os.environ.get("PREPARE_LIGAND_SCRIPT") or which_or_exists(["prepare_ligand4.py"]),
+        "PREPARE_RECEPTOR_SCRIPT": os.environ.get("PREPARE_RECEPTOR_SCRIPT") or which_or_exists(["prepare_receptor4.py"]),
+        # p2rank: either absolute prank or found on PATH
+        "P2RANK_PATH": shutil.which("prank") or "prank",
+    }
 
+def _default_runtime() -> Dict[str, Any]:
+    return {
+        "CPU_ONLY": True,
+        "CPU": os.cpu_count() or 8,
+        "MAX_PARALLEL_JOBS": max(1, (os.cpu_count() or 8) // 2),
+        "FORCE_REPROCESS": False,
+        "DOCKING_MODE": "discovery",  # or "polypharmacology" / "benchmark" set elsewhere
+        "QUIET_CONSOLE": False,
+        # docking/recenter knobs
+        "EARLY_RECENTER_RATIO": 0.70,
+        "EARLY_RECENTER_MIN_EVAL": 10,
+        "EARLY_RECENTER_FAR_A": 15.0,
+        "EARLY_RECENTER_MEDIAN_A": 10.0,
+        "ALLOW_BOX_EXPAND": True,
+        "MAX_RECENTER_ATTEMPTS": 3,
+    }
 
-def load_inputs():
-    config_path = Path("config.txt")
-    if config_path.exists():
-        config = {}
-        with open(config_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):  # skip blanks/comments
-                    continue
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    config[k.strip().upper()] = v.strip()
+# -------------------------
+# Config loading & validation
+# -------------------------
+_ALLOWED_ENV_OVERRIDES = {
+    "VINA_EXE","VINA_PATH","OPENBABEL_PATH","MGLTOOLS_PYTHON",
+    "PREPARE_LIGAND_SCRIPT","PREPARE_RECEPTOR_SCRIPT","PYMOL_PATH",
+    "P2RANK_PATH","PHENIX_DIR","PHENIX_LIB_PATH","PHENIX_CLEAN_SCRIPT",
+    "INPUT_DIR","OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","LIGAND_DIR",
+    "LIGAND_EXTRACTED_DIR","LIGANDS_MOL2_DIR","OUTPUT_LIGANDS_DIR",
+    "P2RANK_OUTPUT_DIR",
+    "CPU","CPU_ONLY","MAX_PARALLEL_JOBS","DOCKING_MODE","REDUCE_EXE",
+    "USE_MEEKO","OVERALL_DIR","PROTEIN_DIR",
+}
 
-        default_cfg = get_default_config()
-        merged_cfg = {**default_cfg, **config}
+def _parse_kv_config(path: Path) -> Dict[str, str]:
+    """
+    Lightweight key=value parser; allows comments starting with '#'.
+    """
+    out = {}
+    if not path.exists():
+        return out
+    with path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip().upper()] = v.strip()
+    return out
 
-        # coerce types
-        for k in ["CPU_ONLY", "FORCE_REPROCESS", "ALLOW_BOX_EXPAND",
-                  "QUIET_CONSOLE", "RECEPTOR_SANITY_CHECK", "CHECKPOINT_ENABLE",
-                  "FILTER_VINA_STDOUT"]:
-            if k in merged_cfg:
-                merged_cfg[k] = _to_bool(merged_cfg[k])
+def _expand_vars_in_value(val: str, cfg_now: Dict[str, Any]) -> str:
+    """
+    Expand {OVERALL_DIR} and $OVERALL_DIR occurrences inside config values.
+    We intentionally keep it simple, not a full env expansion.
+    """
+    if not isinstance(val, str):
+        return val
+    od = str(cfg_now.get("OVERALL_DIR", ""))
+    if od:
+        val = val.replace("{OVERALL_DIR}", od)
+        val = val.replace("$OVERALL_DIR", od)
+    return val
 
-        for k in ["MAX_PARALLEL_JOBS", "CPU", "MAX_RECENTER_ATTEMPTS", "EARLY_RECENTER_MIN_EVAL"]:
-            if k in merged_cfg:
-                merged_cfg[k] = _to_int(merged_cfg[k], merged_cfg[k])
+def _expand_all_vars(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    # single pass is sufficient for our use: expand OVERALL_DIR in the other paths
+    out = dict(cfg)
+    for k, v in list(out.items()):
+        if isinstance(v, str):
+            out[k] = _expand_vars_in_value(v, out)
+    return out
 
-        for k in ["EARLY_RECENTER_RATIO", "EARLY_RECENTER_FAR_A", "EARLY_RECENTER_MEDIAN_A"]:
-            if k in merged_cfg:
-                merged_cfg[k] = _to_float(merged_cfg[k], merged_cfg[k])
+def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -> Dict[str, Any]:
+    """
+    Load configuration with precedence:
+      1) defaults (BRCF-aware)
+      2) config.txt (key=value, optional)
+      3) environment variables (allowed set only)
+    Then expand {OVERALL_DIR}/$OVERALL_DIR inside string values.
+    """
+    base = base_dir or _default_base_dir()
 
-        merged_cfg["DOCKING_MODE"] = merged_cfg.get("DOCKING_MODE", "discovery").lower()
-        return merged_cfg
-    else:
-        return get_default_config()
+    cfg: Dict[str, Any] = {}
+    cfg.update(_default_dirs(base))
+    cfg.update(_default_tools())
+    cfg.update(_default_runtime())
 
+    # overlay config file
+    file_cfg = _parse_kv_config(Path(config_path))
+    cfg.update(file_cfg)
 
+    # overlay env vars (uppercased keys only)
+    for k, v in os.environ.items():
+        K = k.upper()
+        if K in _ALLOWED_ENV_OVERRIDES:
+            cfg[K] = v
 
-# === Config Validation ===
+    # type coercion (before expansion is fine)
+    for k in ["CPU_ONLY","FORCE_REPROCESS","ALLOW_BOX_EXPAND","QUIET_CONSOLE","USE_MEEKO"]:
+        if k in cfg:
+            cfg[k] = _to_bool(cfg[k])
 
-def validate_config(cfg):
+    for k in ["MAX_PARALLEL_JOBS","CPU","MAX_RECENTER_ATTEMPTS","EARLY_RECENTER_MIN_EVAL"]:
+        if k in cfg:
+            cfg[k] = _to_int(cfg[k], cfg[k])
+
+    for k in ["EARLY_RECENTER_RATIO","EARLY_RECENTER_FAR_A","EARLY_RECENTER_MEDIAN_A"]:
+        if k in cfg:
+            cfg[k] = _to_float(cfg[k], cfg[k])
+
+    # normalize mode
+    cfg["DOCKING_MODE"] = str(cfg.get("DOCKING_MODE","discovery")).lower()
+
+    # now expand {OVERALL_DIR}/$OVERALL_DIR appearances
+    cfg = _expand_all_vars(cfg)
+
+    return cfg
+
+def validate_config(cfg: Dict[str, Any]):
+    """
+    Require OVERALL_DIR and INPUT_DIR to exist.
+    Auto-create typical output directories if missing.
+    """
     required_keys = [
-        "OUTPUT_DIR", "INPUT_DIR", "MGLTOOLS_DIR", "MGLTOOLS_PYTHON",
-        "PREPARE_RECEPTOR_SCRIPT", "VINA_EXE", "MAX_PARALLEL_JOBS",
-        "PDBQT_DIR", "DOCKED_DIR", "OVERALL_DIR", "DOCKING_MODE","PYMOL_PATH",
+        "OUTPUT_DIR","INPUT_DIR","PDBQT_DIR","DOCKED_DIR","OVERALL_DIR",
+        "MGLTOOLS_PYTHON","PREPARE_RECEPTOR_SCRIPT","VINA_EXE","MAX_PARALLEL_JOBS",
+        "PYMOL_PATH",
     ]
-
-    missing = [key for key in required_keys if key not in cfg]
+    missing = [k for k in required_keys if not cfg.get(k)]
     if missing:
-        raise ValueError(f"Missing required config keys: {missing}")
+        raise ValueError(f"Missing required config keys or values: {missing}")
 
-    for path_key in ["INPUT_DIR", "OUTPUT_DIR", "MGLTOOLS_DIR", "PDBQT_DIR", "DOCKED_DIR", "OVERALL_DIR"]:
-        path = Path(cfg[path_key])
-        if not path.exists():
-            raise FileNotFoundError(f"Required path does not exist: {path}")
+    # Must exist
+    for path_key in ["OVERALL_DIR", "INPUT_DIR"]:
+        p = Path(cfg[path_key])
+        if not p.exists():
+            raise FileNotFoundError(f"Required path does not exist: {p}")
 
-# === Docking Stage Definitions ===
+    # Create-if-missing for outputs/caches
+    create_keys = [
+        "OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","OUTPUT_LIGANDS_DIR",
+        "LIGAND_EXTRACTED_DIR","LIGANDS_MOL2_DIR","P2RANK_OUTPUT_DIR",
+    ]
+    for path_key in create_keys:
+        p = Path(cfg[path_key])
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise FileNotFoundError(f"Could not create directory for {path_key}: {p} ({e})")
 
+# -------------------------
+# P2Rank helpers (optional)
+# -------------------------
+def p2rank_out_dir(cfg: Dict[str, Any]) -> Path:
+    """
+    Central place to define where P2Rank writes results.
+    Default: OVERALL_DIR/p2rank_out, but user may override P2RANK_OUTPUT_DIR.
+    """
+    out = Path(cfg.get("P2RANK_OUTPUT_DIR") or Path(cfg["OVERALL_DIR"]) / "p2rank_out")
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+# -------------------------
+# Docking stages
+# -------------------------
 def define_docking_stages(mode="discovery"):
     if mode == "discovery":
         return [
-            {"name": "stage1", "num_modes": 1, "energy_range": 2, "exhaustiveness": 2},
-            {"name": "stage2", "num_modes": 3, "energy_range": 3, "exhaustiveness": 4},
-            {"name": "stage3", "num_modes": 5, "energy_range": 4, "exhaustiveness": 6},
-            {"name": "stage4", "num_modes": 9, "energy_range": 6, "exhaustiveness": 8},
+            {"name": "stage1", "num_modes": 1,  "energy_range": 2, "exhaustiveness": 2},
+            {"name": "stage2", "num_modes": 3,  "energy_range": 3, "exhaustiveness": 4},
+            {"name": "stage3", "num_modes": 5,  "energy_range": 4, "exhaustiveness": 6},
+            {"name": "stage4", "num_modes": 9,  "energy_range": 6, "exhaustiveness": 8},
             {"name": "stage5", "num_modes": 20, "energy_range": 9, "exhaustiveness": 20},
         ]
     elif mode == "polypharmacology":
         return [
-            {"name": "stage1", "num_modes": 3, "energy_range": 2, "exhaustiveness": 4},
+            {"name": "stage1", "num_modes": 3,  "energy_range": 2, "exhaustiveness": 4},
             {"name": "stage2", "num_modes": 10, "energy_range": 6, "exhaustiveness": 12},
             {"name": "stage3", "num_modes": 20, "energy_range": 9, "exhaustiveness": 24},
         ]
     else:
         raise ValueError(f"Unknown docking mode: {mode}")
 
-# === Docking Score Output ===
-import re
 
+# -------------------------
+# Score I/O
+# -------------------------
 def write_score_summary_to_csv(score_history, output_path="docking_score_summary.csv"):
-    # Normalize ligand names (remove _stageX)
     ligand_stage_pattern = re.compile(r"^(.*?)(_stage\d+)?\.pdbqt$", re.IGNORECASE)
-
     ligand_scores = defaultdict(dict)
 
     for stage, stage_scores in score_history.items():
@@ -239,13 +299,11 @@ def write_score_summary_to_csv(score_history, output_path="docking_score_summary
                 ligand_core = f"{match.group(1)}.pdbqt"
                 ligand_scores[ligand_core][stage] = score
 
-    # Get sorted list of unique ligands and stages
     all_ligands = sorted(ligand_scores.keys())
     all_stages = sorted(score_history.keys())
 
     header = ["Ligand"] + all_stages
     rows = []
-
     for ligand in all_ligands:
         row = [ligand]
         for stage in all_stages:
@@ -263,9 +321,6 @@ def write_score_summary_to_csv(score_history, output_path="docking_score_summary
 
     print(f"\nScore summary written to: {output_path}")
 
-
-# === Extract Best Docking Score ===
-
 def extract_best_score(docked_pdbqt_path):
     best_score = None
     with open(docked_pdbqt_path, "r") as f:
@@ -277,7 +332,10 @@ def extract_best_score(docked_pdbqt_path):
                     best_score = score
     return best_score
 
-# === Docking Config Writer ===
+
+# -------------------------
+# Vina config writer
+# -------------------------
 def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job):
     config_dir = os.path.join(output_dir, "configs", pdb_id, stage)
     os.makedirs(config_dir, exist_ok=True)
@@ -299,7 +357,7 @@ def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand
         f"energy_range = {stage_info['energy_range']}",
         f"exhaustiveness = {stage_info['exhaustiveness']}",
         f"out = {out_path}",
-        f"cpu = {cpu_per_job}"
+        f"cpu = {cpu_per_job}",
     ]
 
     config_path = os.path.join(config_dir, f"{ligand_name}.txt")
@@ -307,57 +365,30 @@ def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand
         f.write("\n".join(config_lines))
     return config_path, out_path
 
-import re
-# NEW: helpers for structured scores
-import math
 
-# input_and_export_functions.py
-from typing import Any
-
-#import SCAM filter
-from prep_ligands import annotate_ligand_with_scam
-
-# added 'lig_path' argument so the SCAM filter has access to the mol structure
-def record_score(score_history, stage_name, ligand, score: Any, valid, reason=None,
-                 lig_path = None):
+# -------------------------
+# Score bookkeeping
+# -------------------------
+def record_score(score_history, stage_name, ligand, score: Any, valid, reason=None):
     def coerce_score(x):
-        # numeric already?
         if isinstance(x, (int, float)):
             return float(x)
-        # PDBQT path? try to read best score
         if isinstance(x, str) and x.lower().endswith(".pdbqt"):
             try:
                 return extract_best_score(x)
             except Exception:
                 return None
-        # numeric string?
         try:
             return float(x)
         except Exception:
             return None
 
     s = coerce_score(score)
-
-    # create / update the ligand entry
-    if stage_name not in score_history:
-        score_history[stage_name] = {}
-
     score_history[stage_name][ligand] = {
         "score": s,
         "valid": bool(valid),
         "reason": reason,
     }
-
-    # if we have a ligand file, the SCAM annotation will run
-    if lig_path:
-        score_history[stage_name][ligand] = annotate_ligand_with_scam(
-            lig_path,
-            score_history[stage_name][ligand],
-        )
-
-    return score_history
-
-
 
 def score_key(item):
     """item = (ligand, rec). Sort by numeric score; invalid or None go to bottom."""
@@ -369,15 +400,9 @@ def score_key(item):
         s = float(s)
     except (TypeError, ValueError):
         return math.inf
-
-    # Keep native Vina ordering (more negative = better)
-    # If you want invalid to always be worse than same-number valid, add a small bump:
     return s if rec.get("valid", False) else s + 1e-6
 
 def write_scores_csv(cfg, pdb_id, score_history):
-    """
-    Flatten score_history and write docking_score_summary.csv into DOCKED_DIR/<pdb>/.
-    """
     protein_dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
     os.makedirs(protein_dock_dir, exist_ok=True)
     csv_output_path = os.path.join(protein_dock_dir, "docking_score_summary.csv")
@@ -395,11 +420,11 @@ def write_scores_csv(cfg, pdb_id, score_history):
     write_score_summary_to_csv(flat_history, output_path=csv_output_path)
     return csv_output_path
 
+
+# -------------------------
+# Common path builder per protein
+# -------------------------
 def build_paths_for_protein(cfg, base_id, pdb_file):
-    """
-    Build common paths/dirs for a protein and ensure required folders exist.
-    Returns a dict with input/output paths.
-    """
     pdb_id = base_id
     ligand_output_dir = Path(cfg["OUTPUT_DIR"]) / pdb_id / f"{pdb_id}_cleaned_ligands"
     ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
@@ -425,4 +450,17 @@ def build_paths_for_protein(cfg, base_id, pdb_file):
         "cleaned_pdb_path": cleaned_pdb_path,
         "receptor_pdbqt_path": receptor_pdbqt_path,
     }
+# -------------------------
+# Backward-compat shims
+# -------------------------
 
+def load_inputs():
+    """Legacy name used by existing scripts. Now just calls load_config()."""
+    return load_config()
+
+def get_default_config(prompt: bool = False):
+    """
+    Legacy helper kept for compatibility.
+    simply return the fully merged config (defaults + config.txt + env).
+    """
+    return load_config()

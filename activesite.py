@@ -6,12 +6,210 @@ import logging
 from installation import load_config
 from collections import defaultdict
 from logger_setup import setup_logger
+from pathlib import Path
 
 
 
 # Load config
 config = load_config()
 P2RANK_DIR = config.get("P2RANK_PATH")
+import yaml
+from types import SimpleNamespace
+
+ALIASES_PATH = (
+    config.get("ALIASES_PATH")
+    or os.environ.get("ALIASES_YAML")
+    or os.path.join(os.path.dirname(__file__), "aliases.yaml")
+)
+
+# if not found, try ./chemdb/aliases.yaml automatically
+if not os.path.exists(ALIASES_PATH):
+    probe = os.path.join(os.path.dirname(__file__), "chemdb", "aliases.yaml")
+    if os.path.exists(probe):
+        ALIASES_PATH = probe
+
+_aliases_cache = None
+_rules_cache = None
+
+# ---  YAML loader with encoding fallbacks & punctuation cleanup ---
+def _load_aliases_yaml():
+    import yaml, unicodedata
+    global _aliases_cache
+    if _aliases_cache is not None:
+        return _aliases_cache
+
+    path = ALIASES_PATH
+    try:
+        # try UTF-8 first (fast path)
+        with open(path, "r", encoding="utf-8") as fh:
+            _aliases_cache = yaml.safe_load(fh) or {}
+            return _aliases_cache
+    except Exception as e_utf8:
+        logging.warning("[aliases] UTF-8 load failed for %s: %s", path, e_utf8)
+
+    try:
+        # fallback: cp1252 decode + punctuation normalization → UTF-8
+        raw = Path(path).read_bytes()
+        text = raw.decode("cp1252", errors="strict")
+
+        # normalize common Windows punctuation to ASCII
+        repl = {
+            "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+            "\u2013": "-", "\u2014": "-", "\u2026": "...",
+            "\u00A0": " ", "\u200B": "", "\uFEFF": "",
+        }
+        for k, v in repl.items():
+            text = text.replace(k, v)
+
+        # fix common mojibake 'â†’' if present
+        text = text.replace("â†’", "->")
+
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        _aliases_cache = yaml.safe_load(text) or {}
+        logging.info("[aliases] loaded with cp1252 fallback and sanitized punctuation")
+        return _aliases_cache
+    except Exception as e_cp:
+        logging.warning("[aliases] cp1252 fallback failed for %s: %s", path, e_cp)
+        _aliases_cache = {}
+        return _aliases_cache
+
+
+
+def get_atom_rules():
+    """
+    Return a SimpleNamespace of normalized sets/maps used by element fixing,
+    *plus* a compatibility view so legacy code can still do RULES["element_sets"].
+    """
+    global _rules_cache
+    if _rules_cache is not None:
+        return _rules_cache
+
+    a  = _load_aliases_yaml()
+    es = a.get("element_sets", {}) or {}
+
+    # helper: flatten lists of lists and "A; B; C" rows into a single list of strings
+    def _flatten(items):
+        out = []
+        for x in (items or []):
+            if isinstance(x, (list, tuple, set)):
+                out.extend(_flatten(x))
+            else:
+                s = str(x)
+                parts = [p.strip() for p in s.split(";")]
+                out.extend([p for p in parts if p])
+        return out
+
+    def _as_set(items, up=True):
+        vals = _flatten(items)
+        return { (v.upper() if up else v) for v in vals }
+
+    # Normalized sets used by the element/peptide logic
+    peptide_like      = _as_set(es.get("peptide_like_names"))
+    one_letter        = _as_set(es.get("one_letter_elements"))
+    two_letter        = _as_set(es.get("two_letter_elements"))
+    halide_resnames   = _as_set(es.get("halide_resnames"))
+    default_element   = (es.get("default_element") or "C").upper()
+    treat_backbone_ca = bool(es.get("treat_backbone_CA_as_C", True))
+
+    prefix_map     = { (k or "").upper(): (v or "").upper()
+                       for k, v in (es.get("derive_prefix_map") or {}).items() }
+    special_names  = { (k or "").upper(): (v or "").upper()
+                       for k, v in (es.get("special_atom_names") or {}).items() }
+    halide_aliases = { (k or "").upper(): (v or "").upper()
+                       for k, v in (es.get("halide_resname_aliases") or {}).items() }
+    cation_aliases = { (k or "").upper(): (v or "").upper()
+                       for k, v in (es.get("cation_resname_aliases") or {}).items() }
+
+    # Retain list (normalized set, *and* keep the raw list for compat)
+    retain_raw = a.get("retain_in_receptor_resnames", []) or []
+    retain_res = _as_set(retain_raw)
+
+    # add a compatibility dict so existing code can still do RULES["element_sets"]
+    # and RULES["retain_in_receptor_resnames"] without crashing.
+    compat_element_sets = dict(es)  # shallow copy of the YAML block as-is (lists/maps)
+    compat_retain_list  = list(retain_raw)
+
+    from types import SimpleNamespace
+    _rules_cache = SimpleNamespace(
+        # normalized sets / maps (what your element fixer actually uses)
+        peptide_like=peptide_like,
+        one_letter=one_letter,
+        two_letter=two_letter,
+        halide_resnames=halide_resnames,
+        halide_aliases=halide_aliases,
+        cation_aliases=cation_aliases,
+        prefix_map=prefix_map,
+        special_names=special_names,
+        default_element=default_element,
+        treat_backbone_ca=treat_backbone_ca,
+        retain_resnames=retain_res,
+
+        # --- compatibility views for older call sites ---
+        element_sets=compat_element_sets,                       # <� lets RULES["element_sets"] work
+        retain_in_receptor_resnames=compat_retain_list,         # <� lets RULES.get("retain_in_receptor_resnames") work
+    )
+    return _rules_cache
+
+def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
+    """Infer element symbol from atom/residue context using YAML-driven rules."""
+    if rules is None:
+        rules = get_atom_rules()
+
+    an = (aname or "").strip().upper()
+    rn = (resname or "").strip().upper()
+
+    # special atom names (e.g., OXT)
+    if an in rules.special_names:
+        return rules.special_names[an]
+    # normalize residue-name aliases (e.g., IOD->I, CL- -> CL)
+    if rn in rules.halide_aliases:
+        rn = rules.halide_aliases[rn]
+    if rn in rules.cation_aliases:
+        rn = rules.cation_aliases[rn]
+
+    # derive by leading functional prefix (OE1, NE2, OD1, ND2, SD, ...)
+    pref = an[:2]
+    if pref in rules.prefix_map:
+        return rules.prefix_map[pref]
+
+    # halide ions by residue name for single-atom HETATMs
+    if is_het and rn in rules.halide_resnames:
+        # normalize case to proper two-letter form when applicable
+        if rn in {"CL","BR"}:
+            return rn[0] + rn[1].lower()
+        return rn  # I, F
+
+    # CA special-case (avoid backbone CA -> Calcium)
+    if len(an) >= 2 and an[:2] == "CA":
+        if not is_het and rules.treat_backbone_ca:
+            return "C"
+        # allow calcium if tiny HET or named CA/CAL
+        if is_het and rn in {"CA","CAL"}:
+            return "Ca"
+
+    # two-letter elements at name start (Cl, Br, Na, Mg, ...), proper case
+    if len(an) >= 2 and an[:2].upper() in rules.two_letter:
+        t = an[:2].upper()
+        return t[0] + t[1].lower()
+
+    # hydrogens (H, 1H, 2H...)
+    if an.startswith("H") or (an[:1].isdigit() and len(an) >= 2 and an[1] == "H"):
+        return "H"
+
+    # one-letter defaults by first alpha
+    if an and an[0].isalpha():
+        c = an[0].upper()
+        if c in rules.one_letter:
+            return c
+
+    for ch in an:
+        if ch.isalpha():
+            c = ch.upper()
+            return c if c in rules.one_letter else rules.default_element
+
+    return rules.default_element
+
+
 
 
 def ensure_model_records(pdb_input_path: str, pdb_output_path: str):
@@ -70,85 +268,42 @@ from Bio.PDB.PDBIO import Select
 import os
 
 class ElementFixer(Select):
-    """Rewrite element symbols safely, with peptide-like HET awareness."""
-    PEPTIDEY = {
-        "N","CA","C","O","OXT","CB","CG","CD","CE","CZ","SG",
-        "ND","NE","OD","OE","SD","NZ","OH","CH","CZ1","CZ2","CD1","CD2","CE1","CE2","CE3"
-    }
-    TWO_LETTER_METALS = {"ZN","FE","MG","MN","CU","NI","CO","NA","CA","CL","BR","K","SR","BA","CD","HG"}
-    # Note: include halides/alkalis here because some PDBs use them as HET atoms
-
+    """Rewrite element symbols safely, with peptide-like HET awareness (YAML-driven)."""
     def __init__(self):
         super().__init__()
-
-    @staticmethod
-    def _derive_from_name(aname: str) -> str:
-        an = aname.strip().upper()
-        # OE1/NE2/OD1/SD etc.
-        if an[:2] in {"OE","NE","OD","ND","SD"}:
-            return an[0]
-        # OXT special case
-        if an.startswith("OXT"):
-            return "O"
-        # Typical organic atoms: first character
-        if an and an[0].isalpha():
-            c = an[0]
-            if c in {"C","H","O","N","S","P","F","I","B"}:
-                return c
-        # Fallback to first alphabetic char
-        for ch in an:
-            if ch.isalpha():
-                return ch
-        return "C"
+        self.rules = get_atom_rules()
 
     def _is_peptidic_like(self, residue) -> bool:
-        # peptide-like if majority of atoms have peptide-ish names
         try:
-            atoms = list(residue.get_atoms())
+            names = [a.get_name().strip().upper() for a in residue.get_atoms()]
         except Exception:
             return False
-        names = [a.get_name().strip().upper() for a in atoms if hasattr(a, "get_name")]
         if not names:
             return False
-        hits = sum((n in self.PEPTIDEY) or (n[:2] in {"OE","NE","OD","ND","SD"}) for n in names)
-        return hits >= max(4, 0.6 * len(names))
+        hits = sum((n in self.rules.peptide_like) or (n[:2] in {"OE","NE","OD","ND","SD"}) for n in names)
+        return hits >= max(4, int(0.6 * len(names)))
 
     def get_atom_element(self, atom):
-        aname = atom.get_name().strip().upper()
-        res = atom.get_parent()
-        rname = getattr(res, "get_resname", lambda: "")().strip().upper() if res else ""
+        aname = atom.get_name()
+        res   = atom.get_parent()
+        rname = getattr(res, "get_resname", lambda: "")()
 
-        # If this residue looks like a peptide-like HET (e.g., VWW), force derivation from atom name.
+        try:
+            hetflag = res.get_id()[0] if res is not None else " "
+        except Exception:
+            hetflag = " "
+        is_het = (hetflag != " ")
+
+        # if residue looks peptide-like, still derive by name (prevents ion mislabels)
         if self._is_peptidic_like(res):
-            return self._derive_from_name(aname)
+            return derive_element(aname, rname, is_het, self.rules)
 
-        # True two-letter elements (metals/halides/alkalis) only if the atom *name* itself is that element
-        # (e.g., a standalone CA ion where aname == "CA" and residue is also CA/CAL etc.)
-        if len(aname) >= 2 and aname[:2] in self.TWO_LETTER_METALS:
-            # Keep as two-letter element only if residue name matches the ion, or the atom name is exactly the ion.
-            if aname in self.TWO_LETTER_METALS and (rname in self.TWO_LETTER_METALS or len(list(res.get_atoms())) <= 2):
-                return aname[:2]
-            # Otherwise fall through to name-derived element to avoid CA->calcium for backbone CA
-            return self._derive_from_name(aname)
-
-        # Hydrogens including numbered names (1H, 2H, etc.)
-        if aname.startswith("H") or (aname[:1].isdigit() and len(aname) >= 2 and aname[1] == "H"):
-            return "H"
-
-        # Common heavy atoms
-        if aname.startswith("C"): return "C"
-        if aname.startswith("O"): return "O"
-        if aname.startswith("N"): return "N"
-        if aname.startswith("S"): return "S"
-        if aname.startswith("P"): return "P"
-
-        # Fallback
-        logging.warning(f"[ElementFixer] Unknown atom name '{aname}' in {rname}; defaulting to 'C'")
-        return "C"
+        return derive_element(aname, rname, is_het, self.rules)
 
     def accept_atom(self, atom):
         atom.element = self.get_atom_element(atom)
         return True
+
 
 
 def fix_pdb_elements(input_path, output_path=None):
@@ -205,42 +360,61 @@ def rank_ligands_by_atom_count(ligands_dict):
     return sorted(ligands_dict.items(), key=lambda item: len(item[1]), reverse=True)
 
 def _fix_ligand_element_columns_in_memory(lines):
-    """Return new lines with element columns rewritten for peptide-like ligands."""
+    """Rewrite element cols (77–78) for HET ligands using YAML rules."""
+    rules = get_atom_rules()
     out = []
-    def derive(aname):
-        an = aname.strip().upper()
-        if an[:2] in {"OE","NE","OD","ND","SD"}: return an[0]
-        if an.startswith("OXT"): return "O"
-        if an and an[0].isalpha(): return an[0]
-        for ch in an:
-            if ch.isalpha(): return ch
-        return "C"
     for line in lines:
-        if line.startswith(("ATOM  ","HETATM")):
+        if line.startswith(("ATOM  ","HETATM")) and len(line) >= 78:
             aname = line[12:16]
-            el = derive(aname)
+            resn  = line[17:20]
+            is_het = line.startswith("HETATM")
+            el = derive_element(aname, resn, is_het, rules)
             line = line[:76] + f"{el:>2}" + line[78:]
         out.append(line)
     return out
+
+
+
+
+
+
+def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
+    rules = get_atom_rules()
+    src_path = str(src_path)
+    dst_path = src_path if dst_path is None else str(dst_path)
+    out_lines = []
+    with open(src_path, "r", encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            is_atom = line.startswith("ATOM  ")
+            is_het  = line.startswith("HETATM")
+            if len(line) >= 78 and (is_het or (rewrite_atoms and is_atom)):
+                aname = line[12:16]
+                resn  = line[17:20]
+                el = derive_element(aname, resn, is_het, rules)
+                line = line[:76] + f"{el:>2}" + line[78:]
+            out_lines.append(line)
+    with open(dst_path, "w", encoding="utf-8") as out:
+        out.writelines(out_lines)
+    return dst_path
+
+
+
+
 
 def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     os.makedirs(ligands_dir, exist_ok=True)
     ligands = defaultdict(list)
     ligand_coords = []  # collect all ligand atom coords for box calculation
-    retained_resnames = {
-        # waters (optionally filtered later)
-        'HOH',
-        # true ions/metals to retain in receptor (align with KEEP_METALS)
-        'ZN', 'MG', 'FE', 'MN', 'CU', 'NI', 'CO', 'NA', 'K', 'CA', 'CL', 'BR',
-        # essential prosthetics you NEVER want to treat as small ligands
-        'HEM', 'FAD', 'FMN', 'NAD', 'NADH', 'NADP', 'NADPH', 'PLP', 'SAM', 'SAH', 'ATP', 'ADP', 'COA'
-    }
+    rules = get_atom_rules()
+    retained_resnames = rules.retain_resnames  # already uppercased
+
     # Do NOT retain common cryos/buffers: GOL/EDO/PG4/MPD/ACT/TRS/PO4/PEG → they’ll be extracted
 
     with open(pdb_path, 'r') as infile, open(output_cleaned_pdb, 'w') as outfile:
         for line in infile:
             if line.startswith('HETATM'):
-                resname = line[17:20].strip()
+                resname_raw = line[17:20]
+                resname = resname_raw.strip().upper()  # normalize for set membership & filenames
                 chain = line[21]
                 resnum = line[22:26].strip()
                 if resname not in retained_resnames:
@@ -296,11 +470,17 @@ def get_box_from_p2rank_csv(pdb_file):
         logging.error(f"Missing p2rank.jar at: {jar_path}")
         return None, None
 
-    p2rank_executable = os.path.join(P2RANK_DIR, "prank.bat")
-    cmd = [p2rank_executable, "predict", "-f", pdb_file]
+    import platform
+    is_windows = platform.system().lower().startswith("win")
+    p2rank_executable = os.path.join(P2RANK_DIR, "prank.bat" if is_windows else "prank.sh")
 
     try:
-        subprocess.run(cmd, check=True, shell=True)
+        if is_windows:
+            cmd = f'"{p2rank_executable}" predict -f "{pdb_file}"'
+            subprocess.run(cmd, check=True, shell=True)
+        else:
+            cmd = [p2rank_executable, "predict", "-f", pdb_file]
+            subprocess.run(cmd, check=True, shell=False)
         logging.info(f"P2Rank ran successfully for {pdb_file}")
     except subprocess.CalledProcessError as e:
         logging.error(f"P2Rank failed: {e}")
@@ -359,7 +539,7 @@ def detect_pocket(cleaned_pdb, logger):
     Detect pocket center and box size from cleaned PDB.
     Returns (center, box_size) or (None, None) if failed.
     """
-    center, box_size = detect_active_site(cleaned_pdb)
+    center, box_size = get_box_from_p2rank_csv(cleaned_pdb)
     if center is None:
         logger.warning("Active-site detection failed.")
     return center, box_size
@@ -380,7 +560,7 @@ def prepare_receptor(cfg, paths, logger):
     if paths["cleaned_pdb_path"].exists() and paths["receptor_pdbqt_path"].exists() and not force_reprocess:
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
         return norm(paths["cleaned_pdb_path"]), norm(paths["receptor_pdbqt_path"])
-
+    import automate_protein_prep
     result = automate_protein_prep.main(str(paths["nolig_pdb_path"]))
     if not result or not isinstance(result, tuple) or len(result) != 2:
         logger.warning("Protein prep failed.")
@@ -435,6 +615,10 @@ def get_recenter_params(cfg):
         "ALLOW_BOX_EXPAND": bool(cfg.get("ALLOW_BOX_EXPAND", True)),
         "MAX_RECENTER_ATTEMPTS": int(cfg.get("MAX_RECENTER_ATTEMPTS", 3)),
     }
+def load_aliases():
+    # back-compat shim
+    return get_atom_rules()
+
 def main(pdb_file):
     base = os.path.splitext(pdb_file)[0]
     if base.endswith("_cleaned"):
@@ -458,8 +642,9 @@ def main(pdb_file):
             ranked_ligands = rank_ligands_by_atom_count(ligands)
             if ranked_ligands:
                 # Select top ligand by contact count
-                top_ligand_key, top_score = ranked_ligands[0]
-                logging.info(f"Top ligand by size: {top_ligand_key} with {top_score} atoms.")
+                top_ligand_key, top_lines = ranked_ligands[0]
+                logging.info(f"Top ligand by size: {top_ligand_key} with {len(top_lines)} atoms.")
+                top_ligand_lines = top_lines
 
                 ligand_output_dir = os.path.join(os.path.dirname(pdb_cleaned), f"{pdb_id}_ligands")
                 os.makedirs(ligand_output_dir, exist_ok=True)

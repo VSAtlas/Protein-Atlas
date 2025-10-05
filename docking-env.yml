@@ -1,0 +1,20 @@
+name: base
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.13
+  - conda
+  - setuptools
+  - pip
+  - wheel
+  - conda-anaconda-telemetry[version='>=0.2.0']
+  - conda-anaconda-tos[version='>=0.2.1']
+  - conda-content-trust
+  - conda-libmamba-solver
+  - menuinst
+  - anaconda_prompt
+  - anaconda_powershell_prompt
+  - anaconda-anon-usage
+  - modeller
+prefix: E:\miniconda3

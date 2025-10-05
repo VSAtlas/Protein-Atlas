@@ -1,46 +1,42 @@
-PROTEIN_DIR = E:/PythonProject/protein_automation/pdbqts
-LIGAND_DIR = E:/PythonProject/protein_automation/input_ligands
-LIGAND_EXTRACTED_DIR = E:/PythonProject/protein_automation/extracted_ligands
-LIGANDS_MOL2_DIR = E:/PythonProject/protein_automation/ligands_mol2
-OUTPUT_LIGANDS_DIR = E:/PythonProject/protein_automation/prepped_ligands
-OUTPUT_DIR = E:/PythonProject/protein_automation/processed_pdbs
-PDBQT_DIR = E:/PythonProject/protein_automation/pdbqts
-DOCKED_DIR = E:/PythonProject/protein_automation/docked
-
-VINA_PATH = E:/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe
-VINA_EXE = E:/AutoDock-Vina-1.2.7/vina_1.2.7_win.exe
-
-CPU_ONLY = True
-
-PHENIX_DIR = E:/phenix/Library/bin
-PHENIX_LIB_PATH = E:/phenix/Lib/site-packages
-PHENIX_CLEAN_SCRIPT = E:/PythonProject/protein_automation/phenix_clean.py
-
-INPUT_DIR = E:/PythonProject/protein_automation/input_pdbs
-P2RANK_PATH = E:/p2rank_2.5
-
-MGLTOOLS_PATH = E:/MGLTOOLS-1.5.7
-MGLTOOLS_PYTHON = E:/MGLTOOLS-1.5.7/python.exe
-PREPARE_RECEPTOR_SCRIPT = E:/MGLTOOLS-1.5.7/Lib/site-packages/AutoDockTools/Utilities24/prepare_receptor4.py
-MGLTOOLS_DIR = E:/MGLTOOLS-1.5.7
-MAX_PARALLEL_JOBS = 28
-OPENBABEL_PATH = E:/OpenBabel-3.1.1/obabel.exe
-PYMOL_PATH = E:\pymol\python.exe
-PYMOL_EXE = E:/pymol/python.exe
-DOCKING_MODE = polypharmacology
-
-
-CPU = 32
-OVERALL_DIR = E:/PythonProject/protein_automation
-REDUCE_EXE = E:/phenix/Library/bin/reduce.exe
-FORCE_REPROCESS = True
-
-
-EARLY_RECENTER_RATIO = 0.70
-EARLY_RECENTER_MIN_EVAL = 10
-EARLY_RECENTER_FAR_A = 15.0
-EARLY_RECENTER_MEDIAN_A = 10.0
-ALLOW_BOX_EXPAND = True
-MAX_RECENTER_ATTEMPTS = 3
-
-QUIET_CONSOLE = False
+OVERALL_DIR=/stor/home/mpg2352/atlas/code/protein_automation
+INPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs
+LIGAND_DIR=/stor/home/mpg2352/atlas/code/protein_automation/input_ligands
+LIGAND_EXTRACTED_DIR=/stor/home/mpg2352/atlas/code/protein_automation/extracted_ligands
+LIGANDS_MOL2_DIR=/stor/home/mpg2352/atlas/code/protein_automation/ligands_mol2
+OUTPUT_LIGANDS_DIR=/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands
+PREPPED_LIGANDS_DIR=/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands
+PREPPED_LIGANDS_ROOT=/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands
+OUTPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs
+PDBQT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/pdbqts
+DOCKED_DIR=/stor/home/mpg2352/atlas/code/protein_automation/docked
+P2RANK_PATH=/stor/home/mpg2352/atlas/tools/p2rank/bin/p2rank.jar
+P2RANK_OUTPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/p2rank_out
+MGLTOOLS_DIR=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7
+MGLTOOLS_PYTHON=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/bin/pythonsh
+PREPARE_RECEPTOR_SCRIPT=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
+PREPARE_LIGAND_SCRIPT=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+PREPARE_LIGAND4=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+ADFRSUITE_BIN=/stor/home/mpg2352/atlas/tools/ADFRsuite/bin
+PHENIX_DIR=
+PHENIX_LIB_PATH=
+PHENIX_CLEAN_SCRIPT=/stor/home/mpg2352/atlas/code/protein_automation/phenix_clean.py
+REDUCE_EXE=/stor/home/mpg2352/bin/reduce
+VINA_EXE=/stor/home/mpg2352/atlas/tools/vina1.sh
+OPENBABEL_PATH=/stor/home/mpg2352/micromamba/envs/docking-env/bin/obabel
+PYMOL_PATH=pymol
+PYMOL_EXE=pymol
+CPU_ONLY=True
+CPU=50
+MAX_PARALLEL_JOBS=50
+FORCE_REPROCESS=True
+DOCKING_MODE=polypharmacology
+QUIET_CONSOLE=False
+EARLY_RECENTER_RATIO=0.70
+EARLY_RECENTER_MIN_EVAL=10
+EARLY_RECENTER_FAR_A=15.0
+EARLY_RECENTER_MEDIAN_A=10.0
+ALLOW_BOX_EXPAND=True
+MAX_RECENTER_ATTEMPTS=3
+MGLTOOLS_PATH=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7
+REDUCE_HET_DICT=/stor/home/mpg2352/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
+BABEL_LIBDIR=/stor/home/mpg2352/micromamba/envs/docking-env/lib/openbabel/3.1.0

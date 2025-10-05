@@ -500,81 +500,161 @@ def _cli_render_active_site(
     top_n_residues: int = 5,
     proximity_cutoff: float = 5.0,
     viewport: Tuple[int, int] = (800, 600),
+    **kwargs,
 ) -> None:
     """
-    Original one-ligand script:
-    - ligand orange sticks
-    - active-site residues within cutoff Å
-    - rank by CA distance; label top-N
-    - receptor transparent surface (slate)
-    - save front/side/top PNGs
+    Robust, headless-friendly renderer:
+    - loads receptor/ligand
+    - computes ligand centroid (heavy atoms)
+    - finds receptor CA atoms within proximity_cutoff
+    - ranks by CA→centroid distance
+    - shows ligand sticks, highlights top residues, saves 3 PNGs
     """
     PyMOL = _with_pymol()
     if PyMOL is None:
         return
+    from pymol import cmd
+    import math, os
 
+    rec_obj, lig_obj, ctr_obj = "_cap_rec", "_cap_lig", "_cap_ctr"
+    # cleanup any previous remnants
+    for obj in (rec_obj, lig_obj, ctr_obj):
+        try: cmd.delete(obj)
+        except Exception: pass
+
+    # load inputs
     if not Path(receptor).is_file():
         print(f"[capture_pose] Receptor missing: {receptor}")
         return
     if not Path(ligand).is_file():
         print(f"[capture_pose] Ligand missing: {ligand}")
         return
+    cmd.load(receptor, rec_obj)
+    cmd.load(ligand, lig_obj)
 
-    with PyMOL() as pymol:
-        cmd = pymol.cmd
+    # ligand centroid (prefer heavy atoms)
+    coords = cmd.get_coords(f"{lig_obj} and not elem H", 1)
+    # If None or empty, fall back to all atoms
+    _n = 0
+    if coords is not None:
+        try:
+            _n = len(coords)
+        except Exception:
+            try:
+                _n = int(getattr(coords, "shape", [0])[0])
+            except Exception:
+                _n = 0
+    if coords is None or _n == 0:
+        coords = cmd.get_coords(lig_obj, 1)
+    if coords is None or len(coords) == 0:
+        print("[capture_pose] ligand has no coordinates")
+        return
+    try:
+        # works for list-of-lists or numpy arrays
+        n = float(len(coords))
+        cx = sum(float(c[0]) for c in coords) / n
+        cy = sum(float(c[1]) for c in coords) / n
+        cz = sum(float(c[2]) for c in coords) / n
+    except Exception:
+        # last resort: let PyMOL create a pseudoatom at selection center (can be slower)
+        cmd.pseudoatom(ctr_obj, selection=f"{lig_obj} and not elem H")
+    else:
+        cmd.pseudoatom(ctr_obj, pos=[cx, cy, cz])
 
-        cmd.load(receptor, "receptor")
-        cmd.load(ligand, "ligand")
+    # collect CA atoms within cutoff
+    mdl = cmd.get_model(f"{rec_obj} within {proximity_cutoff} of {lig_obj} and name CA")
+    rows = []
+    for a in getattr(mdl, "atom", []):
+        try:
+            rx, ry, rz = a.coord  # (x,y,z)
+            d = math.sqrt((rx-cx)**2 + (ry-cy)**2 + (rz-cz)**2)
+            rows.append((d, a.chain, a.resi, a.resn))
+        except Exception:
+            continue
+    rows.sort(key=lambda t: t[0])
+    rows = rows[:max(0, int(top_n_residues))]
 
-        cmd.hide("everything")
-        cmd.color("orange", "ligand")
-        cmd.show("sticks", "ligand")
+    # Scene styling
+    cmd.hide("everything", "all")
+    cmd.show("cartoon", rec_obj)
+    cmd.color("slate", rec_obj)
+    cmd.set("cartoon_transparency", 0.5, rec_obj)
+    cmd.show("sticks", lig_obj)
+    cmd.color("orange", lig_obj)
 
-        # Active site: residues within cutoff Å
-        cmd.select("active_site_all", f"receptor within {proximity_cutoff} of ligand")
+    if rows:
+        # build a residue selection like "(chain A and resi 123) or (chain B and resi 45)"
+        sel = " or ".join([f"(chain {ch} and resi {ri})" for _, ch, ri, _ in rows])
+        cmd.show("sticks", f"{rec_obj} and ({sel})")
+        cmd.color("yellow", f"{rec_obj} and ({sel})")
+        cmd.label(f"{rec_obj} and name CA and ({sel})", "'%s%s' % (resn, resi)")
 
-        # Rank residues by proximity to ligand CA atoms (no temp measurements)
-        distances: List[Tuple[str, str, str, str, float]] = []
-        cmd.iterate(
-            "active_site_all and name CA",
-            "distances.append((model, chain, resi, resn, cmd.get_distance('ligand', f'{model}//{chain}/{resi}/CA')))",
-            space={"distances": distances, "cmd": cmd},
-        )
+    # viewport + background
+    try:
+        w, h = int(viewport[0]), int(viewport[1])
+        cmd.viewport(w, h)
+    except Exception:
+        pass
+    cmd.bg_color("white")
 
-        # Sort and select top N
-        top_residues = sorted(distances, key=lambda x: x[4])[:top_n_residues] if distances else []
-        top_sel = " or ".join([f"receptor and chain {c} and resi {r}" for _, c, r, _, _ in top_residues])
+    # resolve outprefix → base path
+    base = outprefix
+    if os.path.isdir(outprefix) or outprefix.endswith(os.sep):
+        base = os.path.join(outprefix, "top_pose")
+    os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
 
-        if top_sel:
-            cmd.select("top_site", top_sel)
-            cmd.show("sticks", "top_site")
-            cmd.color("cyan", "top_site")
-            cmd.label("top_site and name CA", "resn + resi")
+    # canonical orientations
+    cmd.orient(lig_obj)
+    cmd.png(base + "_front.png", ray=1)
+    cmd.turn("y", 90)
+    cmd.png(base + "_side.png", ray=1)
+    cmd.turn("x", 90)
+    cmd.png(base + "_top.png", ray=1)
 
-        # Full receptor as transparent surface
-        cmd.show("surface", "receptor")
-        cmd.set("transparency", 0.3, "receptor")
-        cmd.color("slate", "receptor")
+    # cleanup helper objects (keep rec/lig for inspection if running interactively)
+    try: cmd.delete(ctr_obj)
+    except Exception: pass
+import sys
 
-        # View and save
-        cmd.zoom("ligand or top_site", 10)
-        cmd.viewport(*viewport)
-        cmd.set("ray_opaque_background", 0)
-
-        cmd.png(f"{outprefix}_front.png", ray=1)
-        cmd.turn("y", 90)
-        cmd.png(f"{outprefix}_side.png", ray=1)
-        cmd.turn("x", 90)
-        cmd.png(f"{outprefix}_top.png", ray=1)
-
-
-# ============================================================
-# __main__
-# ============================================================
-
-if __name__ == "__main__":
+if __name__ == "__main__" and "pymol" not in sys.modules:
     import sys
     if len(sys.argv) < 4:
         print("Usage: python capture_pose.py <receptor.pdb|pdbqt> <ligand.pdb|pdbqt> <outprefix>")
         sys.exit(2)
     _cli_render_active_site(sys.argv[1], sys.argv[2], sys.argv[3])
+
+# --- Added: PyMOL-callable wrapper so you can run:
+# pymol -cq -r capture_pose.py -d "capture_pose('/path/receptor.pdb','/path/ligand.pdbqt','/path/outdir_or_prefix'); quit"
+def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
+    # If `out_path_or_dir` is a directory, compute an output prefix from the ligand's basename.
+    import os
+    from pathlib import Path as _P
+    outprefix = out_path_or_dir
+    try:
+        if os.path.isdir(out_path_or_dir):
+            base = _P(ligand_path).stem
+            outprefix = str(_P(out_path_or_dir) / base)
+    except Exception:
+        # fall back to whatever was passed
+        outprefix = out_path_or_dir
+
+    # Mirror the defaults used by the CLI helper
+    return _cli_render_active_site(
+        str(receptor_path),
+        str(ligand_path),
+        str(outprefix),
+        top_n_residues=kwargs.get("top_n_residues", 6),
+        proximity_cutoff=kwargs.get("proximity_cutoff", 4.5),
+        viewport=kwargs.get("viewport", (1200, 900)),
+        cartoon_color=kwargs.get("cartoon_color", "wheat"),
+        ligand_color=kwargs.get("ligand_color", "tv_red"),
+        stick_radius=kwargs.get("stick_radius", 0.15),
+    )
+
+# Try to register as a PyMOL command (best-effort; harmless if PyMOL isn't running here)
+try:
+    from pymol import cmd as _cmd
+    # _cmd.extend lets you call: capture_pose rec lig outprefix   (space-separated)
+    _cmd.extend("capture_pose", lambda r, l, o: capture_pose(r, l, o))
+except Exception:
+    pass
