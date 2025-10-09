@@ -7,7 +7,8 @@ from installation import load_config
 from collections import defaultdict
 from logger_setup import setup_logger
 from pathlib import Path
-
+import hashlib
+from typing import Iterable, Tuple, List
 
 
 # Load config
@@ -149,6 +150,136 @@ def get_atom_rules():
         retain_in_receptor_resnames=compat_retain_list,         # <� lets RULES.get("retain_in_receptor_resnames") work
     )
     return _rules_cache
+
+
+
+
+def scan_helium_counts(text_or_lines) -> int:
+    """
+    Count occurrences that look like element/ADT 'He' in PDB or PDBQT.
+    - PDB: fixed-width columns 77–78
+    - PDBQT: trailing ADT token
+    """
+    n = 0
+    if isinstance(text_or_lines, str):
+        lines = text_or_lines.splitlines()
+    else:
+        lines = list(text_or_lines)
+    for ln in lines:
+        if not ln.startswith(("ATOM", "HETATM")):
+            continue
+        # PDB fixed-width first
+        if len(ln) >= 78 and ln[76:78].strip().upper() == "HE":
+            n += 1
+            continue
+        # PDBQT trailing token
+        parts = ln.split()
+        if parts and parts[-1].strip().upper() == "HE":
+            n += 1
+    return n
+
+def rules_version() -> str:
+    """
+    Return a short identifier for the current YAML/alias ruleset if available,
+    else a static placeholder. Keep this stable for log grepping.
+    """
+    try:
+        r = get_atom_rules()
+        for k in ("version", "rules_version", "hash", "source_hash"):
+            v = getattr(r, k, None) if hasattr(r, k) else r.get(k) if isinstance(r, dict) else None
+            if v:
+                return str(v)
+    except Exception:
+        pass
+    return "rules:v1"
+
+
+def format_pdb_atom_debug(line: str, line_no: int | None = None) -> str:
+    """
+    Render a fixed-width debug string exposing key PDB fields + element cols 77–78.
+    """
+    if not (line.startswith("ATOM") or line.startswith("HETATM")):
+        return line.strip()
+    resn = line[17:20].strip()
+    chain = line[21].strip() or "_"
+    resi = line[22:26].strip()
+    icode = line[26].strip() or " "
+    name = line[12:16].strip()
+    alt = line[16] if len(line) > 16 else " "
+    elem = (line[76:78] if len(line) >= 78 else "  ").strip() or "?"
+    ln = f"line{line_no}" if line_no is not None else "line?"
+    return f"{ln} {chain}:{resi}{icode}:{resn} {name} alt={alt} elem={elem}  cols77-78='{(line[76:78] if len(line)>=78 else '  ')}'"
+
+
+def scan_helium_counts_with_hits(text: str, max_hits: int = 5) -> tuple[int, list[str]]:
+    """
+    Wrapper around scan_helium_counts that also returns up to `max_hits` formatted offenders.
+    """
+    n = scan_helium_counts(text)
+    if n == 0:
+        return 0, []
+    hits = []
+    for i, ln in enumerate(text.splitlines(), start=1):
+        if ln.startswith(("ATOM", "HETATM")) and (ln[76:78].strip().upper() == "HE"):
+            hits.append(format_pdb_atom_debug(ln, i))
+            if len(hits) >= max_hits:
+                break
+    return n, hits
+
+
+def assert_no_helium_in_hydrogen_names(pdb_text: str) -> Tuple[str, int]:
+    """
+    If an ATOM/HETATM line has an atom *name* beginning with 'H' but element/ADT is 'He',
+    rewrite the element to 'H'. Returns (new_text, n_fixes).
+    """
+    out: List[str] = []
+    fixes = 0
+    for ln in pdb_text.splitlines(True):
+        if ln.startswith(("ATOM  ","HETATM")) and len(ln) >= 78:
+            aname = ln[12:16].strip().upper()
+            # ADT usually in the last whitespace token for your PDBQT; for PDB use columns 77-78
+            adt_or_elem = ln.split()[-1].strip().upper()
+            if aname.startswith("H") and adt_or_elem == "HE":
+                # fix element columns if fixed-width PDB, else re-map the trailing ADT token
+                # Prefer fixed-width column 77-78 if present:
+                if ln[76:78].strip().upper() in {"HE", "H", ""}:
+                    ln = ln[:76] + f"{'H':>2}" + ln[78:]
+                else:
+                    # trailing token path: reassemble line by replacing the last token
+                    parts = ln.rstrip("\n").split()
+                    parts[-1] = "H"
+                    ln = " ".join(parts) + ("\n" if ln.endswith("\n") else "")
+                fixes += 1
+        out.append(ln)
+    return "".join(out), fixes
+
+def assert_no_helium_in_pdbqt(lines: Iterable[str], ligand_name: str) -> Tuple[List[str], int, str]:
+    """
+    Post-write guardrail for PDBQT:
+      - If ADT='He' appears where atom NAME begins with 'H' → auto-correct to 'H', log fixes.
+      - If ADT='He' appears on a non-H-named atom → quarantine is required; return reason.
+    Returns (new_lines, fixes_count, quarantine_reason_or_empty).
+    """
+    new_lines: List[str] = []
+    fixes = 0
+    quarantine_reason = ""
+    for ln in lines:
+        if ln.startswith(("ATOM", "HETATM")):
+            parts = ln.split()
+            if parts:
+                adt = parts[-1].strip().upper()
+                if adt == "HE":
+                    aname = ln[12:16].strip().upper() if len(ln) >= 16 else ""
+                    if aname.startswith("H"):
+                        parts[-1] = "H"
+                        ln = " ".join(parts) + ("\n" if not ln.endswith("\n") else "")
+                        fixes += 1
+                    else:
+                        quarantine_reason = f"adt_helium_inconsistent: non-H name '{aname}' has ADT=He (ligand={ligand_name})"
+        new_lines.append(ln)
+    return new_lines, fixes, quarantine_reason
+
+
 
 def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
     """Infer element symbol from atom/residue context using YAML-driven rules."""

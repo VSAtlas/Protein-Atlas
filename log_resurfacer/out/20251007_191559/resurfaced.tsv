@@ -1,0 +1,3 @@
+rank	severity	rule_id	pdb	ligand	message	count	recency	file	sample	hint
+1	hard	ligprep.tsv_failure	6WTN	RXT_A1204.sanitized.pdb	Ligand prep failed per TSV	1		prepped_ligands/6WTN/ligand_prep_status.tsv	TSV failure for RXT_A1204.sanitized.pdb: status=fail reason=postcheck_fail_or_small	Treat TSV as ground truth; review the 'reason' column and quarantine failing ligand.
+2	hard	ligprep.tsv_failure	6WTN	RXT_A1204.sanitized	Ligand prep failed per TSV	1		prepped_ligands/6WTN/ligand_prep_status.tsv	TSV failure for RXT_A1204.sanitized: status=fail reason=postcheck_fail_or_small	Treat TSV as ground truth; review the 'reason' column and quarantine failing ligand.

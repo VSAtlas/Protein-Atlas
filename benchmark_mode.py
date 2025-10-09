@@ -24,6 +24,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+import os, capture_pose
+os.environ["DEFER_PYMOL"] = "1"     # optional but nice for consistency
+capture_pose.set_defer_mode(True)   # explicit toggle; no shims needed
 
 # Rendering helpers
 from capture_pose import (
@@ -164,118 +167,61 @@ _PYMOL_DEFER_LOCK  = threading.Lock()
 _PYMOL_DEFER_COUNT = 0
 
 @contextmanager
+# ---- Legacy mid-run PyMOL deferral (DISABLED) ----
 def _defer_pymol_capture_calls(enable: bool = True):
-    """
-    Queue PyMOL renders instead of running them immediately.
-    Re-entrant: only restore originals when the outermost context exits.
-    """
-    global _PYMOL_DEFER_COUNT
-    if not enable:
-        yield
-        return
-    with _PYMOL_DEFER_LOCK:
-        if _PYMOL_DEFER_COUNT == 0:
-            def _enqueue_three(*args, **kwargs):
-                _DEFERRED_PYMOL_CALLS.append(("three", args, kwargs))
-            def _enqueue_native(*args, **kwargs):
-                _DEFERRED_PYMOL_CALLS.append(("native", args, kwargs))
-            _cap._render_three_views_with_pymol = _enqueue_three
-            _cap._render_native_on_original_pdb = _enqueue_native
-        _PYMOL_DEFER_COUNT += 1
-    try:
-        yield
-    finally:
-        with _PYMOL_DEFER_LOCK:
-            _PYMOL_DEFER_COUNT -= 1
-            if _PYMOL_DEFER_COUNT == 0:
-                _cap._render_three_views_with_pymol = _ORIG_RENDER_THREE
-                _cap._render_native_on_original_pdb = _ORIG_RENDER_NATIVE
+    # We now use capture_pose's JSONL queue exclusively.
+    class _Dummy:
+        def __enter__(self):
+            print("[render] WARNING: legacy mid-run deferral path ignored - using capture_pose JSONL queue.")
+        def __exit__(self, exc_type, exc, tb):
+            return False
+    return _Dummy()
 
 def run_deferred_captures(max_workers: int):
-    """Replay queued mid-run captures in parallel."""
-    if not _DEFERRED_PYMOL_CALLS:
-        print("[render] no mid-run captures to replay.")
-        return
-    print(f"[render] replaying deferred mid-run captures: n={len(_DEFERRED_PYMOL_CALLS)} | workers={max_workers}")
-    def _do(task):
-        kind, args, kwargs = task
-        if kind == "three":
-            return _ORIG_RENDER_THREE(*args, **kwargs)
-        elif kind == "native":
-            return _ORIG_RENDER_NATIVE(*args, **kwargs)
-    with _RealTPE2(max_workers=max_workers) as pool:
-        list(pool.map(_do, _DEFERRED_PYMOL_CALLS))
-    _DEFERRED_PYMOL_CALLS.clear()
-    print("[render] deferred mid-run captures complete.")
+    print("[render] WARNING: legacy mid-run capture replay is disabled. Use capture_pose.replay_deferred_jobs_mp().")
 
 
 
-_DEFERRED_RENDER_TASKS: List[Dict[str, str]] = []
-
-def _enqueue_render_task(
-    *,
-    pdb_id: str,
-    stage_name: str,
-    root_project: str,
-    cleaned_pdb_path: str,
-    original_pdb_path: str,
-    ctrl_pose_path: str | None,
-    rdk_pose_path: str | None,
-    exclude_resns: List[str],
-) -> None:
-    _DEFERRED_RENDER_TASKS.append(
-        {
-            "pdb_id": pdb_id,
-            "stage_name": stage_name,
-            "root_project": root_project,
-            "cleaned_pdb_path": cleaned_pdb_path,
-            "original_pdb_path": original_pdb_path,
-            "ctrl_pose_path": ctrl_pose_path or "",
-            "rdk_pose_path": rdk_pose_path or "",
-            "exclude_resns": list(exclude_resns),
-        }
-    )
-
-def _execute_render_task(task: Dict[str, str]) -> None:
-    pdb_id = task["pdb_id"]
-    stage_name = task["stage_name"]
-    stage_dir_target = Path(task["root_project"]) / "docked" / pdb_id / stage_name
+def _enqueue_render_task(*, pdb_id: str, stage_name: str, root_project: str,
+                         cleaned_pdb_path: str, original_pdb_path: str,
+                         ctrl_pose_path: str | None, rdk_pose_path: str | None,
+                         exclude_resns: List[str]) -> None:
+    """
+    Unified producer: enqueue directly into capture_pose's JSONL by calling its APIs with DEFER_PYMOL=1.
+    """
+    import capture_pose as _cap
+    stage_dir_target = Path(root_project) / "docked" / pdb_id / stage_name
     stage_dir_target.mkdir(parents=True, exist_ok=True)
 
-    # Always render native on original PDB
-    _render_native_on_original_pdb(
-        original_pdb=task["original_pdb_path"],
+    # Native view
+    _cap._render_native_on_original_pdb(
+        original_pdb=original_pdb_path,
         outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
-        exclude_resns=sorted(task["exclude_resns"]),
+        exclude_resns=sorted(exclude_resns or []),
     )
-
-    ctrl = task["ctrl_pose_path"] or ""
-    rdk  = task["rdk_pose_path"] or ""
-    cleaned = task["cleaned_pdb_path"]
-    orig    = task["original_pdb_path"]
-
-    if ctrl:
-        _render_three_views_with_pymol(
-            receptor_path=cleaned,
-            ligand_paths_and_colors=[(ctrl, "control", "green")],
+    # Three-view(s)
+    if ctrl_pose_path:
+        _cap._render_three_views_with_pymol(
+            receptor_path=cleaned_pdb_path,
+            ligand_paths_and_colors=[(ctrl_pose_path, "control", "green")],
             outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL"),
         )
-
-    if rdk:
-        _render_three_views_with_pymol(
-            receptor_path=cleaned,
-            ligand_paths_and_colors=[(rdk, "rdk_closest", "magenta")],
+    if rdk_pose_path:
+        _cap._render_three_views_with_pymol(
+            receptor_path=cleaned_pdb_path,
+            ligand_paths_and_colors=[(rdk_pose_path, "rdk", "magenta")],
             outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__RDKclosest"),
         )
-        _render_three_views_with_pymol(
-            receptor_path=orig,
-            ligand_paths_and_colors=[(rdk, "rdk_closest", "magenta")],
+        _cap._render_three_views_with_pymol(
+            receptor_path=original_pdb_path,
+            ligand_paths_and_colors=[(rdk_pose_path, "rdk", "magenta")],
             outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-rdk__RDKclosest"),
         )
-        if ctrl:
-            _render_three_views_with_pymol(
-                receptor_path=cleaned,
-                ligand_paths_and_colors=[(ctrl, "control", "green"), (rdk, "rdk_closest", "magenta")],
+        if ctrl_pose_path:
+            _cap._render_three_views_with_pymol(
+                receptor_path=cleaned_pdb_path,
+                ligand_paths_and_colors=[(ctrl_pose_path, "control", "green"),
+                                         (rdk_pose_path, "rdk", "magenta")],
                 outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
                 label_top_n_res=5,
                 label_cutoff=5.0,
@@ -288,16 +234,34 @@ def run_deferred_renders(max_workers: int) -> None:
     print(f"[render] starting deferred renders: {len(_DEFERRED_RENDER_TASKS)} tasks | workers={max_workers}")
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futs = [pool.submit(_execute_render_task, t) for t in _DEFERRED_RENDER_TASKS]
-        for _ in as_completed(futs):
-            pass
+        for fut in as_completed(futs):
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"[render] task failed: {e}")
     print("[render] all deferred renders complete.")
+
+
+def _resolve_receptor_for(pdb_id: str, cfg: dict) -> Optional[Path]:
+    # Prefer explicit PROCESSED_PDBS_DIR, else try to infer from OVERALL_DIR OUTPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs
+    base = Path(cfg.get("OUTPUT_DIR") or
+                Path(cfg["OVERALL_DIR"]).parent / "processed_pdbs").resolve()
+    d = base / f"{pdb_id}_NOLIG" / "receptor"
+    for pat in [f"{pdb_id}_NOLIG_cleaned.pdb", "*_NOLIG_cleaned.pdb", "*cleaned.pdb"]:
+        c = d / pat
+        if c.exists():
+            return c.resolve()
+    return None
+
 
 
 
 # =============================
 # Small text/path helper utils
 # =============================
-
+def _collapse_name_once(p: Path) -> Path:
+    # turn "...sanitized.sanitized.xyz" into "...sanitized.xyz"
+    return p.with_name(re.sub(r'(?:\.sanitized)+(?=\.)', '.sanitized', p.name))
 def _norm(s: Optional[str]) -> str:
     """Lowercase, trim, collapse spaces, and strip punctuation-like separators."""
     if s is None:
@@ -835,7 +799,7 @@ def _promote_forced_controls_to_ctrls(
     return promoted_paths, promoted_stems_lower
 
 def collect_prepped_controls_for_protein(paths, control_stems: Sequence[str], logger=None) -> Tuple[List[str], set]:
-    """Find control pdbqts colocated in the protein’s prepped ligands directory."""
+    """Find control pdbqts colocated in the protein's prepped ligands directory."""
     control_stems_lower = {s.lower() for s in control_stems if s}
     prepped_control_pdbqts: List[str] = []
     prepped_dir_resolved = paths.prepped_ligands_dir.resolve()
@@ -900,44 +864,125 @@ def run_benchmark_for_protein(
             pass
 
     paths = make_paths(cfg, base_id, pdb_file)
-    # --- DEBUG visibility ---
+    # --- enforce _NOLIG directory consistency for receptor paths ---
+    nolig_dir = Path(cfg["OUTPUT_DIR"]) / f"{pdb_id}_NOLIG" / "receptor"
+    nolig_file = nolig_dir / f"{pdb_id}_NOLIG_cleaned.pdb"
+    if nolig_file.exists():
+        paths.cleaned_pdb_path = nolig_file
+    # else: let prepare_receptor create nolig
+
+    # --- DEBUG visibility (clarify scopes) ---
     try:
-        logger.info("[DEBUG] prepped_dir=%s", str(paths.prepped_ligands_dir.resolve()))
+        per_pdb_prepped = paths.prepped_ligands_dir.resolve()
+        lib_root = Path(cfg.get("PREPPED_LIGANDS_DIR", str(per_pdb_prepped.parent))).resolve()
+
+        logger.info("[DEBUG] per_pdb_prepped_dir=%s", str(per_pdb_prepped))
+        logger.info("[DEBUG] library_root=%s", str(lib_root))
+
         # Mapping stats
         try:
             n_rows = len(mapping.rows)
         except Exception:
             n_rows = -1
         logger.info("[DEBUG] mapping_rows=%d", n_rows)
+
         if n_rows > 0:
-            # sample a few paths and whether they exist & are within prepped_dir
-            from pathlib import Path as _P
-            _pd = paths.prepped_ligands_dir.resolve()
-            sample = mapping.rows[:12]  # first dozen
+            sample = mapping.rows[:12]  # first dozen rows as a quick sample
             bad_exist = 0
-            bad_scope = 0
+            bad_scope_lib = 0
             for r in sample:
-                p = _P(r.path)
+                p = Path(r.path)
                 if not p.exists():
                     bad_exist += 1
                 else:
-                    try:
-                        if p.resolve().parent != _pd and _pd not in p.resolve().parents:
-                            bad_scope += 1
-                    except Exception:
-                        bad_scope += 1
-            logger.info("[DEBUG] mapping sample: not_exist=%d, out_of_scope=%d (first 12)", bad_exist, bad_scope)
+                    rp = p.resolve()
+                    # check against the LIBRARY ROOT (the true selection scope)
+                    if rp.parent != lib_root and lib_root not in rp.parents:
+                        bad_scope_lib += 1
+            logger.info("[DEBUG] mapping sample vs library_root: not_exist=%d, out_of_scope=%d (first 12)",
+                        bad_exist, bad_scope_lib)
     except Exception as _e:
         logger.warning("[DEBUG] mapping-precheck failed: %s", _e)
 
     # 1) Extract controls & build nolig
     _, control_stems = extract_ligands_to_nolig(paths, logger)
     # Always prep the extracted crystal ligands with the same sanitizer/ADT flags (-A hydrogens)
-    prep_ligands_from_pdb(
-        ligand_output_dir=paths.ligand_output_dir,
-        ligands_mol2_dir=paths.ligands_mol2_dir,
-        prepped_ligands_dir=paths.prepped_ligands_dir,
+    prep_marker = paths.prepped_ligands_dir / ".prepped.ok"
+    paths.prepped_ligands_dir.mkdir(parents=True, exist_ok=True)
+
+
+
+    # If marker exists and nothing newer is in ligands_raw, skip prep
+    def _latest_mtime(globpat: str) -> float:
+        import time, glob, os
+        mt = 0.0
+        for p in glob.glob(globpat):
+            try:
+                mt = max(mt, os.stat(p).st_mtime)
+            except Exception:
+                pass
+        return mt
+
+    # --- collapse helper (idempotent) ---
+    import re
+    def _collapse_sanitized_suffixes(root: Path, exts=(".pdb", ".mol2", ".pdbqt")) -> int:
+        """
+        Collapse runs of '.sanitized' (2 or more) just before the extension.
+        Returns count of files renamed.
+        """
+        pat = re.compile(r'(?:\.sanitized){2,}(?=\.)')  # only collapse 2+ in a row
+        fixed = 0
+        for ext in exts:
+            for f in root.glob(f"*{ext}"):
+                new_name = pat.sub('.sanitized', f.name)
+                if new_name != f.name:
+                    dst = f.with_name(new_name)
+                    try:
+                        if dst.exists():
+                            # keep the newer timestamp
+                            if f.stat().st_mtime > dst.stat().st_mtime:
+                                dst.unlink()
+                                f.replace(dst)
+                            else:
+                                f.unlink()
+                        else:
+                            f.replace(dst)
+                        fixed += 1
+                    except Exception:
+                        pass
+        if fixed:
+            logger.info("[tidy] collapsed .sanitized x%d under %s", fixed, root)
+        return fixed
+
+    # -------------------------------------
+
+    # 0) Normalize RAW filenames first so our freshness check is stable
+    _collapse_sanitized_suffixes(paths.ligand_output_dir, (".pdb", ".mol2"))
+
+    # 1) Freshness check (consider both .pdb and .mol2 as raw inputs)
+    raw_latest = max(
+        _latest_mtime(str(paths.ligand_output_dir / "*.pdb")),
+        _latest_mtime(str(paths.ligand_output_dir / "*.mol2")),
     )
+    prepped_latest = _latest_mtime(str(paths.prepped_ligands_dir / "*.pdbqt"))
+
+    if prep_marker.exists() and prepped_latest >= raw_latest:
+        logger.info("[prep] prepped ligands present & up-to-date; skipping ligand prep.")
+    else:
+        logger.info("[prep] running ligand prep (raw newer than prepped or first run).")
+        prep_ligands_from_pdb(
+            ligand_output_dir=paths.ligand_output_dir,
+            ligands_mol2_dir=paths.ligands_mol2_dir,
+            prepped_ligands_dir=paths.prepped_ligands_dir,
+        )
+        try:
+            prep_marker.touch()
+        except Exception:
+            pass
+
+    # 2) Always normalize both trees after the decision (whether we ran prep or not)
+    _collapse_sanitized_suffixes(paths.ligand_output_dir, (".pdb", ".mol2"))
+    _collapse_sanitized_suffixes(paths.prepped_ligands_dir, (".pdbqt",))
 
     # 1b) metabolites -> parents
     extra_parent_ids: List[str] = []
@@ -963,7 +1008,7 @@ def run_benchmark_for_protein(
     center, detected_box, src = detect_pocket(cleaned_pdb, paths.ligand_output_dir, logger)
     if center:
         pockets = [("pocket1", center)]
-        pocket_box_size = tuple(min(28.0, float(s)) for s in (detected_box or (24.0, 24.0, 24.0)))
+        box_size = tuple(min(28.0, float(s)) for s in (detected_box or (24.0, 24.0, 24.0)))
     else:
         logger.error("[benchmark] no pocket could be detected; skipping protein")
         return
@@ -998,17 +1043,123 @@ def run_benchmark_for_protein(
 
     logger.info("[DEBUG] hint_count=%d | examples=%s", len(final_hints), ", ".join(map(str, final_hints[:8])))
     # 5) Candidate selection
+    search_root = Path(cfg.get("PREPPED_LIGANDS_DIR", str(prepped_dir)))
     cand_rows = select_candidates_for_protein(
         mapping=mapping,
         hints=final_hints,
-        prepped_dir=prepped_dir,
+        prepped_dir=search_root, 
         extra_parent_ids=extra_parent_ids,
         max_candidates=max_candidates,
     )
     cand_rows.sort(key=lambda t: t[1], reverse=True)
+    logger.info("[DEBUG] select_candidates scope=%s | kept=%d", str(search_root), len(cand_rows))
+
+    # Force _NOLIG form for consistency
+    cleaned = Path(paths.cleaned_pdb_path)
+    if not cleaned.name.endswith("_NOLIG_cleaned.pdb"):
+        nolig_variant = cleaned.with_name(
+            cleaned.stem.replace("_cleaned", "_NOLIG_cleaned") + cleaned.suffix
+        )
+        if nolig_variant.exists():
+            paths.cleaned_pdb_path = nolig_variant
+
+    # --- render enqueue helpers (inside run_benchmark_for_protein) ---
+    def _first(globpat: str) -> Optional[Path]:
+        hits = sorted(glob.glob(globpat))
+        return Path(hits[0]) if hits else None
+
+    def _pick_best_control_and_rdk(out_dir: Path) -> Tuple[Optional[Path], Optional[Path]]:
+        """
+        Find representative control and rdk pose .pdbqt files produced for this protein.
+        We try a few common patterns; adjust if your filenames differ.
+        """
+        # control: crystal/control poses
+        ctrl = (
+                _first(str(out_dir / "*control*best*.pdbqt")) or
+                _first(str(out_dir / "*CONTROL*best*.pdbqt")) or
+                _first(str(out_dir / "*control*.pdbqt")) or
+		_first(str(out_dir / "*best*.pdb"))                 
+	)
+        # rdk: library match (nearest / selected)
+        rdk = (
+                _first(str(out_dir / "*rdk*best*.pdbqt")) or
+                _first(str(out_dir / "*RDK*best*.pdbqt")) or
+                _first(str(out_dir / "*rdk*.pdbqt"))
+        )
+        return ctrl, rdk
+
+
+    STAGE_NAME = "bench_pocket1_single"
+
+    def _pick_best_control_and_rdk_in_stage(pdb_id: str, root_project: str) -> Tuple[Optional[Path], Optional[Path]]:
+        """
+        Controls (your examples):
+          P30_B1001.sanitized_bench_pocket1_single.best.pdb
+          P30_B1001_bench_pocket1_single.best.pdb
+          VGH_A2346.sanitized_bench_pocket1_single.best.pdb
+          1N1_B502_bench_pocket1_single.best.pdb
+          1N1_A501.sanitized_bench_pocket1_single.best.pdb
+
+        RDK (your example):
+          rdk_0002967_bench_pocket1_single.pdbqt
+        """
+        stage_dir = Path(root_project) / "docked" / pdb_id / STAGE_NAME
+        if not stage_dir.is_dir():
+            return None, None
+
+        def _first_by_mtime(patterns):
+            hits = []
+            for pat in patterns:
+                hits.extend(glob.glob(str(stage_dir / pat)))
+            if not hits:
+                return None
+            hits.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
+            return Path(hits[0])
+
+        # Controls: all are *.pdb, and they always contain "bench_pocket1_single.best"
+        # Names vary a lot before that token, sometimes include ".sanitized" once.
+        ctrl_patterns = [
+            "*bench_pocket1_single.best.pdb",  # catches both sanitized and non-sanitized variants
+        ]
+        ctrl = _first_by_mtime(ctrl_patterns)
+
+        # RDK: *.pdbqt, prefixed with rdk_, sometimes with/without ".best" token.
+        rdk_patterns = [
+            "rdk_*_bench_pocket1_single.best.pdbqt",  # prefer explicit .best if present
+            "rdk_*_bench_pocket1_single*.pdbqt",  # fallback (covers files without .best)
+        ]
+        rdk = _first_by_mtime(rdk_patterns)
+
+        return ctrl, rdk
+
+
 
     # Audit
     out_dir = Path(out_root) / pdb_id
+    # Pick representative poses (best control + best rdk) from this protein's outputs
+    STAGE_NAME = "bench_pocket1_single"
+    ctrl_pose, rdk_pose = _pick_best_control_and_rdk_in_stage(
+        pdb_id=pdb_id,
+        root_project=str(Path(cfg["OVERALL_DIR"]).resolve()),
+    )
+    # in benchmark_mode.py, right before _enqueue_render_task(...)
+    logger.info("[render-enqueue] %s %s: receptor=%s | orig=%s | ctrl=%s | rdk=%s",
+                pdb_id, STAGE_NAME, paths.cleaned_pdb_path, paths.pdb_path,
+                ctrl_pose, rdk_pose)
+    _enqueue_render_task(
+        pdb_id=pdb_id,
+        stage_name=STAGE_NAME,
+        root_project=str(Path(cfg["OVERALL_DIR"]).resolve()),
+        cleaned_pdb_path=str(Path(paths.cleaned_pdb_path).resolve()),
+        original_pdb_path=str(Path(paths.pdb_path).resolve()),
+        ctrl_pose_path=(str(ctrl_pose) if ctrl_pose else None),
+        rdk_pose_path=(str(rdk_pose) if rdk_pose else None),
+        exclude_resns=list(EXCLUDE_HET_IDS),
+    )
+    logger.info("[render-enqueue-final] %s %s: ctrl=%s | rdk=%s",
+                pdb_id, STAGE_NAME, bool(ctrl_pose), bool(rdk_pose))
+
+    # Enqueue consolidated renders (native + control + rdk + overlay)
     fh, cand_csv_path = _safe_open_csv_for_write(out_dir / f"benchmark_candidates_{pdb_id}.csv")
     with fh:
         w = csv.writer(fh)
@@ -1047,7 +1198,7 @@ def run_benchmark_for_protein(
     # Control lookup
     control_lookup = build_control_lookup(paths)
 
-    # Controls present in THIS protein’s prepped dir
+    # Controls present in THIS protein's prepped dir
     prepped_control_pdbqts, control_stems_lower = collect_prepped_controls_for_protein(
         paths=paths, control_stems=control_stems, logger=logger
     )
@@ -1106,7 +1257,10 @@ def run_benchmark_for_protein(
             logger=logger,
         )
 
-        max_total = int(cfg.get("BENCH_MAX_TOTAL_LIGANDS", 5))
+        # toggles to adjust
+        max_ctrls = int(cfg.get("BENCH_MAX_CONTROLS", 8))
+
+        max_total = max_ctrls+3
         if max_total > 0:
             allowed_non_ctrls = max(0, max_total - len(ctrls))
             if allowed_non_ctrls < len(non_ctrls):
@@ -1150,7 +1304,7 @@ def run_benchmark_for_protein(
             if ctrls and non_ctrls:
                 logger.info(f"Single-stage two-wave: {len(ctrls)} controls first, then {len(non_ctrls)} whitelist.")
 
-                # Wave A — controls
+                # Wave A - controls
                 with _patch_main_threadpool(cfg.get("GLOBAL_LIGAND_SEM")):
                     s1, v1, d1, rd1, inv1 = run_one_stage(
                         cfg=cfg,
@@ -1208,7 +1362,7 @@ def run_benchmark_for_protein(
                         f"[CONTROL-LOCK] n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} Angstrom"
                     )
 
-                # Wave B — whitelist
+                # Wave B - whitelist
                 with _patch_main_threadpool(cfg.get("GLOBAL_LIGAND_SEM")):
                     s2, v2, d2, rd2, inv2 = run_one_stage(
                         cfg=cfg,
@@ -1353,18 +1507,19 @@ def run_benchmark_for_protein(
                     )
 
             if validated_ligands_last:
-                final_pose_validation_and_screenshots(
-                    cfg,
-                    pdb_id,
-                    [stage],
-                    receptor_pdbqt,
-                    center,
-                    validated_ligands_last,
-                    score_history,
-                    cleaned_pdb,
-                    cfg.get("DOCKING_MODE", "benchmark"),
-                    logger,
-                )
+                with _defer_pymol_capture_calls(True):
+                    final_pose_validation_and_screenshots(
+                        cfg,
+                        pdb_id,
+                        [stage],
+                        receptor_pdbqt,
+                        center,
+                        validated_ligands_last,
+                        score_history,
+                        cleaned_pdb,
+                        cfg.get("DOCKING_MODE", "benchmark"),
+                        logger,
+                    )
 
             # Optional PyMOL renders (when DOCKING_MODE == "benchmark")
             if str(cfg.get("DOCKING_MODE", "")).lower() == "benchmark":
@@ -1382,6 +1537,12 @@ def run_benchmark_for_protein(
                 rdk_pose_path = raw_docked.get(nearest_rdk_lig) if nearest_rdk_lig else None
 
                 if bool(cfg.get("DEFER_PYMOL", True)):
+                    if not ctrl_pose_path and not rdk_pose_path:
+                        logger.info(
+                            f"[render-skip] {pdb_id} {stage_name}: no ctrl/rdk pose paths → no screenshots will be generated.")
+                    else:
+                        logger.info(f"[render-enqueue] {pdb_id} {stage_name}: "
+                                    f"ctrl={'yes' if ctrl_pose_path else 'no'} | rdk={'yes' if rdk_pose_path else 'no'}")
                     _enqueue_render_task(
                         pdb_id=pdb_id,
                         stage_name=stage_name,
@@ -1405,25 +1566,25 @@ def run_benchmark_for_protein(
                         if ctrl_pose_path and Path(ctrl_pose_path).is_file():
                             _render_three_views_with_pymol(
                                 receptor_path=cleaned_pdb_path,
-                                ligand_paths_and_colors=[(ctrl_pose_path, "control", "green")],
+                                ligand_paths_and_colors=[(ctrl_pose_path, "control", "blue")],
                                 outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL"),
                             )
                         if rdk_pose_path and Path(rdk_pose_path).is_file():
                             _render_three_views_with_pymol(
                                 receptor_path=cleaned_pdb_path,
-                                ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "magenta")],
+                                ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "orange")],
                                 outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__RDKclosest"),
                             )
                             _render_three_views_with_pymol(
                                 receptor_path=original_pdb_path,
-                                ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "magenta")],
+                                ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "orange")],
                                 outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-rdk__RDKclosest"),
                             )
                             if ctrl_pose_path and Path(ctrl_pose_path).is_file():
                                 _render_three_views_with_pymol(
                                     receptor_path=cleaned_pdb_path,
-                                    ligand_paths_and_colors=[(ctrl_pose_path, "control", "green"),
-                                                             (rdk_pose_path, "rdk_closest", "magenta")],
+                                    ligand_paths_and_colors=[(ctrl_pose_path, "control", "blue"),
+                                                             (rdk_pose_path, "rdk_closest", "orange")],
                                     outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
                                     label_top_n_res=5,
                                     label_cutoff=5.0,
@@ -1700,11 +1861,18 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     cfg = dict(cfg)
     cfg["INPUT_DIR"] = str(input_dir)
     cfg["DOCKED_DIR"] = str(out_root)
-    cfg["OUTPUT_DIR"] = str(out_root)
+    cfg["OUTPUT_DIR"] = str(Path(cfg.get("OUTPUT_DIR", Path(out_root).parent / "processed_pdbs")))
     cfg["OUTPUT_LIGANDS_DIR"] = str(prepped)
     cfg["DOCKING_MODE"] = "benchmark"
     cfg.setdefault("OVERALL_DIR", str(Path(out_root).parent))
     cfg["BENCH_MAX_SECONDS"] = float(args.max_seconds)
+
+    # Defer ALL PyMOL work until the very end (no mid-run rendering)
+    cfg["DEFER_PYMOL"] = True
+    # Optional: choose a queue file; default is OVERALL_DIR/deferred_pymol_jobs.jsonl
+    # os.environ["PYMOL_DEFER_QUEUE"] = str(Path(cfg["OVERALL_DIR"]) / "deferred_pymol_jobs.jsonl")
+    capture_pose.set_defer_mode(True, queue_path=os.environ.get("PYMOL_DEFER_QUEUE"))
+
 
     # Optionally harvest aliases from prior results
     alias_sources = args.alias_from_details or []
@@ -1744,8 +1912,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     total_cpus = int(args.total_cpus) if args.total_cpus else _detect_available_cpus()
     _set_thread_env(int(args.blas_threads))
 
-    # We’ll defer PyMOL to the very end by default so docking never waits on renders.
-    cfg["DEFER_PYMOL"] = True
+
     # <<< global token pool used by ALL ligand tasks (live rebalancing of cpu usage) >>>
     global_ligand_sem = threading.BoundedSemaphore(total_cpus)
     cfg["GLOBAL_LIGAND_SEM"] = global_ligand_sem
@@ -1787,22 +1954,23 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     def _work(pdb_file: str, inner_for_this: int):
         cfg_local = dict(cfg)
         cfg_local["GLOBAL_LIGAND_SEM"] = cfg["GLOBAL_LIGAND_SEM"]
-        # Set a high per-protein cap so the semaphore (not the pool size) is the real limiter.
+        # Let the global semaphore be the true limiter.
         cfg_local["MAX_PARALLEL_JOBS"] = max(int(cfg_local.get("MAX_PARALLEL_JOBS") or 0), total_cpus)
-        with _defer_pymol_capture_calls(True):
-            run_benchmark_for_protein(
-                cfg=cfg_local,
-                mapping=mapping,
-                pdb_file=pdb_file,
-                prepped_dir=prepped,
-                out_root=out_root,
-                exhaustiveness=int(args.exhaustiveness),
-                num_modes=int(args.num_modes),
-                max_candidates=int(args.max_candidates),
-                manual_hints=manual_hints,
-                fda_index=fda_index,
-            )
+
+        run_benchmark_for_protein(
+            cfg=cfg_local,
+            mapping=mapping,
+            pdb_file=pdb_file,
+            prepped_dir=prepped,
+            out_root=out_root,
+            exhaustiveness=int(args.exhaustiveness),
+            num_modes=int(args.num_modes),
+            max_candidates=int(args.max_candidates),
+            manual_hints=manual_hints,
+            fda_index=fda_index,
+        )
         return pdb_file
+
 
     import traceback
 
@@ -1852,22 +2020,30 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 fut2 = pool.submit(_work, next_pdb, inner)
                 running[fut2] = (next_pdb, inner)
                 sum_inner += inner
+    # ----- Post-run: render everything without stalling -----
+    # Turn OFF capture_pose deferral so _execute_render_task actually renders now.
+    capture_pose.set_defer_mode(False)
 
-    # ----- Post-run: render everything in parallel (no docking blocked) -----
-    # Default workers: env PYMOL_PARALLEL (if set) else 4 as a safe HPC default
-    try:
-        render_workers = int(os.environ.get("PYMOL_PARALLEL", ""))
-        if render_workers <= 0:
-            render_workers = 4
-    except Exception:
-        render_workers = 4
-    run_deferred_captures(render_workers)
-    run_deferred_renders(render_workers)
-    # optional post-run analysis
+    # ----- Post-run: render everything out-of-process (multi-process) -----
+    def _int_env(name: str, default: int) -> int:
+        try:
+            v = int((os.environ.get(name, "") or "").strip() or str(default))
+            return v if v > 0 else default
+        except Exception:
+            return default
+
+    from capture_pose import replay_deferred_jobs_mp
+    workers = _int_env("PYMOL_RENDER_WORKERS", 30)
+    workers = max(1, min(workers, min(4, os.cpu_count() or 2)))
+    mode = os.environ.get("PYMOL_RENDER_MODE", "cli").lower()
+    print(f"[render] replaying capture_pose queue with workers={workers} mode={mode}")
+    replay_deferred_jobs_mp(max_workers=workers, mode=mode, slow_ms=int(os.environ.get("PYMOL_SLOW_MS", "2500")))
+
+    # ----- Post-run analysis -----
     if args.run_analysis:
         docked_root = Path(cfg.get("OVERALL_DIR", str(Path(out_root).parent))) / "docked"
         if not docked_root.is_dir():
-            print(f"[analysis] Docked root not found at {docked_root} — skipping.")
+            print(f"[analysis] Docked root not found at {docked_root} - skipping.")
         else:
             details, summary = _run_auto_analysis(
                 docked_root=docked_root,
@@ -1884,6 +2060,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 print(f"[analysis] ✅ Summary: {summary}")
             else:
                 print("[analysis] ❌ Analysis did not produce outputs.")
+
 
 if __name__ == "__main__":
     main()

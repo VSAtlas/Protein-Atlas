@@ -1,0 +1,35 @@
+{
+  "schema_version": "atlas-log-resurfacer@1",
+  "generator": "resurface.py",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-07 00:00:00",
+    "rules_path": "embedded"
+  },
+  "scanned": {
+    "proteins": [".../docked/1T46/protein.log", "..."],
+    "ligand_tsvs": [".../prepped_ligands/1T46/ligand_prep_status.tsv", "..."]
+  },
+  "stats": { "fatal": 0, "hard": 7, "soft": 12, "info": 4, "groups": 9, "health": 76 },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000119.pdbqt",
+      "message": "No score for 11 ligand(s)",
+      "hint": "Check TSV + docking outputs; ensure at least one pose completes for recenter.",
+      "count": 11,
+      "first_seen": "2025-10-07 07:04:24",
+      "last_seen": "2025-10-07 07:04:26",
+      "files": [
+        {"path": ".../docked/1T46/protein.log", "samples": ["WARNING - No score for rdk_0000119.pdbqt", "..."]}
+      ],
+      "joins": [
+        {"ligand": "rdk_0000119.pdbqt", "prep_status": "failed", "reason": "sanitize valence"}
+      ]
+    }
+  ]
+}

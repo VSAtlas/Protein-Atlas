@@ -45,10 +45,22 @@ import os, sys, shutil, subprocess, logging
 from installation import load_config
 from logger_setup import setup_logger
 # Single source of truth (YAML-backed) — do not re-implement locally
-from activesite import get_atom_rules, fix_element_columns_in_file, ElementFixer
+from activesite import (
+    fix_element_columns_in_file,
+    scan_helium_counts,
+    assert_no_helium_in_hydrogen_names,
+    get_atom_rules,
+    fix_pdb_elements,
+    scan_helium_counts_with_hits,
+    format_pdb_atom_debug,
+    rules_version,
+)
 ALIASES = get_atom_rules()
 # Normalize to a dict so existing RULES.get(...) calls work
 RULES = ALIASES.__dict__ if hasattr(ALIASES, "__dict__") else dict(ALIASES)
+
+# Toggle: default ON; set HELIUM_POSTWRITE_VERBOSE=0 to suppress the info line
+_HE_POSTWRITE_VERBOSE = (os.environ.get("HELIUM_POSTWRITE_VERBOSE", "1") != "0")
 
 def load_aliases(): #little shim, to fix later 
     return get_atom_rules()
@@ -136,23 +148,147 @@ PDBTOOLS_BAT     = str(Path(PHENIX_DIR) / "phenix.pdbtools.bat") if PHENIX_DIR e
 MOLPROBITY_BAT   = str(Path(PHENIX_DIR) / "phenix.molprobity.bat") if PHENIX_DIR else ""
 PHENIX_PYTHON_BAT= str(Path(PHENIX_DIR) / "phenix.python.bat")   if PHENIX_DIR else ""
 
-# Prefer env REDUCE_EXE first, then REDUCE_BIN (legacy), then config, then PATH fallback
-REDUCE_EXE = (
-    os.environ.get("REDUCE_EXE")
-    or os.environ.get("REDUCE_BIN")
-    or _cfg("REDUCE_EXE", "", "reduce_exe")
-)
-if not REDUCE_EXE:
-    phenix_reduce_py = str(Path(str(PHENIX_DIR or "")).joinpath("reduce.python"))
-    if PHENIX_DIR and Path(phenix_reduce_py).exists():
-        REDUCE_EXE = phenix_reduce_py
-    elif PHENIX_DIR and Path(PHENIX_DIR, "reduce.exe").exists():
-        REDUCE_EXE = str(Path(PHENIX_DIR, "reduce.exe"))
-    else:
-        REDUCE_EXE = shutil.which("reduce") or shutil.which("reduce.exe") or "reduce"
+def _pick_reduce_exe() -> str:
+    """
+    Choose the actual 'reduce' binary robustly.
+    Precedence:
+      1) $REDUCE_EXE (env) or config value
+      2) User's local build: /stor/home/mpg2352/atlas/tools/reduce/reduce_src/reduce
+      3) Phenix conda_base/bin/reduce (next to PHENIX_DIR)
+      4) reduce on PATH
+    Avoids 'reduce.python' wrapper entirely.
+    """
+    # 1) Explicit env/config
+    explicit = (
+        os.environ.get("REDUCE_EXE")
+        or os.environ.get("REDUCE_BIN")
+        or _cfg("REDUCE_EXE", "", "reduce_exe")
+    )
+    if explicit and Path(explicit).exists():
+        return explicit
+
+    # 2) Known local build (user-specific)
+    user_local = Path("/stor/home/mpg2352/atlas/tools/reduce/reduce_src/reduce")
+    if user_local.exists() and os.access(str(user_local), os.X_OK):
+        return str(user_local)
+
+    # 3) Phenix conda-base candidate near PHENIX_DIR
+    if PHENIX_DIR:
+        phenix_root = Path(PHENIX_DIR).resolve().parent  # .../phenix-1.21.2-5419
+        cb = phenix_root / "conda_base" / "bin" / "reduce"
+        if cb.exists() and os.access(str(cb), os.X_OK):
+            return str(cb)
+
+    # 4) PATH fallback
+    which = shutil.which("reduce") or shutil.which("reduce.exe")
+    if which:
+        return which
+
+    # Last resort (let subprocess resolve; will likely fail clearly)
+    return "reduce"
+
+REDUCE_EXE = _pick_reduce_exe()
 logging.info("Using Reduce at: %s", REDUCE_EXE)
 
-# RDKit optional (only for pristine reference writing)
+
+
+def _post_write_element_guard(step: str, pdb_path: str | Path) -> None:
+    """
+    Normalize element columns after each receptor write step and log helium status.
+    """
+    p = Path(pdb_path)
+    try:
+        fixed = fix_element_columns_in_file(p, dst_path=p, rewrite_atoms=False)
+    except Exception as e:
+        logging.warning(
+            "[helium] stage=post_write step=%s file=%s He->H=? residual_He=? note=elemfix_error:%s",
+            step, p, e
+        )
+        return
+
+    txt = p.read_text(encoding="utf-8", errors="ignore")
+    he_count = scan_helium_counts(txt)
+    logging.info(
+        "[helium] stage=post_write step=%s file=%s He->H=%s residual_He=%d",
+        step, p, fixed if isinstance(fixed, int) else -1, he_count
+    )
+
+
+def _meeko_preflight_or_fail(pdb_input: str | Path, work_dir: str | Path) -> Path:
+    """
+    Ensure the exact PDB Meeko will read contains no 'He'.
+    Saves copy to work/meeko_input_pre_sanitize.pdb for forensics.
+    """
+    src = Path(pdb_input).resolve()
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+
+    try:
+        fix_element_columns_in_file(src, dst_path=src, rewrite_atoms=False)
+    except Exception as e:
+        logging.warning("[helium] stage=preflight file=%s note=elemfix_exception:%s", src, e)
+
+    txt = src.read_text(encoding="utf-8", errors="ignore")
+    he_count, first_hits = scan_helium_counts_with_hits(txt, max_hits=5)
+
+    # Save what Meeko will actually see
+    prefile = work / "meeko_input_pre_sanitize.pdb"
+    prefile.write_text(txt, encoding="utf-8")
+
+    if he_count > 0:
+        logging.error(
+            "[helium] stage=preflight file=%s He_count=%d rules=%s",
+            src, he_count, rules_version(),
+        )
+        for hit in first_hits:
+            logging.error("[helium] offender %s", hit)
+        raise RuntimeError("helium_preflight_failed")
+
+    return src
+
+
+
+
+def _helium_postwrite_counter(step_name: str, pdb_path: str | Path) -> None:
+    """
+    Run the element fixer on the freshly written receptor PDB and emit:
+      [helium] stage=post_write step=<name> file=<path> He->H=<n> residual_He=<n>
+    Fail fast if residual_He > 0.
+    """
+    p = Path(pdb_path)
+    try:
+        before = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        before = ""
+
+    # Count BEFORE
+    he_before = scan_helium_counts(before.splitlines()) if before else 0
+
+    # Fix elements in-place on the exact file we pass forward
+    fix_element_columns_in_file(p, p, rewrite_atoms=True)
+
+    try:
+        after = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        after = ""
+
+    # Count AFTER and compute delta
+    he_after = scan_helium_counts(after.splitlines()) if after else 0
+    delta = max(0, he_before - he_after)
+
+    if _HE_POSTWRITE_VERBOSE:
+        logging.info(
+            "[helium] stage=post_write step=%s file=%s He->H=%d residual_He=%d",
+            step_name, str(p), delta, he_after
+        )
+
+    if he_after > 0:
+        # Fail fast so we can see which step leaked helium
+        raise RuntimeError("helium_residual_post_write")
+
+
+
+
 try:
     from rdkit import Chem  # type: ignore
     _HAS_RDKIT = True
@@ -662,7 +798,7 @@ def filter_altlocs(pdb_input_path: Union[str, Path], pdb_output_path: Union[str,
             f.write(line)
         for atom_line in filtered_atoms:
             f.write(atom_line)
-
+    _post_write_element_guard("altloc_filter", pdb_output_path)
     logging.info("Filtered altLocs in %s → %s (removed %d alternates)", pdb_input_path, pdb_output_path, removed_count)
 
 
@@ -685,8 +821,11 @@ def build_missing_loops(input_pdb: Union[str, Path], output_dir: Union[str, Path
         env.io.water = True
         env.libs.topology.read(file='$(LIB)/top_heav.lib')
         env.libs.parameters.read(file='$(LIB)/par.lib')
+        # MODELLER loop building
         mdl = complete_pdb(env, str(input_pdb))
         mdl.write(file=output_pdb)
+        _post_write_element_guard("MODELLER", output_pdb)
+
         if os.path.exists(output_pdb):
             logging.info("MODELLER filled PDB saved to %s", output_pdb)
             return output_pdb
@@ -806,6 +945,7 @@ def clean_hydrogens(pdb_path: Union[str, Path], use_conect_if_reliable: bool = T
     if cov >= conect_min_cov:
         remove_unbonded_atoms(pdb_path)
     remove_implausible_hydrogens_by_distance(pdb_path)
+    _post_write_element_guard("hydrogen_cleanup", pdb_path)
 
 
 # =============================
@@ -924,6 +1064,7 @@ def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[st
 
     with open(output_pdb, 'w', encoding="utf-8") as f:
         f.writelines(kept_lines)
+    _post_write_element_guard("strip_nonstandard", output_pdb)
 
     logging.info("Removed nonstandard residues (YAML-driven): %s", sorted(removed))
     if pocket_center:
@@ -996,6 +1137,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     # (1) Working copy → raw/
     working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
     shutil.copyfile(str(pdb_file), working_pdb)
+    _helium_postwrite_counter("copy_working", working_pdb)
 
     # (2) AltLoc filtering → raw/filtered.pdb
     filtered_pdb = paths["raw"] / f"{pdb_id}_filtered.pdb"
@@ -1004,6 +1146,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     # (2a) EARLY text-level element fix (YAML-driven), before any heavy tools
     try:
         fix_element_columns_in_file(filtered_pdb, filtered_pdb, rewrite_atoms=True)
+        _helium_postwrite_counter("elemfix_filtered", filtered_pdb)
         logging.info("Early text-level element fix applied to %s", filtered_pdb)
     except Exception as e:
         logging.warning("Early text-level element fix skipped for %s: %s", filtered_pdb, e)
@@ -1019,8 +1162,10 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     # (5) Element fix → MODELLER → element fix again (PDB only)
     elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
     fix_pdb_elements(stripped_pdb, elemfix_pdb)
+    _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
     loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
     fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
+    _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
 
     # (6) Optional external Phenix polish (non-fatal if missing)
     receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
@@ -1028,6 +1173,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         pass  # already written by phenix.pdbtools
     else:
         shutil.copyfile(loop_fixed_pdb, receptor_pdb)
+    _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
 
     # (7) Hydrogen cleanup & chain validation
     debulked_pdb = paths["work"] / f"{pdb_id}_debulked.pdb"
@@ -1036,7 +1182,31 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     chain_validated_pdb = paths["work"] / f"{pdb_id}_validated.pdb"
     filter_invalid_chains(debulked_pdb, chain_validated_pdb)
+    _helium_postwrite_counter("chain_validate", chain_validated_pdb)
 
+    try:
+        _txt_before = Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        _txt_before = ""
+
+    try:
+        # Rewrite PDB element columns (77–78) using the unified rules (also for ATOM when rewrite_atoms=True)
+        fix_element_columns_in_file(chain_validated_pdb, chain_validated_pdb, rewrite_atoms=True)
+
+        # Secondary invariant: if any H-named atom still carries He, fix and summarize
+        _txt_after = Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore")
+        _fixed_text, _nname = assert_no_helium_in_hydrogen_names(_txt_after)
+        if _nname > 0:
+            Path(chain_validated_pdb).write_text(_fixed_text, encoding="utf-8")
+
+        # Grep-friendly one-liner with He→H delta
+        _before = scan_helium_counts(_txt_before)
+        _after = scan_helium_counts(Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore"))
+        _delta = max(0, _before - _after)
+        logging.info(f"[elem-fix] file={Path(chain_validated_pdb).name} stage=preflight He->H={_delta}")
+    except Exception as _e:
+        logging.warning(f"[elements] receptor preflight failed for {Path(chain_validated_pdb).name}: {_e}")
+        
     # (8) Protonation (Reduce when safe; else Open Babel fallback)
     def _present_resnames(pdb_path: Path) -> set[str]:
         res = set()
@@ -1060,15 +1230,23 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         reduced_pdb,
         reduce_exe=REDUCE_EXE if use_reduce else None,  # skip Reduce for nucleotide cofactors
     )
+    _helium_postwrite_counter("reduce_or_fallback", reduced_pdb)
 
     # (9) Final element fix and sanity on the protonated file
     fix_pdb_elements(reduced_pdb)
+    _helium_postwrite_counter("elemfix_after_reduce", reduced_pdb)
+
     quick_element_histogram(reduced_pdb)
+
     assert_no_metal_in_peptidic(reduced_pdb)
 
     # (10) Move to receptor and re-fix (post-step edits)
     shutil.copyfile(reduced_pdb, receptor_pdb)
+    _helium_postwrite_counter("promote_receptor_copy", receptor_pdb)
+
     fix_pdb_elements(receptor_pdb)
+    _helium_postwrite_counter("elemfix_final_receptor", receptor_pdb)
+
     quick_element_histogram(receptor_pdb)
     assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
@@ -1169,6 +1347,17 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
 
     input_pdb = str(input_pdb)
     output_pdbqt = str(output_pdbqt)
+    # --- Helium preflight on the EXACT file we’re about to feed into Meeko pipeline
+    # Work dir is the canonical processed tree root/<PDB>/work (output_pdbqt = .../receptor/<PDB>.pdbqt)
+    _work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
+    try:
+        # This both fixes element columns last-mile and FAILS FAST with offenders if He>0.
+        input_pdb = str(_meeko_preflight_or_fail(input_pdb, _work_dir))
+    except RuntimeError as e:
+        if str(e) == "helium_preflight_failed":
+            logging.error("Abort: helium detected pre-Meeko; see [helium] offenders above.")
+            raise
+        raise
 
     his_default = str(cfg.get("HIS_DEFAULT", "HIE")).upper()
     if his_default not in {"HIE", "HID", "HIP"}:
@@ -1258,6 +1447,15 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
     except Exception as e:
         logging.warning("HIS classify/rename step failed (continuing with original): %s", e)
         tmp1_path = input_pdb
+
+    # Preflight again on the HIS-classified file we’re actually handing to Meeko now
+    try:
+        _meeko_preflight_or_fail(tmp1_path, Path(output_pdbqt).resolve().parent.parent / "work")
+    except RuntimeError as e:
+        if str(e) == "helium_preflight_failed":
+            logging.error("Abort: helium detected in HIS-classified PDB pre-Meeko; see [helium] offenders above.")
+            raise
+        raise
 
     # --- Step 1: Modern Meeko first
     r0 = _modern_meeko(tmp1_path)
@@ -1355,47 +1553,89 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
     logging.info("Receptor prepared (ADT).")
     return True
 
-def run_phenix_pdbtools(input_pdb: Union[str, Path], output_pdb: Union[str, Path], remove_waters: bool = True) -> bool:
-    """Run Phenix pdbtools if available (Linux, or Windows via PowerShell under WSL). Return True if successful."""
-    inp = os.path.abspath(str(input_pdb)).replace("\\", "/")
+def _phenix_detect() -> tuple[str, list[str] | None, dict]:
+    """
+    Return (mode, cmd_list, env) for phenix.pdbtools detection.
+    mode ∈ {'linux-path','linux-explicit','wsl-bat','unavailable'}
+    """
+    env = dict(os.environ)
+    if PHENIX_LIB_PATH:
+        env["PYTHONPATH"] = PHENIX_LIB_PATH
+
+    # 1) On PATH (native Linux installs)
+    if shutil.which("phenix.pdbtools"):
+        return ("linux-path", ["phenix.pdbtools"], env)
+
+    # 2) Explicit Linux path via PHENIX_DIR (your case)
+    if PHENIX_DIR:
+        explicit = Path(PHENIX_DIR) / "phenix.pdbtools"
+        if explicit.exists() and os.access(str(explicit), os.X_OK):
+            return ("linux-explicit", [str(explicit)], env)
+
+    # 3) Windows .bat (usable from WSL via PowerShell)
+    if PDBTOOLS_BAT and Path(PDBTOOLS_BAT).exists():
+        return ("wsl-bat", [PDBTOOLS_BAT], env)
+
+    return ("unavailable", None, env)
+
+
+def _run_and_log(cmd: list[str], *, env: dict, check: bool = False) -> subprocess.CompletedProcess:
+    logging.info("[phenix] exec: %s", " ".join(cmd))
+    cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    if cp.stdout:
+        logging.debug("[phenix][stdout]\n%s", cp.stdout)
+    if cp.stderr:
+        logging.debug("[phenix][stderr]\n%s", cp.stderr)
+    if check and cp.returncode != 0:
+        raise subprocess.CalledProcessError(cp.returncode, cmd, cp.stdout, cp.stderr)
+    return cp
+
+
+def run_phenix_pdbtools(input_pdb: Union[str, Path],
+                        output_pdb: Union[str, Path],
+                        remove_waters: bool = True) -> bool:
+    """
+    Run Phenix pdbtools if available (Linux, or Windows via PowerShell under WSL).
+    Return True if successful. Always log branch as: [phenix] mode=...
+    """
+    inp  = os.path.abspath(str(input_pdb)).replace("\\", "/")
     outp = os.path.abspath(str(output_pdb)).replace("\\", "/")
-    remove_arg = ' remove="resname HOH"' if remove_waters else ""
 
-    # 1) Native Linux phenix.pdbtools
-    if _bin_on_path("phenix.pdbtools"):
-        cmd = ["phenix.pdbtools", inp, f"output.file_name={outp}"]
-        if remove_waters:
-            cmd.append('remove="resname HOH"')
-        logging.info("Running (Linux) phenix.pdbtools: %s", " ".join(cmd))
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if r.returncode == 0:
-            logging.info("phenix.pdbtools completed successfully")
-            return True
-        logging.warning("phenix.pdbtools failed (rc=%s):\n%s", r.returncode, r.stderr)
+    mode, base_cmd, env = _phenix_detect()
+    logging.info("[phenix] mode=%s", mode)
+
+    if mode == "unavailable" or not base_cmd:
+        logging.warning("Phenix not available; skipping pdbtools polish")
         return False
 
-    # 2) Windows Phenix .bat (usable from WSL via PowerShell)
-    if _is_wsl() and PHENIX_DIR and Path(PDBTOOLS_BAT).exists():
-        win_in = _win_path(inp)
-        win_out = _win_path(outp)
-        out_dir = _win_path(Path(outp).parent)
-        ps = (
-            "$ErrorActionPreference='Stop';"
-            f"if (!(Test-Path '{out_dir}')) {{ New-Item -ItemType Directory -Force -Path '{out_dir}' | Out-Null }};"
-            f"Push-Location '{out_dir}';"
-            f"& '{_win_path(PDBTOOLS_BAT)}' '{win_in}' output.file_name='{win_out}'{remove_arg};"
-            "Pop-Location;"
-        )
-        logging.info("Running (WSL?Windows) phenix.pdbtools.bat via PowerShell")
-        r = _powershell(ps)
-        if r.returncode == 0:
-            logging.info("phenix.pdbtools (Windows) completed successfully")
+    cmd = base_cmd + [inp, f"output.file_name={outp}"]
+    if remove_waters:
+        cmd.append('remove="resname HOH"')
+
+    try:
+        cp = _run_and_log(cmd, env=env, check=True)
+        if os.path.exists(outp) and os.path.getsize(outp) > 0:
+            logging.info("phenix.pdbtools wrote %s", outp)
             return True
-        logging.warning("phenix.pdbtools (Windows) failed (rc=%s):\n%s", r.returncode, r.stderr)
+        logging.warning("phenix.pdbtools finished but did not create expected output: %s", outp)
+        return False
+    except Exception as e:
+        logging.error("phenix.pdbtools failed: %s", e)
+        # Diagnostic: phenix.python import iotbx (same env)
+        py_cmd = None
+        if PHENIX_DIR and (Path(PHENIX_DIR) / "phenix.python").exists():
+            py_cmd = [str(Path(PHENIX_DIR) / "phenix.python")]
+        elif shutil.which("phenix.python"):
+            py_cmd = ["phenix.python"]
+        elif PHENIX_PYTHON_BAT and Path(PHENIX_PYTHON_BAT).exists():
+            py_cmd = [PHENIX_PYTHON_BAT]
+        if py_cmd:
+            try:
+                _run_and_log(py_cmd + ["-c", "from iotbx import pdb; print('iotbx_ok')"], env=env, check=False)
+            except Exception:
+                pass
         return False
 
-    logging.warning("Phenix not available; skipping pdbtools polish")
-    return False
 
 def run_windows_phenix_clean_script(loop_fixed_pdb: Union[str, Path], nolig_dir: Union[str, Path]) -> int:
     """Call your PHENIX_CLEAN_SCRIPT using Windows Phenix Python from WSL. Returns returncode."""
@@ -1427,10 +1667,6 @@ from typing import Union, Optional
 from pathlib import Path
 import shutil, subprocess, logging, os
 
-# expects: hydrogenation_status, run_openbabel_add_h in scope
-# and fix_pdb_elements imported from activesite:
-from activesite import fix_pdb_elements
-# expects: REDUCE_EXE global configured via _cfg_env_or_default above
 
 def assign_protonation_states(input_pdb: Union[str, Path],
                               output_pdb: Union[str, Path],
@@ -1446,9 +1682,16 @@ def assign_protonation_states(input_pdb: Union[str, Path],
     exe_dir = os.path.dirname(exe) or None
 
     def run_reduce(in_pdb: str, stage_name: str) -> str:
+        env = dict(os.environ)
+        # Allow config-provided dict even if user didn't export it
+        het = env.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT", "")
+        if het:
+            env["REDUCE_HET_DICT"] = het
+
         with open(output_pdb, "w", encoding="utf-8") as out:
             cp = subprocess.run([exe] + reduce_flags + [in_pdb],
-                                stdout=out, stderr=subprocess.PIPE, text=True, cwd=exe_dir)
+                                stdout=out, stderr=subprocess.PIPE, text=True,
+                                cwd=exe_dir, env=env)
         if cp.returncode != 0:
             raise RuntimeError(f"{stage_name} reduce failed: {cp.stderr.strip()}")
         return output_pdb
@@ -1562,6 +1805,7 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
         pdb_id = Path(pdb_filename).stem.upper()
         paths = canon_paths(pdb_id, output_dir)
         output_pdbqt = str((paths["receptor"] / f"{pdb_id}.pdbqt").resolve())
+        fix_element_columns_in_file(cleaned_pdb, cleaned_pdb, rewrite_atoms=True)
 
         if not run_prepare_receptor(cleaned_pdb, output_pdbqt, config):
             logging.error("ERROR: Failed to prepare receptor PDBQT for %s", pdb_id)

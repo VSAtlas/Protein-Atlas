@@ -12,13 +12,23 @@ from datetime import datetime
 import shutil
 from collections import defaultdict
 
-from activesite import fix_pdb_elements
-
+from activesite import (
+    fix_pdb_elements,
+    fix_element_columns_in_file,  # unify element rewrite for columns 77–78
+    _fix_ligand_element_columns_in_memory,
+    derive_element,
+    scan_helium_counts,
+    rules_version,
+    assert_no_helium_in_hydrogen_names,
+    assert_no_helium_in_pdbqt,
+)
 # --- RDKit / Standardization imports ---
 from rdkit import Chem
 from rdkit.Chem.SaltRemover import SaltRemover
+
 try:
     from rdkit.Chem.MolStandardize import rdMolStandardize as _std  # unified handle
+
     _HAS_STD = True
 except Exception:
     _std = None
@@ -52,7 +62,7 @@ QUARANTINE_DIRNAME = "quarantine"
 RESUME_SKIP = False
 
 ALLOWED_ELEMENTS = {
-    "H","C","N","O","F","P","S","Cl","Br","I","B","Si","Se","Zn","Mg","Ca","Mn","Fe","K","Na"
+    "H", "C", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B", "Si", "Se", "Zn", "Mg", "Ca", "Mn", "Fe", "K", "Na"
 }
 MAX_HEAVY_ATOMS = 1200
 MIN_ATOMS_FOR_DOCKING = 5
@@ -61,8 +71,8 @@ MIN_PARENT_HEAVY = 8
 # ----------- tuning switches -----------
 USE_RDKIT_FOR_3D = True
 OBABEL_THREADS = 50
-OBABEL_TIMEOUT_S  = 900
-CHUNK_SIZE        = 200
+OBABEL_TIMEOUT_S = 900
+CHUNK_SIZE = 200
 # --------------------------------------
 
 # --- salt remover (fallback path also uses this) ---
@@ -71,7 +81,9 @@ _REM = SaltRemover()
 # =========================
 # Utility / logging helpers
 # =========================
-MONOATOMIC_IONS = {"Cl","Br","I","F","Na","K","Ca","Mg","Zn","Mn","Fe","Cu","Co","Ni","Al","Ag","Au","Pt","Li","Ba","Sr","Cs","Rb"}
+MONOATOMIC_IONS = {"Cl", "Br", "I", "F", "Na", "K", "Ca", "Mg", "Zn", "Mn", "Fe", "Cu", "Co", "Ni", "Al", "Ag", "Au",
+                   "Pt", "Li", "Ba", "Sr", "Cs", "Rb"}
+
 
 def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
     atom_lines = [ln for ln in lines if ln.startswith(("ATOM", "HETATM"))]
@@ -80,6 +92,7 @@ def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
     parts = atom_lines[0].split()
     elem = _element_from_adt(parts[-1]) if parts else ""
     return elem in MONOATOMIC_IONS
+
 
 def _log_malformed(path: Path, reason: str):
     try:
@@ -129,28 +142,30 @@ def _standardize_then_sanitize(mol: Chem.Mol) -> Tuple[Optional[Chem.Mol], str]:
 def _looks_like_buffer_salt(m: Chem.Mol) -> bool:
     from rdkit.Chem import rdMolDescriptors as rdmd
     hac = m.GetNumHeavyAtoms()
-    o   = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'O')
-    n   = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'N')
+    o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'O')
+    n = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'N')
     rings = rdmd.CalcNumRings(m)
-    arom  = rdmd.CalcNumAromaticRings(m)
+    arom = rdmd.CalcNumAromaticRings(m)
     return (hac <= 15 and o >= 6 and n == 0 and rings == 0 and arom == 0)
+
 
 # --- Counter-ion SMARTS (compiled once) ---
 _COUNTERION_SMARTS = {
-    "mesylate":    Chem.MolFromSmarts("[CH3]-S(=O)(=O)[O-]"),
-    "tosylate":    Chem.MolFromSmarts("c1cccc(c1)S(=O)(=O)[O-]"),
-    "triflate":    Chem.MolFromSmarts("C(F)(F)F-S(=O)(=O)[O-]"),
-    "sulfonate":   Chem.MolFromSmarts("S(=O)(=O)[O-]"),
-    "phosphate":   Chem.MolFromSmarts("P(=O)([O-])([O-])[O-]"),
-    "sulfate":     Chem.MolFromSmarts("S(=O)(=O)([O-])[O-]"),
-    "formate":     Chem.MolFromSmarts("[#6](=O)[O-]"),
-    "acetate":     Chem.MolFromSmarts("CC(=O)[O-]"),
-    "lactate":     Chem.MolFromSmarts("CC(O)C(=O)[O-]"),
+    "mesylate": Chem.MolFromSmarts("[CH3]-S(=O)(=O)[O-]"),
+    "tosylate": Chem.MolFromSmarts("c1cccc(c1)S(=O)(=O)[O-]"),
+    "triflate": Chem.MolFromSmarts("C(F)(F)F-S(=O)(=O)[O-]"),
+    "sulfonate": Chem.MolFromSmarts("S(=O)(=O)[O-]"),
+    "phosphate": Chem.MolFromSmarts("P(=O)([O-])([O-])[O-]"),
+    "sulfate": Chem.MolFromSmarts("S(=O)(=O)([O-])[O-]"),
+    "formate": Chem.MolFromSmarts("[#6](=O)[O-]"),
+    "acetate": Chem.MolFromSmarts("CC(=O)[O-]"),
+    "lactate": Chem.MolFromSmarts("CC(O)C(=O)[O-]"),
 }
 _COUNTERION_SMARTS.update({
     "citrate_like": Chem.MolFromSmarts("[CX4](-[CH2]-C(=O)[O-])(-[CH2]-C(=O)[O-])(-C(=O)[O-])O"),
-    "tartrate_like": Chem.MolFromSmarts("IC([CH](O)C(=O)[O-])C(=O)[O-]".replace("I","O")),
+    "tartrate_like": Chem.MolFromSmarts("IC([CH](O)C(=O)[O-])C(=O)[O-]".replace("I", "O")),
 })
+
 
 def _matches_counterion(m: Chem.Mol) -> Optional[str]:
     try:
@@ -185,29 +200,31 @@ def _matches_counterion(m: Chem.Mol) -> Optional[str]:
     except Exception:
         return None
 
+
 # =========================
 # Poly-acidic & buffer-like detection helpers
 # =========================
 
 _CARBOXYLATE = Chem.MolFromSmarts("[CX3](=O)[O-]")
-_CARBOXYLIC  = Chem.MolFromSmarts("[CX3](=O)O")
+_CARBOXYLIC = Chem.MolFromSmarts("[CX3](=O)O")
+
 
 def _is_polyacidic_buffer_like(m: Chem.Mol) -> bool:
     try:
         from rdkit.Chem import rdMolDescriptors as rdmd
-        hac   = m.GetNumHeavyAtoms()
+        hac = m.GetNumHeavyAtoms()
         if hac == 0:
             return False
         rings = rdmd.CalcNumRings(m)
-        arom  = rdmd.CalcNumAromaticRings(m)
-        o     = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "O")
-        n     = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "N")
+        arom = rdmd.CalcNumAromaticRings(m)
+        o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "O")
+        n = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "N")
         o_ratio = (o / float(hac)) if hac else 0.0
 
         na = 0
         if _CARBOXYLATE: na += len(m.GetSubstructMatches(_CARBOXYLATE))
         if _CARBOXYLIC:  na += len(m.GetSubstructMatches(_CARBOXYLIC))
-        has_sulfate   = bool(_COUNTERION_SMARTS["sulfate"]   and m.HasSubstructMatch(_COUNTERION_SMARTS["sulfate"]))
+        has_sulfate = bool(_COUNTERION_SMARTS["sulfate"] and m.HasSubstructMatch(_COUNTERION_SMARTS["sulfate"]))
         has_phosphate = bool(_COUNTERION_SMARTS["phosphate"] and m.HasSubstructMatch(_COUNTERION_SMARTS["phosphate"]))
 
         if rings == 0 and arom == 0 and o_ratio >= 0.35 and (na >= 3 or has_sulfate or has_phosphate):
@@ -216,6 +233,7 @@ def _is_polyacidic_buffer_like(m: Chem.Mol) -> bool:
         return False
     except Exception:
         return False
+
 
 def _element_from_adt(adt: str) -> str:
     t = (adt or "").strip()
@@ -242,6 +260,7 @@ def _element_from_adt(adt: str) -> str:
         return "Br"
     return u[0]
 
+
 def _element_counts_from_pdb(pdb_path: Path) -> Dict[str, int]:
     counts: Dict[str, int] = defaultdict(int)
     try:
@@ -259,31 +278,32 @@ def _element_counts_from_pdb(pdb_path: Path) -> Dict[str, int]:
         pass
     return counts
 
+
 def _buffer_like_by_counts_from_mol(m: Chem.Mol) -> bool:
     hac = m.GetNumHeavyAtoms()
     if hac == 0:
         return False
-    o   = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'O')
-    n   = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'N')
+    o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'O')
+    n = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'N')
     return (hac >= 10 and (o / float(hac)) >= 0.40 and n <= 1)
+
 
 def _buffer_like_by_counts_from_pdbfile(pdb_path: Path) -> bool:
     counts = _element_counts_from_pdb(pdb_path)
     hac = sum(v for k, v in counts.items() if k != "H")
-    o   = counts.get("O", 0)
-    n   = counts.get("N", 0)
+    o = counts.get("O", 0)
+    n = counts.get("N", 0)
     return (hac >= 10 and hac > 0 and (o / float(hac)) >= 0.40 and n <= 1)
+
 
 def _polyacidic_by_counts_from_pdbfile(pdb_path: Path) -> bool:
     counts = _element_counts_from_pdb(pdb_path)
     hac = sum(v for k, v in counts.items() if k != "H")
-    o   = counts.get("O", 0)
-    n   = counts.get("N", 0)
+    o = counts.get("O", 0)
+    n = counts.get("N", 0)
     return (hac >= 10 and hac > 0 and (o / float(hac)) >= 0.35 and n <= 1)
 
 
-
-# --- put near the other helpers in prep_ligandsBRCF.py ---
 def _write_aromatic_sdf(mol: Chem.Mol, out_path: Path) -> bool:
     try:
         m = Chem.Mol(mol)
@@ -295,10 +315,12 @@ def _write_aromatic_sdf(mol: Chem.Mol, out_path: Path) -> bool:
             w.SetKekulize(False)  # keep aromatic bonds marked
         except Exception:
             pass
-        w.write(m); w.close()
+        w.write(m);
+        w.close()
         return True
     except Exception:
         return False
+
 
 def _re_aromatize_mol2_in_place(mol2_path: Path, obabel_exe_short: str) -> bool:
     """Read MOL2 → impose RDKit aromaticity → write SDF (aromatic) → back to MOL2 (overwrite)."""
@@ -320,8 +342,10 @@ def _re_aromatize_mol2_in_place(mol2_path: Path, obabel_exe_short: str) -> bool:
     except subprocess.CalledProcessError:
         return False
     finally:
-        try: tmp_sdf.unlink(missing_ok=True)
-        except Exception: pass
+        try:
+            tmp_sdf.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     if tmp_mol2.exists() and tmp_mol2.stat().st_size > 100:
         try:
@@ -332,6 +356,50 @@ def _re_aromatize_mol2_in_place(mol2_path: Path, obabel_exe_short: str) -> bool:
             return False
     return False
 
+
+# --- NEW: filename and H helpers ---
+_SANITIZED_RE = re.compile(r'(?:\.sanitized)+(?=\.)')
+
+
+def collapse_sanitized_once(p: Path) -> Path:
+    return p.with_name(_SANITIZED_RE.sub('.sanitized', p.name))
+
+
+def add_hydrogens_mol2(in_path: Path, out_path: Path, obabel_exe: str) -> tuple[bool, str]:
+    """
+    Ensure explicit H before MGLTools. Returns (ok, stderr_text).
+    Uses obabel -h to add hydrogens *without* changing atom order more than necessary.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [obabel_exe, "-imol2", str(in_path), "-omol2", "-O", str(out_path), "-h"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return True, (res.stderr or "").strip()
+    except subprocess.CalledProcessError as e:
+        return False, (e.stderr or "").strip()
+
+
+def quick_pdbqt_validate(path: Path) -> tuple[bool, int, str]:
+    """
+    Lightweight validity: file exists, non-trivial size, has ATOM/HETATM, no blatantly invalid ADT types.
+    Returns (ok, atom_count, reason_if_fail)
+    """
+    if not path.exists() or path.stat().st_size < 100:
+        return False, 0, "empty_or_missing"
+    atoms = 0
+    bad = 0
+    with open(path, "r", errors="ignore") as fh:
+        for ln in fh:
+            if ln.startswith("ATOM") or ln.startswith("HETATM"):
+                atoms += 1
+                # simple ADT type sanity: last token should exist
+                if len(ln.split()) < 2:  # too sparse
+                    bad += 1
+    if atoms == 0:
+        return False, 0, "no_atoms"
+    if bad > 0:
+        return False, atoms, "malformed_records"
+    return True, atoms, ""
 
 
 # =========================
@@ -345,7 +413,8 @@ def _to_parent_mol(m: Chem.Mol) -> Optional[Chem.Mol]:
             chooser = _std.LargestFragmentChooser(preferOrganic=True)
             p = chooser.choose(p)
             p = _std.ChargeParent(p)
-            if _looks_like_buffer_salt(p) or _matches_counterion(p) or _is_polyacidic_buffer_like(p) or _buffer_like_by_counts_from_mol(p):
+            if _looks_like_buffer_salt(p) or _matches_counterion(p) or _is_polyacidic_buffer_like(
+                    p) or _buffer_like_by_counts_from_mol(p):
                 frags = Chem.GetMolFrags(m, asMols=True, sanitizeFrags=True)
                 p = max(frags, key=lambda x: x.GetNumHeavyAtoms())
                 p = _std.ChargeParent(p)
@@ -372,12 +441,14 @@ def _to_parent_mol(m: Chem.Mol) -> Optional[Chem.Mol]:
     except Exception:
         return None
 
+
 # Intial SCAM Filter (post-cleaning)
 from rdkit.Chem import Crippen
 
 # Optional pKa/logD dependency: try to import, else fall back to cLogP
 try:
     from pkasolver import pkasolver as _pka
+
     _HAS_PKASOLVER = True
 except Exception:
     _pka = None
@@ -386,36 +457,37 @@ except Exception:
 # SCAM substructure alerts
 SCAM_SMARTS: Dict[str, str] = {
     # electrophiles / reactive
-    "epoxide":            "[OX2r3]",
-    "aziridine":          "[NX3r3]",
-    "alkyl_halide":       "[CX4;H0,H1,H2][Cl,Br,I,F]",
-    "michael_acceptor":   "[C,c]=[C,c]-[C,S](=O)[O,N,S] | [C,c]=[C,c]-C(=O)[O,N,S]",
-    "acrylamide":         "C=CC(=O)N",
-    "isothiocyanate":     "N=C=S",
-    "sulfonyl_fluoride":  "S(=O)(=O)F",
+    "epoxide": "[OX2r3]",
+    "aziridine": "[NX3r3]",
+    "alkyl_halide": "[CX4;H0,H1,H2][Cl,Br,I,F]",
+    "michael_acceptor": "[C,c]=[C,c]-[C,S](=O)[O,N,S] | [C,c]=[C,c]-C(=O)[O,N,S]",
+    "acrylamide": "C=CC(=O)N",
+    "isothiocyanate": "N=C=S",
+    "sulfonyl_fluoride": "S(=O)(=O)F",
 
     # redox / interference
-    "p_quinone":          "O=C1C=CC(=O)C=C1",
-    "o_quinone":          "O=c1ccc(=O)[cH][cH]1",
+    "p_quinone": "O=C1C=CC(=O)C=C1",
+    "o_quinone": "O=c1ccc(=O)[cH][cH]1",
     "phenothiazine_like": "n2c1ccccn1Sc3ccccc23",
 
     # chelators / aggregators
-    "catechol":           "c1cc(O)c(O)cc1",
-    "hydroxamate":        "C(=O)N[OH]",
+    "catechol": "c1cc(O)c(O)cc1",
+    "hydroxamate": "C(=O)N[OH]",
     "8_hydroxyquinoline": "Oc1cccc2ncccc12",
-    "tannin_polyphenol":  "c(O)c(O)c(O)",
+    "tannin_polyphenol": "c(O)c(O)c(O)",
 
     # nucleophiles / potentially reactive
-    "hydrazine":          "NN",
-    "hydroxylamine":      "N[OH]",
-    "thiol":              "[SH]",
-    "dithiol":            "SCCS",
+    "hydrazine": "NN",
+    "hydroxylamine": "N[OH]",
+    "thiol": "[SH]",
+    "dithiol": "SCCS",
 
     # rhodanine / known hitters
-    "rhodanine":          "O=C1NC(=S)SC1",
-    "barbiturate_like":   "O=C1NC(=O)NC(=O)1",
+    "rhodanine": "O=C1NC(=S)SC1",
+    "barbiturate_like": "O=C1NC(=O)NC(=O)1",
 }
 SCAM_QUERIES = {name: Chem.MolFromSmarts(s) for name, s in SCAM_SMARTS.items()}
+
 
 def scam_flags(mol: Chem.Mol) -> List[str]:
     flags = []
@@ -423,6 +495,7 @@ def scam_flags(mol: Chem.Mol) -> List[str]:
         if patt is not None and mol.HasSubstructMatch(patt):
             flags.append(f"hard: {name}")
     return flags
+
 
 def predict_logD(mol: Chem.Mol, ph: float = 7.4) -> float:
     """
@@ -489,12 +562,84 @@ def annotate_ligand_with_scam(lig_path: str, ligand_record: Dict) -> Dict:
     return ligand_record
 
 
-def _append_prep_status(status_log_path: Path, ligand_name: str, status: str, reason: str = "", relpath: str = ""):
-    header = "ligand\tstatus\treason\tpdbqt_rel\n"
+def _append_prep_status(
+        status_log_path: Path,
+        ligand_name: str,
+        status: str,
+        reason: str = "",
+        relpath: str = "",
+        *,
+        stage: str = "",
+        failure_code: str = "",
+        failure_detail: str = "",
+        fixes_count: int = 0,
+        rules_ver: str = ""
+):
+    """
+    Backward-compatible TSV: old 4 columns + appended provenance columns.
+    """
+    header = (
+        "ligand\tstatus\treason\tpdbqt_rel\t"
+        "stage\tfailure_code\tfailure_detail\tfixes_count\trules_version\n"
+    )
     if not status_log_path.exists():
         status_log_path.write_text(header, encoding="utf-8")
     with status_log_path.open("a", encoding="utf-8") as fh:
-        fh.write("\t".join([ligand_name, status, reason, relpath]) + "\n")
+        row = [
+            ligand_name, status, reason, relpath,
+            stage, failure_code, failure_detail, str(fixes_count), rules_ver
+        ]
+        fh.write("\t".join(row) + "\n")
+
+
+# --- logging helper for element-fix one-liners ---
+def _log_elem_fix_summary(file_path: Path, stage: str, before_text: str = None, after_text: str = None):
+    """
+    Emit a single compact line showing how many He->H (ADT/element) conversions were performed
+    by comparing counts before/after. If before_text is None, read file.
+    """
+    try:
+        if before_text is None:
+            before_text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+        n_before = scan_helium_counts(before_text.splitlines())
+        if after_text is None:
+            after_text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+        n_after = scan_helium_counts(after_text.splitlines())
+        # If we *re-wrote* columns (He->H), the *remaining* He count should drop. Report delta.
+        delta = max(0, n_before - n_after)
+        logging.info(f"[elem-fix] file={file_path.name} stage={stage} He->H={delta}")
+    except Exception as e:
+        logging.warning(f"[elem-fix] summary failed for {file_path}: {e}")
+
+
+def _helium_postwrite_guard(pdbqt_path: Path, ligand_name: str, prepped_ligands_dir: Path) -> Tuple[bool, int, str]:
+    """
+    Ensure no ADT He remains in ligand PDBQT.
+    Returns (ok, fixes_count, quarantine_reason).
+    """
+    try:
+        with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+            lines = fh.readlines()
+        new_lines, fixes, q_reason = assert_no_helium_in_pdbqt(lines, ligand_name)
+        logging.info("[helium] ligand=%s fixes=%d quarantine=%s rules=%s",
+                     mol2_file.name, fixes, str(bool(q_reason)), rules_version())
+
+        if fixes > 0:
+            with open(pdbqt_path, "w", encoding="utf-8") as out:
+                out.writelines(new_lines)
+
+        ok = (q_reason == "")
+        print(f"[helium] ligand={ligand_name} fixes={fixes} quarantine={not ok} rules={_rules_version()}")
+
+        if not ok and "inconsistent" in q_reason:
+            _write_status(ligand_name, failure_code="adt_helium_inconsistent", reason=q_reason)
+
+        return ok, fixes, q_reason
+
+    except Exception as e:
+        print(
+            f"[helium] ligand={ligand_name} fixes=0 quarantine=True rules={_rules_version()} note=postwrite_exception:{e}")
+        return False, 0, f"postwrite_exception:{e}"
 
 
 # =========================
@@ -525,6 +670,7 @@ def _write_obabel_friendly_sdf(mol: Chem.Mol, out_path: Path) -> bool:
             return True
         except Exception:
             return False
+
 
 # =========================
 # OBabel helpers
@@ -558,6 +704,7 @@ def _reserialize_mol_via_obabel(mol, obabel_exe_short: str, target_mol2: Path):
         return None
     return fresh_mol2
 
+
 def read_config(path="config.txt") -> Dict[str, str]:
     config: Dict[str, str] = {}
     with open(path, "r") as f:
@@ -567,6 +714,7 @@ def read_config(path="config.txt") -> Dict[str, str]:
                 key, value = line.split("=", 1)
                 config[key.strip()] = value.strip()
     return config
+
 
 def get_short_path_name(long_name):
     if sys.platform != 'win32':
@@ -580,6 +728,7 @@ def get_short_path_name(long_name):
     if ret == 0 or ret > output_buf_size:
         return long_name
     return output_buf.value
+
 
 # =========================
 # Open Babel runners
@@ -597,7 +746,9 @@ def _run_obabel(cmd: List[str], timeout_sec: int) -> bool:
         print("Open Babel failed with code:", e.returncode)
         return False
 
-def _attempt_obabel_series(base_cmd: List[str], timeout_sec: int, threads_list: List[int], use_fast_first: bool = True) -> bool:
+
+def _attempt_obabel_series(base_cmd: List[str], timeout_sec: int, threads_list: List[int],
+                           use_fast_first: bool = True) -> bool:
     attempts: List[List[str]] = []
     if use_fast_first:
         for j in threads_list:
@@ -615,6 +766,7 @@ def _attempt_obabel_series(base_cmd: List[str], timeout_sec: int, threads_list: 
         print("Retrying with a more conservative setting...")
     return False
 
+
 # =========================
 # SDF chunking
 # =========================
@@ -626,6 +778,7 @@ def count_sdf_records(sdf_path: Path) -> int:
             if line.startswith("$$$$"):
                 n += 1
     return n
+
 
 def split_sdf_into_chunks(sdf_path: Path, out_dir: Path, chunk_size: int = 1000) -> List[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -661,17 +814,18 @@ def split_sdf_into_chunks(sdf_path: Path, out_dir: Path, chunk_size: int = 1000)
         flush_chunk()
     return chunks
 
+
 # =========================
 # SDF ? MOL2 conversions
 # =========================
 
 def convert_sdf_to_mol2_split_parallel(
-    sdf_path: Path,
-    mol2_output_dir: Path,
-    obabel_exe: str,
-    threads: int = 32,
-    timeout_sec: int = 36000,
-    chunk_size: int = 1000
+        sdf_path: Path,
+        mol2_output_dir: Path,
+        obabel_exe: str,
+        threads: int = 32,
+        timeout_sec: int = 36000,
+        chunk_size: int = 1000
 ) -> List[Path]:
     mol2_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -716,6 +870,7 @@ def convert_sdf_to_mol2_split_parallel(
     print(f"Total MOL2 files: {len(all_out)}")
     return all_out
 
+
 def _obabel_convert_chunk(chunk_sdf: Path, out_prefix: Path, obabel_exe: str) -> int:
     cmd = [
         obabel_exe, "-isdf", str(chunk_sdf),
@@ -736,11 +891,12 @@ def _obabel_convert_chunk(chunk_sdf: Path, out_prefix: Path, obabel_exe: str) ->
     written = len(list(out_prefix.parent.glob(out_prefix.name + "_*.mol2")))
     return written
 
+
 # =========================
 # RDKit ETKDG path (with parent picking)
 # =========================
 def rdkit_embed_sdf_to_mol2(
-    sdf_in: Path, mol2_out_dir: Path, obabel_exe: str, max_workers: int = 8
+        sdf_in: Path, mol2_out_dir: Path, obabel_exe: str, max_workers: int = 8
 ) -> List[Path]:
     # Ensure both imports exist in this scope
     from rdkit import Chem
@@ -837,6 +993,7 @@ def _write_parent_only_sdf(src_sdf: Path, dst_sdf: Path) -> int:
     w.close()
     return kept
 
+
 # =========================
 # MGLTools: prepare_ligand4 & validation
 # =========================
@@ -859,6 +1016,7 @@ def _is_probable_water_from_pdbqt_lines(lines: List[str]) -> bool:
         if elem != 'H':
             heavy += 1
     return has_O and heavy <= 1
+
 
 def is_valid_ligand(path: Path, log_dir: Path) -> bool:
     try:
@@ -893,6 +1051,7 @@ def is_valid_ligand(path: Path, log_dir: Path) -> bool:
             f.write(f"{path.name} - PDBQT validation failed: {e}\n")
         return False
 
+
 # === AROMATICITY AUDIT & RESCUE ===
 
 def _count_aromatic_atoms_in_mol2(mol2_path: Path) -> int:
@@ -900,6 +1059,7 @@ def _count_aromatic_atoms_in_mol2(mol2_path: Path) -> int:
     if m is None:
         return -1
     return sum(int(a.GetIsAromatic()) for a in m.GetAtoms())
+
 
 def _count_aromatic_ad_types_in_pdbqt(pdbqt_path: Path) -> int:
     n = 0
@@ -915,6 +1075,7 @@ def _count_aromatic_ad_types_in_pdbqt(pdbqt_path: Path) -> int:
         return -1
     return n
 
+
 def _pdbqt_from_mol2_via_obabel(mol2_file: Path, out_pdbqt: Path, obabel_exe_short: str) -> bool:
     tmp = out_pdbqt.with_suffix(".obabel_tmp.pdbqt")
     cmd = [obabel_exe_short, "-imol2", str(mol2_file), "-opdbqt", "-O", str(tmp)]
@@ -929,23 +1090,40 @@ def _pdbqt_from_mol2_via_obabel(mol2_file: Path, out_pdbqt: Path, obabel_exe_sho
         except Exception:
             return False
     return False
+
+
 def _prepare_one(
-    mgltools_python_short: str,
-    prepare_script_short: str,
-    mol2_file: Path,
-    pdbqt_path: Path,
-    obabel_exe_short: Optional[str] = None
+        mgltools_python_short: str,
+        prepare_script_short: str,
+        mol2_file: Path,
+        pdbqt_path: Path,
+        obabel_exe_short: Optional[str] = None,
+        *,
+        status_log_dir: Path
 ) -> Tuple[str, str]:
-    mol2_short = mol2_file.name
+    # use the H-enriched input
+    lig_id = mol2_file.stem  # stable ID for logs/TSV
     try:
         if pdbqt_path.exists():
             pdbqt_path.unlink()
     except Exception:
         pass
+    # Ensure explicit hydrogens: mol2_in -> mol2_h
+    mol2_in = Path(mol2_file)
+    mol2_h = mol2_in.with_name(mol2_in.stem + ".withH.mol2")
+    okH, hstderr = add_hydrogens_mol2(mol2_in, mol2_h, obabel_exe_short)
+    logging.info("[ligprep] addHs stage=primary in=%s ok=%s", mol2_in.name, okH)
+    if (hstderr or "").strip():
+        logging.warning("[ligprep] addHs stderr (primary) %s", hstderr.splitlines()[-1][:200])
 
-    # aromatic baseline from source MOL2
+    # Use mol2_h as input to MGLTools if AddHs succeeded
+    mol2_for_mgl = mol2_h if okH else mol2_in
+
+    # aromatic baseline from source MOL2 (keep original for comparison)
     src_arom = _count_aromatic_atoms_in_mol2(mol2_file)
 
+    # use the H-enriched file for MGLTools (cwd is mol2_file.parent)
+    mol2_short = mol2_for_mgl.name
     pdbqt_short = get_short_path_name(str(pdbqt_path.resolve()))
     cmd = [
         mgltools_python_short,
@@ -953,8 +1131,9 @@ def _prepare_one(
         "-l", mol2_short,
         "-o", pdbqt_short,
         "-U", "nphs_lps",
-        "-A", "hydrogens",  # <-- fixed
+        "-A", "hydrogens",
     ]
+
     try:
         _ = subprocess.run(
             cmd,
@@ -968,7 +1147,8 @@ def _prepare_one(
         # Compare aromatic counts (MOL2 vs PDBQT)
         adt_arom = _count_aromatic_ad_types_in_pdbqt(pdbqt_path)
         if src_arom >= 0 and adt_arom >= 0 and adt_arom < src_arom:
-            logging.warning(f"[arom-mismatch] {mol2_file.name}: MOL2_arom={src_arom} > PDBQT_arom={adt_arom} (trying rescue)")
+            logging.warning(
+                f"[arom-mismatch] {mol2_file.name}: MOL2_arom={src_arom} > PDBQT_arom={adt_arom} (trying rescue)")
 
             # 1) Try prepare_ligand4 again WITHOUT removing lone pairs: "-U nphs"
             alt_pdbqt = pdbqt_path.with_suffix(".alt.pdbqt")
@@ -1022,6 +1202,98 @@ def _prepare_one(
                         tmp.unlink()
                 except Exception:
                     pass
+        try:
+            with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+                lines = fh.readlines()
+            new_lines, fixes, q_reason = assert_no_helium_in_pdbqt(lines, mol2_file.name)
+            if q_reason:
+                # Quarantine and TSV provenance
+                quarantine = pdbqt_path.parent / QUARANTINE_DIRNAME
+                quarantine.mkdir(exist_ok=True)
+                qpath = quarantine / pdbqt_path.name
+                try:
+                    if pdbqt_path.exists():
+                        pdbqt_path.replace(qpath)
+                except Exception:
+                    pass
+                _append_prep_status(
+                    status_log_path=status_log_dir / "ligand_prep_status.tsv",
+                    ligand_name=lig_id,
+                    status="quarantined",
+                    reason="adt_helium_inconsistent",
+                    relpath=str(qpath.name),
+                    stage="validate_pdbqt",
+                    failure_code="adt_helium_inconsistent",
+                    failure_detail=q_reason,
+                    fixes_count=0,
+                    rules_ver=rules_version(),
+                )
+                logging.warning(
+                    f"[elem-validate] file={pdbqt_path.name} stage=postwrite quarantine ligand={mol2_file.name} code=adt_helium_inconsistent")
+                return (mol2_file.name, "postcheck_fail")
+            if fixes > 0:
+                # Overwrite file with corrections
+                with open(pdbqt_path, "w", encoding="utf-8") as out:
+                    out.writelines(new_lines)
+                _append_prep_status(
+                    status_log_path=status_log_dir / "ligand_prep_status.tsv",
+                    ligand_name=lig_id,
+                    status="ok",
+                    reason="",
+                    relpath=str(pdbqt_path.name),
+                    stage="write_pdbqt",
+                    failure_code="",
+                    failure_detail="",
+                    fixes_count=fixes,
+                    rules_ver=rules_version(),
+                )
+                logging.info(
+                    f"[elem-validate] file={pdbqt_path.name} stage=postwrite ok ligand={mol2_file.name} fixes={fixes}")
+            else:
+                # still append a line so provenance is present on success
+                _append_prep_status(
+                    status_log_path=status_log_dir / "ligand_prep_status.tsv",
+                    ligand_name=lig_id,
+                    status="ok",
+                    reason="",
+                    relpath=str(pdbqt_path.name),
+                    stage="write_pdbqt",
+                    failure_code="",
+                    failure_detail="",
+                    fixes_count=0,
+                    rules_ver=rules_version(),
+                )
+
+        except Exception as e:
+            logging.warning(f"[elem-validate] failed to post-check PDBQT for {mol2_file.name}: {e}")
+
+        # --- lightweight post-write PDBQT validity gate (primary) ---
+        okV, n_atoms, whyV = quick_pdbqt_validate(pdbqt_path)
+        logging.info("[ligprep] validate_pdbqt result=%s atoms=%d ligand=%s",
+                     "ok" if okV else "fail", n_atoms, mol2_file.stem)
+        if not okV:
+            # quarantine + TSV with failure_code
+            quarantine = pdbqt_path.parent / QUARANTINE_DIRNAME
+            quarantine.mkdir(exist_ok=True)
+            qpath = quarantine / pdbqt_path.name
+            try:
+                if pdbqt_path.exists():
+                    pdbqt_path.replace(qpath)
+            except Exception:
+                pass
+            _append_prep_status(
+                status_log_path=status_log_dir / "ligand_prep_status.tsv",
+                ligand_name=mol2_file.stem,
+                status="quarantined",
+                reason="invalid_pdbqt_postwrite",
+                relpath=str(qpath.name if qpath.exists() else ""),
+                stage="validate_pdbqt",
+                failure_code="invalid_pdbqt_postwrite",
+                failure_detail=whyV,
+                fixes_count=0,
+                rules_ver=rules_version(),
+            )
+            return (mol2_file.name, "postcheck_fail")
 
         # Validation / quarantine
         if not is_valid_ligand(pdbqt_path, log_dir=pdbqt_path.parent):
@@ -1060,6 +1332,7 @@ def load_mol2_lenient(path, logger):
             return None
         return std_mol
 
+
 # =========================
 # PDB-control ligand path (crystal-safe)
 # =========================
@@ -1073,6 +1346,7 @@ def _resolve_obabel_exe(obabel_cfg: str) -> str:
         cand = p / "obabel"
         return str(cand) if cand.exists() else str(p)
     return obabel_cfg
+
 
 def _resolve_prepare_ligand4(mgltools_path: str, cfg: Dict[str, str]) -> Path:
     """Support PREPARE_LIGAND4 override; probe Windows-style and Linux-style locations."""
@@ -1088,13 +1362,14 @@ def _resolve_prepare_ligand4(mgltools_path: str, cfg: Dict[str, str]) -> Path:
         return win_probe
     return lin_probe
 
+
 def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepped_ligands_dir: Path):
     logging.info("Starting ligand preparation from PDB files (crystal-safe, MOL2-first path)")
 
     config = read_config()
     mgltools_python = config.get("MGLTOOLS_PYTHON")
-    mgltools_path   = config.get("MGLTOOLS_PATH")
-    obabel_exe_cfg  = config.get("OPENBABEL_PATH")
+    mgltools_path = config.get("MGLTOOLS_PATH")
+    obabel_exe_cfg = config.get("OPENBABEL_PATH")
 
     if not mgltools_python or not mgltools_path or not obabel_exe_cfg:
         raise RuntimeError("Missing paths in config.txt: MGLTOOLS_PYTHON, MGLTOOLS_PATH, OPENBABEL_PATH")
@@ -1115,47 +1390,93 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
     status_log = prepped_ligands_dir / "ligand_prep_status.tsv"
 
     # make sanitized/MOL2 visible next to outputs for easier debugging
+    # Create intermediates dir and a symlink to the source ligands (no per-ligand vars here)
     try:
-        link = prepped_ligands_dir / "intermediates"
+        inter_dir = prepped_ligands_dir / "intermediates"
+        inter_dir.mkdir(parents=True, exist_ok=True)
+        link = prepped_ligands_dir / "intermediates_src"
         if link.exists() or link.is_symlink():
-            if link.is_dir() and not link.is_symlink():
-                shutil.rmtree(link)
-            else:
-                link.unlink()
+            try:
+                if link.is_dir() and not link.is_symlink():
+                    shutil.rmtree(link)
+                else:
+                    link.unlink()
+            except Exception:
+                pass
         link.symlink_to(ligand_output_dir.resolve(), target_is_directory=True)
+        logging.info("[intermediates] symlinked source -> intermediates_src")
     except Exception as e:
         logging.warning("Could not create intermediates symlink: %s", e)
 
     def _sanitize_pdb(in_pdb: Path, out_pdb: Path) -> bool:
+        """
+        Keep ONLY the target ligand residue (by resName/chain/resSeq) and drop all protein ATOM lines.
+        Also retains headers/remarks/END lines.
+        """
+        # discover the primary ligand residue triplet from the first HETATM
+        target = None  # (resn, chain, resi)
         wrote_any = False
-        with open(in_pdb, "r", encoding="utf-8", errors="ignore") as fin, \
-                open(out_pdb, "w", encoding="utf-8") as fout:
-            for ln in fin:
+
+        def _triplet(ln: str):
+            # PDB fixed columns: resName 17-20, chainID 21, resSeq 22-26
+            resn = (ln[17:20] if len(ln) >= 20 else "").strip()
+            chain = (ln[21] if len(ln) >= 22 else " ").strip()
+            resi = (ln[22:26] if len(ln) >= 26 else "").strip()
+            return resn, chain, resi
+
+        with open(in_pdb, "r", encoding="utf-8", errors="ignore") as fin:
+            lines = fin.readlines()
+
+        # first pass: find the first HETATM triplet to define the ligand
+        for ln in lines:
+            if ln.startswith("HETATM"):
+                target = _triplet(ln)
+                break
+
+        if target:
+            logging.info(f"[sanitize] {in_pdb.name}: keeping ligand {target[0]} chain {target[1]} resi {target[2]}")
+        else:
+            logging.warning(f"[sanitize] {in_pdb.name}: no HETATM found; nothing to keep")
+
+        with open(out_pdb, "w", encoding="utf-8") as fout:
+            for ln in lines:
                 if not ln.startswith(("ATOM", "HETATM")):
-                    fout.write(ln);
+                    fout.write(ln)
                     continue
 
+                # drop all protein ATOM lines unconditionally
+                if ln.startswith("ATOM"):
+                    continue
+
+                # HETATM: keep only if it matches the target ligand residue
+                if target is None:
+                    # if we didn't find a HETATM earlier, be conservative: drop
+                    continue
+
+                resn, chain, resi = _triplet(ln)
+                if (resn, chain, resi) != target:
+                    continue
+
+                # basic altLoc/coordinate sanity (your original checks)
                 altloc = ln[16] if len(ln) > 16 else " "
-                # allow "", "A", and numeric altLocs like "1"
-                keep_alt = {"", "A", "1", "2"}  # extend if you’ve seen other numerics in your set
+                keep_alt = {"", " ", "A"} | set("0123456789")
                 a = altloc.strip()
                 if a and (a not in keep_alt and a.upper() not in keep_alt):
                     continue
-
                 try:
-                    x = float(ln[30:38]);
-                    y = float(ln[38:46]);
+                    x = float(ln[30:38])
+                    y = float(ln[38:46])
                     z = float(ln[46:54])
                     if any([(x != x), (y != y), (z != z)]) or max(abs(x), abs(y), abs(z)) > 1e6:
                         continue
                 except Exception:
                     continue
 
-                fout.write(ln);
+                fout.write(ln)
                 wrote_any = True
 
         if not wrote_any:
-            logging.warning(f"[control-prep] {in_pdb.name}: no safe ATOM/HETATM lines kept.")
+            logging.warning(f"[control-prep] {in_pdb.name}: no HETATM kept after residue filtering.")
         # require that we actually kept >=1 atom (not just headers/remarks)
         return wrote_any and out_pdb.exists() and out_pdb.stat().st_size > 0
 
@@ -1178,17 +1499,36 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
             logging.info(f"Skipping tiny ligand: {pdb_file.name}")
             continue
 
-        try:
-            fix_pdb_elements(str(pdb_file))
-        except Exception:
-            pass
-
         sanitized = pdb_file.with_suffix(".sanitized.pdb")
         ok = _sanitize_pdb(pdb_file, sanitized)
         if not ok:
             _log_malformed(pdb_file, "sanitize_kept_no_atoms")
             logging.warning(f"Sanitization produced no atoms: {pdb_file.name}")
             continue
+
+        # run element/element-symbol fixer on the exact file we will convert
+        try:
+            pre_txt = sanitized.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pre_txt = None
+        try:
+            # Column-accurate rewrite for HETATM/optional ATOM → element cols (77–78)
+            fix_element_columns_in_file(str(sanitized), rewrite_atoms=False)
+            # Secondary invariant: if any hydrogen-named atom still carries 'He', fix & log
+            fixed_txt, nname = assert_no_helium_in_hydrogen_names(
+                sanitized.read_text(encoding="utf-8", errors="ignore"))
+            if nname > 0:
+                sanitized.write_text(fixed_txt, encoding="utf-8")
+            _log_elem_fix_summary(sanitized, stage="preflight", before_text=pre_txt,
+                                  after_text=fixed_txt if nname > 0 else None)
+        except Exception as e:
+            logging.warning(f"[elements] preflight failed for {sanitized.name}: {e}")
+
+        try:
+            fix_pdb_elements(str(sanitized))
+            logging.info(f"[elements] fixed element fields: {sanitized.name}")
+        except Exception as e:
+            logging.warning(f"[elements] could not fix elements for {sanitized.name}: {e}")
 
         # quick buffer/counter-ion heuristics (unchanged)
         flag_buffer = False
@@ -1209,7 +1549,8 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                     if not flag_buffer and residue_name in {"UNL", "LIG"} and _is_polyacidic_buffer_like(m_chk):
                         flag_buffer, reason = True, "polyacidic_buffer_like"
         except Exception:
-            if _buffer_like_by_counts_from_pdbfile(sanitized) or (residue_name in {"UNL","LIG"} and _polyacidic_by_counts_from_pdbfile(sanitized)):
+            if _buffer_like_by_counts_from_pdbfile(sanitized) or (
+                    residue_name in {"UNL", "LIG"} and _polyacidic_by_counts_from_pdbfile(sanitized)):
                 flag_buffer, reason = True, "counts_only_polyacidic"
 
         if flag_buffer:
@@ -1221,9 +1562,9 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
             if 'm_chk' in locals() and m_chk is not None and residue_name in {"UNL", "LIG"}:
                 from rdkit.Chem import rdMolDescriptors as rdmd
                 rings = rdmd.CalcNumRings(m_chk)
-                arom  = rdmd.CalcNumAromaticRings(m_chk)
-                o     = sum(1 for a in m_chk.GetAtoms() if a.GetSymbol() == "O")
-                hac   = m_chk.GetNumHeavyAtoms()
+                arom = rdmd.CalcNumAromaticRings(m_chk)
+                o = sum(1 for a in m_chk.GetAtoms() if a.GetSymbol() == "O")
+                hac = m_chk.GetNumHeavyAtoms()
                 if rings == 0 and arom == 0 and hac >= 12 and (o / float(hac)) >= 0.40:
                     _log_malformed(pdb_file, "UNL_O_rich_ringless")
                     logging.info(f"Skipping UNL O-rich ringless fragment: {pdb_file.name}")
@@ -1243,19 +1584,22 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                     w.SetKekulize(False)
                 except Exception:
                     pass
-                w.write(m); w.close()
+                w.write(m);
+                w.close()
         except Exception:
             with open(ref_sdf, "w") as out:
                 out.write(pdb_file.stem + "\n$$$$\n")
 
         pdbqt_path = prepped_ligands_dir / f"{pdb_file.stem}.pdbqt"
 
-        if pdbqt_path.exists() and pdbqt_path.stat().st_size > 100 and is_valid_ligand(pdbqt_path, log_dir=prepped_ligands_dir):
+        if pdbqt_path.exists() and pdbqt_path.stat().st_size > 100 and is_valid_ligand(pdbqt_path,
+                                                                                       log_dir=prepped_ligands_dir):
             logging.info(f"[resume] Valid PDBQT already exists, skipping: {pdbqt_path.name}")
             continue
 
         tmp_mol2 = sanitized.with_suffix(".mol2")
         mgl_ok = False
+        ob_warn_no_H = False
 
         ob_cmd = [
             obabel_exe_short,
@@ -1265,7 +1609,16 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
         logging.info("Converting sanitized PDB -> MOL2 (no gen3d): " + " ".join(map(str, ob_cmd)))
         try:
             res_ob = subprocess.run(ob_cmd, check=True, capture_output=True, text=True, timeout=300)
-            logging.info(res_ob.stdout)
+            # log stderr too (helps diagnose missing hydrogens, valence issues)
+            if res_ob.stderr:
+                logging.warning("[obabel primary stderr] %s", res_ob.stderr.strip())
+
+            # hint for fallback if OBabel mentions hydrogen issue
+            msg = ((res_ob.stdout or "") + (res_ob.stderr or "")).lower()
+            if "no explicit hydrogens" in msg or "hydrogen" in msg and "warning" in msg:
+                logging.info("[hint] OBabel reported hydrogen issue -> prefer fallback route for crystal control.")
+                ob_warn_no_H = True
+
         except subprocess.CalledProcessError as e:
             logging.warning(f"OBabel PDB->MOL2 failed for {sanitized.name}:\n{e.stderr}")
 
@@ -1290,22 +1643,90 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                     cwd=str(sanitized.parent),
                     timeout=600
                 )
+                if result.stderr:
+                    logging.warning("[mgltools primary stderr] %s", result.stderr.strip())
                 logging.info(result.stdout)
                 mgl_ok = True
+                # --- helium post-write summary (primary writer) ---
+                try:
+                    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+                        lines = fh.readlines()
+                    new_lines, fixes, q_reason = assert_no_helium_in_pdbqt(lines, pdb_file.stem)
+                    # overwrite if we auto-fixed H-named atoms labeled as He
+                    if fixes > 0:
+                        with open(pdbqt_path, "w", encoding="utf-8") as out:
+                            out.writelines(new_lines)
+                    logging.info("[helium] ligand=%s fixes=%d quarantine=%s rules=%s",
+                                 pdb_file.stem, fixes, str(bool(q_reason)), rules_version())
+                    if q_reason:
+                        # quarantine and record provenance in TSV
+                        quarantine = prepped_ligands_dir / "quarantine"
+                        quarantine.mkdir(exist_ok=True)
+                        qpath = quarantine / pdbqt_path.name
+                        try:
+                            if pdbqt_path.exists():
+                                pdbqt_path.replace(qpath)
+                        except Exception:
+                            pass
+                        _append_prep_status(
+                            status_log_path=prepped_ligands_dir / "ligand_prep_status.tsv",
+                            ligand_name=pdb_file.stem,
+                            status="quarantined",
+                            reason="adt_helium_inconsistent",
+                            relpath=str(qpath.name),
+                            stage="validate_pdbqt",
+                            failure_code="adt_helium_inconsistent",
+                            failure_detail=q_reason,
+                            fixes_count=0,
+                            rules_ver=rules_version(),
+                        )
+                        # continue to next ligand
+                        continue
+                    else:
+                        # normal success path still gets a TSV row with fixes_count (0 or >0)
+                        _append_prep_status(
+                            status_log_path=prepped_ligands_dir / "ligand_prep_status.tsv",
+                            ligand_name=pdb_file.stem,
+                            status="ok",
+                            reason="",
+                            relpath=str(pdbqt_path.name),
+                            stage="write_pdbqt",
+                            failure_code="",
+                            failure_detail="",
+                            fixes_count=fixes,
+                            rules_ver=rules_version(),
+                        )
+                except Exception as e:
+                    logging.warning("[helium] postwrite summary failed for %s: %s", pdb_file.stem, e)
+
+
+
             except subprocess.TimeoutExpired:
                 logging.error(f"Timeout preparing {tmp_mol2.name}")
             except subprocess.CalledProcessError as e:
                 logging.warning(f"MGLTools failed for {tmp_mol2.name} (will try fallback):\n{e.stderr}")
 
         needs_fallback = (
-            not mgl_ok
-            or not pdbqt_path.exists()
-            or pdbqt_path.stat().st_size < 100
-            or not is_valid_ligand(pdbqt_path, log_dir=prepped_ligands_dir)  # <-- fixed
+                ob_warn_no_H
+                or not mgl_ok
+                or not pdbqt_path.exists()
+                or pdbqt_path.stat().st_size < 100
+                or not is_valid_ligand(pdbqt_path, log_dir=prepped_ligands_dir)
+        )
+        logging.info(
+            "[prep decision] mgl_ok=%s exists=%s size=%sB valid=%s ob_warn_no_H=%s -> needs_fallback=%s | %s",
+            mgl_ok,
+            pdbqt_path.exists(),
+            (pdbqt_path.stat().st_size if pdbqt_path.exists() else 0),
+            is_valid_ligand(pdbqt_path, log_dir=prepped_ligands_dir) if pdbqt_path.exists() else False,
+            ob_warn_no_H,
+            needs_fallback,
+            sanitized.name,
         )
 
         if needs_fallback:
-            logging.info(f"Primary prep failed/invalid for {sanitized.name}; trying RDKit→SDF (kekulize off)→OBabel→MOL2→MGLTools.")
+            logging.info(
+                f"Primary prep failed/invalid for {sanitized.name}; trying RDKit→SDF (kekulize off)→OBabel→MOL2→MGLTools.")
             tmp_sdf = sanitized.with_suffix(".tmp.sdf")
             try:
                 mol = Chem.MolFromPDBFile(str(sanitized), sanitize=False, removeHs=False)
@@ -1332,18 +1753,32 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                 logging.info("Converting SDF -> MOL2 (no gen3d): " + " ".join(map(str, ob_cmd2)))
                 try:
                     res_ob2 = subprocess.run(ob_cmd2, check=True, capture_output=True, text=True, timeout=300)
+                    if res_ob2.stderr:
+                        logging.warning("[obabel fallback stderr] %s", res_ob2.stderr.strip())
                     logging.info(res_ob2.stdout)
+                    if "no explicit hydrogens" in ((res_ob2.stdout or "") + (res_ob2.stderr or "")).lower():
+                        logging.info("[hint] Fallback OBabel also reports 'no explicit hydrogens'.")
                 except subprocess.CalledProcessError as e:
                     logging.error(f"OBabel SDF->MOL2 fallback failed for {sanitized.name}:\n{e.stderr}")
 
                 if tmp_mol2.exists() and tmp_mol2.stat().st_size > 100:
+                    # --- ensure explicit hydrogens before fallback MGLTools ---
+                    withH = tmp_mol2.with_name(tmp_mol2.stem + ".withH.mol2")
+                    okH2, hstderr2 = add_hydrogens_mol2(tmp_mol2, withH, obabel_exe_short)
+                    mol2_for_mgl2 = withH if okH2 else tmp_mol2
+                    logging.info("[ligprep] addHs stage=fallback in=%s ok=%s", tmp_mol2.name, okH2)
+                    if (hstderr2 or "").strip():
+                        logging.warning("[ligprep] addHs stderr (fallback) %s", hstderr2.splitlines()[-1][:200])
+
+                    # build the fallback prepare command using mol2_for_mgl2
                     prepare_cmd2 = [
                         mgltools_python_short, str(prepare_script),
-                        "-l", get_short_path_name(str(tmp_mol2.resolve())),
+                        "-l", get_short_path_name(str(mol2_for_mgl2.resolve())),
                         "-o", get_short_path_name(str(pdbqt_path.resolve())),
                         "-U", "nphs_lps",
                         "-A", "hydrogens",
                     ]
+
                     logging.info("Preparing ligand (fallback MOL2): " + " ".join(map(str, prepare_cmd2)))
                     try:
                         res2 = subprocess.run(
@@ -1353,6 +1788,57 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                             text=True,
                             timeout=600
                         )
+                        # --- helium post-write summary (fallback writer) ---
+                        try:
+                            with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+                                lines = fh.readlines()
+                            new_lines, fixes, q_reason = assert_no_helium_in_pdbqt(lines, pdb_file.stem)
+                            if fixes > 0:
+                                with open(pdbqt_path, "w", encoding="utf-8") as out:
+                                    out.writelines(new_lines)
+                            logging.info("[helium] ligand=%s fixes=%d quarantine=%s rules=%s",
+                                         pdb_file.stem, fixes, str(bool(q_reason)), rules_version())
+                            if q_reason:
+                                quarantine = pdbqt_path.parent / QUARANTINE_DIRNAME
+                                quarantine.mkdir(exist_ok=True)
+                                qpath = quarantine / pdbqt_path.name
+                                try:
+                                    if pdbqt_path.exists():
+                                        pdbqt_path.replace(qpath)
+                                except Exception:
+                                    pass
+                                _append_prep_status(
+                                    status_log_path=status_log_dir / "ligand_prep_status.tsv",
+                                    ligand_name=pdb_file.stem,
+                                    status="quarantined",
+                                    reason="adt_helium_inconsistent",
+                                    relpath=str(qpath.name),
+                                    stage="validate_pdbqt",
+                                    failure_code="adt_helium_inconsistent",
+                                    failure_detail=q_reason,
+                                    fixes_count=0,
+                                    rules_ver=rules_version(),
+                                )
+                                return (mol2_file.name, "postcheck_fail")
+                            else:
+                                _append_prep_status(
+                                    status_log_path=status_log_dir / "ligand_prep_status.tsv",
+                                    ligand_name=mol2_file.name,
+                                    status="ok",
+                                    reason="",
+                                    relpath=str(pdbqt_path.name),
+                                    stage="write_pdbqt",
+                                    failure_code="",
+                                    failure_detail="",
+                                    fixes_count=fixes,
+                                    rules_ver=rules_version(),
+                                )
+                        except Exception as e:
+                            logging.warning("[helium] fallback postwrite summary failed for %s: %s", mol2_file.name, e)
+
+                        if res2.stderr:
+                            logging.warning("[mgltools fallback stderr] %s", res2.stderr.strip())
+
                         logging.info(res2.stdout)
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Fallback MGLTools failed for {sanitized.name}:\n{e.stderr}")
@@ -1364,6 +1850,45 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                     tmp_sdf.unlink(missing_ok=True)
                 except Exception:
                     pass
+        # --- extra postcheck: ensure no *protein residues* slipped into ligand PDBQT
+        try:
+            has_protein_res = False
+            with open(pdbqt_path, "r", errors="ignore") as fh:
+                for ln in fh:
+                    if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
+                        continue
+                    # PDB/PDBQT fixed columns: residue name is cols 18-20 (0-based 17:20)
+                    resn = (ln[17:20] if len(ln) >= 20 else "").strip().upper()
+                    if resn in STANDARD_AMINO_ACIDS:
+                        has_protein_res = True
+                        break
+            if has_protein_res:
+                _log_malformed(pdb_file, "protein_residue_in_pdbqt")
+                quarantine = prepped_ligands_dir / QUARANTINE_DIRNAME
+                quarantine.mkdir(exist_ok=True)
+                try:
+                    if pdbqt_path.exists():
+                        pdbqt_path.replace(quarantine / pdbqt_path.name)
+                except Exception:
+                    pass
+                try:
+                    _append_prep_status(
+                        status_log,
+                        sanitized.name,
+                        "FAIL",
+                        "protein_residue_in_pdbqt",
+                        str((quarantine / pdbqt_path.name).relative_to(prepped_ligands_dir))
+                        if (quarantine / pdbqt_path.name).exists() else ""
+                    )
+                except Exception:
+                    pass
+                continue
+        except Exception:
+            pass
+            continue
+        except Exception:
+            # don't crash prep if the check itself fails; log and proceed to other guards
+            logging.warning(f"[postcheck] unable to scan for protein ATOM in {pdbqt_path.name}")
 
         try:
             if pdbqt_path.exists() and pdbqt_path.stat().st_size > 100:
@@ -1372,8 +1897,9 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
             pass
 
         # final validation & quarantine with correct log_dir
-        if not pdbqt_path.exists() or pdbqt_path.stat().st_size < 100 or not is_valid_ligand(pdbqt_path, log_dir=prepped_ligands_dir):
-            _log_malformed(pdbqt_path, "pdbqt_postcheck_fail_or_small")
+        if not pdbqt_path.exists() or pdbqt_path.stat().st_size < 100 or not is_valid_ligand(pdbqt_path,
+                                                                                             log_dir=prepped_ligands_dir):
+            _log_malformed(pdb_file, "pdbqt_postcheck_fail_or_small")
             quarantine = prepped_ligands_dir / QUARANTINE_DIRNAME
             quarantine.mkdir(exist_ok=True)
             try:
@@ -1382,7 +1908,8 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
             except Exception:
                 pass
             _append_prep_status(status_log, sanitized.name, "FAIL", "postcheck_fail_or_small",
-                                str((quarantine / pdbqt_path.name).relative_to(prepped_ligands_dir)) if (quarantine / pdbqt_path.name).exists() else "")
+                                str((quarantine / pdbqt_path.name).relative_to(prepped_ligands_dir)) if (
+                                            quarantine / pdbqt_path.name).exists() else "")
             continue
 
         logging.info(f"Created PDBQT: {pdbqt_path.name}")
@@ -1397,14 +1924,15 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
 def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
     return path.exists() and path.stat().st_size > 100 and is_valid_ligand(path, log_dir=log_dir)
 
+
 def prep_ligands_with_mgltools():
     print("Starting ligand preparation")
 
     cfg = read_config()
 
     ligand_extracted_dir = Path(cfg["LIGAND_EXTRACTED_DIR"]).resolve()
-    ligands_mol2_dir     = Path(cfg["LIGANDS_MOL2_DIR"]).resolve()
-    output_ligands_dir   = Path(cfg["OUTPUT_LIGANDS_DIR"]).resolve()
+    ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]).resolve()
+    output_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]).resolve()
     prepped_ligands_dir = output_ligands_dir
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1424,11 +1952,11 @@ def prep_ligands_with_mgltools():
 
     for label, p in [
         ("MGLTOOLS_PYTHON", mgltools_python),
-        ("MGLTOOLS_PATH",   mgltools_path),
-        ("OPENBABEL_PATH",  obabel_exe),
+        ("MGLTOOLS_PATH", mgltools_path),
+        ("OPENBABEL_PATH", obabel_exe),
         ("LIGAND_EXTRACTED_DIR", ligand_extracted_dir),
-        ("LIGANDS_MOL2_DIR",     ligands_mol2_dir),
-        ("OUTPUT_LIGANDS_DIR",   output_ligands_dir),
+        ("LIGANDS_MOL2_DIR", ligands_mol2_dir),
+        ("OUTPUT_LIGANDS_DIR", output_ligands_dir),
     ]:
         if not str(p).strip():
             raise RuntimeError(f"Config value missing/empty: {label}")
@@ -1451,7 +1979,7 @@ def prep_ligands_with_mgltools():
         print(f"\n=== Processing SDF: {sdf_file.name} ===")
         sdf_abs = sdf_file.resolve()
 
-        max_workers = max(1, int(os.environ.get("CPU","8")))
+        max_workers = max(1, int(os.environ.get("CPU", "8")))
 
         if USE_RDKIT_FOR_3D:
             print("Using RDKit ETKDG for 3D with parent-picking; OBabel only for format conversion ")
@@ -1476,14 +2004,21 @@ def prep_ligands_with_mgltools():
             continue
 
         print(f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel)")
-        max_workers = max(1, int(os.environ.get("CPU","8")))
+        max_workers = max(1, int(os.environ.get("CPU", "8")))
         futures = []
         ok_count = 0
         fail_count = 0
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for mol2_file in mol2_files:
+                norm_mol2 = collapse_sanitized_once(Path(mol2_file))
+                if norm_mol2 != mol2_file:
+                    try:
+                        norm_mol2.write_bytes(Path(mol2_file).read_bytes())
+                        mol2_file = norm_mol2
+                        logging.info("[tidy] normalized double-sanitized -> %s", mol2_file.name)
+                    except Exception as e:
+                        logging.warning("[tidy] unable to normalize %s: %s", mol2_file, e)
                 pdbqt_path = output_ligands_dir / f"{mol2_file.stem}.pdbqt"
-
                 # cache check: skip if a valid PDBQT already exists
                 if pdbqt_path.exists() and pdbqt_path.stat().st_size > 100 and is_valid_ligand(pdbqt_path,
                                                                                                log_dir=output_ligands_dir):
@@ -1491,7 +2026,9 @@ def prep_ligands_with_mgltools():
                     continue
 
                 futures.append(ex.submit(
-                    _prepare_one, mgltools_python_short, prepare_script_short, mol2_file, pdbqt_path, obabel_exe_short
+                    _prepare_one,
+                    mgltools_python_short, prepare_script_short, mol2_file, pdbqt_path, obabel_exe_short,
+                    status_log_dir=prepped_ligands_dir
                 ))
 
             total = len(futures)
@@ -1512,7 +2049,6 @@ def prep_ligands_with_mgltools():
                         pass
                 if i % 100 == 0 or status != "ok":
                     print(f"[{i}/{total}] {name}: {status}")
-
 
         def _as_path(p) -> Path:
             return p if isinstance(p, Path) else Path(p)
@@ -1718,7 +2254,7 @@ def prep_ligands_with_mgltools():
                         _element_fix_all_in_dir(lig_raw)
                         _expose_ligand_intermediates_for_debug(pdb_id, lig_raw)
                 print("Exposed intermediates under:", prepped_root)
-                
+
         print(f"Done: {ok_count} ok, {fail_count} failed/quarantined for {sdf_file.name}")
 
 

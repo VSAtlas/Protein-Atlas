@@ -1,0 +1,1008 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-08 02:04:19",
+    "rules_path": "<embedded>",
+    "pdb_filter": ""
+  },
+  "scanned": {
+    "proteins": [
+      "docked/1T46/protein.log",
+      "docked/2GQG/protein.log",
+      "docked/2HYY/protein.log",
+      "docked/2WGJ/protein.log",
+      "docked/2XP2/protein.log",
+      "docked/3CS9/protein.log",
+      "docked/3ERT/protein.log",
+      "docked/3G0E/protein.log",
+      "docked/3LXK/protein.log",
+      "docked/3OG7/protein.log",
+      "docked/3OXZ/protein.log",
+      "docked/3WZD/protein.log",
+      "docked/3WZE/protein.log",
+      "docked/3ZBF/protein.log",
+      "docked/3ZOS/protein.log",
+      "docked/4AG8/protein.log",
+      "docked/4ASD/protein.log",
+      "docked/4RT7/protein.log",
+      "docked/4U2P/protein.log",
+      "docked/4U5J/protein.log",
+      "docked/4XUF/protein.log",
+      "docked/4XV2/protein.log",
+      "docked/5I96/protein.log",
+      "docked/5L2I/protein.log",
+      "docked/5L7I/protein.log",
+      "docked/5MO4/protein.log",
+      "docked/5VA0/protein.log",
+      "docked/6ADQ/protein.log",
+      "docked/6JQR/protein.log",
+      "docked/6O0K/protein.log",
+      "docked/6O0L/protein.log",
+      "docked/6U4J/protein.log",
+      "docked/6WTN/protein.log",
+      "docked/_analysis/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/1T46/ligand_prep_status.tsv",
+      "prepped_ligands/2GQG/ligand_prep_status.tsv",
+      "prepped_ligands/2HYY/ligand_prep_status.tsv",
+      "prepped_ligands/2WGJ/ligand_prep_status.tsv",
+      "prepped_ligands/2XP2/ligand_prep_status.tsv",
+      "prepped_ligands/3CS9/ligand_prep_status.tsv",
+      "prepped_ligands/3ERT/ligand_prep_status.tsv",
+      "prepped_ligands/3G0E/ligand_prep_status.tsv",
+      "prepped_ligands/3LXK/ligand_prep_status.tsv",
+      "prepped_ligands/3OG7/ligand_prep_status.tsv",
+      "prepped_ligands/3OXZ/ligand_prep_status.tsv",
+      "prepped_ligands/3WZD/ligand_prep_status.tsv",
+      "prepped_ligands/3WZE/ligand_prep_status.tsv",
+      "prepped_ligands/3ZBF/ligand_prep_status.tsv",
+      "prepped_ligands/3ZOS/ligand_prep_status.tsv",
+      "prepped_ligands/4AG8/ligand_prep_status.tsv",
+      "prepped_ligands/4ASD/ligand_prep_status.tsv",
+      "prepped_ligands/4RT7/ligand_prep_status.tsv",
+      "prepped_ligands/4U2P/ligand_prep_status.tsv",
+      "prepped_ligands/4U5J/ligand_prep_status.tsv",
+      "prepped_ligands/4XUF/ligand_prep_status.tsv",
+      "prepped_ligands/4XV2/ligand_prep_status.tsv",
+      "prepped_ligands/5I96/ligand_prep_status.tsv",
+      "prepped_ligands/5L2I/ligand_prep_status.tsv",
+      "prepped_ligands/5L7I/ligand_prep_status.tsv",
+      "prepped_ligands/5MO4/ligand_prep_status.tsv",
+      "prepped_ligands/5VA0/ligand_prep_status.tsv",
+      "prepped_ligands/6ADQ/ligand_prep_status.tsv",
+      "prepped_ligands/6JQR/ligand_prep_status.tsv",
+      "prepped_ligands/6O0K/ligand_prep_status.tsv",
+      "prepped_ligands/6O0L/ligand_prep_status.tsv",
+      "prepped_ligands/6U4J/ligand_prep_status.tsv",
+      "prepped_ligands/6WTN/ligand_prep_status.tsv",
+      "prepped_ligands/_analysis/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log"
+    ]
+  },
+  "stats": {
+    "soft": 53,
+    "hard": 45
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 23,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:30] Can't kekulize mol.  Unkekulized atoms: 19 20 21 22 23",
+            "[02:05:30] Explicit valence for atom # 14 C, 5, is greater than permitted",
+            "[02:05:31] Explicit valence for atom # 35 C, 5, is greater than permitted"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 2,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "3CS9",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 4,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.sanitized.pdb: WARNING:root:[obabel primary stderr] 1 molecule converted",
+            "[02:05:34] sanitize [02:05:34] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.sanitized.sanitized.pdb: WARNING:root:[obabel primary stderr] 1 molecule converted",
+            "[02:05:37] sanitize [02:05:37] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.sanitized.pdb: Saved fixed PDB to /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6JQR/ligands_raw/C6F_A1001.sanitized.pdb"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 3,
+      "severity": "hard",
+      "rule_id": "ligprep.mgl_partial_write",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "Partial write during conversion",
+      "hint": "Conversion partial; capture stderr, retry fallback, then quarantine if persistent.",
+      "count": 3,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "WARNING: 20 atoms of 23 in RXT_A601.sanitized.sanitized.mol2  were not written",
+            "WARNING: 20 atoms of 23 in RXT_B601.sanitized.sanitized.mol2  were not written",
+            "WARNING: 73 atoms of 82 in CDL_T201.sanitized.mol2  were not written"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 4,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "6U4J",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J/ligands_raw/PWV_B504.sanitized.sanitized.pdb: [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5L7I/ligands_raw/VIS_A1202.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:33] sanitize [02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J/ligands_raw/PWV_A503.sanitized.sanitized.pdb: WARNING:root:[obabel primary stderr] 1 molecule converted"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 5,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "6O0L",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0L/ligands_raw/LBM_C301.sanitized.sanitized.pdb: Saved fixed PDB to /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4XV2/ligands_raw/P06_A801.sanitized.sanitized.pdb",
+            "[02:05:33] sanitize [02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0L/ligands_raw/LBM_A301.sanitized.sanitized.pdb: WARNING:root:[obabel primary stderr] 1 molecule converted"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 6,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "4XV2",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4XV2/ligands_raw/P06_A801.sanitized.sanitized.pdb: WARNING:root:MGLTools failed for RXT_A601.sanitized.sanitized.mol2 (will try fallback):",
+            "[02:05:34] sanitize [02:05:34] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4XV2/ligands_raw/P06_B801.sanitized.sanitized.pdb: WARNING:root:MGLTools failed for RXT_B601.sanitized.sanitized.mol2 (will try fallback):"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 7,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "2WGJ",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": "2025-10-08 02:05:30",
+      "last_seen": "2025-10-08 02:05:30",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:30] sanitize [02:05:30] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2WGJ/ligands_raw/VGH_A2346.sanitized.sanitized.pdb: 2025-10-08 02:05:30,835 - INFO - [prep] running ligand prep (raw newer than prepped or first run)."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 8,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "3OG7",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": "2025-10-08 02:05:30",
+      "last_seen": "2025-10-08 02:05:30",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:30] sanitize [02:05:30] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3OG7/ligands_raw/032_A1.sanitized.sanitized.pdb: 2025-10-08 02:05:30,860 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=False"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 9,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "6O0K",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0K/ligands_raw/LBM_A301.sanitized.sanitized.pdb: WARNING:root:[obabel primary stderr] 1 molecule converted"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 10,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "5L2I",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5L2I/ligands_raw/LQQ_A900.sanitized.sanitized.pdb: Saved fixed PDB to /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2GQG/ligands_raw/1N1_B502.sanitized.sanitized.pdb"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 11,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "3G0E",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3G0E/ligands_raw/B49_A9000.sanitized.sanitized.pdb: [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4AG8/ligands_raw/AXI_A2000.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 12,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "5I96",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:32] sanitize [02:05:32] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5I96/ligands_raw/69Q_B502.sanitized.sanitized.pdb: [02:05:32] DEPRECATION WARNING: please use MorganGenerator"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 13,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "3LXK",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:36] sanitize [02:05:36] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3LXK/ligands_raw/MI1_A1125.sanitized.sanitized.pdb: Saved fixed PDB to /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4ASD_NOLIG/work/4ASD_NOLIG_elemfix.pdb"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 14,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "2XP2",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:36] sanitize [02:05:36] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2XP2/ligands_raw/VGH_A9000.sanitized.sanitized.pdb: Saved fixed PDB to /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0L/ligands_raw/LBM_C301.sanitized.pdb"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 15,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "5MO4",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:41] sanitize [02:05:41] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5MO4/ligands_raw/NIL_A601.sanitized.sanitized.pdb: WARNING:root:Phenix not available; skipping pdbtools polish"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 16,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3WZD",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 5,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3WZD/ligands_raw/DTT_A1203.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:35] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3WZD/ligands_raw/LEV_A1201.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:38] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3WZD/ligands_raw/DTT_A1204.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 17,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3CS9",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 4,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:34] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:37] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 18,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3ZOS",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 3,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3ZOS/ligands_raw/0LI_A1004.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:32] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3ZOS/ligands_raw/0LI_B1000.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:36] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3ZOS/ligands_raw/0LI_A1000.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 19,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "6U4J",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 3,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J/ligands_raw/PWV_B504.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J/ligands_raw/PWV_B504.sanitized.sanitized.pdb: [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5L7I/ligands_raw/VIS_A1202.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J/ligands_raw/PWV_A503.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 20,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "5I96",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 3,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:32] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5I96/ligands_raw/69Q_B502.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:35] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5I96/ligands_raw/NDP_B503.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:38] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5I96/ligands_raw/NDP_A506.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 21,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "5L7I",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 3,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:35] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5L7I/ligands_raw/MPG_B1204.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:38] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5L7I/ligands_raw/VIS_B1202.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:40] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5L7I/ligands_raw/MPG_B1203.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 22,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "4U2P",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 2,
+      "first_seen": "2025-10-08 02:04:57",
+      "last_seen": "2025-10-08 02:15:11",
+      "files": [
+        {
+          "path": "docked/4U2P/protein.log",
+          "samples": [
+            "2025-10-08 02:04:57,254 - INFO - [render-enqueue] 4U2P bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4U2P/receptor/4U2P_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/4U2P.pdb | ctrl=None | rdk=None",
+            "2025-10-08 02:15:11,976 - INFO - [render-enqueue] 4U2P bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4U2P_NOLIG/receptor/4U2P_NOLIG_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/4U2P.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 23,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "4XUF",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:30] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4XUF/ligands_raw/P30_B1001.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4XUF/ligands_raw/P30_A1001.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 24,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "6O0K",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0K/ligands_raw/LBM_A301.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:32] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0K/ligands_raw/2PE_A302.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 25,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "4U5J",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4U5J/ligands_raw/RXT_A601.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4U5J/ligands_raw/RXT_B601.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 26,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3WZE",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3WZE/ligands_raw/DTT_A1203.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3WZE/ligands_raw/BAX_A1201.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 27,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "5MO4",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5MO4/ligands_raw/AY7_A602.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:41] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/5MO4/ligands_raw/NIL_A601.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 28,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "6WTN",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/ligands_raw/RXT_A1204.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:15:32] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/ligands_raw/RXT_A1204.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 29,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3G0E",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3G0E/ligands_raw/B49_A9000.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:31] sanitize [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3G0E/ligands_raw/B49_A9000.sanitized.sanitized.pdb: [02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4AG8/ligands_raw/AXI_A2000.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 30,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "6JQR",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6JQR/ligands_raw/CXS_A1007.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6JQR/ligands_raw/C6F_A1001.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 31,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "6O0L",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0L/ligands_raw/LBM_C301.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:33] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6O0L/ligands_raw/LBM_A301.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 32,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "4XV2",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4XV2/ligands_raw/P06_A801.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[02:05:34] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4XV2/ligands_raw/P06_B801.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 33,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-08 02:15:11",
+      "last_seen": "2025-10-08 02:15:11",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "2025-10-08 02:15:11,976 - INFO - [render-enqueue] 4U2P bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4U2P_NOLIG/receptor/4U2P_NOLIG_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/4U2P.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 34,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "2WGJ",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:30] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2WGJ/ligands_raw/VGH_A2346.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 35,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3OG7",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:30] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3OG7/ligands_raw/032_A1.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 36,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "4ASD",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4ASD/ligands_raw/BAX_A1500.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 37,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3OXZ",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3OXZ/ligands_raw/0LI_A1.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 38,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3ERT",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3ERT/ligands_raw/OHT_A600.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 39,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "4RT7",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:31] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/4RT7/ligands_raw/P30_A1001.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 40,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3LXK",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:36] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3LXK/ligands_raw/MI1_A1125.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 41,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "2XP2",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:36] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2XP2/ligands_raw/VGH_A9000.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 42,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "6ADQ",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 1,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_020419.log",
+          "samples": [
+            "[02:05:39] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_T201.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    }
+  ]
+}

@@ -1,0 +1,695 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-07 23:16:28",
+    "rules_path": "<embedded>",
+    "pdb_filter": ""
+  },
+  "scanned": {
+    "proteins": [
+      "docked/1T46/protein.log",
+      "docked/2GQG/protein.log",
+      "docked/2HYY/protein.log",
+      "docked/_analysis/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/1T46/ligand_prep_status.tsv",
+      "prepped_ligands/2GQG/ligand_prep_status.tsv",
+      "prepped_ligands/2HYY/ligand_prep_status.tsv",
+      "prepped_ligands/_analysis/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log"
+    ]
+  },
+  "stats": {
+    "soft": 10,
+    "hard": 28
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 6,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "[RDKit] ERROR:[23:16:40] Explicit valence for atom # 18 He, 1, is greater than permitted",
+            "rdkit.Chem.rdchem.AtomValenceException: Explicit valence for atom # 18 He, 1, is greater than permitted",
+            "[RDKit] ERROR:[23:16:41] Explicit valence for atom # 18 He, 1, is greater than permitted"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 2,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "STI_A3.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,200 - WARNING - No score for STI_A3.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 3,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "STI_A3.sanitized.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,200 - WARNING - No score for STI_A3.sanitized.pdbqt"
+          ]
+        }
+      ],
+      "joins": [
+        {
+          "ligand": "STI_A3.sanitized.pdbqt",
+          "prep_status": "ok",
+          "reason": ""
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000010.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,237 - WARNING - No score for rdk_0000010.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 5,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0002911.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,237 - WARNING - No score for rdk_0002911.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 6,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000043.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,237 - WARNING - No score for rdk_0000043.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 7,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000119.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,239 - WARNING - No score for rdk_0000119.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 8,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000067.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,239 - WARNING - No score for rdk_0000067.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 9,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000076.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,240 - WARNING - No score for rdk_0000076.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 10,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000123.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,241 - WARNING - No score for rdk_0000123.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 11,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000160.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,247 - WARNING - No score for rdk_0000160.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 12,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "1T46",
+      "ligand": "rdk_0000125.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,247 - WARNING - No score for rdk_0000125.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 13,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "STI_A3.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,200 - WARNING - No score for STI_A3.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 14,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "STI_A3.sanitized.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,200 - WARNING - No score for STI_A3.sanitized.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 15,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000010.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "Docking (bench_pocket1_single):   0%|          | 0/9 [00:00<?, ?ligand/s]\u001b[A2025-10-07 23:16:47,237 - WARNING - No score for rdk_0000010.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 16,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0002911.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,237 - WARNING - No score for rdk_0002911.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 17,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000043.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,237 - WARNING - No score for rdk_0000043.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 18,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000119.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,239 - WARNING - No score for rdk_0000119.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 19,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000067.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,239 - WARNING - No score for rdk_0000067.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 20,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000076.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,240 - WARNING - No score for rdk_0000076.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 21,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000123.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,241 - WARNING - No score for rdk_0000123.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 22,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000160.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,247 - WARNING - No score for rdk_0000160.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 23,
+      "severity": "hard",
+      "rule_id": "dock.no_score",
+      "pdb": "2025",
+      "ligand": "rdk_0000125.pdbqt",
+      "message": "No score for 1 ligand(s)",
+      "hint": "Check ligand_prep_status.tsv for this ligand; verify docking ran; inspect pocket center/grid logs.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,247 - WARNING - No score for rdk_0000125.pdbqt"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 24,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 3,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:17:42",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,064 - INFO - [render-enqueue] 1T46 bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/1T46/receptor/1T46_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/1T46.pdb | ctrl=None | rdk=None",
+            "2025-10-07 23:17:06,613 - INFO - [render-enqueue] 2GQG bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2GQG/receptor/2GQG_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/2GQG.pdb | ctrl=None | rdk=None",
+            "2025-10-07 23:17:42,978 - INFO - [render-enqueue] 2HYY bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2HYY/receptor/2HYY_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/2HYY.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 25,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "2HYY",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:17:42",
+      "last_seen": "2025-10-07 23:17:42",
+      "files": [
+        {
+          "path": "docked/2HYY/protein.log",
+          "samples": [
+            "2025-10-07 23:17:42,978 - INFO - [render-enqueue] 2HYY bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2HYY/receptor/2HYY_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/2HYY.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 26,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "2GQG",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:17:06",
+      "last_seen": "2025-10-07 23:17:06",
+      "files": [
+        {
+          "path": "docked/2GQG/protein.log",
+          "samples": [
+            "2025-10-07 23:17:06,613 - INFO - [render-enqueue] 2GQG bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/2GQG/receptor/2GQG_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/2GQG.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 27,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "1T46",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,064 - INFO - [render-enqueue] 1T46 bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/1T46/receptor/1T46_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/1T46.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 28,
+      "severity": "soft",
+      "rule_id": "render.no_ctrl_rdk_paths",
+      "pdb": "1T46",
+      "ligand": null,
+      "message": "Screenshots skipped: no ctrl/rdk pose paths",
+      "hint": "Why no valid poses? Correlate with 'No score'/validation; ensure control selection produced a pose.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,251 - INFO - [render-skip] 1T46 bench_pocket1_single: no ctrl/rdk pose paths \u2192 no screenshots will be generated."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 29,
+      "severity": "soft",
+      "rule_id": "render.no_ctrl_rdk_paths",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "Screenshots skipped: no ctrl/rdk pose paths",
+      "hint": "Why no valid poses? Correlate with 'No score'/validation; ensure control selection produced a pose.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,251 - INFO - [render-skip] 1T46 bench_pocket1_single: no ctrl/rdk pose paths \u2192 no screenshots will be generated."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 30,
+      "severity": "soft",
+      "rule_id": "recentering.skipped_zero",
+      "pdb": "1T46",
+      "ligand": null,
+      "message": "Early recenter skipped: evaluated=0",
+      "hint": "No evaluated poses to guide recentering; widen first-pass or ensure at least one pose completes.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "docked/1T46/protein.log",
+          "samples": [
+            "2025-10-07 23:16:47,248 - INFO - Early recenter skipped: evaluated=0 < threshold."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 31,
+      "severity": "soft",
+      "rule_id": "recentering.skipped_zero",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "Early recenter skipped: evaluated=0",
+      "hint": "No evaluated poses to guide recentering; widen first-pass or ensure at least one pose completes.",
+      "count": 1,
+      "first_seen": "2025-10-07 23:16:47",
+      "last_seen": "2025-10-07 23:16:47",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251007_231628.log",
+          "samples": [
+            "2025-10-07 23:16:47,248 - INFO - Early recenter skipped: evaluated=0 < threshold."
+          ]
+        }
+      ],
+      "joins": []
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-08 22:19:37",
+    "rules_path": "<embedded>",
+    "pdb_filter": ""
+  },
+  "scanned": {
+    "proteins": [
+      "docked/3OG7/protein.log",
+      "docked/3ZBF/protein.log",
+      "docked/6U4J/protein.log",
+      "docked/6WTN/protein.log",
+      "docked/_analysis/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/3OG7/ligand_prep_status.tsv",
+      "prepped_ligands/3ZBF/ligand_prep_status.tsv",
+      "prepped_ligands/6U4J/ligand_prep_status.tsv",
+      "prepped_ligands/6WTN/ligand_prep_status.tsv",
+      "prepped_ligands/_analysis/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_221937.log"
+    ]
+  },
+  "stats": {
+    "soft": 3
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "6U4J",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 2,
+      "first_seen": "2025-10-08 22:19:38",
+      "last_seen": "2025-10-08 22:20:26",
+      "files": [
+        {
+          "path": "docked/6U4J/protein.log",
+          "samples": [
+            "2025-10-08 22:19:38,677 - INFO - [render-enqueue] 6U4J bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J_NOLIG/receptor/6U4J_NOLIG_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/6U4J.pdb | ctrl=None | rdk=None",
+            "2025-10-08 22:20:26,022 - INFO - [render-enqueue] 6U4J bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J_NOLIG/receptor/6U4J_NOLIG_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/6U4J.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 2,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-08 22:20:26",
+      "last_seen": "2025-10-08 22:20:26",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251008_221937.log",
+          "samples": [
+            "2025-10-08 22:20:26,022 - INFO - [render-enqueue] 6U4J bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6U4J_NOLIG/receptor/6U4J_NOLIG_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/6U4J.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    }
+  ]
+}

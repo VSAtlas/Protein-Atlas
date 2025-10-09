@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import subprocess
 import time
-
+import os, sys, json, statistics, tempfile, threading
 # ------------------------
 # Exclusions: common ions/solvents/cofactors to hide in "native" views
 # ------------------------
@@ -29,6 +29,184 @@ EXCLUDE_HET_IDS = {
     "GLC", "GAL", "MAN", "NAG", "BMA", "FUC", "TRE", "BGC", "BOG",
     "HEM", "FAD", "FMN", "NAD", "NAP", "NADH", "SAM", "SAH",
 }
+
+
+# --- Deferred render queue (first-class, file-backed) -----------------------
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+_DEFER_MODE = bool(int(os.environ.get("DEFER_PYMOL", "0")))
+_QUEUE_PATH = os.environ.get("PYMOL_DEFER_QUEUE",
+                             str(Path(os.environ.get("OVERALL_DIR", Path.cwd()))
+                                 / "deferred_pymol_jobs.jsonl"))
+_Q_LOCK = threading.Lock()
+
+def set_defer_mode(enable: bool, queue_path: Optional[str] = None):
+    """Toggle deferral globally (preferred entry point for callers)."""
+    global _DEFER_MODE, _QUEUE_PATH
+    _DEFER_MODE = bool(enable)
+    if queue_path:
+        _QUEUE_PATH = str(queue_path)
+
+def _enqueue_job(kind: str, payload: dict):
+    Path(_QUEUE_PATH).parent.mkdir(parents=True, exist_ok=True)
+    rec = {"kind": kind, **payload}
+    line = json.dumps(rec, ensure_ascii=False)
+    with _Q_LOCK:
+        with open(_QUEUE_PATH, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+def _iter_jobs(path: str):
+    p = Path(path)
+    if not p.is_file():
+        return
+    with open(p, "r", encoding="utf-8") as fh:
+        for ln in fh:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                yield json.loads(ln)
+            except Exception:
+                continue
+
+def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2):
+    qp = str(queue_path or _QUEUE_PATH)
+    jobs = list(_iter_jobs(qp)) or []
+    if not jobs:
+        print("[capture_pose] no deferred PyMOL jobs to replay.")
+        return 0
+
+    print(f"[capture_pose] replaying {len(jobs)} deferred PyMOL jobs | workers={max_workers}")
+
+    global _DEFER_MODE
+    _prev = _DEFER_MODE
+    _DEFER_MODE = False
+    try:
+        def _run(job):
+            k = job.get("kind")
+            if k == "three":
+                return _render_three_views_with_pymol(
+                    job["receptor_path"], job["ligand_paths_and_colors"],
+                    job["outprefix"],
+                    label_top_n_res=job.get("label_top_n_res", 5),
+                    label_cutoff=job.get("label_cutoff", 5.0),
+                    viewport=tuple(job.get("viewport", (192, 144))),
+                    hide_receptor=bool(job.get("hide_receptor", False)),
+                )
+            elif k == "native":
+                return _render_native_on_original_pdb(
+                    job["original_pdb"], job["outprefix"],
+                    exclude_resns=job.get("exclude_resns", []),
+                    viewport=tuple(job.get("viewport", (192, 144))),
+                )
+
+        workers = max(1, int(max_workers))
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(_run, jobs))
+    finally:
+        _DEFER_MODE = _prev
+        # Clear queue after successful replay
+        try:
+            Path(qp).unlink()
+        except Exception:
+            pass
+    print("[capture_pose] deferred PyMOL jobs complete.")
+    return len(jobs)
+def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
+                            max_workers: int = 2,
+                            mode: str = "cli",
+                            slow_ms: int = 2500) -> int:
+    """
+    Multi-process renderer that replays JSONL queue without sharing a PyMOL session.
+    - mode: "cli" (pymol -cq) preferred; "pymol2" fallback per process.
+    Backoff:
+      If >=2 jobs in the last minute exceed slow_ms or an error occurs, halves workers for 60s.
+      Each clean minute, +1 worker until target.
+    """
+    qp = str(queue_path or _QUEUE_PATH)
+    jobs = list(_iter_jobs(qp)) or []
+    if not jobs:
+        print("[render-replay] workers=0 jobs=0 mode=%s" % mode)
+        return 0
+
+    target = max(1, int(max_workers))
+    # disable in-queue deferral while we replay
+    global _DEFER_MODE
+    prev = _DEFER_MODE
+    _DEFER_MODE = False
+
+    print(f"[render-replay] workers={target} jobs={len(jobs)} mode={mode}")
+
+    # Controller state
+    active = min(target, os.cpu_count() or 2, 4)  # soft cap 4 to start
+    incidents: List[int] = []
+    durations: List[int] = []
+    ok_count = fail_count = 0
+
+    def _window_trim(now_ms: int):
+        # keep last ~60s window
+        cutoff = now_ms - 60_000
+        while incidents and incidents[0] < cutoff:
+            incidents.pop(0)
+
+    idx = 0
+    while idx < len(jobs):
+        # slice next batch up to 'active' size
+        batch = jobs[idx: idx + active]
+        idx += len(batch)
+        started_ms = int(time.time() * 1000)
+
+        with ProcessPoolExecutor(max_workers=active) as ex:
+            futs = [ex.submit(_run_one_job_mp, job, mode) for job in batch]
+            for j, fut in zip(batch, as_completed(futs)):
+                ok, t_ms, err = fut.result()
+                durations.append(t_ms)
+                kind = j.get("kind","?")
+                tag = Path(j.get("outprefix","?")).name
+                print(f"[render-done] {kind}:{tag} t_ms={t_ms} ok={int(ok)}"
+                      + (f" err={err.splitlines()[0][:80]}" if (err) else ""))
+
+                if not ok:
+                    fail_count += 1
+                    incidents.append(int(time.time()*1000))
+                else:
+                    ok_count += 1
+                    if t_ms >= slow_ms:
+                        incidents.append(int(time.time()*1000))
+
+        # Backoff / ramp
+        now = int(time.time() * 1000)
+        _window_trim(now)
+        if len(incidents) >= 2:
+            # back off
+            new_active = max(1, active // 2)
+            if new_active < active:
+                print(f"[render-backoff] recent incidents={len(incidents)} slow_ms={slow_ms} -> workers {active}→{new_active}")
+            active = new_active
+            # cooldown one minute window naturally by time
+        else:
+            if active < target:
+                active += 1
+
+    # Clear the queue
+    try:
+        Path(qp).unlink()
+    except Exception:
+        pass
+    _DEFER_MODE = prev
+
+    # Summary
+    if durations:
+        avg = int(sum(durations)/len(durations))
+        p50 = int(statistics.median(durations))
+        p90 = int(sorted(durations)[max(0,int(0.9*len(durations))-1)])
+    else:
+        avg=p50=p90=0
+    print(f"[render-summary] jobs={len(jobs)} ok={ok_count} fail={fail_count} avg_ms={avg} p50={p50} p90={p90} workers_used<={target}")
+    return ok_count
+
+
 
 
 # ============================================================
@@ -146,7 +324,7 @@ def _render_three_views_with_pymol(
     outprefix: str,
     label_top_n_res: int = 5,
     label_cutoff: float = 5.0,
-    viewport: Tuple[int, int] = (1200, 900),
+    viewport: Tuple[int, int] = (192, 144),
     hide_receptor: bool = False,
 ) -> None:
     """
@@ -154,6 +332,19 @@ def _render_three_views_with_pymol(
     Receptor shown as transparent surface; ligands as sticks; labels top-N closest residues (CA) within cutoff Å.
     If hide_receptor is True, receptor is not drawn (pair-only views).
     """
+    if _DEFER_MODE:
+        _enqueue_job("three", {
+            "receptor_path": str(receptor_path),
+            "ligand_paths_and_colors": [(str(p), str(n), str(c)) for (p, n, c) in ligand_paths_and_colors],
+            "outprefix": str(outprefix),
+            "label_top_n_res": int(label_top_n_res),
+            "label_cutoff": float(label_cutoff),
+            "viewport": list(viewport),
+            "hide_receptor": bool(hide_receptor),
+        })
+        return
+
+
     PyMOL = _with_pymol()
     if PyMOL is None:
         return
@@ -179,7 +370,12 @@ def _render_three_views_with_pymol(
         for lig_path, obj_name, color in ligand_paths_and_colors:
             if not lig_path or not Path(lig_path).is_file():
                 continue
-            cmd.load(lig_path, obj_name)
+            lig_path_eff = _prefer_best_pdb(lig_path)
+            if not Path(lig_path_eff).is_file():
+                print(f"[capture_pose] missing ligand file: {lig_path_eff} (original: {lig_path})")
+                continue
+
+            cmd.load(lig_path_eff, obj_name)
             cmd.show("sticks", obj_name)
             cmd.color(color, obj_name)
             lig_objects.append(obj_name)
@@ -225,32 +421,41 @@ def _render_three_views_with_pymol(
                 top_sel = " or ".join([f"receptor and chain {c} and resi {r}" for _, c, r, _, _ in top_res])
                 cmd.select("top_site", top_sel)
                 cmd.show("sticks", "top_site")
-                cmd.color("cyan", "top_site")
-                cmd.label("top_site and name CA and (alt '' or alt A)", "resn + resi")
-
+                cmd.color("gray", "top_site")
+                cmd.label("top_site and name CA and (alt '' or alt A)", "resn + '-' + resi")
         # Views
         cmd.zoom(lig_union, 10)
         cmd.viewport(*viewport)
         cmd.set("antialias", 2)
         cmd.set("ray_opaque_background", 0)
 
-        cmd.png(f"{outprefix}_front.png", ray=1)
+        cmd.png(f"{outprefix}_front.png", ray=0)
         cmd.turn("y", 90)
-        cmd.png(f"{outprefix}_side.png", ray=1)
+        cmd.png(f"{outprefix}_side.png", ray=0)
         cmd.turn("x", 90)
-        cmd.png(f"{outprefix}_top.png", ray=1)
+        cmd.png(f"{outprefix}_top.png", ray=0)
 
 
 def _render_native_on_original_pdb(
     original_pdb: str,
     outprefix: str,
     exclude_resns: Sequence[str] = tuple(EXCLUDE_HET_IDS),
-    viewport: Tuple[int, int] = (1200, 900),
+    viewport: Tuple[int, int] = (192, 144),
 ) -> None:
     """
     Render original PDB with native ligand(s): polymer surface + HETATM (minus excludes) as sticks.
     Saves <outprefix>_[front|side|top].png.
     """
+    if _DEFER_MODE:
+        _enqueue_job("native", {
+            "original_pdb": str(original_pdb),
+            "outprefix": str(outprefix),
+            "exclude_resns": list(exclude_resns or []),
+            "viewport": list(viewport),
+        })
+        return
+
+
     PyMOL = _with_pymol()
     if PyMOL is None:
         return
@@ -286,7 +491,7 @@ def _render_native_on_original_pdb(
             cmd.select("near_native", "orig within 5 of native_lig and polymer.protein")
             cmd.show("sticks", "near_native")
             cmd.color("cyan", "near_native")
-            cmd.label("near_native and name CA", "resn + resi")
+            cmd.label("near_native and name CA", "resn + '-' + resi")
 
             focus_sel = "native_lig or near_native"
         else:
@@ -298,16 +503,19 @@ def _render_native_on_original_pdb(
         cmd.set("antialias", 2)
         cmd.set("ray_opaque_background", 0)
 
-        cmd.png(f"{outprefix}_front.png", ray=1)
+        cmd.png(f"{outprefix}_front.png", ray=0)
         cmd.turn("y", 90)
-        cmd.png(f"{outprefix}_side.png", ray=1)
+        cmd.png(f"{outprefix}_side.png", ray=0)
         cmd.turn("x", 90)
-        cmd.png(f"{outprefix}_top.png", ray=1)
+        cmd.png(f"{outprefix}_top.png", ray=0)
 
 
 # ============================================================
 # PML writer + launch/fallback
 # ============================================================
+from pathlib import Path
+from typing import Tuple
+from string import Template
 
 def write_multiview_pml(
     receptor_path: str,
@@ -316,113 +524,110 @@ def write_multiview_pml(
     out_pml: Path,
     label_top_n_res: int = 5,
     label_cutoff: float = 5.0,
+    outprefix: str = "",
+    viewport: Tuple[int, int] = (192, 144),
 ) -> Path:
     """
-    Writes a PyMOL .pml that:
-      - loads receptor (transparent surface)
-      - optionally loads CONTROL (green sticks) and RDK (magenta sticks)
-      - labels top-N nearby residues within cutoff Å
-      - stores three scenes: front, side, top
+    Write a PyMOL .pml that loads receptor (+optional ligands), stores 3 scenes,
+    and writes three PNGs to <outprefix>_[front|side|top].png (via unquoted, no-ext png calls).
     """
     out_pml.parent.mkdir(parents=True, exist_ok=True)
 
-    control_path = _prefer_best_pdb(control_path) if control_path else ""
-    rdk_path = _prefer_best_pdb(rdk_path) if rdk_path else ""
+    def _posix(p: str) -> str:
+        return (Path(p).resolve().as_posix() if p else "")
 
-    # Use forward slashes so PyMOL on Windows is happy
-    def as_posix_or_empty(path: str) -> str:
-        return (Path(path).resolve().as_posix() if path else "")
+    receptor_posix = _posix(receptor_path)
+    control_posix  = _posix(control_path) if control_path else ""
+    rdk_posix      = _posix(rdk_path) if rdk_path else ""
 
-    receptor_posix = as_posix_or_empty(receptor_path)
-    control_posix = as_posix_or_empty(control_path)
-    rdk_posix = as_posix_or_empty(rdk_path)
+    # Resolve output bases (NO extension here; PyMOL will add .png)
+    opref = Path(outprefix) if outprefix else out_pml.with_suffix("")  # default to PML stem
+    out_front = (opref.with_name(opref.name + "_front")).resolve().as_posix()
+    out_side  = (opref.with_name(opref.name + "_side")).resolve().as_posix()
+    out_top   = (opref.with_name(opref.name + "_top")).resolve().as_posix()
+    Path(out_front).parent.mkdir(parents=True, exist_ok=True)
 
-    # Build the ligand union expression used for zoom/labels
-    lig_parts = []
-    if control_posix:
-        lig_parts.append("control")
-    if rdk_posix:
-        lig_parts.append("rdk")
-    lig_union = " or ".join(lig_parts) if lig_parts else "receptor"
+    # Ligand union for camera/labels
+    parts = []
+    if control_posix: parts.append("control")
+    if rdk_posix:     parts.append("rdk")
+    lig_union = " or ".join(parts) if parts else "receptor"
 
     tpl = Template(r"""
 reinitialize
 bg_color white
-set ray_opaque_background, 0
+set ray_opaque_background, off
 set antialias, 2
 
-load "$RECEPTOR", receptor
+load $RECEPTOR, receptor
 hide everything, receptor
 show surface, receptor
-set transparency, 0.30, receptor
-color slate, receptor
+show cartoon, receptor
+set cartoon_transparency, 0.30
+set_color gray90, [230,230,230]
+color gray90, receptor and surface
+color gray90, receptor and cartoon
+set transparency, 0.25, receptor and surface
+set two_sided_lighting, on
+set ambient, 0.4
+set specular, 0.2
+set spec_power, 150
+set light_count, 8
+set depth_cue, on
+set fog_start, 0.6
+
 python
 try:
-    cmd.util.cbag("receptor and polymer")
+    import pymol.util as util
+    util.cbag("receptor and polymer and cartoon")
 except Exception:
     pass
 python end
+color gray90, receptor and surface
 
-# Ligands (conditionally present)
 $LOAD_CONTROL
 $LOAD_RDK
 
-# Union for focus
 select lig_union, ($LIG_UNION)
 
-# Label nearby residues (build a ranked list in a small Python block)
+# Label top-N nearby residues by CA distance (brace characters in f-strings must be doubled, so we avoid them here)
 select near_res, (receptor within $CUTOFF of lig_union) and polymer.protein and name CA and (alt '' or alt A)
 python
 TOPN = $TOPN
 import math
-
-# Cache ligand atom coordinates once (avoid get_distance with multi-atom selections)
+from pymol import cmd
 lig_model = cmd.get_model("lig_union")
-lig_coords = [(a.coord[0], a.coord[1], a.coord[2]) for a in lig_model.atom]
-
-def min_dist_to_lig(x, y, z, coords):
-    if not coords:
-        return float("inf")
+lig_coords = [a.coord for a in lig_model.atom]
+def _mindist(x,y,z,coords):
+    if not coords: return float("inf")
     best = float("inf")
-    for (lx, ly, lz) in coords:
-        dx = x - lx; dy = y - ly; dz = z - lz
-        d = math.sqrt(dx*dx + dy*dy + dz*dz)
-        if d < best:
-            best = d
-    return best
-
-dlist = []
-# Collect distances to CA atoms near lig_union (alt '' or A only per selection above)
-for (model_id, atom_index) in cmd.index("near_res"):
-    m = cmd.get_model("near_res and index %d" % atom_index)
-    if not m.atom:
-        continue
-    a = m.atom[0]
-    dist = min_dist_to_lig(a.coord[0], a.coord[1], a.coord[2], lig_coords)
-    dlist.append((a.model, a.chain, a.resi, dist))
-
-# Sort by distance and keep unique residues up to TOPN
-dlist.sort(key=lambda t: t[3])
-keep = []
-seen = set()
+    for lx,ly,lz in coords:
+        dx=x-lx; dy=y-ly; dz=z-lz
+        d=dx*dx+dy*dy+dz*dz
+        if d<best: best=d
+    return math.sqrt(best)
+dlist=[]
+for (obj_name, atom_index) in cmd.index("near_res"):
+    m=cmd.get_model(f"{obj_name} and index {atom_index}")
+    if not m.atom: continue
+    a=m.atom[0]
+    dist=_mindist(a.coord[0],a.coord[1],a.coord[2],lig_coords)
+    dlist.append((a.model,a.chain,a.resi,dist))
+dlist.sort(key=lambda t:t[3])
+keep,seen=[],set()
 for (m,c,i,_) in dlist:
-    key = (m,c,i)
-    if key in seen:
-        continue
-    seen.add(key)
-    keep.append(key)
-    if len(keep) >= TOPN:
-        break
-
-sel = " or ".join(["%s//%s/%s" % (m,c,i) for (m,c,i) in keep])
+    key=(m,c,i)
+    if key in seen: continue
+    seen.add(key); keep.append(key)
+    if len(keep)>=TOPN: break
+sel=" or ".join([f"{m}//{c}/{i}" for (m,c,i) in keep])
 if sel:
     cmd.select("top_site", sel)
     cmd.show("sticks", "top_site")
-    cmd.color("cyan", "top_site")
-    cmd.label("top_site and name CA and (alt '' or alt A)", "resn + resi")
+    cmd.color("gray", "top_site")
+    cmd.label("top_site and name CA and (alt '' or alt A)", "resn + '-' + resi")
 python end
 
-# Views & scenes
 orient lig_union
 zoom lig_union, 10
 scene front, store
@@ -431,25 +636,30 @@ scene side, store
 turn x, 90
 scene top, store
 
-set scene_buttons, on
+viewport $W, $H
+png $OUT_FRONT, ray=0
+turn y, 90
+png $OUT_SIDE, ray=0
+turn x, 90
+png $OUT_TOP, ray=0
 """)
 
     load_control = ""
     if control_posix:
         load_control = '\n'.join([
-            f'load "{control_posix}", control',
+            f'load {control_posix}, control',
             'show sticks, control',
-            'color green, control',
+            'color blue, control',
         ])
-
     load_rdk = ""
     if rdk_posix:
         load_rdk = '\n'.join([
-            f'load "{rdk_posix}", rdk',
+            f'load {rdk_posix}, rdk',
             'show sticks, rdk',
-            'color magenta, rdk',
+            'color orange, rdk',
         ])
 
+    w, h = int(viewport[0]), int(viewport[1])
     pml_text = tpl.substitute(
         RECEPTOR=receptor_posix,
         LOAD_CONTROL=load_control,
@@ -457,11 +667,141 @@ set scene_buttons, on
         LIG_UNION=lig_union,
         CUTOFF=f"{label_cutoff:.2f}",
         TOPN=str(label_top_n_res),
+        W=str(w), H=str(h),
+        OUT_FRONT=out_front,   # no quotes, no .png
+        OUT_SIDE=out_side,     # no quotes, no .png
+        OUT_TOP=out_top,       # no quotes, no .png
     )
-
     out_pml.write_text(pml_text, encoding="utf-8")
     return out_pml
 
+
+def write_native_pml(original_pdb: str, outprefix: Path, exclude_resns: Sequence[str], viewport=(192,144)) -> Path:
+    outprefix = Path(outprefix)
+    outprefix.parent.mkdir(parents=True, exist_ok=True)
+    excl = " ".join(sorted(set(exclude_resns or [])))
+    tpl = Template(r"""
+reinitialize
+bg_color white
+set ray_opaque_background, off
+set antialias, 2
+load "$PDB", orig
+hide everything
+show surface, orig and polymer
+set transparency, 0.30, orig and polymer
+set_color gray90, [230,230,230]
+color gray90, orig and polymer
+python
+try:
+    import pymol.util as util
+    util.cbag("orig and polymer")
+except Exception:
+    pass
+python end
+select native_lig, (hetatm and not polymer and not solvent) and not resn $EXCL
+if (count_atoms("native_lig")>0) {
+    show sticks, native_lig
+    color green, native_lig
+    select near_native, orig within 5 of native_lig and polymer.protein
+    show sticks, near_native
+    color cyan, near_native
+    label near_native and name CA, resn + "-" + resi
+    zoom native_lig or near_native, 10
+} else {
+    zoom orig and polymer, 10
+}
+viewport $W, $H
+png "$OUT_front", ray=0
+turn y, 90
+png "$OUT_side", ray=0
+turn x, 90
+png "$OUT_top",  ray=0
+""")
+    w, h = int(viewport[0]), int(viewport[1])
+    pml = outprefix.with_suffix(".native.pml")
+    pml.write_text(tpl.substitute(
+        PDB=Path(original_pdb).resolve().as_posix(),
+        EXCL=",".join(exclude_resns or []),
+        W=str(w), H=str(h),
+        OUT_front=(str(outprefix) + "_front.png").replace("\\","/"),
+        OUT_side=(str(outprefix) + "_side.png").replace("\\","/"),
+        OUT_top =(str(outprefix) + "_top.png").replace("\\","/"),
+    ), encoding="utf-8")
+    return pml
+def _job_to_pml(job: dict, tmpdir: Path) -> Optional[Path]:
+    kind = job.get("kind")
+    if kind == "three":
+        # Map list into control/rdk slots by name if available (fallback = rdk only)
+        ctrl_path, rdk_path = "", ""
+        for p, obj, _col in job.get("ligand_paths_and_colors", []):
+            name = (obj or "").lower()
+            if "control" in name and not ctrl_path:
+                ctrl_path = p
+            elif "rdk" in name and not rdk_path:
+                rdk_path = p
+        # if only one ligand, treat it as rdk
+        if not ctrl_path and not rdk_path and job.get("ligand_paths_and_colors"):
+            rdk_path = job["ligand_paths_and_colors"][0][0]
+        out_pml = tmpdir / (Path(job["outprefix"]).name + ".pml")
+        return write_multiview_pml(
+            receptor_path=job["receptor_path"],
+            control_path=ctrl_path or "",
+            rdk_path=rdk_path or "",
+            out_pml=out_pml,
+            label_top_n_res=int(job.get("label_top_n_res", 5)),
+            label_cutoff=float(job.get("label_cutoff", 5.0)),
+            outprefix=str(job.get("outprefix", "")),
+            viewport=tuple(job.get("viewport", (192, 144))),
+        )
+    elif kind == "native":
+        outprefix = Path(job["outprefix"])
+        return write_native_pml(
+            original_pdb=job["original_pdb"],
+            outprefix=outprefix,
+            exclude_resns=job.get("exclude_resns", []),
+            viewport=tuple(job.get("viewport", (192,144))),
+        )
+    return None
+def _run_one_job_mp(job: dict, mode: str = "cli") -> tuple:
+    """
+    Returns: (ok:bool, t_ms:int, err:str|None)
+    """
+    t0 = time.time()
+    err_first = None
+    try:
+        if mode == "cli":
+            with tempfile.TemporaryDirectory() as td:
+                pml = _job_to_pml(job, Path(td))
+                if pml is None:
+                    raise RuntimeError("unsupported job")
+                rc = render_pml_headless(pml)
+                ok = (rc == 0)
+        else:
+            # process-local pymol2 fallback (still one job per process)
+            k = job.get("kind")
+            if k == "three":
+                _render_three_views_with_pymol(
+                    job["receptor_path"], job["ligand_paths_and_colors"], job["outprefix"],
+                    label_top_n_res=job.get("label_top_n_res", 5),
+                    label_cutoff=job.get("label_cutoff", 5.0),
+                    viewport=tuple(job.get("viewport", (192,144))),
+                    hide_receptor=bool(job.get("hide_receptor", False)),
+                )
+                ok = True
+            elif k == "native":
+                _render_native_on_original_pdb(
+                    job["original_pdb"], job["outprefix"],
+                    exclude_resns=job.get("exclude_resns", []),
+                    viewport=tuple(job.get("viewport", (192,144))),
+                )
+                ok = True
+            else:
+                ok = False
+        t_ms = int((time.time() - t0) * 1000)
+        return (ok, t_ms, err_first)
+    except Exception as e:
+        t_ms = int((time.time() - t0) * 1000)
+        return (False, t_ms, str(e))
 
 def launch_pymol_with_pml(pml_path: Path, pymol_exe: Optional[str] = None) -> None:
     """
@@ -499,162 +839,264 @@ def _cli_render_active_site(
     outprefix: str,
     top_n_residues: int = 5,
     proximity_cutoff: float = 5.0,
-    viewport: Tuple[int, int] = (800, 600),
+    viewport: Tuple[int, int] = (192, 144),
     **kwargs,
 ) -> None:
     """
-    Robust, headless-friendly renderer:
-    - loads receptor/ligand
-    - computes ligand centroid (heavy atoms)
-    - finds receptor CA atoms within proximity_cutoff
-    - ranks by CA→centroid distance
-    - shows ligand sticks, highlights top residues, saves 3 PNGs
+    Headless-friendly renderer (NO RAY TRACING):
+      - Loads receptor/ligand
+      - Computes ligand centroid (heavy atoms)
+      - Finds receptor CA atoms within cutoff; ranks nearest
+      - Shows ligand sticks, highlights residues, saves 3 PNGs
+      - Applies optional color-blind–friendly palette and colors
+
+    Optional kwargs (all optional; ignored if missing):
+      - palette_defs: Dict[str, List[int]]  # e.g., {"orangeOI":[230,159,0], ...}
+      - protein_color: str                  # e.g., "gray90"
+      - protein_transparency: float         # 0..1
+      - ligand_color: str                   # e.g., "orangeOI"
+      - pocket_color: str                   # if a 'pocket' object/selection exists
     """
-    PyMOL = _with_pymol()
-    if PyMOL is None:
-        return
-    from pymol import cmd
-    import math, os
+    import os
+    from typing import List, Dict
+    try:
+        from pymol import cmd
+    except Exception as e:
+        raise RuntimeError("PyMOL (pymol2) is required to render.") from e
 
-    rec_obj, lig_obj, ctr_obj = "_cap_rec", "_cap_lig", "_cap_ctr"
-    # cleanup any previous remnants
-    for obj in (rec_obj, lig_obj, ctr_obj):
-        try: cmd.delete(obj)
-        except Exception: pass
+    rec_obj = "receptor"
+    lig_obj = "ligand"
 
-    # load inputs
-    if not Path(receptor).is_file():
-        print(f"[capture_pose] Receptor missing: {receptor}")
-        return
-    if not Path(ligand).is_file():
-        print(f"[capture_pose] Ligand missing: {ligand}")
-        return
+    # reset state for consistency
+    cmd.reinitialize()
+
+    # load objects
     cmd.load(receptor, rec_obj)
     cmd.load(ligand, lig_obj)
 
-    # ligand centroid (prefer heavy atoms)
-    coords = cmd.get_coords(f"{lig_obj} and not elem H", 1)
-    # If None or empty, fall back to all atoms
-    _n = 0
-    if coords is not None:
-        try:
-            _n = len(coords)
-        except Exception:
-            try:
-                _n = int(getattr(coords, "shape", [0])[0])
-            except Exception:
-                _n = 0
-    if coords is None or _n == 0:
-        coords = cmd.get_coords(lig_obj, 1)
-    if coords is None or len(coords) == 0:
-        print("[capture_pose] ligand has no coordinates")
-        return
-    try:
-        # works for list-of-lists or numpy arrays
-        n = float(len(coords))
-        cx = sum(float(c[0]) for c in coords) / n
-        cy = sum(float(c[1]) for c in coords) / n
-        cz = sum(float(c[2]) for c in coords) / n
-    except Exception:
-        # last resort: let PyMOL create a pseudoatom at selection center (can be slower)
-        cmd.pseudoatom(ctr_obj, selection=f"{lig_obj} and not elem H")
-    else:
-        cmd.pseudoatom(ctr_obj, pos=[cx, cy, cz])
-
-    # collect CA atoms within cutoff
-    mdl = cmd.get_model(f"{rec_obj} within {proximity_cutoff} of {lig_obj} and name CA")
-    rows = []
-    for a in getattr(mdl, "atom", []):
-        try:
-            rx, ry, rz = a.coord  # (x,y,z)
-            d = math.sqrt((rx-cx)**2 + (ry-cy)**2 + (rz-cz)**2)
-            rows.append((d, a.chain, a.resi, a.resn))
-        except Exception:
-            continue
-    rows.sort(key=lambda t: t[0])
-    rows = rows[:max(0, int(top_n_residues))]
-
-    # Scene styling
-    cmd.hide("everything", "all")
-    cmd.show("cartoon", rec_obj)
-    cmd.color("slate", rec_obj)
-    cmd.set("cartoon_transparency", 0.5, rec_obj)
-    cmd.show("sticks", lig_obj)
-    cmd.color("orange", lig_obj)
-
-    if rows:
-        # build a residue selection like "(chain A and resi 123) or (chain B and resi 45)"
-        sel = " or ".join([f"(chain {ch} and resi {ri})" for _, ch, ri, _ in rows])
-        cmd.show("sticks", f"{rec_obj} and ({sel})")
-        cmd.color("yellow", f"{rec_obj} and ({sel})")
-        cmd.label(f"{rec_obj} and name CA and ({sel})", "'%s%s' % (resn, resi)")
-
-    # viewport + background
+    # viewport
     try:
         w, h = int(viewport[0]), int(viewport[1])
         cmd.viewport(w, h)
     except Exception:
         pass
-    cmd.bg_color("white")
 
-    # resolve outprefix → base path
+    # Apply palette definitions first (so names are usable)
+    palette_defs = kwargs.get("palette_defs") or {}
+    if isinstance(palette_defs, dict):
+        for name, rgb in palette_defs.items():
+            # Accept list/tuple of 3 ints
+            if isinstance(rgb, (list, tuple)) and len(rgb) == 3:
+                cmd.set_color(str(name), [int(rgb[0]), int(rgb[1]), int(rgb[2])])
+
+    # protein appearance
+    protein_color = kwargs.get("protein_color")
+    if protein_color:
+        cmd.color(str(protein_color), rec_obj)
+    protein_transparency = kwargs.get("protein_transparency")
+    if protein_transparency is not None:
+        try:
+            cmd.set("transparency", float(protein_transparency), rec_obj)
+        except Exception:
+            pass
+    # ensure surface is visible if you're relying on surface
+    # (commented to avoid overriding user's representation choices)
+    # cmd.show("surface", rec_obj)
+
+    # ligand color (if provided)
+    lig_color = kwargs.get("ligand_color")
+    if lig_color:
+        cmd.color(str(lig_color), lig_obj)
+    else:
+        # keep existing default styling elsewhere (caller may color later)
+        pass
+
+    # pocket color (optional)
+    pocket_color = kwargs.get("pocket_color")
+    if pocket_color:
+        try:
+            cmd.color(str(pocket_color), "pocket")
+        except Exception:
+            pass
+
+    # Basic styling: sticks/cartoon (respect existing, but ensure ligand visible)
+    cmd.show("sticks", lig_obj)
+
+    # Compute ligand centroid (heavy atoms)
+    # Create a temporary selection without hydrogens
+    cmd.select("lig_heavy_tmp", f"({lig_obj}) and not elem H")
+    # Get atomic coordinates via iterate_state
+    coords = []
+    cmd.iterate_state(1, "lig_heavy_tmp", "coords.append([x,y,z])", space={"coords": coords})
+    if coords:
+        cx = sum(c[0] for c in coords) / len(coords)
+        cy = sum(c[1] for c in coords) / len(coords)
+        cz = sum(c[2] for c in coords) / len(coords)
+        # pseudoatom at centroid for selection math
+        cmd.pseudoatom("lig_centroid", pos=[cx, cy, cz])
+    else:
+        # fallback: just orient to ligand
+        cmd.orient(lig_obj)
+
+    # Find nearby residues: CA within cutoff
+    cutoff = float(proximity_cutoff)
+    cmd.select("near_CA", f"byres ({rec_obj} and name CA within {cutoff} of {lig_obj})")
+    # Label CA atoms of nearby residues (simple label; you may have a fancier one upstream)
+    cmd.label("near_CA and name CA", '"%s-%s" % (resn, resi)')
+
+    # Orient view
+    cmd.orient(lig_obj)
+
+    # build outprefix base
     base = outprefix
     if os.path.isdir(outprefix) or outprefix.endswith(os.sep):
         base = os.path.join(outprefix, "top_pose")
     os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
 
-    # canonical orientations
-    cmd.orient(lig_obj)
-    cmd.png(base + "_front.png", ray=1)
+    # canonical orientations; NO RAY (ray=0)
+    cmd.png(base + "_front.png", ray=0, width=w, height=h)
     cmd.turn("y", 90)
-    cmd.png(base + "_side.png", ray=1)
+    cmd.png(base + "_side.png", ray=0, width=w, height=h)
     cmd.turn("x", 90)
-    cmd.png(base + "_top.png", ray=1)
+    cmd.png(base + "_top.png", ray=0, width=w, height=h)
 
-    # cleanup helper objects (keep rec/lig for inspection if running interactively)
-    try: cmd.delete(ctr_obj)
-    except Exception: pass
-import sys
+    # cleanup helpers
+    try:
+        cmd.delete("lig_heavy_tmp")
+        cmd.delete("lig_centroid")
+    except Exception:
+        pass
 
-if __name__ == "__main__" and "pymol" not in sys.modules:
-    import sys
-    if len(sys.argv) < 4:
-        print("Usage: python capture_pose.py <receptor.pdb|pdbqt> <ligand.pdb|pdbqt> <outprefix>")
-        sys.exit(2)
-    _cli_render_active_site(sys.argv[1], sys.argv[2], sys.argv[3])
 
-# --- Added: PyMOL-callable wrapper so you can run:
-# pymol -cq -r capture_pose.py -d "capture_pose('/path/receptor.pdb','/path/ligand.pdbqt','/path/outdir_or_prefix'); quit"
 def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
-    # If `out_path_or_dir` is a directory, compute an output prefix from the ligand's basename.
+    """
+    Backward-compatible default: ligand stays magenta, existing behavior unchanged.
+
+    Optional controls (only applied if provided):
+      - ligand_color: explicit PyMOL color name or custom color name
+      - ligand_role: "reference" | "candidate"   (maps to blue/orange under okabe_ito)
+      - color_scheme: "okabe_ito"                 (defines safe palette names)
+      - palette_defs: dict like {"orangeOI":[230,159,0], ...} (override/extend)
+      - protein_color: e.g., "gray90"
+      - protein_transparency: float 0..1
+      - pocket_color: e.g., "tealOI"
+    """
     import os
-    from pathlib import Path as _P
+    from pathlib import Path
+
+    # Built-in color-blind–friendly palette (only used if requested)
+    base_palettes = {
+        "okabe_ito": {
+            "custom_defs": {
+                "orangeOI": [230, 159,   0],  # candidate
+                "blueOI":   [  0, 114, 178],  # reference
+                "tealOI":   [  0, 158, 115],
+                "yellowOI": [240, 228,  66],
+                "vermOI":   [213,  94,   0],
+                "purpleOI": [204, 121, 167],
+            },
+            "ligand_colors": {
+                "reference": "blueOI",
+                "candidate": "orangeOI",
+            },
+        }
+    }
+
+    # Did the caller request any custom color behavior?
+    wants_custom = any(k in kwargs for k in (
+        "ligand_color", "ligand_role", "color_scheme", "palette_defs",
+        "protein_color", "protein_transparency", "pocket_color"
+    ))
+
+    # Defaults that preserve current behavior
+    chosen_ligand_color = "magenta"
+
+    # Resolve custom ligand color if requested
+    if wants_custom:
+        scheme_key = kwargs.get("color_scheme")
+        scheme = base_palettes.get(scheme_key, {}) if scheme_key else {}
+        role = (kwargs.get("ligand_role") or "candidate").lower()
+        # Direct override wins
+        if "ligand_color" in kwargs:
+            chosen_ligand_color = kwargs["ligand_color"]
+        # Otherwise pick from scheme if provided
+        elif scheme and "ligand_colors" in scheme:
+            chosen_ligand_color = scheme["ligand_colors"].get(role, scheme["ligand_colors"].get("candidate", "magenta"))
+
+    # Compute output prefix if a directory is given
     outprefix = out_path_or_dir
     try:
         if os.path.isdir(out_path_or_dir):
-            base = _P(ligand_path).stem
-            outprefix = str(_P(out_path_or_dir) / base)
+            outprefix = str(Path(out_path_or_dir) / Path(ligand_path).stem)
     except Exception:
-        # fall back to whatever was passed
-        outprefix = out_path_or_dir
+        pass
 
-    # Mirror the defaults used by the CLI helper
-    return _cli_render_active_site(
-        str(receptor_path),
-        str(ligand_path),
-        str(outprefix),
-        top_n_residues=kwargs.get("top_n_residues", 6),
-        proximity_cutoff=kwargs.get("proximity_cutoff", 4.5),
-        viewport=kwargs.get("viewport", (1200, 900)),
-        cartoon_color=kwargs.get("cartoon_color", "wheat"),
-        ligand_color=kwargs.get("ligand_color", "tv_red"),
-        stick_radius=kwargs.get("stick_radius", 0.15),
-    )
+    # Build payload for deferred renderer
+    payload = {
+        "receptor_path": str(receptor_path),
+        "ligand_paths_and_colors": [(str(ligand_path), "ligand", chosen_ligand_color)],
+        "outprefix": str(outprefix),
+        "label_top_n_res": int(kwargs.get("top_n_residues", 6)),
+        "label_cutoff": float(kwargs.get("proximity_cutoff", 4.5)),
+        "viewport": list(kwargs.get("viewport", (192, 144))),
+        "hide_receptor": False,
+    }
 
-# Try to register as a PyMOL command (best-effort; harmless if PyMOL isn't running here)
-try:
-    from pymol import cmd as _cmd
-    # _cmd.extend lets you call: capture_pose rec lig outprefix   (space-separated)
-    _cmd.extend("capture_pose", lambda r, l, o: capture_pose(r, l, o))
-except Exception:
-    pass
+    # Attach extras only if custom requested
+    if wants_custom:
+        # Merge built-in palette with user overrides
+        palette_defs = {}
+        if kwargs.get("color_scheme") in base_palettes:
+            palette_defs.update(base_palettes[kwargs["color_scheme"]]["custom_defs"])
+        palette_defs.update(kwargs.get("palette_defs", {}))
+        if palette_defs:
+            payload["palette_defs"] = palette_defs
+        if "protein_color" in kwargs:
+            payload["protein_color"] = kwargs["protein_color"]
+        if "protein_transparency" in kwargs:
+            payload["protein_transparency"] = float(kwargs["protein_transparency"])
+        if "pocket_color" in kwargs:
+            payload["pocket_color"] = kwargs["pocket_color"]
+
+    # Defer path (unchanged API)
+    if _DEFER_MODE:
+        _enqueue_job("three", payload)
+        return
+
+    # Immediate path
+    outpath_final = (str(outprefix) if not os.path.isdir(out_path_or_dir)
+                     else str(Path(out_path_or_dir) / Path(ligand_path).stem))
+
+    appearance_kwargs = {}
+    if wants_custom:
+        if "protein_color" in payload:
+            appearance_kwargs["protein_color"] = payload["protein_color"]
+        if "protein_transparency" in payload:
+            appearance_kwargs["protein_transparency"] = payload["protein_transparency"]
+        if "palette_defs" in payload:
+            appearance_kwargs["palette_defs"] = payload["palette_defs"]
+        if "pocket_color" in payload:
+            appearance_kwargs["pocket_color"] = payload["pocket_color"]
+        appearance_kwargs["ligand_color"] = chosen_ligand_color
+
+    try:
+        return _cli_render_active_site(
+            str(receptor_path),
+            str(ligand_path),
+            outpath_final,
+            top_n_residues=kwargs.get("top_n_residues", 6),
+            proximity_cutoff=kwargs.get("proximity_cutoff", 4.5),
+            viewport=kwargs.get("viewport", (192, 144)),
+            **appearance_kwargs
+        )
+    except TypeError:
+        # Fallback if old signature: ignore appearance kwargs
+        return _cli_render_active_site(
+            str(receptor_path),
+            str(ligand_path),
+            outpath_final,
+            top_n_residues=kwargs.get("top_n_residues", 6),
+            proximity_cutoff=kwargs.get("proximity_cutoff", 4.5),
+            viewport=kwargs.get("viewport", (192, 144)),
+        )
+

@@ -527,10 +527,10 @@ per_pdb_hints:
   "2XP2": [ "crizotinib"]
   "3DZY": ["osiglitazone", "alitretinoin", "Rosiglitazone"]
   "3WZE": ["sorafenib"]
-  "3ZBF" : ["Crizotinib"]
+  "3ZBF": ["Crizotinib"]
   "4AG8": ["axitinib"]
   "4ASD": ["sorafenib"]
-
+  "6O0K": ["venetoclax"]
 
 hard_fda_control_by_pdb:
   "1M17": ["erlotinib", "gefitinib", "afatinib", "osimertinib"]
@@ -560,11 +560,12 @@ hard_fda_control_by_pdb:
   "2WGJ": ["crizotinib"]
   "2XP2": ["crizotinib"]
   "3DZY": ["osiglitazone", "alitretinoin", "Rosiglitazone"]
-  "3ZBF" : ["Crizotinib"]
+  "3ZBF": ["Crizotinib"]
   "4AG8": ["axitinib"]
   "4ASD": ["sorafenib"]
   "5L2I": ["palbociclib"]
   "5MO4": ["asciminib", "nilotinib"]
+  "6O0K": ["venetoclax"]
 
 # === atom & element rules ===
 element_sets:
