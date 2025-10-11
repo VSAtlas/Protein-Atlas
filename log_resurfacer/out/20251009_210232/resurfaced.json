@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-09 21:02:32",
+    "rules_path": "<embedded>",
+    "pdb_filter": ""
+  },
+  "scanned": {
+    "proteins": [
+      "docked/1T46/protein.log",
+      "docked/2GQG/protein.log",
+      "docked/2HYY/protein.log",
+      "docked/2WGJ/protein.log",
+      "docked/2XP2/protein.log",
+      "docked/3CS9/protein.log",
+      "docked/3ERT/protein.log",
+      "docked/3G0E/protein.log",
+      "docked/3LXK/protein.log",
+      "docked/3OG7/protein.log",
+      "docked/3OXZ/protein.log",
+      "docked/3WZD/protein.log",
+      "docked/3WZE/protein.log",
+      "docked/3ZBF/protein.log",
+      "docked/3ZOS/protein.log",
+      "docked/4AG8/protein.log",
+      "docked/4ASD/protein.log",
+      "docked/4RT7/protein.log",
+      "docked/4U5J/protein.log",
+      "docked/4XUF/protein.log",
+      "docked/4XV2/protein.log",
+      "docked/5I96/protein.log",
+      "docked/5L2I/protein.log",
+      "docked/5L7I/protein.log",
+      "docked/5MO4/protein.log",
+      "docked/5VA0/protein.log",
+      "docked/6ADQ/protein.log",
+      "docked/6JQR/protein.log",
+      "docked/6O0K/protein.log",
+      "docked/6O0L/protein.log",
+      "docked/6U4J/protein.log",
+      "docked/6WTN/protein.log",
+      "docked/_analysis/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/1T46/ligand_prep_status.tsv",
+      "prepped_ligands/2GQG/ligand_prep_status.tsv",
+      "prepped_ligands/2HYY/ligand_prep_status.tsv",
+      "prepped_ligands/2WGJ/ligand_prep_status.tsv",
+      "prepped_ligands/2XP2/ligand_prep_status.tsv",
+      "prepped_ligands/3CS9/ligand_prep_status.tsv",
+      "prepped_ligands/3ERT/ligand_prep_status.tsv",
+      "prepped_ligands/3G0E/ligand_prep_status.tsv",
+      "prepped_ligands/3LXK/ligand_prep_status.tsv",
+      "prepped_ligands/3OG7/ligand_prep_status.tsv",
+      "prepped_ligands/3OXZ/ligand_prep_status.tsv",
+      "prepped_ligands/3WZD/ligand_prep_status.tsv",
+      "prepped_ligands/3WZE/ligand_prep_status.tsv",
+      "prepped_ligands/3ZBF/ligand_prep_status.tsv",
+      "prepped_ligands/3ZOS/ligand_prep_status.tsv",
+      "prepped_ligands/4AG8/ligand_prep_status.tsv",
+      "prepped_ligands/4ASD/ligand_prep_status.tsv",
+      "prepped_ligands/4RT7/ligand_prep_status.tsv",
+      "prepped_ligands/4U5J/ligand_prep_status.tsv",
+      "prepped_ligands/4XUF/ligand_prep_status.tsv",
+      "prepped_ligands/4XV2/ligand_prep_status.tsv",
+      "prepped_ligands/5I96/ligand_prep_status.tsv",
+      "prepped_ligands/5L2I/ligand_prep_status.tsv",
+      "prepped_ligands/5L7I/ligand_prep_status.tsv",
+      "prepped_ligands/5MO4/ligand_prep_status.tsv",
+      "prepped_ligands/5VA0/ligand_prep_status.tsv",
+      "prepped_ligands/6ADQ/ligand_prep_status.tsv",
+      "prepped_ligands/6JQR/ligand_prep_status.tsv",
+      "prepped_ligands/6O0K/ligand_prep_status.tsv",
+      "prepped_ligands/6O0L/ligand_prep_status.tsv",
+      "prepped_ligands/6U4J/ligand_prep_status.tsv",
+      "prepped_ligands/6WTN/ligand_prep_status.tsv",
+      "prepped_ligands/_analysis/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251009_210232.log"
+    ]
+  },
+  "stats": {
+    "soft": 4,
+    "hard": 4
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251009_210232.log",
+          "samples": [
+            "[21:02:48] Explicit valence for atom # 18 C, 5, is greater than permitted",
+            "[21:02:49] Explicit valence for atom # 18 C, 5, is greater than permitted"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 2,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "6WTN",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251009_210232.log",
+          "samples": [
+            "[21:02:48] sanitize [21:02:48] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/ligands_raw/RXT_A1204.sanitized.sanitized.pdb: Saved fixed PDB to /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3OG7/ligands_raw/032_A1.sanitized.sanitized.pdb",
+            "[21:02:49] sanitize [21:02:49] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/ligands_raw/RXT_A1204.sanitized.pdb: /stor/home/mpg2352/micromamba/envs/docking-env/lib/python3.10/site-packages/Bio/PDB/PDBParser.py:384: PDBConstructionWarning: Ignoring unrecognized record 'END' at line 2274"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 3,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "6WTN",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 2,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251009_210232.log",
+          "samples": [
+            "[21:02:48] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/ligands_raw/RXT_A1204.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[21:02:49] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/ligands_raw/RXT_A1204.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 4,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "6WTN",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-09 21:03:19",
+      "last_seen": "2025-10-09 21:03:19",
+      "files": [
+        {
+          "path": "docked/6WTN/protein.log",
+          "samples": [
+            "2025-10-09 21:03:19,877 - INFO - [render-enqueue] 6WTN bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/receptor/6WTN_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/6WTN.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    },
+    {
+      "rank": 5,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "2025",
+      "ligand": null,
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-09 21:03:19",
+      "last_seen": "2025-10-09 21:03:19",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251009_210232.log",
+          "samples": [
+            "2025-10-09 21:03:19,877 - INFO - [render-enqueue] 6WTN bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6WTN/receptor/6WTN_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/6WTN.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": []
+    }
+  ]
+}

@@ -494,6 +494,16 @@ def extract_ligands_from_filtered(filtered_pdb: Union[str, Path], out_dir: Union
             for ln in bucket:
                 w.write(ln)
             w.write("TER\nEND\n")
+
+        # normalize once (no-op if not needed)
+        norm = collapse_sanitized_once(outp)
+        if norm.name != outp.name:
+            try:
+                outp.replace(norm)
+                outp = norm
+            except Exception:
+                pass
+
         # YAML-backed element repair (PDB only)
         try:
             fix_element_columns_in_file(outp, outp)
@@ -1131,6 +1141,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     pdb_id = os.path.splitext(os.path.basename(str(pdb_file)))[0].upper()
     paths = canon_paths(pdb_id, output_root)
+
+    logging.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
+
     for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
         paths[d].mkdir(parents=True, exist_ok=True)
 
@@ -1138,7 +1151,6 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
     shutil.copyfile(str(pdb_file), working_pdb)
     _helium_postwrite_counter("copy_working", working_pdb)
-
     # (2) AltLoc filtering → raw/filtered.pdb
     filtered_pdb = paths["raw"] / f"{pdb_id}_filtered.pdb"
     filter_altlocs(working_pdb, filtered_pdb)
@@ -1173,6 +1185,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         pass  # already written by phenix.pdbtools
     else:
         shutil.copyfile(loop_fixed_pdb, receptor_pdb)
+    print(f"[proteinprep] steps: Reduce=deferred Phenix={Path(paths['work'] / f'{pdb_id}_phenix.pdb').is_file()} MODELLER={Path(paths['work'] / f'{pdb_id}_modelled.pdb').is_file()}")
     _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
 
     # (7) Hydrogen cleanup & chain validation
@@ -1231,6 +1244,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         reduce_exe=REDUCE_EXE if use_reduce else None,  # skip Reduce for nucleotide cofactors
     )
     _helium_postwrite_counter("reduce_or_fallback", reduced_pdb)
+    print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
 
     # (9) Final element fix and sanity on the protonated file
     fix_pdb_elements(reduced_pdb)
@@ -1251,6 +1265,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
     logging.info("Cleaned receptor: %s", receptor_pdb)
+    print(f"[proteinprep] cleaned receptor exists={Path(receptor_pdb).is_file()} -> {receptor_pdb}")
     return str(receptor_pdb)
 
 

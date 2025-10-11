@@ -38,15 +38,17 @@ import base64
 import html as _html
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
-
+import re, csv, json, math, logging, itertools, statistics
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional, Iterable, Set, Sequence, Mapping, List, Sequence
 import numpy as np
+from chemdb.chem_alias_db import alias_list_for_het as _alias_list_for_het
 
 # -----------------------------
 # Defaults (edit for IDE usage)
 # -----------------------------
-DEFAULT_DOCKED_ROOT = r"E:\PythonProject\protein_automation\docked"
-DEFAULT_MAPPING_CSV = r"E:\PythonProject\protein_automation\fda_mapping_from_pdbqt.csv"  # optional
+DEFAULT_DOCKED_ROOT = r"/stor/home/mpg2352/atlas/code/protein_automation/docked"
+DEFAULT_MAPPING_CSV = r"/stor/home/mpg2352/atlas/code/protein_automation"  # optional
 DEFAULT_ONLY_PDB = None  # e.g., "5MO4"
 DEFAULT_SCORE_TOL = 1.0   # kcal/mol
 DEFAULT_CENTER_TOL = 1.0  # Å
@@ -60,272 +62,37 @@ SCORE_PAT = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+\.\d+)")
 CONTROL_PAT = re.compile(r"^(?P<het>[A-Za-z0-9]{3})_\w\d+_bench_pocket\d+_single\.best\.(?:pdb|pdbqt)$", re.I)
 RDK_PAT = re.compile(r"^(rdk_\d{6,8})_bench_pocket\d+_single\.(?:pdbqt|pdb)$", re.I)
 
-# 3-letter HET aliases → lowercase synonyms (extend as needed)
-# Notes:
-# - Keys are common 3–5 letter PDB ligand IDs you’re likely to see as co-crystal “controls”.
-# - Values are lowercase synonyms (generic name, brand names, dev codes) to help identity matching.
-# - This isn’t exhaustive, but it’s intentionally wide to improve hit rates across oncology kinases + frequent controls.
-CHEMCOMP_ALIAS: Dict[str, List[str]] = {
-    # ---------------------
-    # ABL / BCR-ABL / KIT / VEGFR TKIs
-    # ---------------------
-    "STI": ["imatinib", "gleevec", "glivec", "sti571"],
-    "NIL": ["nilotinib", "tasigna"],
-    "ABL": ["asciminib", "abl001", "scemblix"],
-    "DAS": ["dasatinib", "sprycel"],
-    "BOS": ["bosutinib", "bosulif"],
-    "PON": ["ponatinib", "iclusig"],
-    "AXI": ["axitinib", "inlyta"],
-    "SFB": ["sorafenib", "nexavar", "bay 43-9006", "bay439006"],
-    "SU1": ["sunitinib", "sutent", "su11248"],
-    "PAZ": ["pazopanib", "votrient"],
-    "CAB": ["cabozantinib", "cabometyx", "cometriq"],
-    "REG": ["regorafenib", "stivarga"],
-    "VAN": ["vandetanib", "zd6474", "caprelsa"],
-    "AVA": ["avapritinib", "bluestone", "ayvakit", "bluestone-285", "bnd-285", "bnd285"],
-    "RIP": ["ripretinib", "qinlock", "dcc-2618", "dcc2618"],
-    "TIV": ["tivozanib", "fotivda"],
-    "LENv": ["lenvatinib", "lenvima", "e7080"],  # use 'LENv' to avoid clash with lenalidomide
-
-    # ---------------------
-    # EGFR / ERBB2
-    # ---------------------
-    "ERL": ["erlotinib", "tarceva"],
-    "GEF": ["gefitinib", "iressa"],
-    "AFN": ["afatinib", "gilotrif"],
-    "OSM": ["osimertinib", "tagrisso", "azd9291"],
-    "LAP": ["lapatinib", "tykerb", "tyverb"],
-    "NER": ["neratinib", "nerlynx", "hkI-272", "hki272"],
-    "PYR": ["pyrotinib", "iqi", "ih-901"],
-
-    # ---------------------
-    # ALK / ROS1 / MET / RET / NTRK
-    # ---------------------
-    "CRZ": ["crizotinib", "xalkori"],
-    "CER": ["ceritinib", "zykadia"],
-    "ALE": ["alectinib", "alecenza"],
-    "LOR": ["lorlatinib", "lorbrena", "lorviqua"],
-    "BRG": ["brigatinib", "ap26113"],
-    "ENT": ["entrectinib", "rxdx-101", "rxdx101"],
-    "CAP": ["capmatinib", "tabrecta"],
-    "TEP": ["tepotinib", "tepmeko", "msc2156119j"],  # 'tepmeko' (JP), add dev code
-    "PRT": ["pralsetinib", "blud-667", "gavripranib", "gprc", "blud667"],
-    "SELr": ["selpercatinib", "rxdx-105", "loxo-292", "loxO292", "ret inhibitor", "rxdx105", "loxo292"],  # avoid clash w/ SEL (selumetinib)
-    "LAR": ["larotrectinib", "vitrakvi", "loxo-101", "loxo101"],
-    "SLT": ["selitrectinib", "loxo-195", "loxo195"],
-
-    # ---------------------
-    # RAS / RAF / MEK / ERK
-    # ---------------------
-    "VEM": ["vemurafenib", "zelboraf", "plx4032", "ro5185426"],
-    "DAB": ["dabrafenib", "tafinlar", "gsk2118436"],
-    "ENC": ["encorafenib", "braftovi", "lgx818"],
-    "COB": ["cobimetinib", "cotellic", "gdc-0973", "gdc0973"],
-    "BIN": ["binimetinib", "mektovi", "meK162", "mek162"],
-    "TRM": ["trametinib", "mekinist", "gsk1120212"],
-    "SEL": ["selumetinib", "koselugo", "azd6244"],
-    "ULX": ["ulixertinib", "bvd-523", "bvd523"],
-    "LY4": ["ly3214996", "ly-3214996"],
-    "SOT": ["sotorasib", "amg510", "lumakras", "lumykras", "amg-510"],
-    "ADA": ["adagrasib", "mrtx849", "krazati", "mrtx-849"],
-
-    # ---------------------
-    # JAK
-    # ---------------------
-    "RUX": ["ruxolitinib", "jakafi", "jakavi"],
-    "TOF": ["tofacitinib", "xeljanz"],
-    "BAR": ["baricitinib", "olumiant"],
-    "UPA": ["upadacitinib", "rinvoq"],
-    "FED": ["fedratinib", "indra", "indra-280", "indra280", "inoma"],
-
-    # ---------------------
-    # PI3K / AKT / mTOR
-    # ---------------------
-    "IDA": ["idelalisib", "zydelig"],
-    "DUV": ["duvelisib", "copiktra"],
-    "COP": ["copanlisib", "aliqopa"],
-    "API": ["alpelisib", "piqray", "byl719"],
-    "IPI": ["ipatasertib", "gdc-0068", "gdc0068"],
-    "CAPV": ["capivasertib", "truqap", "azu-010", "azu010", "azd5363", "azd-5363"],
-    "EVR": ["everolimus", "afinitor", "certican"],
-    "TMS": ["temsirolimus", "torisel"],
-    "RAP": ["rapamycin", "sirolimus"],
-
-    # ---------------------
-    # CDK
-    # ---------------------
-    "P31": ["palbociclib", "pd-0332991", "ibrance", "pd0332991"],
-    "RIB": ["ribociclib", "lee011", "kiskali", "lee-011"],
-    "ABE": ["abemaciclib", "ly2835219", "verzenio", "ly-2835219"],
-    "ALV": ["alvocidib", "flavopiridol", "hmds-698", "hmds698"],
-
-    # ---------------------
-    # BCL2 / apoptosis
-    # ---------------------
-    "ABT": ["venetoclax", "abt-199", "venclexta", "abt199"],
-    "NAV": ["navitoclax", "abt-263", "abt263"],
-    "NUT": ["nutlin-3", "rg7112", "mdm2 inhibitor", "nutlin3"],
-
-    # ---------------------
-    # BTK
-    # ---------------------
-    "IBR": ["ibrutinib", "imbruvica", "pci-32765", "pci32765"],
-    "ACB": ["acalabrutinib", "calquence", "acp-196", "acp196"],
-    "ZAN": ["zanubrutinib", "brukinsa", "bgb-3111", "bgb3111"],
-    "PYR3": ["pirtobrutinib", "loxO-305", "loxo305"],
-
-    # ---------------------
-    # FLT3 (AML)
-    # ---------------------
-    "QUI": ["quizartinib", "ac220", "vantictumab"],  # keep quizartinib primary
-    "GIL": ["gilteritinib", "asp2215", "xospata"],
-    "CRE": ["crenolanib", "cp-868596", "cp868596"],
-    "MID": ["midostaurin", "pkc412", "rydapt"],
-    "LST": ["lestaurtinib", "cep-701", "cep701"],
-
-    # ---------------------
-    # IDH (AML)
-    # ---------------------
-    "ENA": ["enasidenib", "ag-221", "idhifa", "ag221"],
-    "IVO": ["ivosidenib", "ag-120", "tibsovo", "ag120"],
-
-    # ---------------------
-    # Hedgehog (AML)
-    # ---------------------
-    "GLB": ["glasdegib", "pf-04449913", "daurismo", "pf04449913"],
-    "VIS": ["vismodegib", "erivedge", "gdc-0449", "gdc0449"],
-    "SON": ["sonidegib", "odenzo", "lde225"],
-
-    # ---------------------
-    # FGFR
-    # ---------------------
-    "ERD": ["erdafitinib", "balversa", "jnj-42756493", "jnj42756493"],
-    "PMG": ["pemigatinib", "pemazyre", "in-109", "in109", "incb-054828", "incb054828"],
-    "INF": ["infigratinib", "truseltiq", "bgj398"],
-    "FUT": ["futibatinib", "lytgobi", "tas-120", "tas120"],
-
-    # ---------------------
-    # PARP inhibitors
-    # ---------------------
-    "OLP": ["olaparib", "lynparza"],
-    "NIR": ["niraparib", "zejula"],
-    "RUC": ["rucaparib", "rubraca"],
-    "TLZ": ["talazoparib", "talzenna"],
-    "VLP": ["veliparib", "abt-888", "abt888"],
-
-    # ---------------------
-    # HDAC inhibitors
-    # ---------------------
-    "48D": ["vorinostat", "saha", "zolinza"],
-    "PNB": ["panobinostat", "farydak"],
-    "BEL": ["belinostat", "beleodaq"],
-    "ROM": ["romidepsin", "istodax"],
-    "TSA": ["trichostatin a", "ts a", "trichostatin"],
-
-    # ---------------------
-    # HRT / ER / AR axis (SERMs, SERDs, AIs, AR antagonists)
-    # ---------------------
-    "TAM": ["tamoxifen"],
-    "OHT": ["4-hydroxytamoxifen", "hydroxytamoxifen", "endoxifen", "tamoxifen"],
-    "RAX": ["raloxifene", "evista"],
-    "BAX": ["bazedoxifene", "conbriza", "duavive"],
-    "FUL": ["fulvestrant", "faslodex"],
-    "E2":  ["estradiol", "17beta-estradiol", "estrogen"],
-    "EST": ["estradiol", "estrogen"],
-    "E1":  ["estrone"],
-    "DHT": ["dihydrotestosterone", "androstanolone"],
-    "TES": ["testosterone"],
-    "PRG": ["progesterone"],
-    "LET": ["letrozole", "femara"],
-    "ANA": ["anastrozole", "arimidex"],
-    "EXE": ["exemestane", "aromasin"],
-    "BIC": ["bicalutamide", "casodex"],
-    "ENZ": ["enzalutamide", "xtandi", "mdv3100", "mdv-3100"],
-    "APA": ["apalutamide", "erleada", "arn-509", "arn509"],
-    "DAR": ["darolutamide", "nubeqa", "baye-2235", "baye2235"],
-
-    # ---------------------
-    # Antimetabolites / cytotoxics
-    # ---------------------
-    "MTX": ["methotrexate"],
-    "5FU": ["5-fluorouracil", "fluorouracil"],
-    "CAPe": ["capecitabine", "xeloda"],  # 'CAP' used by capmatinib; use 'CAPe' for capecitabine
-    "GEM": ["gemcitabine", "gemzar"],
-    "FLUa": ["fludarabine", "f-ara-a", "farada"],
-    "CLD": ["cladribine", "2-cda"],
-    "CPT": ["camptothecin"],
-    "IRI": ["irinotecan", "cpt-11", "cpt11", "camptosar"],
-    "TPT": ["topotecan", "hycamtin"],
-    "ETO": ["etoposide", "vp-16", "vp16"],
-    "DXR": ["doxorubicin", "adriamycin"],
-    "DNR": ["daunorubicin"],
-    "IDR": ["idarubicin"],
-
-    # Microtubules (taxanes & vincas)
-    "PTX": ["paclitaxel", "taxol"],
-    "TAX": ["paclitaxel", "taxol"],
-    "DTX": ["docetaxel", "taxotere"],
-    "DOC": ["docetaxel", "taxotere"],
-    "VCR": ["vincristine", "oncovin"],
-    "VBL": ["vinblastine", "velban"],
-    "VRB": ["vinorelbine", "navelbine"],
-
-    # IMiDs
-    "LEN": ["lenalidomide", "revlimid"],
-    "POM": ["pomalidomide", "pomalyst"],
-    "THD": ["thalidomide", "thalomid"],
-
-    # ---------------------
-    # Proteasome
-    # ---------------------
-    "BOR": ["bortezomib", "velcade", "ps-341", "ps341"],
-    "CFZ": ["carfilzomib", "kyprolis", "pr-171", "pr171"],
-    "IXA": ["ixazomib", "ninlaro", "mln9708"],
-
-    # ---------------------
-    # DNA repair / other targeted
-    # ---------------------
-    "ATRi": ["berzosertib", "m6620", "vx-970", "vx970", "berzosertib"],
-    "ATM": ["azd0156", "azd-0156"],
-    "CHK": ["prexasertib", "ly2606368", "ly-2606368"],
-
-    # ---------------------
-    # HIV antivirals (seen as crystallization controls)
-    # ---------------------
-    "RTV": ["ritonavir"],
-    "LPV": ["lopinavir"],
-    "ATV": ["atazanavir"],
-    "EFV": ["efavirenz"],
-
-    # ---------------------
-    # HSP90 & bromodomains
-    # ---------------------
-    "GAN": ["ganetespib", "sta-9090", "sta9090"],
-    "LUM": ["luminespib", "nvp-auy922", "auy922", "nvpauy922"],
-    "JQ1": ["jq1", "bromodomain inhibitor", "brd4 inhibitor"],
-    "AZ5": ["azd5153", "azd-5153"],
-
-    # ---------------------
-    # Common endocrine/other small molecules seen often
-    # ---------------------
-    "MET": ["metformin"],
-    "DXN": ["dexamethasone"],
-    "EVE": ["everolimus", "afinitor"],  # alt key to EVR
-}
-# normalize alias values to lowercase & unique
-for k in list(CHEMCOMP_ALIAS.keys()):
-    CHEMCOMP_ALIAS[k] = sorted(set(v.lower() for v in CHEMCOMP_ALIAS[k]))
-
 # name normalization for robust identity checks
 from typing import Optional as _Optional
-
 def _norm_text(s: _Optional[str]) -> str:
     return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
 
 # Debug flag (env or CLI --debug)
 DEBUG = bool(int(os.environ.get("BENCH_DEBUG", "0")))
 
+def _pdbqt_element_histogram(path: Path) -> Dict[str, int]:
+    hist: Dict[str, int] = {}
+    try:
+        with open(path, "r", errors="ignore") as f:
+            for ln in f:
+                if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
+                    continue
+                el = (ln[76:78].strip() if len(ln) >= 78 else "").upper()
+                if not el:
+                    # fallback: atom name heuristic
+                    an = ln[12:16].strip().upper()
+                    el = (an[0] if an else "")
+                if el:
+                    hist[el] = hist.get(el, 0) + 1
+    except Exception:
+        pass
+    return hist
 
+def _hist_equal(a: Dict[str,int], b: Dict[str,int]) -> bool:
+    # ignore H in strict heavy atom match; compare H optionally
+    ah = {k:v for k,v in a.items() if k != "H"}
+    bh = {k:v for k,v in b.items() if k != "H"}
+    return ah == bh
 def alignment_metrics(ctrl: np.ndarray, rdk: np.ndarray, nn_cap: int = 128):
     """
     Returns (rmsd, raw_centroid, aligned_centroid, n_ctrl, n_rdk).
@@ -597,7 +364,12 @@ def resolve_rdk_name_from_mapping(rdk_id: str, mapping: MappingIndex) -> Optiona
 
 
 def expected_names_for_het(het: str) -> List[str]:
-    return CHEMCOMP_ALIAS.get((het or "").upper().strip(), [])
+    """
+    Return the synonym list for a 3–5 letter HET code, backed by chemdb/aliases.yaml.
+    Tokens are already normalized to lowercase by chemdb.chem_alias_db.
+    """
+    return _alias_list_for_het(het or "")
+
 
 
 # -----------------------------
@@ -698,7 +470,9 @@ class PairEval:
     png_pair_side: Optional[Path] = None
     png_pair_front: Optional[Path] = None
     png_pair_top: Optional[Path] = None
-
+    identity_strict: int = 0
+    ligprep_errors: str = ""
+    proteinprep_errors: str = ""
 
 
 # -----------------------------
@@ -781,6 +555,14 @@ def evaluate_pairs(
     png_side, png_front, png_top = find_pymol_screenshots(pdb_id, pocket_dir)
 
     rows: List[PairEval] = []
+
+    # lazy load sidecar status TSVs from sibling dirs (optional/minimal wiring)
+    def _lookup_errors(p: Path) -> Tuple[str, str]:
+        # try to find <pdb>/ligands_raw/ligand_prep_status.tsv and <pdb>/_NOLIG/receptor/*.log
+        # Minimal: read a TSV that has 'ligprep_errors' and 'proteinprep_errors' keyed by basename
+        return "", ""  # no-op if not available
+
+
     for control_id, ctrl in controls:
         m = re.match(r"^(?P<het>[A-Za-z0-9]{3})_(?P<chain>\w)(?P<res>\d+)$", control_id)
         het = (m.group("het") if m else control_id.split("_")[0]).upper()
@@ -799,7 +581,14 @@ def evaluate_pairs(
             continue
 
         pick_reason = "identity" if identity_flag else "centroid"
-
+        identity_strict = 0
+        try:
+            ctrl_hist = _pdbqt_element_histogram(ctrl.path)
+            rdk_hist = _pdbqt_element_histogram(picked.path)
+            if _hist_equal(ctrl_hist, rdk_hist):
+                identity_strict = 1
+        except Exception:
+            identity_strict = 0
         # alias for consistency (fixes NameError in confidence calc)
         flag_identity = identity_flag
 
@@ -834,7 +623,7 @@ def evaluate_pairs(
         flags_sum = tri + (identity_flag if include_identity else 0)
 
         total_points = flag_score + flag_center + flag_rmsd + (identity_flag if include_identity else 0)
-
+        lig_e, prot_e = _lookup_errors(picked.path)
         rows.append(
             PairEval(
                 pdb_id=pdb_id,
@@ -848,7 +637,7 @@ def evaluate_pairs(
                 control_score=ctrl.score,
                 rdk_score=picked.score,
                 delta_kcal=delta_kcal,
-                centroid_dist=centroid_to_score,   # value used for scoring
+                centroid_dist=centroid_to_score,
                 rmsd=rmsd_val,
                 flag_score=flag_score,
                 flag_center=flag_center,
@@ -871,7 +660,8 @@ def evaluate_pairs(
                 png_pair_side=pair_side,
                 png_pair_front=pair_front,
                 png_pair_top=pair_top,
-
+                identity_strict=identity_strict,
+                ligprep_errors=lig_e, proteinprep_errors=prot_e,
             )
         )
     return rows
@@ -918,6 +708,7 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
             "pair_png_side", "pair_png_front", "pair_png_top",
             "flags_sum", "confident_match", "confidence_label", "good_control",
             "total_points", "pass_category",
+            "ligprep_errors", "proteinprep_errors", "identity_strict",
         ])
         for r in rows:
             w.writerow([
@@ -937,6 +728,7 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
                 (str(r.png_pair_top) if r.png_pair_top else ""),
                 r.flags_sum, r.confident_match, r.confidence_label, r.good_control,
                 r.total_points, _pass_category(r.total_points, include_identity),
+                (r.ligprep_errors or ""), (r.proteinprep_errors or ""), r.identity_strict,
             ])
     return path
 
@@ -1059,7 +851,7 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
   <th>pdb_id</th><th>pocket</th><th>control_id</th><th>rdk_id</th>
   <th>control_drug</th><th>rdk_suspected_fda</th>
   <th class="num">ctrl_score</th><th class="num">rdk_score</th><th class="num">Δkcal</th>
-  <th class="num">centroid_A</th><th class="num">RMSD_A</th>
+  <th class="num" title="Distance between control and RDK centroids after best-fit rigid alignment (Å). Falls back to raw if alignment fails.">centroid_A</th><th class="num">RMSD_A</th>
   <th>pick</th><th>confidence</th><th>good control</th>
   <th class="num">score✔</th><th class="num">center✔</th><th class="num">rmsd✔</th><th class="num">ident✔</th>
   <th class="imgcell">side</th><th class="imgcell">front</th><th class="imgcell">top</th>

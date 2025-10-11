@@ -166,16 +166,7 @@ _ORIG_RENDER_NATIVE = getattr(_cap, "_render_native_on_original_pdb")
 _PYMOL_DEFER_LOCK  = threading.Lock()
 _PYMOL_DEFER_COUNT = 0
 
-@contextmanager
-# ---- Legacy mid-run PyMOL deferral (DISABLED) ----
-def _defer_pymol_capture_calls(enable: bool = True):
-    # We now use capture_pose's JSONL queue exclusively.
-    class _Dummy:
-        def __enter__(self):
-            print("[render] WARNING: legacy mid-run deferral path ignored - using capture_pose JSONL queue.")
-        def __exit__(self, exc_type, exc, tb):
-            return False
-    return _Dummy()
+
 
 def run_deferred_captures(max_workers: int):
     print("[render] WARNING: legacy mid-run capture replay is disabled. Use capture_pose.replay_deferred_jobs_mp().")
@@ -1507,19 +1498,18 @@ def run_benchmark_for_protein(
                     )
 
             if validated_ligands_last:
-                with _defer_pymol_capture_calls(True):
-                    final_pose_validation_and_screenshots(
-                        cfg,
-                        pdb_id,
-                        [stage],
-                        receptor_pdbqt,
-                        center,
-                        validated_ligands_last,
-                        score_history,
-                        cleaned_pdb,
-                        cfg.get("DOCKING_MODE", "benchmark"),
-                        logger,
-                    )
+                final_pose_validation_and_screenshots(
+                    cfg,
+                    pdb_id,
+                    [stage],
+                    receptor_pdbqt,
+                    center,
+                    validated_ligands_last,
+                    score_history,
+                    cleaned_pdb,
+                    cfg.get("DOCKING_MODE", "benchmark"),
+                    logger,
+                )
 
             # Optional PyMOL renders (when DOCKING_MODE == "benchmark")
             if str(cfg.get("DOCKING_MODE", "")).lower() == "benchmark":
@@ -2034,10 +2024,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     from capture_pose import replay_deferred_jobs_mp
     workers = _int_env("PYMOL_RENDER_WORKERS", 30)
-    workers = max(1, min(workers, min(4, os.cpu_count() or 2)))
+    workers = 30 #max(1, min(workers, min(4, os.cpu_count() or 2)))
     mode = os.environ.get("PYMOL_RENDER_MODE", "cli").lower()
     print(f"[render] replaying capture_pose queue with workers={workers} mode={mode}")
-    replay_deferred_jobs_mp(max_workers=workers, mode=mode, slow_ms=int(os.environ.get("PYMOL_SLOW_MS", "2500")))
+    capture_pose.replay_deferred_jobs_mp(max_workers=workers, mode="cli")
 
     # ----- Post-run analysis -----
     if args.run_analysis:

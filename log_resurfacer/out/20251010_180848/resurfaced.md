@@ -1,0 +1,136 @@
+# Atlas Log Resurfacer - Summary
+
+> Note: No timestamped lines >= --since were found; results may include older untimed lines.
+
+*Fatal:* 0  *Hard:* 10  *Soft:* 8  *Info:* 0
+
+**Health score:** 0 / 100
+
+## 1. [HARD] ligprep.rdkit_valence - 2025
+- **Message:** RDKit sanitize/valence/kekulize error(s)
+- **Count:** 9  |  **Recency:** 
+- **Hint:** Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.
+  - **File:** `logs/bench_20251010_131013.log`
+    - `[13:11:51] Explicit valence for atom # 10 O, 3, is greater than permitted`
+    - `[13:11:58] Explicit valence for atom # 10 O, 3, is greater than permitted`
+    - `[13:12:01] Explicit valence for atom # 7 O, 3, is greater than permitted`
+
+## 2. [HARD] ligprep.mgl_partial_write - 2025
+- **Message:** Partial write during conversion
+- **Count:** 1  |  **Recency:** 
+- **Hint:** Conversion partial; capture stderr, retry fallback, then quarantine if persistent.
+  - **File:** `logs/bench_20251010_131013.log`
+    - `WARNING: 70 atoms of 80 in CDL_N605.sanitized.mol2  were not written`
+
+## 3. [SOFT] ligprep.obabel_h_charge - 6ADQ
+- **Message:** OpenBabel H/charge warning(s)
+- **Count:** 8  |  **Recency:** 
+- **Hint:** Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.
+  - **File:** `logs/bench_20251010_131013.log`
+    - `[13:12:05] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B608.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.`
+    - `[13:12:18] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_W201.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.`
+    - `[13:12:51] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B609.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.`
+- **Paths:**
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_M504.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_N604.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_O304.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_B611.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_A502.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B608.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_W201.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_F606.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_R605.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_T201.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_B612.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B610.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/PLM_W203.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_C303.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B609.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/PLM_K203.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_P202.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B607.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/PLM_Y301.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_N605.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_H201.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_K201.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_P201.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_S301.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9XX_Y302.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9XX_Z302.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_D201.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_B605.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9XX_K204.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_N609.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_G301.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_M503.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_N607.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_W202.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_D202.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_B606.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/PLM_Z301.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_N601.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_N606.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_M501.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_R606.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_F605.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_N608.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_A504.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_B603.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_B604.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_A503.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_C304.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_K202.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_O303.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9XX_W204.pdb`
+  - pre_raw_pdb: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_N610.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_F606.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_B612.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_R605.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_N605.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_C303.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_T201.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/PLM_Y301.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B608.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_F606.sanitized.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_W201.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B607.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9YF_M504.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_B612.sanitized.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_O304.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B609.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/9Y0_P202.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_R605.sanitized.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/PLM_W203.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_N604.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_B611.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/MQ9_B610.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/CDL_A502.sanitized.pdb`
+  - pre_raw_pdb_sanitized: `/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/6ADQ/ligands_raw/PLM_K203.sanitized.pdb`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/9Y0_W201.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/9Y0_B612.sanitized.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_B611.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_R605.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/9YF_M504.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_T201.sanitized.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/MQ9_B608.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/MQ9_B609.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/MQ9_B610.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/9Y0_P202.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/9Y0_B612.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/9YF_C303.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/PLM_K203.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/MQ9_B607.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_N604.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_F606.sanitized.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/PLM_Y301.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_N605.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_R605.sanitized.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/MQ9_O304.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/PLM_W203.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/9YF_C303.sanitized.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_T201.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_A502.pdbqt`
+  - post_pdbqt: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/CDL_F606.pdbqt`
+  - ligand_prep_status_tsv: `/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/6ADQ/ligand_prep_status.tsv`
+  - protein_log: `/stor/home/mpg2352/atlas/code/protein_automation/docked/6ADQ/protein.log`
+

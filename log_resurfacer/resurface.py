@@ -28,7 +28,7 @@ import csv
 import json
 import re
 import sys
-import subprocess
+import subprocess, os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -119,6 +119,26 @@ DEFAULT_RULES = {
 SEVERITY_ORDER = {"fatal": 3, "hard": 2, "soft": 1, "info": 0}
 TIMESTAMP_RE = re.compile(r"(?P<ts>(?:20\d{2}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}))")
 
+
+# Map rule IDs to pipeline steps
+RULE_TO_STEP = {
+    "ligprep.rdkit_valence":     "ligprep.sanitize",
+    "ligprep.mgl_partial_write": "ligprep.write_mol2",
+    "ligprep.obabel_h_charge":   "ligprep.add_h",
+    "ligprep.mgl_missing_mol2":  "ligprep.write_mol2",
+    "ligprep.tsv_failure":       "ligprep.parse",
+    "dock.no_score":             "dock.score",
+    "render.no_ctrl_rdk_paths":  "render",
+    "render.enqueue_none":       "render",
+    "recentering.skipped_zero":  "dock.run",
+    "cap.limiting":              "dock.run",
+}
+
+
+
+
+
+
 # -----------------------
 # Data structures
 # -----------------------
@@ -152,6 +172,8 @@ class GroupItem:
     joins: List[Dict[str, str]] = field(default_factory=list)
     priority: int = 0
     had_timed: bool = False
+    step: str = ""
+    paths: Dict[str, List[str]] = field(default_factory=dict)
 
     def add_hit(self, path: str, line: str, ts: Optional[datetime]):
         self.count += 1
@@ -233,6 +255,80 @@ def _load_ligand_tsv(tsv_path: Path) -> Dict[str, Dict[str, str]]:
 def _severity_at_or_above(sev: str, threshold: str) -> bool:
     return SEVERITY_ORDER.get(sev, -1) >= SEVERITY_ORDER.get(threshold, 99)
 
+def _shorten(s: str, width: int = 64) -> str:
+    if not s:
+        return ""
+    if len(s) <= width:
+        return s
+    # center-ellipsis to keep head/tail informative
+    keep = width - 3
+    head = keep // 2
+    tail = keep - head
+    return f"{s[:head]}...{s[-tail:]}"
+
+def _pick_representative_path(g) -> str:
+    """
+    Prefer post-prep artifacts, then raw, then dock, then bench log.
+    """
+    if not getattr(g, "paths", None):
+        return ""
+    order = [
+        "post_pdbqt",
+        "post_mol2",
+        "pre_raw_pdb_sanitized",
+        "pre_raw_pdb",
+        "protein_log",
+        "dock_inputs",
+        "bench_logs",
+    ]
+    for key in order:
+        hits = g.paths.get(key, [])
+        if hits:
+            return hits[0]
+    return ""
+
+
+import re
+
+_PDB_RX = re.compile(r"/(?:processed_pdbs|docked)/([^/]+)/")
+_LIG_RX = re.compile(r"([A-Za-z0-9_.+-]+)\.(?:pdbqt|mol2|pdb)(?:\s|$)")
+# also catch sanitized variants
+_LIG_SAN_RX = re.compile(r"([A-Za-z0-9_.+-]+)\.sanitized\.pdb(?:\s|$)")
+
+def infer_missing_ids(items: list):
+    """Fill in g.pdb / g.ligand from sample lines and file paths if missing."""
+    for g in items:
+        if g.pdb and g.ligand:
+            continue
+        # Walk all samples from all files for this group
+        samples = []
+        for fs in g.files.values():
+            samples.extend(fs.samples)
+            samples.append(fs.path)  # also try the file path itself
+        # Infer PDB
+        if not g.pdb:
+            for s in samples:
+                m = _PDB_RX.search(s)
+                if m:
+                    g.pdb = m.group(1)
+                    break
+        # Infer ligand
+        if not g.ligand:
+            for s in samples:
+                m = _LIG_RX.search(s) or _LIG_SAN_RX.search(s)
+                if m:
+                    g.ligand = m.group(1)
+                    break
+    # Final pass: if still missing PDB but have ligand, reverse-lookup by ligand
+    project_root = Path(__file__).resolve().parent.parent
+    for g in items:
+        if not g.pdb and g.ligand:
+            lig_base = Path(g.ligand).stem
+            pdb_guess = _reverse_lookup_pdb_by_ligand(project_root, lig_base)
+            if pdb_guess:
+                g.pdb = pdb_guess
+
+
 
 # -----------------------
 # Scanner
@@ -291,7 +387,9 @@ def scan(
                         ligand=ligand,
                         file_basename=protein_log.name,
                         priority=rule.priority,
+                        step=RULE_TO_STEP.get(rule.id, ""),
                     )
+
                 groups[key].add_hit(str(protein_log), line, ts)
                 sev_counts[rule.severity] += 1
 
@@ -310,6 +408,7 @@ def scan(
                         ligand=lig_key,
                         file_basename="ligand_prep_status.tsv",
                         priority=95,
+                        step=RULE_TO_STEP.get(rule_id, ""),
                     )
                 line = f"TSV failure for {lig_key}: status={payload.get('prep_status')} reason={payload.get('reason')}"
                 groups[key].add_hit(str(lig_tsv), line, None)
@@ -348,8 +447,9 @@ def scan(
                             hint=rule.hint,
                             pdb=pdb or "",
                             ligand=ligand,
-                            file_basename=logf.name,
+                            file_basename=logf.name,  # or Path(bl).name
                             priority=rule.priority,
+                            step=RULE_TO_STEP.get(rule.id, ""),
                         )
                     groups[key].add_hit(str(logf), line, ts)
                     sev_counts[rule.severity] += 1
@@ -380,22 +480,122 @@ def scan(
                         ligand=ligand,
                         file_basename=Path(bl).name,
                         priority=rule.priority,
+                        step=RULE_TO_STEP.get(rule.id, ""),
                     )
                 groups[key].add_hit(str(bl), line, ts)
                 sev_counts[rule.severity] += 1
 
     return groups, sev_counts, scanned, saw_timed_since
 
+def _norm(p: Path) -> str:
+    return str(p.resolve()).replace("\\", "/")
+
+def enrich_paths(items: List[GroupItem], project_root: Path,
+                 proteins_root: Path, ligands_root: Path, logs_dir: Path) -> List[GroupItem]:
+    """
+    Populate g.paths with existing files for each item, using your tree:
+      processed_pdbs/<PDB>/ligands_raw/*[.sanitized].pdb
+      prepped_ligands/<PDB>/*.pdbqt  (+ ligand_prep_status.tsv)
+      docked/<PDB>/bench_pocket1_single/*{ligand_base}*, docked/<PDB>/protein.log
+      logs/bench_*.log (that matched)
+    Also: optionally probe for <ligand_base>.mol2 within those same three roots;
+    include only if found (we don't assume a canonical mol2 location).
+    """
+    processed_root = project_root / "processed_pdbs"
+    prepped_root   = ligands_root
+    docked_root    = proteins_root
+
+    for g in items:
+        paths: Dict[str, List[str]] = {}
+        pdb = (g.pdb or "").strip()
+        lig = (g.ligand or "").strip()
+        lig_base = Path(lig).stem if lig else ""
+
+        # processed_pdbs/<PDB>/ligands_raw/*
+        if pdb:
+            raw_dir = processed_root / pdb / "ligands_raw"
+            if raw_dir.exists():
+                pre = [p for p in raw_dir.glob(f"{lig_base}*.pdb")] if lig_base else list(raw_dir.glob("*.pdb"))
+                san = [p for p in raw_dir.glob(f"{lig_base}*.sanitized.pdb")] if lig_base else [p for p in pre if str(p).endswith(".sanitized.pdb")]
+                pre_raw = [_norm(p) for p in pre if not str(p).endswith(".sanitized.pdb")]
+                pre_san = [_norm(p) for p in san]
+                if pre_raw: paths["pre_raw_pdb"] = pre_raw
+                if pre_san: paths["pre_raw_pdb_sanitized"] = pre_san
+
+        # prepped_ligands/<PDB>/*.pdbqt (+ TSV)
+        if pdb:
+            prepped_dir = prepped_root / pdb
+            if prepped_dir.exists():
+                pdbqt_hits = list(prepped_dir.glob(f"{lig_base}*.pdbqt")) if lig_base else list(prepped_dir.glob("*.pdbqt"))
+                if pdbqt_hits:
+                    paths["post_pdbqt"] = [_norm(p) for p in pdbqt_hits]
+                tsv = prepped_dir / "ligand_prep_status.tsv"
+                if tsv.exists():
+                    paths["ligand_prep_status_tsv"] = [_norm(tsv)]
+
+                # Optional: try to find a .mol2 sibling if present
+                mol2_hits = list(prepped_dir.glob(f"{lig_base}*.mol2")) if lig_base else []
+                if mol2_hits:
+                    paths["post_mol2"] = [_norm(p) for p in mol2_hits]
+
+        # docked/<PDB>/bench_pocket1_single/*
+        if pdb:
+            dock_dir = docked_root / pdb / "bench_pocket1_single"
+            if dock_dir.exists():
+                dock_hits = list(dock_dir.glob(f"*{lig_base}*")) if lig_base else []
+                if dock_hits:
+                    paths["dock_inputs"] = [_norm(p) for p in dock_hits]
+            prot_log = docked_root / pdb / "protein.log"
+            if prot_log.exists():
+                paths["protein_log"] = [_norm(prot_log)]
+
+            # Optional: .mol2 might also be under docked (rare but cheap to probe)
+            if lig_base and dock_dir.exists():
+                mol2_hits_docked = list(dock_dir.glob(f"*{lig_base}*.mol2"))
+                if mol2_hits_docked:
+                    paths.setdefault("post_mol2", [])
+                    paths["post_mol2"].extend(_norm(p) for p in mol2_hits_docked)
+
+        # Bench logs that matched this group (from g.files)
+            bench_matches = []
+            for fp in g.files.keys():
+                try:
+                    p = Path(fp).resolve()
+                except Exception:
+                    p = Path(fp)
+                if p.suffix == ".log" and p.parent.resolve() == logs_dir.resolve():
+                    bench_matches.append(_norm(p))
+            if bench_matches:
+                paths["bench_logs"] = sorted(set(bench_matches))
+
+            g.paths = paths
+    return items
+
 
 def _extract_pdb_from_line(line: str) -> Optional[str]:
-    m = re.search(r"\b([0-9][A-Za-z0-9]{3})\b", line)
+    m = re.search(r"([0-9](?:[A-Za-z][A-Za-z0-9]{2}|[A-Za-z0-9][A-Za-z][A-Za-z0-9]|[A-Za-z0-9]{2}[A-Za-z]))", line)
     return m.group(1).upper() if m else None
 
 
 def _extract_pdb_from_path(p: Path) -> Optional[str]:
-    m = re.search(r"([0-9][A-Za-z0-9]{3})", p.stem)
+    m = re.search(r"([0-9](?:[A-Za-z][A-Za-z0-9]{2}|[A-Za-z0-9][A-Za-z][A-Za-z0-9]|[A-Za-z0-9]{2}[A-Za-z]))",p.stem)
     return m.group(1).upper() if m else None
 
+def _reverse_lookup_pdb_by_ligand(project_root: Path, lig_base: str) -> Optional[str]:
+    # Try prepped_ligands/<PDB>/<lig_base>*
+    prepped = project_root / "prepped_ligands"
+    for pdir in prepped.iterdir() if prepped.exists() else []:
+        if not pdir.is_dir():
+            continue
+        if list(pdir.glob(f"{lig_base}*")):
+            return pdir.name.upper()
+    # Try processed_pdbs/<PDB>/ligands_raw/<lig_base>*
+    processed = project_root / "processed_pdbs"
+    for pdir in processed.iterdir() if processed.exists() else []:
+        rawdir = pdir / "ligands_raw"
+        if rawdir.exists() and list(rawdir.glob(f"{lig_base}*")):
+            return pdir.name.upper()
+    return None
 
 # -----------------------
 # Ranking and reporting
@@ -444,6 +644,8 @@ def compose_json(items: List[GroupItem], stats: Dict[str, int], scanned: Dict[st
                 "last_seen": g.last_seen.strftime("%Y-%m-%d %H:%M:%S") if g.last_seen else None,
                 "files": [{"path": fs.path, "samples": fs.samples} for fs in g.files.values()],
                 "joins": g.joins,
+                "step": getattr(g, "step", ""),
+                "paths": getattr(g, "paths", {}),
             }
             for g in items
         ],
@@ -455,15 +657,18 @@ def write_json(outdir: Path, payload: Dict):
 
 
 def render_tsv(items: List[GroupItem]) -> str:
-    lines = [
-        "\t".join(["rank","severity","rule_id","pdb","ligand","message","count","recency","file","sample","hint"])
-    ]
+    lines = ["\t".join([
+        "rank", "severity", "rule_id", "pdb", "ligand", "message", "count", "recency", "file", "sample", "hint", "step",
+        "paths"
+    ])]
     for g in items:
         for fs in g.files.values():
             sample = fs.samples[0] if fs.samples else ""
+            paths_str = ";".join(sum([v for v in getattr(g, "paths", {}).values()], []))
             row = [
                 str(getattr(g, "rank", "")), g.severity, g.rule_id, g.pdb, g.ligand or "",
                 _group_message(g), str(g.count), g.recency, fs.path, sample, g.hint,
+                getattr(g, "step", ""), paths_str
             ]
             lines.append("\t".join(row))
     return "\n".join(lines) + "\n"
@@ -493,6 +698,13 @@ def render_markdown(items: List[GroupItem], stats: Dict[str, int], stale_note: O
             md.append("- **Joins:**\n")
             for j in g.joins:
                 md.append(f"  - ligand={j.get('ligand')} prep_status={j.get('prep_status')} reason={j.get('reason')}\n")
+        if getattr(g, "step", ""):
+            md.append(f"- **Step:** {g.step}\n")
+        if getattr(g, "paths", {}):
+            md.append("- **Paths:**\n")
+            for key, plist in g.paths.items():
+                for p in plist:
+                    md.append(f"  - {key}: `{p}`\n")
         md.append("\n")
     return "".join(md)
 
@@ -528,16 +740,35 @@ def print_console(items: List[GroupItem], stats: Dict[str, int], top: int):
         print(f"{sev:>5}: {stats.get(sev,0)}")
     print(f"Health score: {compute_health(stats)} / 100\n")
 
-    headers = ["#", "sev", "rule", "pdb", "lig", "count", "recency", "file", "sample", "hint"]
+    headers = ["#", "sev", "rule", "pdb", "lig", "count", "recency", "file", "sample", "step", "rep_path"]
     rows = []
     for g in items[:top]:
         fs = next(iter(g.files.values())) if g.files else FileSample(path="", samples=[""])
         sample = fs.samples[0] if fs.samples else ""
+        # representative path (post_pdbqt > post_mol2 > pre_raw_* > protein_log > dock_inputs > bench_logs)
+        rep = _pick_representative_path(g)
         rows.append([
-            getattr(g, "rank", ""), g.severity, g.rule_id, g.pdb, g.ligand or "", g.count,
-            g.recency, Path(fs.path).name if fs.path else "", _truncate(sample, 80), _truncate(g.hint, 60),
+            getattr(g, "rank", ""),
+            g.severity,
+            g.rule_id,
+            g.pdb,
+            g.ligand or "",
+            g.count,
+            g.recency,
+            Path(fs.path).name if fs.path else "",
+            _truncate(sample, 80),
+            getattr(g, "step", ""),
+            rep,  # full path, no truncation
         ])
     _print_table(headers, rows)
+def print_paths_footer(items: List[GroupItem], top: int):
+    print("\n[paths] top (rank • step → rep_path)")
+    for g in items[:top]:
+        rep = _pick_representative_path(g)
+        step = getattr(g, "step", "")
+        rank = getattr(g, "rank", "?")
+        if rep or step:
+            print(f"  {rank}. {step or '-'} → {rep or '-'}")
 
 
 def _truncate(s: str, n: int) -> str:
@@ -559,28 +790,38 @@ def _print_table(headers: List[str], rows: List[List[object]]):
 # -----------------------
 # Runner (benchmark + resurface)
 # -----------------------
-def tee_run(cmd: List[str], log_file: Path, cwd: Optional[Path] = None) -> int:
-    """Run a command, stream to console and log_file (portable tee)."""
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_file, "w", encoding="utf-8", newline="") as lf:
-        try:
-            proc = subprocess.Popen(
-                cmd, cwd=str(cwd) if cwd else None,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                bufsize=1, universal_newlines=True,
-            )
-        except Exception as e:
-            lf.write(f"[launcher] failed to start: {e}\n")
-            print(f"[launcher] failed to start: {e}", file=sys.stderr)
-            return 2
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            lf.write(line)
-            lf.flush()
-            print(line, end="")
-        proc.wait()
-        return proc.returncode
+# --- at top of file if not present ---
+from pathlib import Path
+import os
+import subprocess
 
+def tee_run(cmd, log_path, cwd=None, env=None):
+    """
+    Run a subprocess, stream stdout to console AND to log_path.
+    Robust to non-UTF-8 bytes.
+    """
+    # Normalize and create parent dir
+    log_path = str(log_path)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    print(f"[tee] opening log file: {log_path}")
+    with open(log_path, "a", encoding="utf-8", errors="replace") as flog:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd) if cwd is not None else None,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        for line in proc.stdout:
+            print(line, end="")
+            flog.write(line)
+        rc = proc.wait()
+    return rc
 
 # -----------------------
 # CLI
@@ -663,7 +904,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         bench_logs=bench_logs,
     )
     items = rank_groups(groups)
+    # Enrich each item with discovered filesystem paths
+    infer_missing_ids(items)
 
+    items = enrich_paths(
+        items=items,
+        project_root=project_root,
+        proteins_root=args.proteins,
+        ligands_root=args.ligands,
+        logs_dir=logs_dir,
+    )
     # Output directory (use same ts so bench & reports align)
     outdir = (Path(args.out_root) if args.out_root else Path(__file__).parent / "out") / ts
     outdir.mkdir(parents=True, exist_ok=True)
@@ -691,6 +941,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Console
     print_console(items, sev_counts, args.top)
+    print_paths_footer(items, args.top) 
     if bench_log_created:
         print(f"\n[paths] bench log: {bench_log_created}")
     print(f"[paths] reports: {outdir}")

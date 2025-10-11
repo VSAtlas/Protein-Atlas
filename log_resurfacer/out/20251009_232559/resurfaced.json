@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-09 23:25:59",
+    "rules_path": "<embedded>",
+    "pdb_filter": ""
+  },
+  "scanned": {
+    "proteins": [
+      "docked/3OG7/protein.log",
+      "docked/3ZBF/protein.log",
+      "docked/6U4J/protein.log",
+      "docked/6WTN/protein.log",
+      "docked/_analysis/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/3OG7/ligand_prep_status.tsv",
+      "prepped_ligands/3ZBF/ligand_prep_status.tsv",
+      "prepped_ligands/6U4J/ligand_prep_status.tsv",
+      "prepped_ligands/6WTN/ligand_prep_status.tsv",
+      "prepped_ligands/_analysis/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251009_232559.log"
+    ]
+  },
+  "stats": {},
+  "items": []
+}

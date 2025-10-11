@@ -113,83 +113,53 @@ def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2)
             pass
     print("[capture_pose] deferred PyMOL jobs complete.")
     return len(jobs)
+
 def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
-                            max_workers: int = 2,
+                            max_workers: int = 8,
                             mode: str = "cli",
-                            slow_ms: int = 2500) -> int:
+                            slow_ms: int = 1500) -> int:
     """
     Multi-process renderer that replays JSONL queue without sharing a PyMOL session.
+    Uses a single persistent pool to avoid per-batch spawn overhead.
     - mode: "cli" (pymol -cq) preferred; "pymol2" fallback per process.
-    Backoff:
-      If >=2 jobs in the last minute exceed slow_ms or an error occurs, halves workers for 60s.
-      Each clean minute, +1 worker until target.
+    - slow_ms: only used for summary stats (no automatic backoff here).
     """
     qp = str(queue_path or _QUEUE_PATH)
     jobs = list(_iter_jobs(qp)) or []
     if not jobs:
-        print("[render-replay] workers=0 jobs=0 mode=%s" % mode)
+        print(f"[render-replay] workers=0 jobs=0 mode={mode}")
         return 0
 
-    target = max(1, int(max_workers))
-    # disable in-queue deferral while we replay
     global _DEFER_MODE
     prev = _DEFER_MODE
     _DEFER_MODE = False
+    workers = max(1, int(max_workers))
+    print(f"[render-replay] workers={workers} jobs={len(jobs)} mode={mode}")
 
-    print(f"[render-replay] workers={target} jobs={len(jobs)} mode={mode}")
-
-    # Controller state
-    active = min(target, os.cpu_count() or 2, 4)  # soft cap 4 to start
-    incidents: List[int] = []
-    durations: List[int] = []
     ok_count = fail_count = 0
+    durations: List[int] = []
 
-    def _window_trim(now_ms: int):
-        # keep last ~60s window
-        cutoff = now_ms - 60_000
-        while incidents and incidents[0] < cutoff:
-            incidents.pop(0)
-
-    idx = 0
-    while idx < len(jobs):
-        # slice next batch up to 'active' size
-        batch = jobs[idx: idx + active]
-        idx += len(batch)
-        started_ms = int(time.time() * 1000)
-
-        with ProcessPoolExecutor(max_workers=active) as ex:
-            futs = [ex.submit(_run_one_job_mp, job, mode) for job in batch]
-            for j, fut in zip(batch, as_completed(futs)):
+    # Use a stable mapping so we can print tags with the right job
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        fut2job = {ex.submit(_run_one_job_mp, job, mode): job for job in jobs}
+        for fut in as_completed(fut2job):
+            j = fut2job[fut]
+            kind = j.get("kind", "?")
+            tag = Path(j.get("outprefix", "?")).name
+            try:
                 ok, t_ms, err = fut.result()
-                durations.append(t_ms)
-                kind = j.get("kind","?")
-                tag = Path(j.get("outprefix","?")).name
-                print(f"[render-done] {kind}:{tag} t_ms={t_ms} ok={int(ok)}"
-                      + (f" err={err.splitlines()[0][:80]}" if (err) else ""))
+            except Exception as e:
+                ok, t_ms, err = False, 0, str(e)
+            durations.append(t_ms)
+            print(f"[render-done] {kind}:{tag} t_ms={t_ms} ok={int(ok)}"
+                  + (f" err={str(err).splitlines()[0][:80]}" if err else ""))
+            if ok:
+                ok_count += 1
+            else:
+                fail_count += 1
 
-                if not ok:
-                    fail_count += 1
-                    incidents.append(int(time.time()*1000))
-                else:
-                    ok_count += 1
-                    if t_ms >= slow_ms:
-                        incidents.append(int(time.time()*1000))
-
-        # Backoff / ramp
-        now = int(time.time() * 1000)
-        _window_trim(now)
-        if len(incidents) >= 2:
-            # back off
-            new_active = max(1, active // 2)
-            if new_active < active:
-                print(f"[render-backoff] recent incidents={len(incidents)} slow_ms={slow_ms} -> workers {active}→{new_active}")
-            active = new_active
-            # cooldown one minute window naturally by time
-        else:
-            if active < target:
-                active += 1
-
-    # Clear the queue
+    # Clear queue
     try:
         Path(qp).unlink()
     except Exception:
@@ -198,13 +168,15 @@ def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
 
     # Summary
     if durations:
-        avg = int(sum(durations)/len(durations))
+        avg = int(sum(durations) / len(durations))
+        import statistics
         p50 = int(statistics.median(durations))
-        p90 = int(sorted(durations)[max(0,int(0.9*len(durations))-1)])
+        p90 = int(sorted(durations)[max(0, int(0.9 * len(durations)) - 1)])
     else:
-        avg=p50=p90=0
-    print(f"[render-summary] jobs={len(jobs)} ok={ok_count} fail={fail_count} avg_ms={avg} p50={p50} p90={p90} workers_used<={target}")
+        avg = p50 = p90 = 0
+    print(f"[render-summary] jobs={len(jobs)} ok={ok_count} fail={fail_count} avg_ms={avg} p50={p50} p90={p90} workers_used<={workers}")
     return ok_count
+
 
 
 
@@ -423,17 +395,27 @@ def _render_three_views_with_pymol(
                 cmd.show("sticks", "top_site")
                 cmd.color("gray", "top_site")
                 cmd.label("top_site and name CA and (alt '' or alt A)", "resn + '-' + resi")
+
+
         # Views
-        cmd.zoom(lig_union, 10)
+        focus_sel = (lig_union if lig_objects else "receptor")
+        cmd.zoom(focus_sel, 10)
         cmd.viewport(*viewport)
         cmd.set("antialias", 2)
         cmd.set("ray_opaque_background", 0)
 
+        cmd.sync(); cmd.refresh()
         cmd.png(f"{outprefix}_front.png", ray=0)
+
+        cmd.sync(); cmd.refresh()
         cmd.turn("y", 90)
         cmd.png(f"{outprefix}_side.png", ray=0)
+
+        cmd.sync(); cmd.refresh()
         cmd.turn("x", 90)
         cmd.png(f"{outprefix}_top.png", ray=0)
+
+
 
 
 def _render_native_on_original_pdb(
@@ -502,10 +484,15 @@ def _render_native_on_original_pdb(
         cmd.viewport(*viewport)
         cmd.set("antialias", 2)
         cmd.set("ray_opaque_background", 0)
-
+        cmd.sync()
+        cmd.refresh()
         cmd.png(f"{outprefix}_front.png", ray=0)
+        cmd.sync()
+        cmd.refresh()
         cmd.turn("y", 90)
         cmd.png(f"{outprefix}_side.png", ray=0)
+        cmd.sync()
+        cmd.refresh()
         cmd.turn("x", 90)
         cmd.png(f"{outprefix}_top.png", ray=0)
 
@@ -557,7 +544,12 @@ def write_multiview_pml(
 reinitialize
 bg_color white
 set ray_opaque_background, off
-set antialias, 2
+set antialias, 1
+
+set async_builds, off
+set defer_builds_mode, 3
+feedback disable, all, results
+feedback disable, all, actions
 
 load $RECEPTOR, receptor
 hide everything, receptor
@@ -684,7 +676,13 @@ def write_native_pml(original_pdb: str, outprefix: Path, exclude_resns: Sequence
 reinitialize
 bg_color white
 set ray_opaque_background, off
-set antialias, 2
+set antialias, 1
+
+set async_builds, off
+set defer_builds_mode, 3
+feedback disable, all, results
+feedback disable, all, actions
+
 load "$PDB", orig
 hide everything
 show surface, orig and polymer
@@ -822,11 +820,15 @@ def render_pml_headless(pml_path: Path, pymol_exe: Optional[str] = None) -> int:
     """
     exe = pymol_exe or "pymol"
     try:
-        # -cq = console (no GUI) + quiet
-        return subprocess.run([exe, "-cq", str(pml_path)], check=False).returncode
+        import shlex, subprocess
+        pml_abs = Path(pml_path).resolve()
+        cmd = [exe, "-cq", str(pml_abs)]
+        print("[render-cli] " + " ".join(shlex.quote(x) for x in cmd))
+        return subprocess.run(cmd, check=False).returncode
     except FileNotFoundError:
         print(f"[capture_pose] PyMOL CLI not found: '{exe}'")
         return 127
+
 
 
 # ============================================================
@@ -954,9 +956,15 @@ def _cli_render_active_site(
     os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
 
     # canonical orientations; NO RAY (ray=0)
+    cmd.sync()
+    cmd.refresh()
     cmd.png(base + "_front.png", ray=0, width=w, height=h)
+    cmd.sync()
+    cmd.refresh()
     cmd.turn("y", 90)
     cmd.png(base + "_side.png", ray=0, width=w, height=h)
+    cmd.sync()
+    cmd.refresh()
     cmd.turn("x", 90)
     cmd.png(base + "_top.png", ray=0, width=w, height=h)
 

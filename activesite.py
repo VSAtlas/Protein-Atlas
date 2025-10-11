@@ -291,46 +291,88 @@ def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
 
     # special atom names (e.g., OXT)
     if an in rules.special_names:
+        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                      an, rn, is_het, "special_names", rules.special_names.get(an, "?"))
         return rules.special_names[an]
+
     # normalize residue-name aliases (e.g., IOD->I, CL- -> CL)
     if rn in rules.halide_aliases:
+        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                      an, rn, is_het, "halide_alias", rules.halide_aliases[rn])
         rn = rules.halide_aliases[rn]
     if rn in rules.cation_aliases:
+        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                      an, rn, is_het, "cation_alias", rules.cation_aliases[rn])
         rn = rules.cation_aliases[rn]
 
     # derive by leading functional prefix (OE1, NE2, OD1, ND2, SD, ...)
     pref = an[:2]
     if pref in rules.prefix_map:
+        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                      an, rn, is_het, "prefix_map", rules.prefix_map.get(pref, "?"))
         return rules.prefix_map[pref]
-
     # halide ions by residue name for single-atom HETATMs
     if is_het and rn in rules.halide_resnames:
-        # normalize case to proper two-letter form when applicable
+        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                      an, rn, is_het, "halide_resname", rn)
         if rn in {"CL","BR"}:
             return rn[0] + rn[1].lower()
         return rn  # I, F
-
+    
+    
+    
     # CA special-case (avoid backbone CA -> Calcium)
     if len(an) >= 2 and an[:2] == "CA":
         if not is_het and rules.treat_backbone_ca:
+            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                          an, rn, is_het, "backbone_CA_guard", "C")
             return "C"
-        # allow calcium if tiny HET or named CA/CAL
         if is_het and rn in {"CA","CAL"}:
+            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                          an, rn, is_het, "Ca_ion", "Ca")
             return "Ca"
 
-    # two-letter elements at name start (Cl, Br, Na, Mg, ...), proper case
-    if len(an) >= 2 and an[:2].upper() in rules.two_letter:
-        t = an[:2].upper()
-        return t[0] + t[1].lower()
+    # two-letter elements at name start (Cl, Br, Na, Mg, ...) — HETs only, and only when the
+    # atom name itself looks like a stand-alone element token (length==2 or 3rd char not alpha).
+    if is_het:
+        two = an[:2].upper()
+        looks_like_standalone = (len(an) == 2) or (len(an) >= 3 and not an[2].isalpha())
+        if two in rules.two_letter and looks_like_standalone:
+            t = two
+            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                          an, rn, is_het, "two_letter", t[0] + t[1].lower())
+            return t[0] + t[1].lower()
 
+        # --- Guard: avoid mislabeling organic HET atom names like "CAK","NAA" as Ca/Na ---
+        # If this is a HET but NOT a known simple ion residue, and the atom name
+        # continues with another alpha character (e.g., "CAK", "NAA"), prefer a
+        # one-letter element guess (C/N/...) rather than a two-letter metal.
+    if is_het:
+        _ion_res = {
+            "LI", "NA", "K", "RB", "CS",
+            "MG", "CA", "SR", "BA",
+            "ZN", "CU", "NI", "CO", "FE", "MN", "CD", "AL", "HG", "AG", "PB",
+            "PT", "PD", "AU", "RU", "IR", "OS"
+        }
+        if rn not in _ion_res:
+            if len(an) >= 3 and an[0].isalpha() and an[1].isalpha() and an[2].isalpha():
+                c = an[0].upper()
+                if c in rules.one_letter:
+                    logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                                  an, rn, is_het, "het_three_letters_guard", c)
+                    return c
     # hydrogens (H, 1H, 2H...)
     if an.startswith("H") or (an[:1].isdigit() and len(an) >= 2 and an[1] == "H"):
+        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                      an, rn, is_het, "hydrogen_name", "H")
         return "H"
 
     # one-letter defaults by first alpha
     if an and an[0].isalpha():
         c = an[0].upper()
         if c in rules.one_letter:
+            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                          an, rn, is_het, "one_letter", c)
             return c
 
     for ch in an:
@@ -513,6 +555,7 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
     rules = get_atom_rules()
     src_path = str(src_path)
     dst_path = src_path if dst_path is None else str(dst_path)
+    logging.info("[elemfix] in=%s rewrite_atoms=%s", src_path, rewrite_atoms)
     out_lines = []
     with open(src_path, "r", encoding="utf-8", errors="ignore") as fh:
         for line in fh:
@@ -526,8 +569,8 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
             out_lines.append(line)
     with open(dst_path, "w", encoding="utf-8") as out:
         out.writelines(out_lines)
+    logging.info("[elemfix] done=%s", dst_path or src_path)
     return dst_path
-
 
 
 
