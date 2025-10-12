@@ -636,34 +636,68 @@ def get_box_from_p2rank_csv(pdb_file):
     pdb_name = os.path.splitext(os.path.basename(pdb_file))[0]
     pred_dir = os.path.join(P2RANK_DIR, "test_output", f"predict_{pdb_name}")
     pred_file = os.path.join(pred_dir, f"{pdb_name}.pdb_predictions.csv")
-
+    
     logging.info(f"Running P2Rank for: {pdb_file}")
 
-    jar_path = os.path.join(P2RANK_DIR, "bin", "p2rank.jar")
-    if not os.path.isfile(jar_path):
-        logging.error(f"Missing p2rank.jar at: {jar_path}")
+    # Resolve P2Rank execution: accept either a dir, a jar path, or rely on PATH ("prank")
+    pr_cfg = P2RANK_DIR or ""
+    pr_base = None
+    pr_exe = None
+    pr_jar = None
+
+    # If config points to a file and ends with .jar, treat it as the jar
+    if pr_cfg and os.path.isfile(pr_cfg) and pr_cfg.lower().endswith(".jar"):
+        pr_jar = pr_cfg
+        pr_base = os.path.dirname(os.path.dirname(pr_cfg))  # .../bin/p2rank.jar -> parent of bin
+    elif pr_cfg and os.path.isdir(pr_cfg):
+        # config is an install root (directory)
+        jar_candidate = os.path.join(pr_cfg, "bin", "p2rank.jar")
+        if os.path.isfile(jar_candidate):
+            pr_jar = jar_candidate
+        pr_base = pr_cfg
+
+    # If prank is on PATH, prefer it (simplest + portable)
+    from shutil import which
+    pr_on_path = which("prank")
+
+    # Pick command: (1) prank on PATH, else (2) java -jar p2rank.jar, else error
+    if pr_on_path:
+        run_cmd = ["prank", "predict"]
+    elif pr_jar and os.path.isfile(pr_jar):
+        run_cmd = ["java", "-Xmx4G", "-jar", pr_jar, "predict"]
+    else:
+        logging.error("P2Rank not found. Set P2RANK_PATH to either the install directory or the p2rank.jar.")
         return None, None
 
-    import platform
-    is_windows = platform.system().lower().startswith("win")
-    p2rank_executable = os.path.join(P2RANK_DIR, "prank.bat" if is_windows else "prank.sh")
+    # Always write to a known output folder next to the input PDB
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(pdb_file)), "_p2rank")
+    os.makedirs(out_dir, exist_ok=True)
 
     try:
-        if is_windows:
-            cmd = f'"{p2rank_executable}" predict -f "{pdb_file}"'
-            subprocess.run(cmd, check=True, shell=True)
-        else:
-            cmd = [p2rank_executable, "predict", "-f", pdb_file]
-            subprocess.run(cmd, check=True, shell=False)
+        # Explicit -o ensures we know exactly where predictions land
+        cmd = run_cmd + ["-f", pdb_file, "-o", out_dir]
+        logging.info("P2Rank cmd: %s", " ".join(cmd))
+        subprocess.run(cmd, check=True, shell=False)
         logging.info(f"P2Rank ran successfully for {pdb_file}")
     except subprocess.CalledProcessError as e:
         logging.error(f"P2Rank failed: {e}")
         return None, None
 
+    # Prefer the explicit output location; fall back to legacy locations if needed
+    pdb_name = os.path.splitext(os.path.basename(pdb_file))[0]
+    pred_file = os.path.join(out_dir, f"{pdb_name}.pdb_predictions.csv")
+    if not os.path.isfile(pred_file):
+        # legacy fallback: current working dir default
+        legacy = os.path.join("test_output", f"predict_{pdb_name}", f"{pdb_name}.pdb_predictions.csv")
+        alt = os.path.join(pr_base or "", "test_output", f"predict_{pdb_name}", f"{pdb_name}.pdb_predictions.csv")
+        for probe in (legacy, alt):
+            if probe and os.path.isfile(probe):
+                pred_file = probe
+                break
+
     if not os.path.isfile(pred_file):
         logging.warning(f"Prediction file not created: {pred_file}")
         return None, None
-
     with open(pred_file, "r", newline='') as f:
         reader = csv.DictReader(f)
         reader.fieldnames = [field.strip() for field in reader.fieldnames]

@@ -1231,9 +1231,26 @@ def _prepare_one(
     lig_id = mol2_file.stem  # stable ID for logs/TSV
     try:
         if obabel_exe_short:
+            try:
+                _pre_arom = _count_aromatic_atoms_in_mol2(mol2_file)
+                _m_pre = Chem.MolFromMol2File(str(mol2_file), sanitize=False, removeHs=False)
+                _preH = sum(1 for a in (_m_pre.GetAtoms() if _m_pre else []) if a.GetSymbol() == "H")
+                logging.info("[ligprep] re_arom pre  arom=%d H=%d file=%s", _pre_arom, _preH, mol2_file.name)
+            except Exception:
+                logging.info("[ligprep] re_arom pre  arom=? H=? file=%s", mol2_file.name)
+
             _re_aromatize_mol2_in_place(mol2_file, obabel_exe_short)
+
+            try:
+                _post_arom = _count_aromatic_atoms_in_mol2(mol2_file)
+                _m_post = Chem.MolFromMol2File(str(mol2_file), sanitize=False, removeHs=False)
+                _postH = sum(1 for a in (_m_post.GetAtoms() if _m_post else []) if a.GetSymbol() == "H")
+                logging.info("[ligprep] re_arom post arom=%d H=%d file=%s", _post_arom, _postH, mol2_file.name)
+            except Exception:
+                logging.info("[ligprep] re_arom post arom=? H=? file=%s", mol2_file.name)
     except Exception as e:
         logging.info("[ligprep] re_arom skipped for %s: %s", mol2_file.name, e)
+
     try:
         if pdbqt_path.exists():
             pdbqt_path.unlink()
@@ -1247,12 +1264,36 @@ def _prepare_one(
     if (hstderr or "").strip():
         logging.warning("[ligprep] addHs stderr (primary) %s", hstderr.splitlines()[-1][:200])
 
-    # Use mol2_h as input to MGLTools if AddHs succeeded
     mol2_for_mgl = mol2_h if okH else mol2_in
+
+    # If still H-free, attempt an RDKit-based AddHs roundtrip
     if mol2_for_mgl is mol2_in:
-        logging.warning("[ligprep] proceeding to ADT WITHOUT explicit H: %s", mol2_in.name)
+        logging.warning("[ligprep] OBabel -h failed (or no H added); attempting RDKit AddHs fallback: %s", mol2_in.name)
+        try:
+            _m = Chem.MolFromMol2File(str(mol2_in), sanitize=True, removeHs=False)
+            if _m is not None:
+                _mh = Chem.AddHs(_m)
+                _tmp_sdf = mol2_in.with_suffix(".rdkH.sdf")
+                _tmp_mol2 = mol2_in.with_suffix(".rdkH.mol2")
+                with Chem.SDWriter(str(_tmp_sdf)) as w:
+                    w.write(_mh)
+                ok2 = _run_obabel(["obabel", "-isdf", str(_tmp_sdf), "-omol2", "-O", str(_tmp_mol2)], timeout_sec=600)
+                if ok2 and _tmp_mol2.exists():
+                    mol2_for_mgl = _tmp_mol2
+                    logging.info("[ligprep] RDKit AddHs fallback produced MOL2: %s", _tmp_mol2.name)
+        except Exception as e:
+            logging.warning("[ligprep] RDKit AddHs fallback failed: %s", e)
+
+    # Final ADT input sanity
+    _m_chk = Chem.MolFromMol2File(str(mol2_for_mgl), sanitize=False, removeHs=False)
+    curH = sum(1 for a in (_m_chk.GetAtoms() if _m_chk else []) if a.GetSymbol() == "H")
+    if curH > 0:
+        logging.info("[ligprep] ADT input Hs=%d path=%s", curH, mol2_for_mgl)
     else:
-        logging.info("[ligprep] ADT input has explicit H: %s", mol2_for_mgl.name)
+        logging.warning("[ligprep] ADT will add hydrogens internally (input has 0 explicit H): %s", mol2_for_mgl)
+
+
+
 
     try:
         _chk = Chem.MolFromMol2File(str(mol2_for_mgl), sanitize=False, removeHs=False)
@@ -1260,6 +1301,9 @@ def _prepare_one(
                      lig_id,
                      (_chk.GetNumAtoms() if _chk else -1),
                      (any(a.GetAtomicNum() == 1 for a in _chk.GetAtoms()) if _chk else False))
+        
+        
+        
     except Exception:
         pass
 
@@ -1321,7 +1365,29 @@ def _prepare_one(
         except Exception:
             ok, n_atoms, reason = False, 0, "validate_exception"
 
+        # If ADT wrote noticeably fewer atoms than the MOL2 input, rescue via OBabel MOL2->PDBQT
+        try:
+            _in_atoms = (_m_chk.GetNumAtoms() if _m_chk else -1)  # _m_chk was loaded from mol2_for_mgl above
+            _out_atoms = n_atoms
+        except Exception:
+            _in_atoms, _out_atoms = -1, -1
+
+        if _out_atoms > 0 and _in_atoms > 0 and _out_atoms < int(0.9 * _in_atoms):
+            logging.warning("[ligprep] ADT wrote fewer atoms (%d -> %d); invoking OBabel MOL2->PDBQT fallback",
+                            _in_atoms, _out_atoms)
+            if obabel_exe_short:
+                ok_ob = _pdbqt_from_mol2_via_obabel(mol2_for_mgl, pdbqt_path, obabel_exe_short)
+                logging.info("[ligprep] ADT altpath (via OBabel) OK=%s", ok_ob)
+                # refresh validation counters for downstream decisions
+                try:
+                    ok, n_atoms, reason = quick_pdbqt_validate(pdbqt_path)
+                    print(f"[ligprep] post-OBabel rescue PDBQT atoms={n_atoms} ok={ok} reason={reason}")
+                except Exception:
+                    pass
+
         adt_arom = _count_aromatic_ad_types_in_pdbqt(pdbqt_path)
+
+
         if src_arom >= 0 and adt_arom >= 0 and adt_arom < src_arom:
             logging.warning(
                 f"[arom-mismatch] {mol2_file.name}: MOL2_arom={src_arom} > PDBQT_arom={adt_arom} (trying rescue)")
@@ -1522,6 +1588,18 @@ def load_mol2_lenient(path, logger):
             _log_malformed(Path(path), f"sanitize_fail:{e}|{why}")
             if logger:
                 logger.warning(f"RDKit failed to sanitize: {path} ({e})")
+                # On sanitize/valence error: dump quick forensics
+                try:
+                    smi = Chem.MolToSmiles(mol, isomericSmiles=True) if mol is not None else "None"
+                except Exception:
+                    smi = "MolToSmiles_failed"
+                try:
+                    from collections import Counter
+                    elem_hist = dict(Counter(a.GetSymbol() for a in mol.GetAtoms())) if mol is not None else {}
+                    fcharge = sum(int(a.GetFormalCharge()) for a in (mol.GetAtoms() if mol else []))
+                except Exception:
+                    elem_hist, fcharge = {}, 0
+                logging.warning("[ligprep] sanitize_failed elem=%s formal_charge=%d smiles=%s", elem_hist, fcharge, smi)
             return None
         return std_mol
 
@@ -1944,14 +2022,16 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                             return {}
 
                     logging.info("[ligprep] pre-AddHs mol ok=%s atoms=%s elements=%s",
-                                 mol is not None, (mol.GetNumAtoms() if mol else -1), _elem_hist_from_mol)
+                                 mol is not None, (mol.GetNumAtoms() if mol else -1), _elem_hist_from_mol(mol))
+
                     m = Chem.AddHs(m, addCoords=True)
                     logging.info("[ligprep] post-AddHs atoms=%s", (m.GetNumAtoms() if m else -1))
                 except Exception:
                     pass
 
                 if not _write_obabel_friendly_sdf(mol, tmp_sdf):
-                    raise RuntimeError("Failed to write OBabel-friendly SDF in fallback")
+                    raise RuntimeError(
+                        f"Failed to write OBabel-friendly SDF in fallback [pdb={pdb_file.stem.split('_')[0]} lig={pdb_file.stem} file={sanitized.name}]")
 
                 ob_cmd2 = [
                     obabel_exe_short,

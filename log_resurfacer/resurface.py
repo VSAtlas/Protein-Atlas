@@ -756,9 +756,9 @@ def print_console(items: List[GroupItem], stats: Dict[str, int], top: int):
             g.count,
             g.recency,
             Path(fs.path).name if fs.path else "",
-            _truncate(sample, 80),
+            sample,  
             getattr(g, "step", ""),
-            rep,  # full path, no truncation
+            rep,
         ])
     _print_table(headers, rows)
 def print_paths_footer(items: List[GroupItem], top: int):
@@ -776,15 +776,93 @@ def _truncate(s: str, n: int) -> str:
 
 
 def _print_table(headers: List[str], rows: List[List[object]]):
-    widths = [len(h) for h in headers]
+    """
+    Pretty, fixed-width console table:
+      - clamps each column to a sensible max,
+      - adapts to terminal width,
+      - ellipsizes overly long cells so rows never wrap.
+    """
+    import shutil
+
+    # Column order for headers:
+    # 0:# 1:sev 2:rule 3:pdb 4:lig 5:count 6:recency 7:file 8:sample 9:step 10:rep_path
+    # Set *target caps* for fixed columns; we'll size 'rep_path' dynamically
+    caps = {
+        0: 3,   # #
+        1: 4,   # sev
+        2: 25,  # rule
+        3: 4,   # pdb
+        4: 24,  # lig
+        5: 5,   # count
+        6: 19,  # recency
+        7: 22,  # file
+        8: 48,  # sample (we'll shrink first if needed)
+        9: 22,  # step
+        # 10 rep_path -> dynamic
+    }
+    min_sample = 18
+    min_rep    = 24
+
+    # Terminal width (fallback if not a TTY)
+    term = shutil.get_terminal_size((140, 24)).columns
+
+    # Compute static sum (all except rep_path) + spaces
+    static_sum = sum(caps.values())
+    gaps = len(headers) - 1
+    # Desired width for rep_path with a decent minimum
+    desired_rep = max(min_rep, term - static_sum - gaps)
+
+    # If negative space, shrink sample first, then rep_path down to minima
+    sample_w = caps[8]
+    rep_w = desired_rep
+    overflow = (static_sum + gaps + desired_rep) - term
+    if overflow > 0:
+        take = min(overflow, sample_w - min_sample)
+        sample_w -= take
+        overflow -= take
+    if overflow > 0:
+        rep_w = max(min_rep, desired_rep - overflow)
+        overflow = 0
+
+    # Final widths array (with clamps) and alignments
+    widths = [0] * len(headers)
+    aligns = ["<"] * len(headers)  # left by default
+    numeric_right = {0, 5}         # #, count right align
+    for i in numeric_right:
+        aligns[i] = ">"
+    # recency right-ish looks nicer in narrow view
+    aligns[6] = ">"
+    # file, sample, rep_path left
+    widths[10] = rep_w
+    for i in range(len(headers)):
+        if i == 8:
+            widths[i] = sample_w
+        elif i in caps:
+            widths[i] = caps[i]
+        # else: already set for 10
+
+    def _ellipsize(s: str, w: int) -> str:
+        s = "" if s is None else str(s).replace("\n", " ").replace("\t", " ")
+        if len(s) <= w:
+            return s
+        if w <= 3:
+            return s[:w]
+        # center-ellipsis for long paths and names
+        keep = w - 3
+        head = keep // 2
+        tail = keep - head
+        return f"{s[:head]}...{s[-tail:]}"
+
+    # Print header
+    fmt = " ".join([f"{{:{aligns[i]}{widths[i]}}}" for i in range(len(headers))])
+    print(fmt.format(*[ _ellipsize(h, widths[i]) for i, h in enumerate(headers) ]))
+    print(" ".join("-" * widths[i] for i in range(len(headers))))
+
+    # Print rows, clamped
     for r in rows:
-        for i, cell in enumerate(r):
-            widths[i] = max(widths[i], len(str(cell)))
-    fmt = " ".join([f"{{:{w}}}" for w in widths])
-    print(fmt.format(*headers))
-    print(" ".join(["-" * w for w in widths]))
-    for r in rows:
-        print(fmt.format(*[str(c) for c in r]))
+        cells = [ _ellipsize(r[i], widths[i]) for i in range(len(headers)) ]
+        print(fmt.format(*cells))
+
 
 
 # -----------------------

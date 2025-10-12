@@ -554,11 +554,9 @@ feedback disable, all, actions
 load $RECEPTOR, receptor
 hide everything, receptor
 show surface, receptor
-show cartoon, receptor
-set cartoon_transparency, 0.30
+set transparency, 0.30
 set_color gray90, [230,230,230]
 color gray90, receptor and surface
-color gray90, receptor and cartoon
 set transparency, 0.25, receptor and surface
 set two_sided_lighting, on
 set ambient, 0.4
@@ -571,7 +569,7 @@ set fog_start, 0.6
 python
 try:
     import pymol.util as util
-    util.cbag("receptor and polymer and cartoon")
+    util.cbag("receptor and polymer")
 except Exception:
     pass
 python end
@@ -921,7 +919,7 @@ def _cli_render_active_site(
         except Exception:
             pass
 
-    # Basic styling: sticks/cartoon (respect existing, but ensure ligand visible)
+    # Basic styling: sticks (respect existing, but ensure ligand visible)
     cmd.show("sticks", lig_obj)
 
     # Compute ligand centroid (heavy atoms)

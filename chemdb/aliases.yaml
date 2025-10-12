@@ -418,6 +418,7 @@ exclude_het_ids:
   - LMG
   - NG
   - 2PE
+  - DTT
 
 exclude_het_name_keywords:
   - SULFATE
