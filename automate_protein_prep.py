@@ -97,6 +97,7 @@ _TWORAW  = _ES.get("two_letter_elements", []) or []
 _TWO     = _canonize_two_letter(_TWORAW)
 # All allowed element tokens
 _ELEM_CANON = _ONE | _TWO
+_MEEKO_DROP_IONS = set(_flatten_semicolons(RULES.get("meeko_drop_free_ions", []))) or {"NA", "K", "LI"}
 
 def _is_element_token(sym):
     s = str(sym).strip().upper()
@@ -189,6 +190,64 @@ def _pick_reduce_exe() -> str:
 
 REDUCE_EXE = _pick_reduce_exe()
 logging.info("Using Reduce at: %s", REDUCE_EXE)
+
+
+import shlex
+from pathlib import Path
+from typing import List, Tuple
+
+def _persist_subproc(tag: str, cmd: List[str], cp: "subprocess.CompletedProcess",
+                     outdir: Path, receptor_pdbqt: Path) -> None:
+    """
+    Save command, stdout, stderr to <work>/<tag>.* and emit a one-line summary with rc and receptor size.
+    """
+    try:
+        outdir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    (outdir / f"{tag}.cmd.txt").write_text(" ".join(shlex.quote(x) for x in cmd), encoding="utf-8", errors="ignore")
+    (outdir / f"{tag}.stdout.txt").write_text(cp.stdout or "", encoding="utf-8", errors="ignore")
+    (outdir / f"{tag}.stderr.txt").write_text(cp.stderr or "", encoding="utf-8", errors="ignore")
+    exists = receptor_pdbqt.exists()
+    size = receptor_pdbqt.stat().st_size if exists else 0
+    logging.info("[receptor-attempt %s] rc=%s exists=%s size=%d stderr=%s",
+                 tag, cp.returncode, exists, size, str(outdir / f"{tag}.stderr.txt"))
+
+def _first_last_lines(p: Path, n: int = 50) -> Tuple[list, list]:
+    try:
+        lines = (p.read_text(encoding="utf-8", errors="ignore")).splitlines()
+        return lines[:n], lines[-n:]
+    except Exception:
+        return [], []
+
+def _ok_receptor_file(p: Path) -> bool:
+    return p.exists() and p.stat().st_size > 0
+
+
+# --- Chain-prune config helpers (reads via _cfg) ---
+def _cfg_bool(key: str, default: bool = False) -> bool:
+    v = (_cfg(key, str(int(default))) or "").strip().lower()
+    return v in ("1","true","yes","y","on")
+
+def _cfg_float(key: str, default: float) -> float:
+    try:
+        return float(_cfg(key, str(default)))
+    except Exception:
+        return float(default)
+
+def _cfg_int(key: str, default: int) -> int:
+    try:
+        return int(float(_cfg(key, str(default))))
+    except Exception:
+        return int(default)
+
+def _cfg_chain_keep_list() -> set[str]:
+    raw = (_cfg("CHAIN_KEEP_LIST", "") or "")
+    toks = [t.strip() for t in raw.replace(";",",").split(",") if t.strip()]
+    return {t if len(t)==1 else t[:1] for t in toks}
+
+
+
 
 
 
@@ -869,6 +928,58 @@ def filter_invalid_chains(pdb_path: Union[str, Path], output_path: Union[str, Pa
             else:
                 logging.warning("Skipping invalid chain '%s' (no CA atoms)", chain_id)
 
+
+def _has_backbone_atoms(lines):
+    req = {"N","CA","C","O"}
+    seen = set()
+    for ln in lines:
+        if not ln.startswith(("ATOM","HETATM")): continue
+        name = ln[12:16].strip()
+        if name in req: seen.add(name)
+    return req.issubset(seen)
+
+def _group_by_chain(lines):
+    chains = {}
+    for ln in lines:
+        if not ln.startswith(("ATOM","HETATM")): continue
+        ch = ln[21]
+        chains.setdefault(ch, []).append(ln)
+    return chains
+
+def _prune_chains_conservative(lines, keep_chains):
+    out=[]
+    for ln in lines:
+        if ln.startswith(("ATOM","HETATM")) and ln[21] not in keep_chains:
+            continue
+        out.append(ln)
+    return out
+
+def _chains_to_keep(lines, pocket_center=None, r=12.0):
+    chains = _group_by_chain(lines)
+    keep=set()
+    # rule 1: chain has full backbone atoms somewhere
+    for ch, seg in chains.items():
+        if _has_backbone_atoms(seg): keep.add(ch)
+    # rule 2: optional geometric proximity if center known
+    if pocket_center:
+        near=set()
+        x0,y0,z0 = pocket_center
+        for ch, seg in chains.items():
+            for ln in seg:
+                if not ln.startswith(("ATOM","HETATM")): continue
+                try:
+                    x=float(ln[30:38]); y=float(ln[38:46]); z=float(ln[46:54])
+                except Exception: continue
+                if (x-x0)**2+(y-y0)**2+(z-z0)**2 <= r*r:
+                    near.add(ch); break
+        if near: keep = keep & near
+    return keep or set(chains.keys())
+
+
+
+
+
+
 # --- Hydrogen cleanup (geometry + CONECT) ---
 
 def _parse_xyz(line: str):
@@ -1091,6 +1202,7 @@ def quick_element_histogram(pdb_path: Union[str, Path]) -> None:
                 cnt[el or ""] += 1
     logging.info("[Elem histogram %s] %s", os.path.basename(str(pdb_path)), dict(sorted(cnt.items())))
 
+    
 def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
     # Build a peptide-like name set from YAML
     pep_name_lines = RULES["element_sets"].get("peptide_like_names", [])
@@ -1101,11 +1213,12 @@ def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
             if t:
                 peptidey.add(t)
 
+    # PTM whitelist: YAML override if present; else default PTR/SEP/TPO
+    ptm_yaml = set(_flatten_semicolons(RULES.get("element_sets", {}).get("ptm_resnames", [])))
+    ptm_resnames = ptm_yaml or {"PTR", "SEP", "TPO"}
+
     # Element tokens considered "ionic" from YAML context (retain + element list)
     ionic_tokens = {r for r in _RETAIN if _is_element_token(r)}
-    # If you want to exclude halides from the warning, do:
-    # halides = set(RULES.get("element_sets", {}).get("halide_resnames", []))
-    # ionic_tokens = ionic_tokens - halides
 
     res_atoms = defaultdict(list)
     with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -1116,6 +1229,10 @@ def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
 
     offenders = []
     for key, lines in res_atoms.items():
+        chain, resi, icode, resname = key
+        # Skip known PTMs entirely
+        if resname in ptm_resnames:
+            continue
         names = [ln[12:16].strip().upper() for ln in lines]
         if not names:
             continue
@@ -1127,8 +1244,239 @@ def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
         if any((ln[76:78].strip().upper() in ionic_tokens) for ln in lines):
             offenders.append(key)
 
+    # Compact info line to make the warning greppable/noisy only when meaningful
+    logging.info("[peptide-ion check] offenders=%s peptidey_n=%d ionic_tokens_n=%d",
+                 offenders, len(peptidey), len(ionic_tokens))
+
     if offenders:
         logging.warning("Peptide-like residues contain ionic elements (check labeling): %s", offenders)
+
+
+#DELETE CHAINS HELPERS
+def detect_pocket_center_from_ligands(filtered_pdb: Union[str, Path],
+                                      ligands_dir: Union[str, Path]
+) -> Optional[Tuple[float,float,float]]:
+    """
+    Prefer center of extracted ligands in ligands_raw/; fallback to YAML-retained cofactors/metals
+    present in filtered_pdb. Returns (x,y,z) or None.
+    """
+    from statistics import fmean
+    pts: list[Tuple[float,float,float]] = []
+
+    # 1) Extracted ligands (*.pdb) under ligands_dir
+    ligd = Path(ligands_dir)
+    for p in ligd.glob("*.pdb"):
+        try:
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                for ln in f:
+                    if ln.startswith(("ATOM","HETATM")):
+                        el = ln[76:78].strip().upper()
+                        if el == "H":
+                            continue
+                        try:
+                            x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                            pts.append((x,y,z))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    # 2) Fallback: retained cofactors/metals from YAML in filtered_pdb
+    if not pts:
+        with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                if not ln.startswith("HETATM"):
+                    continue
+                resname = ln[17:20].strip().upper()
+                if resname in _RETAIN:
+                    try:
+                        x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                        pts.append((x,y,z))
+                    except Exception:
+                        pass
+
+    if not pts:
+        return None
+    xs, ys, zs = zip(*pts)
+    return (fmean(xs), fmean(ys), fmean(zs))
+def score_chain_contacts(pdb_path: Union[str, Path], keep_chains: set[str]) -> Dict[str, int]:
+    """
+    Return heavy-atom pair counts within CHAIN_CONTACT_DIST_ANG between each non-kept chain
+    and the *union* of kept chains.
+    """
+    dist = _cfg_float("CHAIN_CONTACT_DIST_ANG", 5.0)
+    atoms_by_chain: dict[str, list[Tuple[float,float,float]]] = {}
+    with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if not ln.startswith(("ATOM  ","HETATM")):
+                continue
+            el = ln[76:78].strip().upper()
+            if el == "H":
+                continue
+            c = ln[21]
+            try:
+                x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+            except Exception:
+                continue
+            atoms_by_chain.setdefault(c, []).append((x,y,z))
+
+    kept_pts = []
+    for kc in keep_chains:
+        kept_pts.extend(atoms_by_chain.get(kc, []))
+
+    out: Dict[str,int] = {}
+    if not kept_pts:
+        return {c: 0 for c in atoms_by_chain}  # nothing to compare to
+
+    d2 = dist*dist
+    for c, pts in atoms_by_chain.items():
+        if c in keep_chains:
+            continue
+        cnt = 0
+        # simple O(N*M); early stop not necessary but harmless
+        for x,y,z in pts:
+            for X,Y,Z in kept_pts:
+                dx = x-X; dy = y-Y; dz = z-Z
+                if (dx*dx + dy*dy + dz*dz) <= d2:
+                    cnt += 1
+        out[c] = cnt
+    return out
+def select_chains_to_keep(filtered_pdb: Union[str, Path],
+                          ligands_dir: Union[str, Path],
+                          cfg=None
+) -> set[str]:
+    """
+    Decide chains to keep using pocket proximity, contact counts, keep-list, and safety rails.
+    Emits a compact decision table when CHAIN_LOG_DECISIONS is enabled.
+    """
+    radius = _cfg_float("CHAIN_POCKET_RADIUS_ANG", 10.0)
+    min_contacts = _cfg_int("CHAIN_MIN_CONTACTS", 200)
+    keep_list = _cfg_chain_keep_list()
+    log_dec = _cfg_bool("CHAIN_LOG_DECISIONS", True)
+
+    pocket = detect_pocket_center_from_ligands(filtered_pdb, ligands_dir)
+
+    # Build per-chain stats
+    chains: dict[str, dict] = {}
+    all_chains: set[str] = set()
+    ca_counts: dict[str,int] = {}
+    min_dists: dict[str,float] = {}
+
+    def _dist2(pt, xyz):
+        dx = pt[0]-xyz[0]; dy = pt[1]-xyz[1]; dz = pt[2]-xyz[2]
+        return dx*dx + dy*dy + dz*dz
+
+    with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if ln.startswith(("ATOM  ","HETATM")):
+                c = ln[21]
+                all_chains.add(c)
+                if ln.startswith("ATOM  ") and ln[12:16].strip() == "CA":
+                    ca_counts[c] = ca_counts.get(c,0)+1
+                if pocket is not None:
+                    try:
+                        xyz = (float(ln[30:38]), float(ln[38:46]), float(ln[46:54]))
+                        d2 = _dist2(pocket, xyz)
+                        md = min_dists.get(c, float("inf"))
+                        if d2 < md:
+                            min_dists[c] = d2
+                    except Exception:
+                        pass
+
+    if not all_chains:
+        return set()  # nothing to decide
+
+    # Initial kept set
+    kept: set[str] = set(keep_list)
+
+    # Always keep blank-chain records conservatively
+    if " " in all_chains:
+        kept.add(" ")
+
+    # Pocket proximity
+    if pocket is not None:
+        r2 = radius*radius
+        for c in all_chains:
+            if min_dists.get(c, float("inf")) <= r2:
+                kept.add(c)
+
+    # If we still have no pocket & no keep_list -> abort prune
+    if (pocket is None) and not keep_list:
+        if log_dec:
+            logging.info("[chain_prune] skipped reason=no_pocket_center or keep_list")
+        return set()  # signal: do not prune
+
+    # Contact expansion to capture interfaces
+    contacts = score_chain_contacts(filtered_pdb, kept)
+    for c, cnt in contacts.items():
+        if cnt >= min_contacts:
+            kept.add(c)
+
+    # Safety rails
+    if not kept:
+        if log_dec:
+            logging.info("[chain_prune] conservative_abort reason=kept_empty")
+        return set()
+    largest_ca_chain = max(ca_counts, key=lambda c: ca_counts.get(c,0)) if ca_counts else None
+    drop_set = {c for c in all_chains if c not in kept}
+    if len(drop_set) > len(all_chains) / 2:
+        if log_dec:
+            logging.warning("[chain_prune] conservative_abort reason=drop_gt_50pct all=%s drop=%s",
+                            sorted(all_chains), sorted(drop_set))
+        return set()
+    if largest_ca_chain and (largest_ca_chain in drop_set):
+        if log_dec:
+            logging.warning("[chain_prune] conservative_abort reason=largest_CA_chain_would_be_dropped largest=%s",
+                            largest_ca_chain)
+        return set()
+
+    # Decision table
+    if log_dec:
+        rows = []
+        for c in sorted(all_chains):
+            rows.append({
+                "chain": c,
+                "CA_count": ca_counts.get(c, 0),
+                "near_pocket": ("yes" if (pocket is not None and min_dists.get(c,float("inf")) <= (radius*radius)) else "no"),
+                "min_dist": (0.0 if pocket is None else (min_dists.get(c,float("inf"))**0.5)),
+                "contact_count_to_kept": contacts.get(c, 0),
+                "decision": ("keep" if c in kept else "drop"),
+                "reason": ("whitelist" if c in keep_list else
+                           "near_pocket" if (pocket is not None and min_dists.get(c,float("inf")) <= (radius*radius)) else
+                           "interface_contacts" if contacts.get(c,0) >= min_contacts else
+                           "far_and_sparse")
+            })
+        # Emit compact table
+        hdr = "# chain  CA  near  min_d  contacts  keep  reason"
+        logging.info(hdr)
+        for r in rows:
+            logging.info("  %-5s  %-3d %-5s %6.2f    %-7d %-4s  %s",
+                         r["chain"], r["CA_count"], r["near_pocket"], r["min_dist"],
+                         r["contact_count_to_kept"], ("yes" if r["decision"]=="keep" else "no"),
+                         r["reason"])
+        kept_ids = "".join(sorted(kept)) or "-"
+        dropped_ids = "".join(sorted(drop_set)) or "-"
+        logging.info("[chain_prune] kept=%s dropped=%s reason=see_table", kept_ids, dropped_ids)
+
+    return kept
+def prune_to_chains(input_pdb: Union[str, Path],
+                    kept_chains: set[str],
+                    output_pdb: Union[str, Path]) -> None:
+    """
+    Write only coordinate records belonging to kept_chains; copy all non-coordinate lines through.
+    """
+    kept = set(kept_chains or set())
+    with open(input_pdb, "r", encoding="utf-8", errors="ignore") as f, \
+         open(output_pdb, "w", encoding="utf-8") as w:
+        for ln in f:
+            if ln.startswith(("ATOM  ","HETATM")):
+                c = ln[21]
+                if (c in kept):
+                    w.write(ln)
+            else:
+                w.write(ln)
+    _post_write_element_guard("chain_pruned", output_pdb)
+
 
 
 # ============================
@@ -1166,27 +1514,91 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     # (3) Extract ligands now (controls live here), with YAML element repair per-file
     _ = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
 
+    if os.environ.get("EARLY_CHAIN_PRUNE", "1").lower() not in {"0", "false", "no"}:
+        try:
+            with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as fh:
+                lines = fh.readlines()
+            keep = _chains_to_keep(lines, pocket_center=None)  # center can be wired later
+            orig = {ln[21] for ln in lines if ln.startswith(("ATOM", "HETATM"))}
+            if keep and keep != orig:
+                pruned = _prune_chains_conservative(lines, keep)
+                with open(filtered_pdb, "w", encoding="utf-8") as out:
+                    out.writelines(pruned)
+                logging.info("[chains] early-pruned chains keep=%s drop=%s", "".join(sorted(keep)),
+                             "".join(sorted(orig - keep)))
+        except Exception as e:
+            logging.warning("[chains] early prune skipped: %s", e)
+    # (3a) Optional early chain-prune (conservative, pocket-aware)
+    source_for_strip = filtered_pdb
+    if _cfg_bool("CHAIN_PRUNE", False):
+        try:
+            kept = select_chains_to_keep(filtered_pdb, paths["ligands_raw"], config)
+            if kept:
+                pruned_filtered = paths["raw"] / f"{pdb_id}_filtered_pruned.pdb"
+                prune_to_chains(filtered_pdb, kept, pruned_filtered)
+                logging.info("[chain_prune] using pruned source for step (4): %s", pruned_filtered)
+                source_for_strip = pruned_filtered
+            else:
+                logging.info("[chain_prune] not applied (kept empty or conservative_abort); using unpruned file")
+        except Exception as e:
+            logging.warning("[chain_prune] skipped due to exception: %s", e)
+
     # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
     stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
-    removed_count, _out = strip_nonstandard_residues(filtered_pdb, stripped_pdb)
+    removed_count, _out = strip_nonstandard_residues(source_for_strip, stripped_pdb)
     logging.info("Removed %d nonstandard residue lines.", removed_count)
 
     # (5) Element fix → MODELLER → element fix again (PDB only)
     elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
+    
     fix_pdb_elements(stripped_pdb, elemfix_pdb)
     _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
     loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
     fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
     _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
 
+    # MODELLER (detect whether a new file was actually produced)
+    modeller_ok = (
+            os.path.basename(loop_fixed_pdb) == "modeller_filled.pdb"
+            and os.path.isfile(loop_fixed_pdb)
+    )
     # (6) Optional external Phenix polish (non-fatal if missing)
     receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
-    if run_phenix_pdbtools(loop_fixed_pdb, receptor_pdb, remove_waters=True):
-        pass  # already written by phenix.pdbtools
-    else:
+
+    # PHENIX (capture success straight from the function)
+    phenix_ok = False
+    if config.get("use_phenix", False):
+        phenix_ok = run_phenix_pdbtools(
+            input_pdb=loop_fixed_pdb,
+            output_pdb=receptor_pdb,  # write here (no temporary name)
+            work_dir=paths["work"],
+            mode=config.get("phenix_mode", "clean_pdb")
+        )
+    if not phenix_ok:
         shutil.copyfile(loop_fixed_pdb, receptor_pdb)
-    print(f"[proteinprep] steps: Reduce=deferred Phenix={Path(paths['work'] / f'{pdb_id}_phenix.pdb').is_file()} MODELLER={Path(paths['work'] / f'{pdb_id}_modelled.pdb').is_file()}")
+
     _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
+    
+    # choose the file to pass downstream
+    pdb_for_reduce = loop_fixed_pdb if modeller_ok else elemfix_pdb
+
+    reduce_deferred = True
+
+    logging.info(
+        "[proteinprep] steps: Reduce=%s Phenix=%s MODELLER=%s",
+        "deferred" if reduce_deferred else "applied",
+        str(phenix_ok),
+        str(modeller_ok),
+    )
+    if modeller_ok:
+        sz = os.path.getsize(loop_fixed_pdb)
+        logging.info("[proteinprep] modeller_out=%s size=%d", loop_fixed_pdb, sz)
+    else:
+        logging.info("[proteinprep] modeller_out=none (kept %s)", elemfix_pdb)
+
+    if phenix_ok:
+        sz = os.path.getsize(receptor_pdb)
+        logging.info("[proteinprep] phenix_applied_to=%s size=%d", receptor_pdb, sz)
 
     # (7) Hydrogen cleanup & chain validation
     debulked_pdb = paths["work"] / f"{pdb_id}_debulked.pdb"
@@ -1230,12 +1642,11 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         return res
 
     present_resnames = _present_resnames(chain_validated_pdb)
-    # Cofactors where Reduce tends to misinterpret atom names as elements (phosphorus variants etc.)
-    nucleotide_like = {
-        "NAP","NAD","NADP","NMN","FAD","FMN",
-        "ATP","ADP","AMP","GTP","GDP","CTP","UTP","TTP"
-    }
-    use_reduce = not any(r in nucleotide_like for r in present_resnames)
+    NUC_LIKE = set(_flatten_semicolons(RULES.get("nucleotide_like_resnames", [])))
+    use_reduce = not any(r in NUC_LIKE for r in present_resnames)
+
+    if not use_reduce:
+        logging.info("[protonation] Skipping Reduce due to detected nucleotides; using OpenBabel path.")
 
     reduced_pdb = paths["work"] / f"{pdb_id}_reduced.pdb"
     assign_protonation_states(
@@ -1269,7 +1680,6 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     return str(receptor_pdb)
 
 
-# --- Histidine helpers used by Meeko wrapper ---
 from collections import defaultdict
 
 def _classify_and_rename_histidines(pdb_in: Union[str, Path], pdb_out: Union[str, Path]) -> None:
@@ -1348,6 +1758,45 @@ def _rewrite_his_default(pdb_in: Union[str, Path], pdb_out: Union[str, Path], de
 # =============================
 # External Tools (Meeko/ADT, Phenix, OpenBabel, Reduce)
 # =============================
+def _drop_free_ions_for_meeko(pdb_in: str | Path, pdb_out: str | Path,
+                              banlist: set[str] | None = None) -> int:
+    """
+    Remove HETATM entries for simple ions that Meeko chokes on (e.g., Na, K, Li).
+    Writes to pdb_out. Returns #atoms dropped.
+    Never drops ions explicitly retained by YAML (retain_in_receptor_resnames) that are elemental tokens.
+    Set MEEKO_DROP_VERBOSE=1 to log each dropped residue position.
+    """
+    # Compute retain_ions once: YAML retain list ∩ element tokens
+    retain_ions = {r for r in _RETAIN if _is_element_token(r)}
+    base_ban = set(banlist) if banlist else _MEEKO_DROP_IONS
+    # Do not drop any YAML-retained elemental ions
+    ban = base_ban - retain_ions
+
+    verbose = (os.environ.get("MEEKO_DROP_VERBOSE", "0") not in ("0", "false", "False"))
+
+    dropped = 0
+    kept = []
+    with open(pdb_in, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if ln.startswith("HETATM"):
+                res = ln[17:20].strip().upper()
+                if res in ban:
+                    dropped += 1
+                    if verbose:
+                        resi = ln[22:26].strip()
+                        chain = ln[21]
+                        el = (ln[76:78].strip() or res)
+                        logging.info("[meeko drop] res=%s chain=%s resi=%s el=%s", res, chain, resi, el)
+                    continue
+            kept.append(ln)
+    Path(pdb_out).write_text("".join(kept), encoding="utf-8")
+    if dropped:
+        logging.warning("Meeko pre-sanitize: dropped %d free ions (%s).",
+                        dropped, ",".join(sorted(ban)))
+    return dropped
+
+
+
 def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, Path], cfg: dict) -> bool:
     """
     Robust Meeko/ADT wrapper with:
@@ -1362,17 +1811,20 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
 
     input_pdb = str(input_pdb)
     output_pdbqt = str(output_pdbqt)
+    # Persist all attempt logs here (processed_pdbs/<PDB>/work) NOTE DIFF FROM _WORK_DIR
+    work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
     # --- Helium preflight on the EXACT file we’re about to feed into Meeko pipeline
-    # Work dir is the canonical processed tree root/<PDB>/work (output_pdbqt = .../receptor/<PDB>.pdbqt)
     _work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
+    skip_meeko = False
     try:
-        # This both fixes element columns last-mile and FAILS FAST with offenders if He>0.
         input_pdb = str(_meeko_preflight_or_fail(input_pdb, _work_dir))
     except RuntimeError as e:
         if str(e) == "helium_preflight_failed":
-            logging.error("Abort: helium detected pre-Meeko; see [helium] offenders above.")
+            logging.error("Helium persists pre-Meeko; skipping Meeko and trying ADT fallback.")
+            skip_meeko = True
+        else:
             raise
-        raise
+
 
     his_default = str(cfg.get("HIS_DEFAULT", "HIE")).upper()
     if his_default not in {"HIE", "HID", "HIP"}:
@@ -1432,27 +1884,66 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 targets.append(f"{chain}:{rnum}")
         return (",".join(sorted(targets)) + f"={his_default}") if targets else ""
 
-    def _modern_meeko(pdb_path: str, extra_flags: Optional[List[str]] = None) -> subprocess.CompletedProcess:
+    def _modern_meeko(pdb_path: str,
+                      extra_flags: Optional[List[str]] = None,
+                      tag: Optional[str] = None,
+                      work_dir_for_tag: Optional[Path] = None) -> subprocess.CompletedProcess:
         try:
             cmd = _meeko_cmd() + ["--read_pdb", pdb_path, "-p", output_pdbqt]
         except FileNotFoundError as e:
             from types import SimpleNamespace
-            return SimpleNamespace(returncode=127, stdout="", stderr=str(e))
+            cp = SimpleNamespace(returncode=127, stdout="", stderr=str(e))
+            if tag and work_dir_for_tag:
+                _persist_subproc(tag, ["<meeko-not-found>"], cp, work_dir_for_tag, Path(output_pdbqt))
+            return cp
         flags = extra_flags or []
-        return _run(cmd + flags)
+        cp = _run(cmd + flags)
+        if tag and work_dir_for_tag:
+            _persist_subproc(tag, cmd + flags, cp, work_dir_for_tag, Path(output_pdbqt))
+            # Inline empty-file hint for fast triage
+            try:
+                if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+                    head, tail = _first_last_lines(work_dir_for_tag / f"{tag}.stderr.txt")
+                    logging.warning("[%s] receptor PDBQT is empty. head=%r tail=%r", tag, head, tail)
+            except Exception:
+                pass
+        return cp
 
-    def _legacy_meeko(pdb_path: str, extra_flags: Optional[List[str]] = None) -> bool:
+    def _legacy_meeko(pdb_path: str,
+                      extra_flags: Optional[List[str]] = None,
+                      tag: Optional[str] = None,
+                      work_dir_for_tag: Optional[Path] = None) -> bool:
         try:
             base = _meeko_cmd()
         except FileNotFoundError:
+            if tag and work_dir_for_tag:
+                from types import SimpleNamespace
+                _persist_subproc(tag, ["<meeko-not-found>"],
+                                 SimpleNamespace(returncode=127, stdout="", stderr="mk_prepare_receptor not found"),
+                                 work_dir_for_tag, Path(output_pdbqt))
             return False
         flags = extra_flags or []
-        tried = False
-        r = _run(base + ["-i", pdb_path, "-p", output_pdbqt] + flags); tried = True
-        if r.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
+
+        # try '-i' form
+        cmd_i = base + ["-i", pdb_path, "-p", output_pdbqt] + flags
+        r1 = _run(cmd_i)
+        if tag and work_dir_for_tag:
+            _persist_subproc(f"{tag}_i", cmd_i, r1, work_dir_for_tag, Path(output_pdbqt))
+        if r1.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
             return True
-        r = _run(base + ["-r", pdb_path, "-o", output_pdbqt] + flags)
-        return r.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0
+
+        # try '-r/-o' form
+        cmd_r = base + ["-r", pdb_path, "-o", output_pdbqt] + flags
+        r2 = _run(cmd_r)
+        if tag and work_dir_for_tag:
+            _persist_subproc(f"{tag}_ro", cmd_r, r2, work_dir_for_tag, Path(output_pdbqt))
+            try:
+                if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+                    head, tail = _first_last_lines(work_dir_for_tag / f"{tag}_ro.stderr.txt")
+                    logging.warning("[%s_ro] receptor PDBQT is empty. head=%r tail=%r", tag, head, tail)
+            except Exception:
+                pass
+        return r2.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0
 
     # --- Step 0: classify HIS by existing hydrogens (best-case, no coord change)
     with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp1:
@@ -1463,110 +1954,319 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         logging.warning("HIS classify/rename step failed (continuing with original): %s", e)
         tmp1_path = input_pdb
 
-    # Preflight again on the HIS-classified file we’re actually handing to Meeko now
-    try:
-        _meeko_preflight_or_fail(tmp1_path, Path(output_pdbqt).resolve().parent.parent / "work")
-    except RuntimeError as e:
-        if str(e) == "helium_preflight_failed":
-            logging.error("Abort: helium detected in HIS-classified PDB pre-Meeko; see [helium] offenders above.")
-            raise
-        raise
+    if _cfg_bool("MEEKO_DROP_FREE_IONS", True):
+        # Never drop YAML-retained elemental ions (banlist computed inside)
+        _drop_free_ions_for_meeko(tmp1_path, tmp1_path)
 
-    # --- Step 1: Modern Meeko first
-    r0 = _modern_meeko(tmp1_path)
-    if r0.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
-        logging.info("Receptor prepared (Meeko).")
-        if tmp1_path != input_pdb:
-            try: os.remove(tmp1_path)
-            except Exception: pass
+    # Preflight again on the HIS-classified file we’re actually handing to Meeko now
+    if not skip_meeko:
+        try:
+            _meeko_preflight_or_fail(tmp1_path, Path(output_pdbqt).resolve().parent.parent / "work")
+        except RuntimeError as e:
+            if str(e) == "helium_preflight_failed":
+                logging.error("Helium persists after HIS/ion tweaks; skipping Meeko and trying ADT fallback.")
+                skip_meeko = True
+            else:
+                raise
+    # define once near the top of run_prepare_receptor, right after output_pdbqt:
+    work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
+
+    # Build explicit commands for each attempt
+    try:
+        base_meeko = _meeko_cmd()
+    except FileNotFoundError as e:
+        base_meeko = None
+        logging.warning("Meeko CLI not found at prebuild stage: %s", e)
+
+    # Meeko modern (--read_pdb) uses the HIS-classified, ion-sanitized tmp1_path
+    if base_meeko:
+        meeko_cmd = base_meeko + ["--read_pdb", tmp1_path, "-p", output_pdbqt]
+        # Legacy single-shot form (we still capture rc/file size for logging)
+        meeko_cmd_legacy = base_meeko + ["-r", tmp1_path, "-o", output_pdbqt]
+    else:
+        meeko_cmd = None
+        meeko_cmd_legacy = None
+
+    # ADT fallback command (prefer explicit env/config, but still log the exact command we try)
+    mgltools_python = MGLTOOLS_PYTHON or shutil.which("python2") or "python2"
+    prepare_script = PREPARE_RECEPTOR_SCRIPT or "prepare_receptor4.py"
+    adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt, "-A", "none", "-U",
+               "nphs_lps_nonstdres"]
+
+    # --- Step 1: Modern Meeko attempt
+    if not skip_meeko and meeko_cmd:
+        cp = subprocess.run(meeko_cmd, capture_output=True, text=True)
+        _persist_subproc("meeko_modern", meeko_cmd, cp, work_dir, Path(output_pdbqt))
+    else:
+        # If Meeko is skipped or unavailable, synthesize a "failed" result object
+        from types import SimpleNamespace
+        cp = SimpleNamespace(returncode=127, stdout="", stderr=("meeko_skipped" if skip_meeko else "meeko_not_found"))
+
+    if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+        logging.info("Prepared receptor PDBQT with modern Meeko.")
+        # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
+        try:
+            # Compute present/missing sets in-line (keeps compare logic decoupled from warn-only helper)
+            def _ions_in_pdb(p):
+                s = set()
+                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                    for _ln in fh:
+                        if not _ln.startswith("HETATM"): continue
+                        _res = _ln[17:20].strip().upper();
+                        _c = _ln[21];
+                        _i = _ln[22:26].strip()
+                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                return s
+
+            def _ions_in_pdbqt(p):
+                s = set()
+                if not Path(p).exists(): return s
+                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                    for _ln in fh:
+                        if not _ln.startswith(("ATOM  ", "HETATM")): continue
+                        _res = _ln[17:20].strip().upper();
+                        _c = _ln[21];
+                        _i = _ln[22:26].strip()
+                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                return s
+
+            _pdb_ions = _ions_in_pdb(input_pdb)
+            _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
+            _missing = _pdb_ions - _pdbqt_ions
+            if _pdb_ions or _missing:
+                logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                                sorted(_pdb_ions), sorted(_missing))
+            # If any missing ion is YAML-retained, emit a targeted warning
+            _retained = {r for r in _RETAIN if _is_element_token(r)}
+            _lost_retained = sorted([x for x in _missing if x[0] in _retained])
+            if _lost_retained:
+                logging.warning("[ion lost] %s", _lost_retained)
+        except Exception as _e:
+            logging.warning("[ion diff] skipped note=%s", _e)
         return True
 
-    se0 = (r0.stderr or "")
-    # (1a) HIS tie? -> build a -n mapping and retry once
-    his_tie = ("tied for fewest missing H" in se0) and ("HIE" in se0 and "HID" in se0)
+    if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+        head, tail = _first_last_lines(work_dir / "meeko_modern.stderr.txt")
+        logging.warning("[meeko_modern] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+
+    # Decide if we need an -n retry (histidine tie) based on se0
+    se0 = cp.stderr or ""
+    his_tie = ("tied for fewest missing h" in se0.lower()) and ("hie" in se0.lower() and "hid" in se0.lower())
+    mapping = ""
     if his_tie:
         mapping = _build_his_override_mapping(tmp1_path)
         if not mapping:
             m = re.search(r"residue_key='([A-Za-z]):(\d+)'", se0)
             if m:
                 mapping = f"{m.group(1)}:{int(m.group(2))}={his_default}"
-        if mapping:
-            logging.warning("Meeko histidine ambiguity -> retry with -n %s", mapping)
-            r1 = _modern_meeko(tmp1_path, extra_flags=["-n", mapping])
-            if r1.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
-                logging.info("Receptor prepared after tautomer override (Meeko).")
-                if tmp1_path != input_pdb:
-                    try: os.remove(tmp1_path)
-                    except Exception: pass
-                return True
 
-    # (1b) Template mismatch? -> retry with -a (and default altloc if provided)
-    templ_fail = ("No template matched for residue_key" in se0) or ("Template matched failed" in se0) \
-                 or ("Template matching failed" in se0)
-    if allow_bad_res and (templ_fail or "allow_bad_res" in se0 or "recommendations" in se0.lower()):
+    # --- Step 1b: Retry with -n if needed
+    if mapping and meeko_cmd:
+        meeko_cmd_with_n = meeko_cmd + ["-n", mapping]
+        cp = subprocess.run(meeko_cmd_with_n, capture_output=True, text=True)
+        _persist_subproc("meeko_retry_nmap", meeko_cmd_with_n, cp, work_dir, Path(output_pdbqt))
+        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            logging.info("Prepared receptor after HIS -n mapping.")
+            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
+            try:
+                def _ions_in_pdb(p):
+                    s = set()
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                        for _ln in fh:
+                            if not _ln.startswith("HETATM"): continue
+                            _res = _ln[17:20].strip().upper();
+                            _c = _ln[21];
+                            _i = _ln[22:26].strip()
+                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                    return s
+
+                def _ions_in_pdbqt(p):
+                    s = set()
+                    if not Path(p).exists(): return s
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                        for _ln in fh:
+                            if not _ln.startswith(("ATOM  ", "HETATM")): continue
+                            _res = _ln[17:20].strip().upper();
+                            _c = _ln[21];
+                            _i = _ln[22:26].strip()
+                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                    return s
+
+                _pdb_ions = _ions_in_pdb(input_pdb)
+                _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
+                _missing = _pdb_ions - _pdbqt_ions
+                if _pdb_ions or _missing:
+                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                                    sorted(_pdb_ions), sorted(_missing))
+                _retained = {r for r in _RETAIN if _is_element_token(r)}
+                _lost_retained = sorted([x for x in _missing if x[0] in _retained])
+                if _lost_retained:
+                    logging.warning("[ion lost] %s", _lost_retained)
+            except Exception as _e:
+                logging.warning("[ion diff] skipped note=%s", _e)
+            return True
+
+        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+            head, tail = _first_last_lines(work_dir / "meeko_retry_nmap.stderr.txt")
+            logging.warning("[meeko_retry_nmap] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+
+    # --- Step 1c: Retry with -a allow_bad_res (and default_altloc if hinted)
+    templ_fail = ("no template matched for residue_key" in se0.lower()) or (
+                "template matching failed" in se0.lower()) or ("template matched failed" in se0.lower())
+    extra = []
+    if meeko_cmd and allow_bad_res and (
+            templ_fail or "allow_bad_res" in se0.lower() or "recommendations" in se0.lower()):
         extra = ["-a"]
+        if (not default_altloc) and ("default_altloc" in se0.lower() or "altloc" in se0.lower()):
+            default_altloc = "A"
+            logging.warning("Assuming --default_altloc A based on Meeko hint.")
         if default_altloc:
             extra += ["--default_altloc", default_altloc]
-        logging.warning("Template mismatch -> retry with %s", " ".join(extra))
-        r2 = _modern_meeko(tmp1_path, extra_flags=extra)
-        if r2.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
-            logging.info("Receptor prepared after -a (allow_bad_res).")
-            if tmp1_path != input_pdb:
-                try: os.remove(tmp1_path)
-                except Exception: pass
+        meeko_cmd_allow_bad = meeko_cmd + extra
+        cp = subprocess.run(meeko_cmd_allow_bad, capture_output=True, text=True)
+        _persist_subproc("meeko_retry_allow_bad_res", meeko_cmd_allow_bad, cp, work_dir, Path(output_pdbqt))
+        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            logging.info("Prepared receptor after -a allow_bad_res.")
+            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
+            try:
+                def _ions_in_pdb(p):
+                    s = set()
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                        for _ln in fh:
+                            if not _ln.startswith("HETATM"): continue
+                            _res = _ln[17:20].strip().upper();
+                            _c = _ln[21];
+                            _i = _ln[22:26].strip()
+                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                    return s
+
+                def _ions_in_pdbqt(p):
+                    s = set()
+                    if not Path(p).exists(): return s
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                        for _ln in fh:
+                            if not _ln.startswith(("ATOM  ", "HETATM")): continue
+                            _res = _ln[17:20].strip().upper();
+                            _c = _ln[21];
+                            _i = _ln[22:26].strip()
+                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                    return s
+
+                _pdb_ions = _ions_in_pdb(input_pdb)
+                _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
+                _missing = _pdb_ions - _pdbqt_ions
+                if _pdb_ions or _missing:
+                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                                    sorted(_pdb_ions), sorted(_missing))
+                _retained = {r for r in _RETAIN if _is_element_token(r)}
+                _lost_retained = sorted([x for x in _missing if x[0] in _retained])
+                if _lost_retained:
+                    logging.warning("[ion lost] %s", _lost_retained)
+            except Exception as _e:
+                logging.warning("[ion diff] skipped note=%s", _e)
             return True
 
-    # --- Step 2: Heavy-handed fallback: rewrite residual HIS -> default and retry modern Meeko (+-a)
-    logging.warning("Retrying Meeko after rewriting residual HIS -> %s", his_default)
-    with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp2:
-        tmp2_path = tmp2.name
-    try:
-        _rewrite_his_default(input_pdb, tmp2_path, default=his_default)
-        extra = ["-a"] if allow_bad_res else []
-        if default_altloc:
-            extra += ["--default_altloc", default_altloc]
-        r3 = _modern_meeko(tmp2_path, extra_flags=extra)
-        if r3.returncode == 0 and Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size > 0:
-            logging.info("Receptor prepared after HIS rewrite (Meeko).")
-            return True
-    finally:
-        try: os.remove(tmp2_path)
-        except Exception: pass
+        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+            head, tail = _first_last_lines(work_dir / "meeko_retry_allow_bad_res.stderr.txt")
+            logging.warning("[meeko_retry_allow_bad_res] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+    # --- Step 2: Legacy Meeko
+    if not skip_meeko and meeko_cmd_legacy:
+        cp = subprocess.run(meeko_cmd_legacy, capture_output=True, text=True)
+        _persist_subproc("meeko_legacy", meeko_cmd_legacy, cp, work_dir, Path(output_pdbqt))
+        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            logging.info("Prepared receptor with legacy Meeko.")
+            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
+            try:
+                def _ions_in_pdb(p):
+                    s = set()
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                        for _ln in fh:
+                            if not _ln.startswith("HETATM"): continue
+                            _res = _ln[17:20].strip().upper();
+                            _c = _ln[21];
+                            _i = _ln[22:26].strip()
+                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                    return s
 
-    # --- Step 3: Legacy variants
-    extra = ["-a"] if allow_bad_res else []
-    if default_altloc:
-        extra += ["--default_altloc", default_altloc]
-    if _legacy_meeko(tmp1_path, extra_flags=extra):
-        logging.info("Receptor prepared (Meeko legacy).")
-        if tmp1_path != input_pdb:
-            try: os.remove(tmp1_path)
-            except Exception: pass
+                def _ions_in_pdbqt(p):
+                    s = set()
+                    if not Path(p).exists(): return s
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                        for _ln in fh:
+                            if not _ln.startswith(("ATOM  ", "HETATM")): continue
+                            _res = _ln[17:20].strip().upper();
+                            _c = _ln[21];
+                            _i = _ln[22:26].strip()
+                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                    return s
+
+                _pdb_ions = _ions_in_pdb(input_pdb)
+                _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
+                _missing = _pdb_ions - _pdbqt_ions
+                if _pdb_ions or _missing:
+                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                                    sorted(_pdb_ions), sorted(_missing))
+                _retained = {r for r in _RETAIN if _is_element_token(r)}
+                _lost_retained = sorted([x for x in _missing if x[0] in _retained])
+                if _lost_retained:
+                    logging.warning("[ion lost] %s", _lost_retained)
+            except Exception as _e:
+                logging.warning("[ion diff] skipped note=%s", _e)
+            return True
+
+        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+            head, tail = _first_last_lines(work_dir / "meeko_legacy.stderr.txt")
+            logging.warning("[meeko_legacy] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+
+    # --- Step 3: ADT prepare_receptor4 fallback
+    cp = subprocess.run(adt_cmd, capture_output=True, text=True)
+    _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
+    if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+        logging.info("Prepared receptor with ADT prepare_receptor4.py.")
+        # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
+        try:
+            def _ions_in_pdb(p):
+                s = set()
+                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                    for _ln in fh:
+                        if not _ln.startswith("HETATM"): continue
+                        _res = _ln[17:20].strip().upper();
+                        _c = _ln[21];
+                        _i = _ln[22:26].strip()
+                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                return s
+
+            def _ions_in_pdbqt(p):
+                s = set()
+                if not Path(p).exists(): return s
+                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                    for _ln in fh:
+                        if not _ln.startswith(("ATOM  ", "HETATM")): continue
+                        _res = _ln[17:20].strip().upper();
+                        _c = _ln[21];
+                        _i = _ln[22:26].strip()
+                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
+                return s
+
+            _pdb_ions = _ions_in_pdb(input_pdb)
+            _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
+            _missing = _pdb_ions - _pdbqt_ions
+            if _pdb_ions or _missing:
+                logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                                sorted(_pdb_ions), sorted(_missing))
+            _retained = {r for r in _RETAIN if _is_element_token(r)}
+            _lost_retained = sorted([x for x in _missing if x[0] in _retained])
+            if _lost_retained:
+                logging.warning("[ion lost] %s", _lost_retained)
+        except Exception as _e:
+            logging.warning("[ion diff] skipped note=%s", _e)
         return True
 
-    if tmp1_path != input_pdb:
-        try: os.remove(tmp1_path)
-        except Exception: pass
+    if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+        head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
+        logging.warning("[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r", head, tail)
 
-    # --- Step 4: ADT fallback
-    mgltools_python = cfg.get("MGLTOOLS_PYTHON")
-    prepare_script   = cfg.get("PREPARE_RECEPTOR_SCRIPT")
-    if not mgltools_python or not prepare_script or not os.path.exists(prepare_script):
-        logging.error("ADT receptor prep unavailable (MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT missing/not found)")
-        return False
 
-    cmd = [
-        mgltools_python, prepare_script,
-        "-r", input_pdb, "-o", output_pdbqt,
-        "-A", "none", "-U", "nphs_lps_nonstdres"
-    ]
-    logging.info("Running prepare_receptor4.py: %s", " ".join(cmd))
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if r.returncode != 0:
-        logging.error("prepare_receptor4 failed:\n%s", r.stderr or r.stdout or "")
-        return False
-    logging.info("Receptor prepared (ADT).")
-    return True
 
 def _phenix_detect() -> tuple[str, list[str] | None, dict]:
     """
@@ -1687,14 +2387,31 @@ def assign_protonation_states(input_pdb: Union[str, Path],
                               output_pdb: Union[str, Path],
                               reduce_exe: Optional[str] = None) -> str:
     import uuid
+    from pathlib import Path
+    # --- toggles ---
+    _REDUCE_RETRY   = str(os.environ.get("REDUCE_RETRY", "1")).lower() not in {"0","false","no"}
+    _FALLBACK_ADDH  = str(os.environ.get("FALLBACK_ADDH", "1")).lower() not in {"0","false","no"}
 
     input_pdb  = os.path.abspath(str(input_pdb)).replace("\\", "/")
     output_pdb = os.path.abspath(str(output_pdb)).replace("\\", "/")
 
+    # Optional precheck: very low CONECT coverage is a strong predictor of Reduce complaints.
+    try:
+        cc = conect_coverage(input_pdb)
+        if cc < 0.05:
+            logging.info("[reduce precheck] low_conect=%.2f file=%s", cc, input_pdb)
+            try:
+                # Idempotent, YAML-driven element repair
+                fix_pdb_elements(input_pdb)
+            except Exception as _e:
+                logging.warning("[reduce precheck] elemfix_skip note=%s", _e)
+    except Exception as _e:
+        logging.warning("[reduce precheck] coverage_skip note=%s", _e)
+
     has_h = hydrogenation_status(input_pdb)[0] != "NO_H"
     reduce_flags = ["-quiet"] if has_h else ["-BUILD", "-quiet"]
-    exe = reduce_exe or REDUCE_EXE
-    exe_dir = os.path.dirname(exe) or None
+    exe = reduce_exe
+    exe_dir = os.path.dirname(exe) if exe else None
 
     def run_reduce(in_pdb: str, stage_name: str) -> str:
         env = dict(os.environ)
@@ -1707,53 +2424,143 @@ def assign_protonation_states(input_pdb: Union[str, Path],
             cp = subprocess.run([exe] + reduce_flags + [in_pdb],
                                 stdout=out, stderr=subprocess.PIPE, text=True,
                                 cwd=exe_dir, env=env)
+        # Greppable one-liner for every Reduce attempt
+        (logging.info if cp.returncode == 0 else logging.warning)(
+            "[reduce] stage=%s rc=%s flags=%r in=%s stdout_len=%d stderr_len=%d",
+            stage_name, cp.returncode, reduce_flags, in_pdb,
+            len(cp.stdout or "") if hasattr(cp, "stdout") else 0,
+            len(cp.stderr or "") if hasattr(cp, "stderr") else 0,
+        )
         if cp.returncode != 0:
             raise RuntimeError(f"{stage_name} reduce failed: {cp.stderr.strip()}")
         return output_pdb
 
     status_before, h0, hv0, r0 = hydrogenation_status(input_pdb)
     logging.info("[H-Scan before] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_before, h0, hv0, r0)
+    if exe is None:
+        # Caller requested to skip Reduce (e.g., nucleotides). Go straight to fallback.
+        if _FALLBACK_ADDH:
+            logging.info("[protonate] skipping Reduce by request; using OpenBabel fallback")
+            run_openbabel_add_h(input_pdb, output_pdb)
+        else:
+            # Keep as-is if fallback is disabled
+            shutil.copy(input_pdb, output_pdb)
+            logging.warning("[protonate] Reduce skipped and FALLBACK_ADDH=0; copying input")
+        # Continue into the existing post-guard checks (size/H-Scan) below
+        sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
+        if sz == 0:
+            raise RuntimeError("protonation_empty_output")
+        status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
+        logging.info("[H-Scan after ] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_after, h1, hv1, r1)
+        return output_pdb
 
+    # --- First attempt (default flags) ---
     try:
         run_reduce(input_pdb, "Reduce#1")
     except Exception as e:
-        logging.warning("Reduce#1 failed: %s", e)
+        logging.warning("[reduce#1 fail] exe=%s het_dict=%s has_h=%s note=%s",
+                        exe, os.environ.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT",""),
+                        str(has_h), str(e)[:200])
+        completed = False
+        # Quick element repair before a retry
         try:
-            # Repair element columns (YAML-driven fixer under the hood)
             fix_pdb_elements(input_pdb)
         except Exception:
             pass
-        try:
-            tmp_in = os.path.splitext(input_pdb)[0] + f"_retry_{uuid.uuid4().hex}.pdb"
-            shutil.copy(input_pdb, tmp_in)
-            try:
-                run_reduce(tmp_in, "Reduce#2(temp)")
-            finally:
-                try:
-                    os.remove(tmp_in)
-                except Exception:
-                    pass
-        except Exception as e2:
-            logging.error("Reduce temp retry failed: %s", e2)
-            try:
-                if has_h:
-                    shutil.copy(input_pdb, output_pdb)
-                    logging.warning("Reduce failed; keeping existing hydrogens (no rebuild).")
-                else:
-                    run_openbabel_add_h(input_pdb, output_pdb)
-                    logging.info("Open Babel used to add hydrogens.")
-            except Exception as babel_error:
-                logging.error("OpenBabel fallback failed: %s", babel_error)
-                shutil.copy(input_pdb, output_pdb)
-                logging.warning("Hydrogenation skipped; copied input to output.")
 
-    # everything below stays INSIDE the function
+        # ---  retry ladder ---
+        retried_ok = False
+        if _REDUCE_RETRY:
+            try:
+                # Second attempt: add -noflip (Reduce sometimes flips/complains on tricky H networks)
+                reduce_flags_noflip = (["-noflip"] + reduce_flags) if "-noflip" not in reduce_flags else reduce_flags
+                def run_reduce_noflip(in_pdb: str, stage_name: str) -> str:
+                    env = dict(os.environ)
+                    het = env.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT", "")
+                    if het:
+                        env["REDUCE_HET_DICT"] = het
+                    with open(output_pdb, "w", encoding="utf-8") as out:
+                        cp = subprocess.run([exe] + reduce_flags_noflip + [in_pdb],
+                                            stdout=out, stderr=subprocess.PIPE, text=True,
+                                            cwd=exe_dir, env=env)
+                    (logging.info if cp.returncode == 0 else logging.warning)(
+                        "[reduce] stage=%s rc=%s flags=%r in=%s", stage_name, cp.returncode, reduce_flags_noflip, in_pdb
+                    )
+                    if cp.returncode != 0:
+                        raise RuntimeError(f"{stage_name} reduce failed: {cp.stderr.strip()}")
+                    return output_pdb
+
+                run_reduce_noflip(input_pdb, "Reduce#2(noflip)")
+                retried_ok = True
+                completed = True
+            except Exception as e2:
+                logging.warning("[reduce#2 fail] noflip note=%s", str(e2)[:200])
+
+        if not retried_ok:
+            # --- H-add fallback path (OpenBabel) ---
+            if _FALLBACK_ADDH:
+                try:
+                    # Guard element columns first to avoid He/column drift in fallback
+                    try:
+                        fix_pdb_elements(input_pdb)
+                    except Exception as _e_fix:
+                        logging.warning("[element] guard before fallback failed: %s", _e_fix)
+                    logging.info("[protonate fallback] using=OpenBabel in=%s out=%s", input_pdb, output_pdb)
+                    run_openbabel_add_h(input_pdb, output_pdb)
+                    logging.warning("[reduce] fallback H-add applied")
+                    completed = True
+
+                except Exception as babel_error:
+                    logging.error("OpenBabel fallback failed: %s", babel_error)
+                    # Last resort: if input already had H, keep them; else raise
+                    if has_h:
+                        shutil.copy(input_pdb, output_pdb)
+                        logging.warning("Reduce+fallback failed; keeping existing hydrogens.")
+                    else:
+                        raise
+        if not completed:
+            try:
+                # Repair element columns (YAML-driven fixer under the hood)
+                fix_pdb_elements(input_pdb)
+            except Exception:
+                pass
+            try:
+                tmp_in = os.path.splitext(input_pdb)[0] + f"_retry_{uuid.uuid4().hex}.pdb"
+                shutil.copy(input_pdb, tmp_in)
+                try:
+                    run_reduce(tmp_in, "Reduce#3(temp)")
+                finally:
+                    try:
+                        os.remove(tmp_in)
+                    except Exception:
+                        pass
+            except Exception as e2:
+                logging.error("Reduce temp retry failed: %s", e2)
+                try:
+                    if has_h:
+                        shutil.copy(input_pdb, output_pdb)
+                        logging.warning("Reduce failed; keeping existing hydrogens (no rebuild).")
+                    else:
+                        logging.info("[protonate fallback] using=OpenBabel in=%s out=%s", input_pdb, output_pdb)
+                        run_openbabel_add_h(input_pdb, output_pdb)
+                        logging.info("Open Babel used to add hydrogens.")
+                except Exception as babel_error:
+                    logging.error("OpenBabel fallback failed: %s", babel_error)
+                    shutil.copy(input_pdb, output_pdb)
+                    logging.warning("Hydrogenation skipped; copied input to output.")
+
+    # Guard: the path we will scan must exist and be non-empty
+    sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
+    if sz == 0:
+        raise RuntimeError("protonation_empty_output")
+
     status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
     logging.info("[H-Scan after ] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_after, h1, hv1, r1)
 
     if status_after == "NO_H":
         logging.warning("Reduce produced no hydrogens; trying Open Babel fallback.")
         try:
+            logging.info("[protonate fallback] using=OpenBabel in=%s out=%s", input_pdb, output_pdb)
             tmp_babel = output_pdb + ".babel.pdb"
             run_openbabel_add_h(input_pdb, tmp_babel)
             shutil.move(tmp_babel, output_pdb)
@@ -1765,10 +2572,26 @@ def assign_protonation_states(input_pdb: Union[str, Path],
         if hydrogenation_status(output_pdb)[0] == "NO_H":
             if str(os.environ.get("ALLOW_NO_HYDROGENS", "")).lower() in ("1","true","yes"):
                 logging.warning("Continuing with NO_H due to ALLOW_NO_HYDROGENS env override.")
+                # Still emit result line for grep
+                try:
+                    sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
+                except Exception:
+                    sz = 0
+                logging.info("[protonate result] status=%s H=%d Heavy=%d ratio=%.2f size=%d",
+                             "NO_H", h1, hv1, r1, sz)
                 return output_pdb
             raise RuntimeError("Protonation produced no hydrogens.")
 
+    # Final greppable result line
+    try:
+        sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
+    except Exception:
+        sz = 0
+    logging.info("[protonate result] status=%s H=%d Heavy=%d ratio=%.2f size=%d",
+                 status_after, h1, hv1, r1, sz)
+
     return output_pdb
+
 
 
 
@@ -1824,19 +2647,41 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
 
         if not run_prepare_receptor(cleaned_pdb, output_pdbqt, config):
             logging.error("ERROR: Failed to prepare receptor PDBQT for %s", pdb_id)
+            # Always emit a summary even on failure
+            try:
+                rp = Path(output_pdbqt)
+                exists = rp.exists()
+                size = rp.stat().st_size if exists else 0
+            except Exception:
+                exists = False
+                size = 0
+            logging.info("[receptor-summary]\n"
+                         "cleaned_pdb=%s\n"
+                         "receptor_pdbqt=%s exists=%s size=%d\n"
+                         "meeko_attempts=(see work/*.cmd.txt | *.stderr.txt)",
+                         cleaned_pdb, output_pdbqt, exists, size)
             return None
+
+        # Success path summary
+        try:
+            rp = Path(output_pdbqt)
+            exists = rp.exists()
+            size = rp.stat().st_size if exists else 0
+        except Exception:
+            exists = False
+            size = 0
+        logging.info("[receptor-summary]\n"
+                     "cleaned_pdb=%s\n"
+                     "receptor_pdbqt=%s exists=%s size=%d\n"
+                     "meeko_attempts=(see work/*.cmd.txt | *.stderr.txt)",
+                     cleaned_pdb, output_pdbqt, exists, size)
 
         logging.info("Prepared receptor PDBQT: %s", output_pdbqt)
         return cleaned_pdb, output_pdbqt
+
 
     except Exception as e:
         logging.exception("[FATAL] automate_protein_prep.main() failed: %s", e)
         return None
 
-# Example usage
-# if __name__ == "__main__":
-#     setup_logger()
-#     test_pdb = "1a3n.pdb"
-#     result = main(test_pdb)
-#     if result:
-#         print("Final cleaned PDB:", result[0])
+

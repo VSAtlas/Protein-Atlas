@@ -26,8 +26,8 @@ OPENBABEL_PATH=/stor/home/mpg2352/micromamba/envs/docking-env/bin/obabel
 PYMOL_PATH=pymol
 PYMOL_EXE=pymol
 CPU_ONLY=True
-CPU=50
-MAX_PARALLEL_JOBS=50
+CPU=100
+MAX_PARALLEL_JOBS=100
 FORCE_REPROCESS=True
 DOCKING_MODE=polypharmacology
 QUIET_CONSOLE=False
@@ -40,3 +40,11 @@ MAX_RECENTER_ATTEMPTS=3
 MGLTOOLS_PATH=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7
 REDUCE_HET_DICT=/stor/home/mpg2352/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
 BABEL_LIBDIR=/stor/home/mpg2352/micromamba/envs/docking-env/lib/openbabel/3.1.0
+
+
+CHAIN_PRUNE=1
+CHAIN_POCKET_RADIUS_ANG=10.0
+CHAIN_CONTACT_DIST_ANG=5.0
+CHAIN_MIN_CONTACTS=200
+CHAIN_KEEP_LIST=
+CHAIN_LOG_DECISIONS=1

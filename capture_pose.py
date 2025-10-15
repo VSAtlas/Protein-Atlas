@@ -316,7 +316,6 @@ def _render_three_views_with_pymol(
         })
         return
 
-
     PyMOL = _with_pymol()
     if PyMOL is None:
         return
@@ -329,15 +328,16 @@ def _render_three_views_with_pymol(
         cmd = pm.cmd
         cmd.reinitialize()
 
-        # Receptor
+        # Receptor (uniform gray, semi-transparent)
         cmd.load(receptor_path, "receptor")
         cmd.hide("everything", "receptor")
         if not hide_receptor:
             cmd.show("surface", "receptor")
+            cmd.set_color("gray90", [230, 230, 230])
+            cmd.color("gray90", "receptor")
             cmd.set("transparency", 0.30, "receptor")
-            cmd.color("slate", "receptor")
 
-        # Ligands
+        # Ligands (keep colors as provided)
         lig_objects: List[str] = []
         for lig_path, obj_name, color in ligand_paths_and_colors:
             if not lig_path or not Path(lig_path).is_file():
@@ -354,26 +354,22 @@ def _render_three_views_with_pymol(
 
         lig_union = " or ".join(lig_objects) if lig_objects else "receptor"
 
-        # Label nearest residues (rank by CA distance)
+        # Label nearest residues (sticks colored gray to avoid color noise)
         if lig_objects:
             cmd.select("active_site_all", f"receptor within {label_cutoff} of ({lig_union})")
 
-            # Precompute ligand atom coordinates once to avoid get_distance on multi-atom selections
             lig_model = cmd.get_model(lig_union)
             lig_coords = [(a.coord[0], a.coord[1], a.coord[2]) for a in lig_model.atom]
 
             def _min_dist_to_lig(x, y, z, coords):
                 if not coords:
                     return float("inf")
-                # Euclidean distance to nearest ligand atom
                 dx = x - coords[0][0]
                 dy = y - coords[0][1]
                 dz = z - coords[0][2]
                 best = (dx * dx + dy * dy + dz * dz) ** 0.5
                 for (lx, ly, lz) in coords[1:]:
-                    dx = x - lx;
-                    dy = y - ly;
-                    dz = z - lz
+                    dx = x - lx; dy = y - ly; dz = z - lz
                     d = (dx * dx + dy * dy + dz * dz) ** 0.5
                     if d < best:
                         best = d
@@ -381,8 +377,6 @@ def _render_three_views_with_pymol(
 
             distances = []
             sel_ca = "active_site_all and name CA and (alt '' or alt A)"
-
-            # Pull CA atoms (with coords) directly and compute min distance to ligand atoms
             ca_model = cmd.get_model(sel_ca)
             for a in ca_model.atom:
                 d = _min_dist_to_lig(a.coord[0], a.coord[1], a.coord[2], lig_coords)
@@ -396,8 +390,7 @@ def _render_three_views_with_pymol(
                 cmd.color("gray", "top_site")
                 cmd.label("top_site and name CA and (alt '' or alt A)", "resn + '-' + resi")
 
-
-        # Views
+        # Views (unchanged performance settings)
         focus_sel = (lig_union if lig_objects else "receptor")
         cmd.zoom(focus_sel, 10)
         cmd.viewport(*viewport)
@@ -414,6 +407,7 @@ def _render_three_views_with_pymol(
         cmd.sync(); cmd.refresh()
         cmd.turn("x", 90)
         cmd.png(f"{outprefix}_top.png", ray=0)
+
 
 
 
@@ -437,7 +431,6 @@ def _render_native_on_original_pdb(
         })
         return
 
-
     PyMOL = _with_pymol()
     if PyMOL is None:
         return
@@ -453,46 +446,40 @@ def _render_native_on_original_pdb(
         cmd.load(original_pdb, "orig")
         cmd.hide("everything")
 
-        # Polymer & coloring
+        # Protein polymer: uniform gray + transparency; no auto-coloring
         cmd.show("surface", "orig and polymer")
+        cmd.set_color("gray90", [230, 230, 230])
+        cmd.color("gray90", "orig and polymer")
         cmd.set("transparency", 0.30, "orig and polymer")
-        cmd.color("slate", "orig and polymer")
-        try:
-            cmd.util.cbag("orig and polymer")
-        except Exception:
-            pass
 
-        # Native ligands (exclude common junk)
+        # Native ligands (keep visible & colored as before)
         excl = "+".join(sorted(set(exclude_resns or [])))
         cmd.select("native_lig", f"(hetatm and not polymer and not solvent) and not resn {excl}")
         if cmd.count_atoms("native_lig") > 0:
             cmd.show("sticks", "native_lig")
             cmd.color("green", "native_lig")
 
-            # Nearby residues (sticks on residues; labels only on CA)
+            # Nearby residues: keep sticks but gray to avoid visual noise
             cmd.select("near_native", "orig within 5 of native_lig and polymer.protein")
             cmd.show("sticks", "near_native")
-            cmd.color("cyan", "near_native")
+            cmd.color("gray", "near_native")
             cmd.label("near_native and name CA", "resn + '-' + resi")
 
             focus_sel = "native_lig or near_native"
         else:
             focus_sel = "orig and polymer"
 
-        # Views
+        # Views (unchanged)
         cmd.zoom(focus_sel, 10)
         cmd.viewport(*viewport)
         cmd.set("antialias", 2)
         cmd.set("ray_opaque_background", 0)
-        cmd.sync()
-        cmd.refresh()
+        cmd.sync(); cmd.refresh()
         cmd.png(f"{outprefix}_front.png", ray=0)
-        cmd.sync()
-        cmd.refresh()
+        cmd.sync(); cmd.refresh()
         cmd.turn("y", 90)
         cmd.png(f"{outprefix}_side.png", ray=0)
-        cmd.sync()
-        cmd.refresh()
+        cmd.sync(); cmd.refresh()
         cmd.turn("x", 90)
         cmd.png(f"{outprefix}_top.png", ray=0)
 
@@ -503,7 +490,6 @@ def _render_native_on_original_pdb(
 from pathlib import Path
 from typing import Tuple
 from string import Template
-
 def write_multiview_pml(
     receptor_path: str,
     control_path: str,
@@ -514,10 +500,6 @@ def write_multiview_pml(
     outprefix: str = "",
     viewport: Tuple[int, int] = (192, 144),
 ) -> Path:
-    """
-    Write a PyMOL .pml that loads receptor (+optional ligands), stores 3 scenes,
-    and writes three PNGs to <outprefix>_[front|side|top].png (via unquoted, no-ext png calls).
-    """
     out_pml.parent.mkdir(parents=True, exist_ok=True)
 
     def _posix(p: str) -> str:
@@ -527,14 +509,12 @@ def write_multiview_pml(
     control_posix  = _posix(control_path) if control_path else ""
     rdk_posix      = _posix(rdk_path) if rdk_path else ""
 
-    # Resolve output bases (NO extension here; PyMOL will add .png)
-    opref = Path(outprefix) if outprefix else out_pml.with_suffix("")  # default to PML stem
+    opref = Path(outprefix) if outprefix else out_pml.with_suffix("")
     out_front = (opref.with_name(opref.name + "_front")).resolve().as_posix()
     out_side  = (opref.with_name(opref.name + "_side")).resolve().as_posix()
     out_top   = (opref.with_name(opref.name + "_top")).resolve().as_posix()
     Path(out_front).parent.mkdir(parents=True, exist_ok=True)
 
-    # Ligand union for camera/labels
     parts = []
     if control_posix: parts.append("control")
     if rdk_posix:     parts.append("rdk")
@@ -555,9 +535,10 @@ load $RECEPTOR, receptor
 hide everything, receptor
 show surface, receptor
 set transparency, 0.30
-set_color gray90, [230,230,230]
-color gray90, receptor and surface
-set transparency, 0.25, receptor and surface
+# No custom set_color needed; gray90 is built-in
+color gray90, receptor
+set surface_color, gray90, receptor
+set transparency, 0.30, receptor
 set two_sided_lighting, on
 set ambient, 0.4
 set specular, 0.2
@@ -566,21 +547,16 @@ set light_count, 8
 set depth_cue, on
 set fog_start, 0.6
 
-python
-try:
-    import pymol.util as util
-    util.cbag("receptor and polymer")
-except Exception:
-    pass
-python end
-color gray90, receptor and surface
 
 $LOAD_CONTROL
 $LOAD_RDK
 
+# Re-assert uniform gray on protein after all loads (belt-and-suspenders)
+color gray90, receptor and surface
+
 select lig_union, ($LIG_UNION)
 
-# Label top-N nearby residues by CA distance (brace characters in f-strings must be doubled, so we avoid them here)
+# Label top-N nearby residues (sticks colored gray)
 select near_res, (receptor within $CUTOFF of lig_union) and polymer.protein and name CA and (alt '' or alt A)
 python
 TOPN = $TOPN
@@ -658,9 +634,9 @@ png $OUT_TOP, ray=0
         CUTOFF=f"{label_cutoff:.2f}",
         TOPN=str(label_top_n_res),
         W=str(w), H=str(h),
-        OUT_FRONT=out_front,   # no quotes, no .png
-        OUT_SIDE=out_side,     # no quotes, no .png
-        OUT_TOP=out_top,       # no quotes, no .png
+        OUT_FRONT=out_front,
+        OUT_SIDE=out_side,
+        OUT_TOP=out_top,
     )
     out_pml.write_text(pml_text, encoding="utf-8")
     return out_pml
@@ -688,11 +664,6 @@ set transparency, 0.30, orig and polymer
 set_color gray90, [230,230,230]
 color gray90, orig and polymer
 python
-try:
-    import pymol.util as util
-    util.cbag("orig and polymer")
-except Exception:
-    pass
 python end
 select native_lig, (hetatm and not polymer and not solvent) and not resn $EXCL
 if (count_atoms("native_lig")>0) {
@@ -700,7 +671,7 @@ if (count_atoms("native_lig")>0) {
     color green, native_lig
     select near_native, orig within 5 of native_lig and polymer.protein
     show sticks, near_native
-    color cyan, near_native
+    color gray, near_native
     label near_native and name CA, resn + "-" + resi
     zoom native_lig or near_native, 10
 } else {
@@ -832,7 +803,6 @@ def render_pml_headless(pml_path: Path, pymol_exe: Optional[str] = None) -> int:
 # ============================================================
 # Simple CLI (one-ligand) for quick testing
 # ============================================================
-
 def _cli_render_active_site(
     receptor: str,
     ligand: str,
@@ -851,11 +821,11 @@ def _cli_render_active_site(
       - Applies optional color-blind–friendly palette and colors
 
     Optional kwargs (all optional; ignored if missing):
-      - palette_defs: Dict[str, List[int]]  # e.g., {"orangeOI":[230,159,0], ...}
-      - protein_color: str                  # e.g., "gray90"
-      - protein_transparency: float         # 0..1
-      - ligand_color: str                   # e.g., "orangeOI"
-      - pocket_color: str                   # if a 'pocket' object/selection exists
+      - palette_defs: Dict[str, List[int]]
+      - protein_color: str
+      - protein_transparency: float
+      - ligand_color: str
+      - pocket_color: str
     """
     import os
     from typing import List, Dict
@@ -867,14 +837,13 @@ def _cli_render_active_site(
     rec_obj = "receptor"
     lig_obj = "ligand"
 
-    # reset state for consistency
     cmd.reinitialize()
 
-    # load objects
+    # Load
     cmd.load(receptor, rec_obj)
     cmd.load(ligand, lig_obj)
 
-    # viewport
+    # Viewport unchanged
     try:
         w, h = int(viewport[0]), int(viewport[1])
         cmd.viewport(w, h)
@@ -885,33 +854,29 @@ def _cli_render_active_site(
     palette_defs = kwargs.get("palette_defs") or {}
     if isinstance(palette_defs, dict):
         for name, rgb in palette_defs.items():
-            # Accept list/tuple of 3 ints
             if isinstance(rgb, (list, tuple)) and len(rgb) == 3:
                 cmd.set_color(str(name), [int(rgb[0]), int(rgb[1]), int(rgb[2])])
 
-    # protein appearance
-    protein_color = kwargs.get("protein_color")
-    if protein_color:
-        cmd.color(str(protein_color), rec_obj)
+    # Ensure receptor is uniformly gray and semi-transparent by default
+    cmd.hide("everything", rec_obj)
+    cmd.show("surface", rec_obj)
+    cmd.set_color("gray90", [230, 230, 230])
+    cmd.color("gray90", rec_obj)
+    cmd.set("transparency", 0.30, rec_obj)
+
+
     protein_transparency = kwargs.get("protein_transparency")
     if protein_transparency is not None:
         try:
             cmd.set("transparency", float(protein_transparency), rec_obj)
         except Exception:
             pass
-    # ensure surface is visible if you're relying on surface
-    # (commented to avoid overriding user's representation choices)
-    # cmd.show("surface", rec_obj)
 
-    # ligand color (if provided)
+    # Ligand color (keep if provided; otherwise default elsewhere)
     lig_color = kwargs.get("ligand_color")
     if lig_color:
         cmd.color(str(lig_color), lig_obj)
-    else:
-        # keep existing default styling elsewhere (caller may color later)
-        pass
 
-    # pocket color (optional)
     pocket_color = kwargs.get("pocket_color")
     if pocket_color:
         try:
@@ -919,59 +884,47 @@ def _cli_render_active_site(
         except Exception:
             pass
 
-    # Basic styling: sticks (respect existing, but ensure ligand visible)
+    # Sticks for ligand; protein already surface
     cmd.show("sticks", lig_obj)
 
-    # Compute ligand centroid (heavy atoms)
-    # Create a temporary selection without hydrogens
+    # Centroid + labels (unchanged)
     cmd.select("lig_heavy_tmp", f"({lig_obj}) and not elem H")
-    # Get atomic coordinates via iterate_state
     coords = []
     cmd.iterate_state(1, "lig_heavy_tmp", "coords.append([x,y,z])", space={"coords": coords})
     if coords:
         cx = sum(c[0] for c in coords) / len(coords)
         cy = sum(c[1] for c in coords) / len(coords)
         cz = sum(c[2] for c in coords) / len(coords)
-        # pseudoatom at centroid for selection math
         cmd.pseudoatom("lig_centroid", pos=[cx, cy, cz])
     else:
-        # fallback: just orient to ligand
         cmd.orient(lig_obj)
 
-    # Find nearby residues: CA within cutoff
     cutoff = float(proximity_cutoff)
     cmd.select("near_CA", f"byres ({rec_obj} and name CA within {cutoff} of {lig_obj})")
-    # Label CA atoms of nearby residues (simple label; you may have a fancier one upstream)
     cmd.label("near_CA and name CA", '"%s-%s" % (resn, resi)')
 
-    # Orient view
     cmd.orient(lig_obj)
 
-    # build outprefix base
     base = outprefix
     if os.path.isdir(outprefix) or outprefix.endswith(os.sep):
         base = os.path.join(outprefix, "top_pose")
     os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
 
-    # canonical orientations; NO RAY (ray=0)
-    cmd.sync()
-    cmd.refresh()
+    cmd.sync(); cmd.refresh()
     cmd.png(base + "_front.png", ray=0, width=w, height=h)
-    cmd.sync()
-    cmd.refresh()
+    cmd.sync(); cmd.refresh()
     cmd.turn("y", 90)
     cmd.png(base + "_side.png", ray=0, width=w, height=h)
-    cmd.sync()
-    cmd.refresh()
+    cmd.sync(); cmd.refresh()
     cmd.turn("x", 90)
     cmd.png(base + "_top.png", ray=0, width=w, height=h)
 
-    # cleanup helpers
     try:
         cmd.delete("lig_heavy_tmp")
         cmd.delete("lig_centroid")
     except Exception:
         pass
+
 
 
 def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):

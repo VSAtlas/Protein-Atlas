@@ -502,71 +502,72 @@ exclude_het_name_keywords:
   - OXAN
 
 per_pdb_hints:
-  "1M17": ["erlotinib", "gefitinib", "afatinib", "osimertinib"]
-  "2E2B": ["bafetinib", "imatinib", "dasatinib", "nilotinib", "ponatinib"]
+  "1T46": ["imatinib", "gleevec"]
+  "1M17": ["erlotinib"]
+  "2E2B": ["bafetinib"]
+  "2HYY": ["imatinib", "gleevec"]
   "2GQG": ["dasatinib"]
-  "2ITN": ["erlotinib", "gefitinib", "afatinib", "osimertinib", "dacomitinib"]
-  "3OG7": ["vemurafenib", "dabrafenib", "Vemurafenib"]
-  "3QX3": ["etoposide", "doxorubicin"]
-  "3G0E": ["sunitinib"]
+  "3CS9": ["nilotinib", "tasigna"]
+  "3ERT": ["4-hydroxytamoxifen", "tamoxifen"]
+  "3OG7": ["vemurafenib"]
+  "3QX3": ["etoposide"]
   "4RT7": ["quizartinib"]
   "4XUF": ["quizartinib"]
-  "4I4E": ["defactinib", "PF-562271"]
-  "5C7X": []  # antibody complex; no small-molecule control
-  "6GQO": ["axitinib", "sunitinib", "pazopanib", "cabozantinib", "regorafenib"]
-  "6O0L": ["venetoclax", "navitoclax"]
+  "6O0L": ["venetoclax"]
   "6JQR": ["gilteritinib"]
-  "6WTN": ["ruxolitinib", "Ruxolitinib"]
-  "4XV2": ["dabrafenib", "vemurafenib"]
+  "6WTN": ["ruxolitinib"]
+  "4XV2": ["dabrafenib"]
   "3OXZ": ["ponatinib"]
   "5I96": ["enasidenib"]
-  "4U5J": ["ruxolitinib", "jakafi"]
+  "4U5J": ["ruxolitinib"]
   "3LXK": ["tofacitinib", "xeljanz"]
   "3ZOS": ["ponatinib", "Ponatinib"]
   "3WZD": ["lenvatinib"]
   "2WGJ": ["crizotinib"]
   "2XP2": [ "crizotinib"]
-  "3DZY": ["osiglitazone", "alitretinoin", "Rosiglitazone"]
+  "3DZY": ["Rosiglitazone"]
   "3WZE": ["sorafenib"]
   "3ZBF": ["Crizotinib"]
   "4AG8": ["axitinib"]
   "4ASD": ["sorafenib"]
+  "5L7I": ["vismodegib", "erivedge"]
   "6O0K": ["venetoclax"]
+  "5MO4": ["asciminib", "nilotinib"]
+  "6U4J": ["olutasidenib", "FT-2102"]
 
 hard_fda_control_by_pdb:
-  "1M17": ["erlotinib", "gefitinib", "afatinib", "osimertinib"]
-  "2E2B": ["imatinib", "dasatinib", "nilotinib", "bosutinib", "ponatinib", "asciminib"]
+  "1T46": ["imatinib", "gleevec"]
+  "1M17": ["erlotinib"]
+  "2E2B": ["bafetinib"]
+  "2HYY": ["imatinib", "gleevec"]
   "2GQG": ["dasatinib"]
-  "2ITN": ["erlotinib", "gefitinib", "afatinib", "osimertinib", "dacomitinib"]
-  "3OG7": ["vemurafenib", "Vemurafenib"]
-  "3QX3": ["etoposide", "doxorubicin"]
-  "3G0E": ["sunitinib"]
-  "3ERT": ["tamoxifen"]
+  "3CS9": ["nilotinib", "tasigna"]
+  "3ERT": ["4-hydroxytamoxifen", "tamoxifen"]
+  "3OG7": ["vemurafenib"]
+  "3QX3": ["etoposide"]
   "4RT7": ["quizartinib"]
   "4XUF": ["quizartinib"]
-  "4I4E": ["defactinib"]  # FDA-approved (2025) in combo with avutometinib
-  "5C7X": []
-  "6GQO": ["axitinib", "sunitinib", "pazopanib", "cabozantinib", "regorafenib"]
-  "6O0L": ["venetoclax"]  # navitoclax is not FDA-approved
+  "6O0L": ["venetoclax"]
   "6JQR": ["gilteritinib"]
   "6WTN": ["ruxolitinib"]
-  "4XV2": ["dabrafenib", "vemurafenib"]
-  "3OXZ": ["ponatinib", "Ponatinib"]
+  "4XV2": ["dabrafenib"]
+  "3OXZ": ["ponatinib"]
   "5I96": ["enasidenib"]
-  "4U5J": ["ruxolitinib", "jakafi"]
-  "3LXK": ["tofacitinib"]
+  "4U5J": ["ruxolitinib"]
+  "3LXK": ["tofacitinib", "xeljanz"]
   "3ZOS": ["ponatinib", "Ponatinib"]
   "3WZD": ["lenvatinib"]
-  "3WZE": ["sorafenib"]
   "2WGJ": ["crizotinib"]
-  "2XP2": ["crizotinib"]
-  "3DZY": ["osiglitazone", "alitretinoin", "Rosiglitazone"]
+  "2XP2": [ "crizotinib"]
+  "3DZY": ["Rosiglitazone"]
+  "3WZE": ["sorafenib"]
   "3ZBF": ["Crizotinib"]
   "4AG8": ["axitinib"]
   "4ASD": ["sorafenib"]
-  "5L2I": ["palbociclib"]
-  "5MO4": ["asciminib", "nilotinib"]
+  "5L7I": ["vismodegib", "erivedge"]
   "6O0K": ["venetoclax"]
+  "5MO4": ["asciminib", "nilotinib"]
+  "6U4J": ["olutasidenib", "FT-2102"]
 
 # === atom & element rules ===
 element_sets:
@@ -729,10 +730,16 @@ remove_as_solvent_resnames:
   - SO4; PO4; EPE; MPD; NME; ACE
   - CL; BR; I; F  # (kept as ions if monatomic; here stops them being ligand picks)
 
-# Glycans / sugars (usually remove from ligand ranking; keep if your project needs them)
+# Glycans / sugars
 remove_as_glycan_resnames:
   - NAG; NDG; BMA; MAN; FUC; GAL; GLC; NNN; SIA; SIR; A2G; A2M
 
-# Labels to help protonation decisions (used by your pipeline logic if present)
-nucleotide_like_resnames:
-  - NAD; NADH; NADP; NAP; NMN; FAD; FMN; AMP; ADP; ATP
+ligand_sets:
+  nucleotide_like_resnames:
+    - ATP; ADP; AMP; GTP; GDP; CTP; UTP; TTP
+    - NAD; NADP; NAP; NMN
+    - FAD; FMN
+
+meeko:
+  drop_free_ions:
+    - NA; K; LI

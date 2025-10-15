@@ -79,32 +79,32 @@ def _load_aliases_yaml():
 def get_atom_rules():
     """
     Return a SimpleNamespace of normalized sets/maps used by element fixing,
-    *plus* a compatibility view so legacy code can still do RULES["element_sets"].
+    plus compatibility views so legacy code can still do RULES["element_sets"].
     """
     global _rules_cache
     if _rules_cache is not None:
         return _rules_cache
 
-    a  = _load_aliases_yaml()
+    a  = _load_aliases_yaml() or {}
     es = a.get("element_sets", {}) or {}
+    ligand_sets = a.get("ligand_sets", {}) or {}
+    meeko_cfg   = a.get("meeko", {}) or {}
 
-    # helper: flatten lists of lists and "A; B; C" rows into a single list of strings
+    # helpers
     def _flatten(items):
         out = []
         for x in (items or []):
             if isinstance(x, (list, tuple, set)):
                 out.extend(_flatten(x))
             else:
-                s = str(x)
-                parts = [p.strip() for p in s.split(";")]
+                parts = [p.strip() for p in str(x).split(";")]
                 out.extend([p for p in parts if p])
         return out
 
     def _as_set(items, up=True):
-        vals = _flatten(items)
-        return { (v.upper() if up else v) for v in vals }
+        return { (v.upper() if up else v) for v in _flatten(items) }
 
-    # Normalized sets used by the element/peptide logic
+    # element/name logic
     peptide_like      = _as_set(es.get("peptide_like_names"))
     one_letter        = _as_set(es.get("one_letter_elements"))
     two_letter        = _as_set(es.get("two_letter_elements"))
@@ -112,44 +112,52 @@ def get_atom_rules():
     default_element   = (es.get("default_element") or "C").upper()
     treat_backbone_ca = bool(es.get("treat_backbone_CA_as_C", True))
 
-    prefix_map     = { (k or "").upper(): (v or "").upper()
-                       for k, v in (es.get("derive_prefix_map") or {}).items() }
-    special_names  = { (k or "").upper(): (v or "").upper()
-                       for k, v in (es.get("special_atom_names") or {}).items() }
-    halide_aliases = { (k or "").upper(): (v or "").upper()
-                       for k, v in (es.get("halide_resname_aliases") or {}).items() }
-    cation_aliases = { (k or "").upper(): (v or "").upper()
-                       for k, v in (es.get("cation_resname_aliases") or {}).items() }
+    # AD4 types (support both top-level and nested)
+    ad4_types_yaml = a.get("ad4_types") or (a.get("pdbqt_types") or {}).get("ad4_types")
+    ad4_types = _as_set(ad4_types_yaml) if ad4_types_yaml else set()
 
-    # Retain list (normalized set, *and* keep the raw list for compat)
+    # NEW: ligand & Meeko lists from YAML
+    nucleotide_like_resnames = _as_set(ligand_sets.get("nucleotide_like_resnames"))
+    meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"))
+
+    # retain list (and a compat copy)
     retain_raw = a.get("retain_in_receptor_resnames", []) or []
     retain_res = _as_set(retain_raw)
-
-    # add a compatibility dict so existing code can still do RULES["element_sets"]
-    # and RULES["retain_in_receptor_resnames"] without crashing.
-    compat_element_sets = dict(es)  # shallow copy of the YAML block as-is (lists/maps)
+    compat_element_sets = dict(es)      # keep YAML shape
     compat_retain_list  = list(retain_raw)
 
     from types import SimpleNamespace
     _rules_cache = SimpleNamespace(
-        # normalized sets / maps (what your element fixer actually uses)
+        # normalized sets / maps
         peptide_like=peptide_like,
         one_letter=one_letter,
         two_letter=two_letter,
         halide_resnames=halide_resnames,
-        halide_aliases=halide_aliases,
-        cation_aliases=cation_aliases,
-        prefix_map=prefix_map,
-        special_names=special_names,
         default_element=default_element,
         treat_backbone_ca=treat_backbone_ca,
         retain_resnames=retain_res,
 
-        # --- compatibility views for older call sites ---
-        element_sets=compat_element_sets,                       # <� lets RULES["element_sets"] work
-        retain_in_receptor_resnames=compat_retain_list,         # <� lets RULES.get("retain_in_receptor_resnames") work
+        # NEW exports used elsewhere
+        nucleotide_like_resnames=sorted(nucleotide_like_resnames),
+        meeko_drop_free_ions=sorted(meeko_drop_free_ions),
+
+        # name/alias maps (uppercased keys/values)
+        prefix_map={ (k or "").upper(): (v or "").upper()
+                     for k, v in (es.get("derive_prefix_map") or {}).items() },
+        special_names={ (k or "").upper(): (v or "").upper()
+                        for k, v in (es.get("special_atom_names") or {}).items() },
+        halide_aliases={ (k or "").upper(): (v or "").upper()
+                         for k, v in (es.get("halide_resname_aliases") or {}).items() },
+        cation_aliases={ (k or "").upper(): (v or "").upper()
+                         for k, v in (es.get("cation_resname_aliases") or {}).items() },
+
+        # compatibility views for older call sites
+        element_sets=compat_element_sets,
+        retain_in_receptor_resnames=compat_retain_list,
+        ad4_types=ad4_types,
     )
     return _rules_cache
+
 
 
 

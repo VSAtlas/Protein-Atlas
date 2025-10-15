@@ -1654,9 +1654,9 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--out-root", default=None)
     p.add_argument("--prepped", default=None)
     p.add_argument("--mapping", default=None)
-    p.add_argument("--max-candidates", type=int, default=999)
-    p.add_argument("--exhaustiveness", type=int, default=1)
-    p.add_argument("--num-modes", type=int, default=1)
+    p.add_argument("--max-candidates", type=int, default=9)
+    p.add_argument("--exhaustiveness", type=int, default=10)
+    p.add_argument("--num-modes", type=int, default=10)
     p.add_argument("--hints", help="Optional manual comma-separated hints (e.g., 'imatinib,STI571')")
 
     # Outer (proteins) parallelism

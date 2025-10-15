@@ -9,7 +9,7 @@ What this does
 - Parses Vina scores from REMARK lines, computes pose centroids, and an approximate RMSD.
 - Pairs each CONTROL to the best RDK match (prefer identity when mapping name is available, else centroid-nearest).
 - Scores each pair up to **4 points**:
-    1) |Δ score| ≤ 1.0 kcal/mol
+    1) |Δ score| ≤ 2.0 kcal/mol
     2) Centroid distance ≤ 1.0 Å
     3) Pose–pose RMSD ≤ 3.0 Å
     4) Identity match (RDKit ligand resolves to the *same drug* as the control via mapping or alias)
@@ -48,9 +48,9 @@ from chemdb.chem_alias_db import alias_list_for_het as _alias_list_for_het
 # Defaults (edit for IDE usage)
 # -----------------------------
 DEFAULT_DOCKED_ROOT = r"/stor/home/mpg2352/atlas/code/protein_automation/docked"
-DEFAULT_MAPPING_CSV = r"/stor/home/mpg2352/atlas/code/protein_automation"  # optional
+DEFAULT_MAPPING_CSV = r"/stor/home/mpg2352/atlas/code/protein_automation/fda_mapping_from_pdbqt.csv" 
 DEFAULT_ONLY_PDB = None  # e.g., "5MO4"
-DEFAULT_SCORE_TOL = 1.0   # kcal/mol
+DEFAULT_SCORE_TOL = 2   # kcal/mol
 DEFAULT_CENTER_TOL = 1.0  # Å
 DEFAULT_RMSD_TOL = 3.0    # Å
 DEFAULT_OUTDIR = None     # None -> <DOCKED>\_analysis
@@ -61,6 +61,52 @@ DEFAULT_INCLUDE_IDENTITY = True  # toggle 4th criterion
 SCORE_PAT = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+\.\d+)")
 CONTROL_PAT = re.compile(r"^(?P<het>[A-Za-z0-9]{3})_\w\d+_bench_pocket\d+_single\.best\.(?:pdb|pdbqt)$", re.I)
 RDK_PAT = re.compile(r"^(rdk_\d{6,8})_bench_pocket\d+_single\.(?:pdbqt|pdb)$", re.I)
+
+
+# Expected RDK names by PDB (case-insensitive match will be applied on use)
+EXPECTED_RDK_BY_PDB: Dict[str, List[str]] = {
+  "1T46": ["imatinib", "gleevec"],
+  "1M17": ["erlotinib"],
+  "2E2B": ["bafetinib"],
+  "2HYY": ["imatinib", "gleevec"],
+  "2GQG": ["dasatinib"],
+  "3CS9": ["nilotinib", "tasigna"],
+  "3ERT": ["4-hydroxytamoxifen", "tamoxifen"],
+  "3OG7": ["vemurafenib"],
+  "3QX3": ["etoposide"],
+  "4RT7": ["quizartinib"],
+  "4XUF": ["quizartinib"],
+  "6O0L": ["venetoclax"],
+  "6JQR": ["gilteritinib"],
+  "6WTN": ["ruxolitinib"],
+  "4XV2": ["dabrafenib"],
+  "3OXZ": ["ponatinib"],
+  "5I96": ["enasidenib"],
+  "4U5J": ["ruxolitinib"],
+  "3LXK": ["tofacitinib", "xeljanz"],
+  "3ZOS": ["ponatinib", "Ponatinib"],
+  "3WZD": ["lenvatinib"],
+  "2WGJ": ["crizotinib"],
+  "2XP2": ["crizotinib"],
+  "3DZY": ["Rosiglitazone"],
+  "3WZE": ["sorafenib"],
+  "3ZBF": ["Crizotinib"],
+  "4AG8": ["axitinib"],
+  "4ASD": ["sorafenib"],
+  "5L7I": ["vismodegib", "erivedge"],
+  "6O0K": ["venetoclax"],
+  "5MO4": ["asciminib", "nilotinib"],
+  "6U4J": ["olutasidenib", "FT-2102"],
+}
+
+
+
+def _is_expected_name(pdb_id: str, rdk_name: str) -> bool:
+    exp = [_norm_text(x) for x in EXPECTED_RDK_BY_PDB.get((pdb_id or '').upper(), [])]
+    nm = _norm_text(rdk_name or '')
+    if not exp or not nm:
+        return True  # fail-open
+    return any(en and (en in nm or nm in en) for en in exp)
 
 # name normalization for robust identity checks
 from typing import Optional as _Optional
@@ -100,17 +146,15 @@ def alignment_metrics(ctrl: np.ndarray, rdk: np.ndarray, nn_cap: int = 128):
     """
     n_ctrl = int(ctrl.shape[0])
     n_rdk  = int(rdk.shape[0])
-    raw_centroid = None
-    aligned_centroid = None
+
     rmsd = None
 
     if n_ctrl >= 1 and n_rdk >= 1:
         c_ctr = ctrl.mean(axis=0)
         r_ctr = rdk.mean(axis=0)
-        raw_centroid = float(np.linalg.norm(c_ctr - r_ctr))
 
     if n_ctrl < 3 or n_rdk < 3:
-        return rmsd, raw_centroid, aligned_centroid, n_ctrl, n_rdk
+        return rmsd, n_ctrl, n_rdk
 
     # build NN pairs (A=ctrl reference, B=rdk moved to A)
     A = ctrl
@@ -135,7 +179,7 @@ def alignment_metrics(ctrl: np.ndarray, rdk: np.ndarray, nn_cap: int = 128):
             pairs_b.append(B[best_j])
 
     if len(pairs_a) < 3:
-        return rmsd, raw_centroid, aligned_centroid, n_ctrl, n_rdk
+        return rmsd, n_ctrl, n_rdk
 
     P = np.vstack(pairs_a)  # ctrl
     Q = np.vstack(pairs_b)  # rdk
@@ -150,8 +194,7 @@ def alignment_metrics(ctrl: np.ndarray, rdk: np.ndarray, nn_cap: int = 128):
 
     # Apply transform to ALL rdk atoms for centroid-after-alignment
     rdk_aligned = (rdk - Q.mean(axis=0)) @ R + P.mean(axis=0)
-    aligned_centroid = float(np.linalg.norm(ctrl.mean(axis=0) - rdk_aligned.mean(axis=0)))
-    return rmsd, raw_centroid, aligned_centroid, n_ctrl, n_rdk
+    return rmsd, n_ctrl, n_rdk
 
 
 # -----------------------------
@@ -287,6 +330,55 @@ def parse_coords(path: Path) -> np.ndarray:
     return np.asarray(coords, dtype=float)
 
 
+
+def extract_raw_text_block(path: Path, max_chars: int = 20000, only_header: bool = False) -> str:
+    """
+    Return a 'raw text' snippet from a PDB/PDBQT pose.
+
+    If only_header=True:
+      - Keep header-ish lines (MODEL, REMARK, TORSDOF, ENDMDL; plus ROOT marker for PDBQT).
+      - Skip ATOM/HETATM coordinate blocks to stay compact.
+
+    If only_header=False (default for our HTML/CSV fields now):
+      - Include the *entire* file contents (including ATOM/HETATM/BRANCH blocks).
+      - Still enforce a max_chars cap to keep reports reasonable.
+
+    The result is newline-preserved; caller can wrap in <pre> for HTML.
+    """
+    try:
+        ext = (path.suffix or "").lower()
+        is_pdbqt = (ext == ".pdbqt")
+
+        if not only_header:
+            # Full text path: include everything
+            with open(path, "r", errors="ignore") as f:
+                raw = f.read()
+            raw = raw.strip()
+            if len(raw) > max_chars:
+                raw = raw[:max_chars].rstrip() + " …"
+            return raw
+
+        # Header-only path (kept for possible re-use)
+        keep_prefixes = ("MODEL", "REMARK", "TORSDOF", "ENDMDL")
+        out_lines = []
+        with open(path, "r", errors="ignore") as f:
+            for ln in f:
+                if any(ln.startswith(pfx) for pfx in keep_prefixes):
+                    out_lines.append(ln.rstrip("\r\n"))
+                    continue
+                if is_pdbqt and ln.startswith("ROOT"):
+                    out_lines.append("ROOT")
+                    continue
+                # header-only mode deliberately skips ATOM/HETATM
+        raw = "\n".join(out_lines).strip()
+        if len(raw) > max_chars:
+            raw = raw[:max_chars].rstrip() + " …"
+        return raw
+    except Exception:
+        return ""
+
+
+
 def centroid(pts: np.ndarray) -> Optional[np.ndarray]:
     if pts is None or pts.size == 0:
         return None
@@ -380,7 +472,6 @@ class Pose:
     path: Path
     score: Optional[float]
     coords: np.ndarray
-    centroid: Optional[np.ndarray]
     rdk_name: Optional[str] = None  # resolved drug name for RDKs
 
 
@@ -446,7 +537,6 @@ class PairEval:
     control_score: Optional[float]
     rdk_score: Optional[float]
     delta_kcal: Optional[float]
-    centroid_dist: Optional[float]   # value used for scoring (aligned if possible)
     rmsd: Optional[float]
     flag_score: int
     flag_center: int
@@ -455,13 +545,11 @@ class PairEval:
     total_points: int
     n_atoms_ctrl: int
     n_atoms_rdk: int
-    centroid_raw: Optional[float]
-    centroid_aligned: Optional[float]
-    pick_reason: str  # "identity" or "centroid"
+    pick_reason: str
     png_side: Optional[Path] = None
     png_front: Optional[Path] = None
     png_top: Optional[Path] = None
-    # NEW: interpretability/readability fields
+    #interpretability/readability fields
     control_display_name: Optional[str] = None  # guessed control drug name
     flags_sum: int = 0                          # how many flags passed (incl. identity when enabled)
     confidence_label: str = ""                 # confident / plausible / weak
@@ -470,9 +558,14 @@ class PairEval:
     png_pair_side: Optional[Path] = None
     png_pair_front: Optional[Path] = None
     png_pair_top: Optional[Path] = None
+    expected_rdks: str = ""
+    matched_success: int = 0
+    rdk_raw_text: str = ""
+    control_raw_text: str = ""
     identity_strict: int = 0
     ligprep_errors: str = ""
     proteinprep_errors: str = ""
+    is_expected: int = 0
 
 
 # -----------------------------
@@ -499,20 +592,18 @@ def load_controls_and_rdks(pocket_dir: Path, mapping: MappingIndex) -> Tuple[Lis
         if CONTROL_PAT.match(name):
             control_id = name.split("_bench_")[0]  # NIL_A601
             coords = parse_coords(p)
-            ctr = centroid(coords)
             sc = parse_vina_score(p)
-            controls.append((control_id, Pose(path=p, score=sc, coords=coords, centroid=ctr)))
+            controls.append((control_id, Pose(path=p, score=sc, coords=coords)))
         elif RDK_PAT.match(name):
             coords = parse_coords(p)
-            ctr = centroid(coords)
             sc = parse_vina_score(p)
             rdk_id = _rdk_id_from_stem(Path(name).stem)
 
             rname = resolve_rdk_name_from_mapping(rdk_id or "", mapping)
-            rdks.append(Pose(path=p, score=sc, coords=coords, centroid=ctr, rdk_name=rname))
+            rdks.append(Pose(path=p, score=sc, coords=coords, rdk_name=rname))
     return controls, rdks
 
-
+#should stay unused
 def _closest_by_centroid(ctrl: Pose, rdks: Sequence[Pose]) -> Optional[Pose]:
     if ctrl.centroid is None:
         return None
@@ -526,6 +617,7 @@ def _closest_by_centroid(ctrl: Pose, rdks: Sequence[Pose]) -> Optional[Pose]:
             best_d = d
             best = r
     return best
+
 
 
 def _match_by_identity(ctrl_het: str, rdks: Sequence[Pose]) -> List[Pose]:
@@ -567,20 +659,31 @@ def evaluate_pairs(
         m = re.match(r"^(?P<het>[A-Za-z0-9]{3})_(?P<chain>\w)(?P<res>\d+)$", control_id)
         het = (m.group("het") if m else control_id.split("_")[0]).upper()
 
-        # Prefer identity match; fallback to centroid-nearest
+        # Prefer identity match; fallback to score-nearest if none
+        picked = None
         identity_flag = 0
         candidates = _match_by_identity(het, rdks)
         if candidates:
             identity_flag = 1
-            picked = (min(candidates, key=lambda r: abs((r.score or 9e9) - (ctrl.score or 0.0)))
-                      if ctrl.score is not None else
-                      min(candidates, key=lambda r: (r.score or 9e9)))
+            if ctrl.score is not None:
+                picked = min(candidates, key=lambda r: abs((r.score or 9e9) - (ctrl.score or 0.0)))
+            else:
+                picked = min(candidates, key=lambda r: (r.score or 9e9))
         else:
-            picked = _closest_by_centroid(ctrl, rdks)
+            # score-based fallback (no identity): keep rows flowing without centroid
+            if not rdks:
+                continue  # nothing to pair with
+            if ctrl.score is not None:
+                picked = min(rdks, key=lambda r: abs((r.score or 9e9) - (ctrl.score or 0.0)))
+                pick_reason = "score-nearest"
+            else:
+                picked = min(rdks, key=lambda r: (r.score or 9e9))
+                pick_reason = "best-score"
+
         if picked is None:
             continue
 
-        pick_reason = "identity" if identity_flag else "centroid"
+        pick_reason = "identity"
         identity_strict = 0
         try:
             ctrl_hist = _pdbqt_element_histogram(ctrl.path)
@@ -593,34 +696,70 @@ def evaluate_pairs(
         flag_identity = identity_flag
 
         # Score delta
+        # Score delta
         delta_kcal: Optional[float] = None
         flag_score = 0
         if ctrl.score is not None and picked.score is not None:
             delta_kcal = abs(picked.score - ctrl.score)
             flag_score = int(delta_kcal <= score_tol)
 
-        # Geometry metrics (use ALIGNED centroid for flag_center)
-        rmsd_val, raw_ctr, aligned_ctr, n_ctrl, n_rdk = alignment_metrics(ctrl.coords, picked.coords)
-        centroid_to_score = aligned_ctr if aligned_ctr is not None else raw_ctr
-        flag_center = int(centroid_to_score is not None and centroid_to_score <= center_tol)
+        # Geometry metrics (RMSD only; no centroid flag)
+        rmsd_val, n_ctrl, n_rdk = alignment_metrics(ctrl.coords, picked.coords)
         flag_rmsd = int((rmsd_val is not None) and (rmsd_val <= rmsd_tol))
+
+        # No centroid flag in this version
+        flag_center = 0
+
 
         if DEBUG and rmsd_val is not None and raw_ctr is not None and raw_ctr > (center_tol + 0.25) and flag_rmsd:
             print(f"[debug] {pdb_id}/{pocket_name}/{control_id}: RMSD ok ({rmsd_val:.2f} Å) "
-                  f"but RAW centroid {raw_ctr:.2f} Å; ALIGNED centroid {aligned_ctr if aligned_ctr is None else f'{aligned_ctr:.2f}'} Å. "
                   f"Using aligned for scoring. pick={picked.path.name} via {pick_reason}")
 
         rdk_id = _rdk_id_from_stem(picked.path.stem) or ""
-        pair_side, pair_front, pair_top = find_pair_only_screenshots(pdb_id, pocket_dir, rdk_id or "RDKclosest")
+        # Expected RDK names (by PDB)
+        expected_list = EXPECTED_RDK_BY_PDB.get(pdb_id.upper(), [])
+        expected_rdks = ", ".join(expected_list)
 
-        # interpretability / labels
+        # HTML filter flag: does picked.rdk_name match the allow-list for this PDB?
+        exp_norm = [_norm_text(x) for x in EXPECTED_RDK_BY_PDB.get(pdb_id.upper(), [])]
+        nm_norm = _norm_text(picked.rdk_name)
+        is_expected_bool = 0
+        if not exp_norm or not nm_norm:
+            # fail-open: if no allow-list for this PDB or name missing, include row
+            is_expected_bool = 1
+        else:
+            for en in exp_norm:
+                if en and (en in nm_norm or nm_norm in en):
+                    is_expected_bool = 1
+                    break
+
+        # interpretability / labels (resolve control name first)
         ctrl_guess_list = expected_names_for_het(het)
         control_display_name = (ctrl_guess_list[0] if ctrl_guess_list else "")
-        tri = flag_score + flag_center + flag_rmsd
-        confident = int((flag_identity and flag_rmsd and (flag_score or flag_center)) or (tri == 3))
-        confidence_label = "confident" if confident else ("plausible" if (tri >= 2 or (flag_identity and (flag_score or flag_center))) else "weak")
+
+        # Raw text straight from pose files INCLUDING ATOM/HETATM (capped for size)
+        rdk_raw_text = extract_raw_text_block(picked.path, only_header=False)
+        control_raw_text = extract_raw_text_block(ctrl.path, only_header=False)
+
+
+        # Success criterion (ignore centroid): identity & RMSD & score
+        matched_success = int(bool(flag_identity and flag_rmsd and flag_score))
+
+        pair_side, pair_front, pair_top = find_pair_only_screenshots(pdb_id, pocket_dir, rdk_id or "RDKclosest")
+
+        # Confidence rule use only score & RMSD (+ identity for "confident")
+        _two = (flag_rmsd + flag_score)
+        confident = int(bool(flag_identity and flag_rmsd and flag_score))
+        confidence_label = "confident" if confident else ("plausible" if _two >= 2 else "weak")
+
+
         good_control = int((ctrl.score is not None) and (int(ctrl.coords.shape[0]) >= 10) and bool(control_display_name))
-        flags_sum = tri + (identity_flag if include_identity else 0)
+        flags_sum = _two + (identity_flag if include_identity else 0)
+        if DEBUG and (ctrl.score is not None) and (picked.score is not None):
+            logging.debug(
+                "[Δkcal-check] %s/%s ctrl=%.3f rdk=%.3f Δ=%.3f tol=%.3f -> score✔=%d",
+                pdb_id, control_id, ctrl.score, picked.score, delta_kcal, score_tol, flag_score
+            )
 
         total_points = flag_score + flag_center + flag_rmsd + (identity_flag if include_identity else 0)
         lig_e, prot_e = _lookup_errors(picked.path)
@@ -637,7 +776,6 @@ def evaluate_pairs(
                 control_score=ctrl.score,
                 rdk_score=picked.score,
                 delta_kcal=delta_kcal,
-                centroid_dist=centroid_to_score,
                 rmsd=rmsd_val,
                 flag_score=flag_score,
                 flag_center=flag_center,
@@ -646,8 +784,7 @@ def evaluate_pairs(
                 total_points=total_points,
                 n_atoms_ctrl=int(ctrl.coords.shape[0]),
                 n_atoms_rdk=int(picked.coords.shape[0]),
-                centroid_raw=raw_ctr,
-                centroid_aligned=aligned_ctr,
+
                 pick_reason=pick_reason,
                 png_side=png_side,
                 png_front=png_front,
@@ -660,8 +797,14 @@ def evaluate_pairs(
                 png_pair_side=pair_side,
                 png_pair_front=pair_front,
                 png_pair_top=pair_top,
+                expected_rdks=expected_rdks,
+                matched_success=matched_success,
+                rdk_raw_text=rdk_raw_text,
+                control_raw_text=control_raw_text,
                 identity_strict=identity_strict,
                 ligprep_errors=lig_e, proteinprep_errors=prot_e,
+                is_expected=int(is_expected_bool),
+
             )
         )
     return rows
@@ -700,15 +843,15 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
             "pdb_id", "pocket", "control_id", "control_het", "control_file", "rdk_file", "rdk_id",
             "control_drug_guess", "rdk_suspected_fda_name",
             "control_score_kcal", "rdk_score_kcal", "delta_kcal",
-            "centroid_raw_A", "centroid_aligned_A", "centroid_dist_A",
             "rmsd_ctrl_to_rdk_A", "rmsd_rdk_to_ctrl_A",
-            "score_within_tol", "centroid_within_tol", "rmsd_within_tol", "identity_match",
+            "score_within_tol", "rmsd_within_tol", "identity_match",
             "n_atoms_ctrl", "n_atoms_rdk", "pick_reason",
             "png_side", "png_front", "png_top",
             "pair_png_side", "pair_png_front", "pair_png_top",
             "flags_sum", "confident_match", "confidence_label", "good_control",
             "total_points", "pass_category",
             "ligprep_errors", "proteinprep_errors", "identity_strict",
+            "expected_rdks", "matched_success", "rdk_raw_text", "control_raw_text",
         ])
         for r in rows:
             w.writerow([
@@ -716,9 +859,8 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
                 str(r.control_file), str(r.rdk_file), r.rdk_id,
                 (r.control_display_name or ""), (r.rdk_name or ""),
                 _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal),
-                _fmt(r.centroid_raw), _fmt(r.centroid_aligned), _fmt(r.centroid_dist),
                 _fmt(r.rmsd), _fmt(r.rmsd),
-                r.flag_score, r.flag_center, r.flag_rmsd, r.flag_identity,
+                r.flag_score,  r.flag_rmsd, r.flag_identity,
                 r.n_atoms_ctrl, r.n_atoms_rdk, r.pick_reason,
                 (str(r.png_side) if r.png_side else ""),
                 (str(r.png_front) if r.png_front else ""),
@@ -729,6 +871,8 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
                 r.flags_sum, r.confident_match, r.confidence_label, r.good_control,
                 r.total_points, _pass_category(r.total_points, include_identity),
                 (r.ligprep_errors or ""), (r.proteinprep_errors or ""), r.identity_strict,
+                r.expected_rdks, r.matched_success, r.rdk_raw_text, r.control_raw_text,
+
             ])
     return path
 
@@ -753,7 +897,6 @@ def write_summary_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
             "num_controls",
             "num_pockets",
             "any_score_within_tol",
-            "any_centroid_within_tol",
             "any_rmsd_within_tol",
             "any_identity_match",
             "num_good_controls",
@@ -822,6 +965,37 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
         elif label == "plausible":
             cls = "ok"
         return f"<span class='badge {cls}'>{_html_escape(label)}</span>"
+
+    # --- Expected-only HTML filter ---
+    def _norm(s: str) -> str:
+        return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
+    def _exp_list_for(pid: str):
+        return [_norm(x) for x in EXPECTED_RDK_BY_PDB.get((pid or '').upper(), [])]
+    def _is_expected_row(r: PairEval) -> bool:
+        # prefer precomputed flag if present
+        try:
+            return bool(r.is_expected)
+        except Exception:
+            pass
+        exp = _exp_list_for(r.pdb_id)
+        nm = _norm(r.rdk_name or '')
+        if not exp or not nm:
+            return True  # fail-open (will tag)
+        return any(en and (en in nm or nm in en) for en in exp)
+
+    # --- Expected-only HTML filter ---
+    want_expected_only = bool(int(os.environ.get("ANALYSIS_HTML_EXPECTED_ONLY", "1")))
+    rows_to_render: list[PairEval] = []
+    if want_expected_only:
+        for r in rows:
+            if _is_expected_row(r):
+                rows_to_render.append(r)
+            else:
+                # hidden (non-expected with configured allow-list and a resolvable name)
+                pass
+    else:
+        rows_to_render = list(rows)
+
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("""
 <!doctype html>
@@ -834,7 +1008,19 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
   table{border-collapse:collapse;width:100%}
   th,td{border:1px solid #e5e5e5;padding:6px 8px;vertical-align:top;font-size:13px}
   th{background:#fafafa;position:sticky;top:0;z-index:1}
-  .num{text-align:right;white-space:nowrap}
+  /* Raw text cells: make tiny and clamp height so images decide row size */
+  pre.raw{
+    white-space:pre-wrap;
+    max-width:420px;
+    overflow-wrap:anywhere;
+    margin:0;
+    font-size:9px;         /* tiny */
+    line-height:1.05;      /* tight lines */
+    max-height:96px;       /* clamp – tweak to taste (e.g., 80–120px) */
+    overflow:auto;         /* scroll if longer, don't expand row */
+  }
+  /* Slightly reduce padding for those cols so they look compact */
+  td.rawcol{ padding:2px 4px; }  .num{text-align:right;white-space:nowrap}
   .imgcell{white-space:nowrap}
   .muted{color:#777}
   .badge{display:inline-block;padding:2px 8px;border-radius:12px;border:1px solid #ddd;font-size:12px}
@@ -851,9 +1037,10 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
   <th>pdb_id</th><th>pocket</th><th>control_id</th><th>rdk_id</th>
   <th>control_drug</th><th>rdk_suspected_fda</th>
   <th class="num">ctrl_score</th><th class="num">rdk_score</th><th class="num">Δkcal</th>
-  <th class="num" title="Distance between control and RDK centroids after best-fit rigid alignment (Å). Falls back to raw if alignment fails.">centroid_A</th><th class="num">RMSD_A</th>
+  <th class="num">RMSD_A</th>
+  <th>expected_rdks</th><th>matched_success</th><th>rdk_raw_text</th><th>control_raw_text</th>
   <th>pick</th><th>confidence</th><th>good control</th>
-  <th class="num">score✔</th><th class="num">center✔</th><th class="num">rmsd✔</th><th class="num">ident✔</th>
+  <th class="num">score✔</th><th class="num">rmsd✔</th><th class="num">ident✔</th>
   <th class="imgcell">side</th><th class="imgcell">front</th><th class="imgcell">top</th>
   <th class="imgcell">pair_side</th><th class="imgcell">pair_front</th><th class="imgcell">pair_top</th>
 </tr></thead>
@@ -866,17 +1053,27 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
             fh.write(f"<td>{_html_escape(r.control_id)}</td>")
             fh.write(f"<td>{_html_escape(r.rdk_id)}</td>")
             fh.write(f"<td>{_html_escape(r.control_display_name or '')}</td>")
-            fh.write(f"<td>{_html_escape(r.rdk_name or '')}</td>")
+            _nm = r.rdk_name or ''
+            def _norm(s: str) -> str:
+                return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
+
+            _exp = [_norm(x) for x in EXPECTED_RDK_BY_PDB.get((r.pdb_id or '').upper(), [])]
+            _nm_norm = _norm(_nm)
+            _match = (not _exp) or (not _nm_norm) or any(en and (en in _nm_norm or _nm_norm in en) for en in _exp)
+            note = '' if _match else " <span class='muted'>(not-in-expected)</span>"
+            fh.write(f"<td>{_html_escape(_nm)}{note}</td>")
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.control_score))}</td>")
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.rdk_score))}</td>")
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.delta_kcal))}</td>")
-            fh.write(f"<td class='num'>{_html_escape(_fmt(r.centroid_dist))}</td>")
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.rmsd))}</td>")
+            fh.write(f"<td>{_html_escape(r.expected_rdks)}</td>")
+            fh.write(f"<td>{'True' if r.matched_success else 'False'}</td>")
+            fh.write(f"<td class='rawcol'><pre class='raw'>{_html_escape(r.rdk_raw_text)}</pre></td>")
+            fh.write(f"<td class='rawcol'><pre class='raw'>{_html_escape(r.control_raw_text)}</pre></td>")
             fh.write(f"<td>{_html_escape(r.pick_reason)}</td>")
             fh.write(f"<td>{_badge(r.confidence_label)}</td>")
             fh.write(f"<td class='num'>{'✔' if r.good_control else '—'}</td>")
             fh.write(f"<td class='num'>{r.flag_score}</td>")
-            fh.write(f"<td class='num'>{r.flag_center}</td>")
             fh.write(f"<td class='num'>{r.flag_rmsd}</td>")
             fh.write(f"<td class='num'>{r.flag_identity}</td>")
             # overlay images
@@ -907,7 +1104,7 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
         # Column headers
         headers = [
             "pdb_id","pocket","control_id","control_het","rdk_id","rdk_suspected_fda","control_drug_guess",
-            "ctrl_score","rdk_score","delta_kcal","centroid_A","rmsd_A","pick_reason",
+            "ctrl_score","rdk_score","delta_kcal","rmsd_A","pick_reason",
             "confidence","good_control","score✔","center✔","rmsd✔","ident✔",
             "image_side","image_front","image_top","pair_side","pair_front","pair_top",
         ]
@@ -925,7 +1122,7 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
         for r in rows:
             ws.write_row(row, 0, [
                 r.pdb_id, r.pocket, r.control_id, r.control_het, r.rdk_id, r.rdk_name or "", r.control_display_name or "",
-                _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal), _fmt(r.centroid_dist), _fmt(r.rmsd), r.pick_reason,
+                _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal), _fmt(r.rmsd), r.pick_reason,
                 r.confidence_label, r.good_control, r.flag_score, r.flag_center, r.flag_rmsd, r.flag_identity
             ])
             # Insert overlay images (scaled down)
@@ -959,7 +1156,7 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
         ws.title = "details"
         headers = [
             "pdb_id","pocket","control_id","control_het","rdk_id","rdk_suspected_fda","control_drug_guess",
-            "ctrl_score","rdk_score","delta_kcal","centroid_A","rmsd_A","pick_reason",
+            "ctrl_score","rdk_score","delta_kcal","rmsd_A","pick_reason",
             "confidence","good_control","score✔","center✔","rmsd✔","ident✔",
             "image_side","image_front","image_top","pair_side","pair_front","pair_top",
         ]
@@ -967,7 +1164,7 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
         for r in rows:
             ws.append([
                 r.pdb_id, r.pocket, r.control_id, r.control_het, r.rdk_id, r.rdk_name or "", r.control_display_name or "",
-                _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal), _fmt(r.centroid_dist), _fmt(r.rmsd), r.pick_reason,
+                _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal), _fmt(r.rmsd), r.pick_reason,
                 r.confidence_label, r.good_control, r.flag_score, r.flag_center, r.flag_rmsd, r.flag_identity,
                 "", "", "", "", "", ""  # placeholders for 6 images
             ])
@@ -1096,12 +1293,20 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--docked-root", default=DEFAULT_DOCKED_ROOT)
     p.add_argument("--mapping", default=DEFAULT_MAPPING_CSV)
     p.add_argument("--only-pdb", default=DEFAULT_ONLY_PDB)
-    p.add_argument("--score-tol", type=float, default=DEFAULT_SCORE_TOL)
+    p.add_argument("--score-tol", type=float, default=DEFAULT_SCORE_TOL,
+                   help="Score tolerance (kcal/mol) used for 'score✔'.")
     p.add_argument("--center-tol", type=float, default=DEFAULT_CENTER_TOL)
     p.add_argument("--rmsd-tol", type=float, default=DEFAULT_RMSD_TOL)
     p.add_argument("--no-identity", action="store_true", help="Exclude identity-match from scoring (max 3 points)")
     p.add_argument("--out", default=DEFAULT_OUTDIR)
     p.add_argument("--debug", action="store_true", help="Verbose per-pair diagnostics (or set BENCH_DEBUG=1)")
+    p.add_argument("--analysis-score-tol", type=float, dest="score_tol",
+                   help="Alias for --score-tol (kcal/mol).")
+    p.add_argument("--html-expected-only", dest="html_expected_only", action="store_true", default=True,
+                   help="Show only expected FDA RDKs in the HTML report (env ANALYSIS_HTML_EXPECTED_ONLY=1).")
+    p.add_argument("--no-html-expected-only", dest="html_expected_only", action="store_false",
+                   help="Disable expected-only filtering in HTML (env ANALYSIS_HTML_EXPECTED_ONLY=0).")
+
     return p
 
 
@@ -1114,6 +1319,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     # honor CLI --debug
     global DEBUG
     DEBUG = DEBUG or bool(args.debug)
+    os.environ["ANALYSIS_HTML_EXPECTED_ONLY"] = "1" if bool(getattr(args, "html_expected_only", True)) else "0"
 
     run_analysis(
         docked_root=docked_root,

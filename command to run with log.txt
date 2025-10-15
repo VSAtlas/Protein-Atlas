@@ -1,6 +1,16 @@
 mkdir -p logs
 ts=$(date +%Y%m%d_%H%M%S)
+LOG="logs/MAIN_${ts}.log"
+
+python -u main.py 2>&1 | tee "$LOG"
+echo "Log -> $LOG"
+
+
+
+mkdir -p logs
+ts=$(date +%Y%m%d_%H%M%S)
 LOG="logs/bench_${ts}.log"
 
 python -u benchmark_mode.py 2>&1 | tee "$LOG"
 echo "Log -> $LOG"
+
