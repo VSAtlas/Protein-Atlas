@@ -22,8 +22,9 @@ def general_fallback_recenter_if_needed(cfg, pdb_id, stage_name, scores, raw_doc
         logger.warning("Fallback recovery failed. Ending docking for this protein.")
         return False, center, box_size, None
 
+    max_box = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
     center = new_center
-    box_size = tuple(min(28.0, s) for s in box_size)
+    box_size = tuple(min(max_box, s) for s in box_size)
     logger.info("Re-running stage1 with new center after no-valid fallback.")
     return True, center, box_size, ligands_stage1_original[:]
 
@@ -51,7 +52,8 @@ def early_recenter(stage_index, all_distances, scores, recenter_knobs, box_size,
     # One-time box expansion for borderline cases
     if (recenter_knobs["ALLOW_BOX_EXPAND"] and 0.5 <= far_ratio < recenter_knobs["EARLY_RECENTER_RATIO"]
             and 8.0 <= med_dist < recenter_knobs["EARLY_RECENTER_MEDIAN_A"] and valid_count == 0):
-        new_box = tuple(min(28.0, s + 4.0) for s in box_size)
+        max_box = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
+        new_box = tuple(min(max_box, s + 4.0) for s in box_size)
         if new_box != box_size:
             logger.info(f"Borderline far_ratio={far_ratio:.2f}, median={med_dist:.1f} Å → expand box to {new_box} and redo stage1.")
             return True, center, new_box, recenter_attempts, tried_centers, ligands_stage1_original[:]
@@ -83,7 +85,8 @@ def early_recenter(stage_index, all_distances, scores, recenter_knobs, box_size,
             tried_centers.add(center_key)
             recenter_attempts += 1
             center = new_center
-            box_size = tuple(min(28.0, s) for s in box_size)
+            max_box = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
+            box_size = tuple(min(max_box, s) for s in box_size)
             logger.info("Re-running stage1 with new center and tightened box.")
             return True, center, box_size, recenter_attempts, tried_centers, ligands_stage1_original[:]
 

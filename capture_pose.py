@@ -31,13 +31,46 @@ EXCLUDE_HET_IDS = {
 }
 
 
-# --- Deferred render queue (first-class, file-backed) -----------------------
 from concurrent.futures import ProcessPoolExecutor, as_completed
+try:
+    from input_and_export_functions import load_config, validate_config
+    _cfg = load_config("config.txt") or {}
+    try:
+        validate_config(_cfg)
+    except Exception:
+        pass
+except Exception:
+    _cfg = {}
 
-_DEFER_MODE = bool(int(os.environ.get("DEFER_PYMOL", "0")))
-_QUEUE_PATH = os.environ.get("PYMOL_DEFER_QUEUE",
-                             str(Path(os.environ.get("OVERALL_DIR", Path.cwd()))
-                                 / "deferred_pymol_jobs.jsonl"))
+def _cfg_bool(name: str, *, env: str | None = None, default: bool = False) -> bool:
+    v = _cfg.get(name, None)
+    if v is None and env:
+        v = os.environ.get(env)
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    return s in ("1", "true", "yes", "on")
+
+def _cfg_int(name: str, *, env: str | None = None, default: int = 0) -> int:
+    v = _cfg.get(name, None)
+    if v is None and env:
+        v = os.environ.get(env)
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+def _cfg_float(name: str, default: float) -> float:
+    try:
+        return float(_cfg.get(name, default))
+    except Exception:
+        return default
+_DEFER_MODE = _cfg_bool("DEFER_PYMOL", env="DEFER_PYMOL", default=False)
+_QUEUE_PATH = (
+    _cfg.get("PYMOL_DEFER_QUEUE")
+    or os.environ.get("PYMOL_DEFER_QUEUE")
+    or str(Path(os.environ.get("OVERALL_DIR", Path.cwd())) / "deferred_pymol_jobs.jsonl")
+)
 _Q_LOCK = threading.Lock()
 
 def set_defer_mode(enable: bool, queue_path: Optional[str] = None):
@@ -115,9 +148,9 @@ def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2)
     return len(jobs)
 
 def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
-                            max_workers: int = 8,
+                            max_workers: int = 99,
                             mode: str = "cli",
-                            slow_ms: int = 1500) -> int:
+                            slow_ms: int = 15) -> int:
     """
     Multi-process renderer that replays JSONL queue without sharing a PyMOL session.
     Uses a single persistent pool to avoid per-batch spawn overhead.
@@ -292,18 +325,28 @@ def pick_control_and_nearest_rdk(
 
 def _render_three_views_with_pymol(
     receptor_path: str,
-    ligand_paths_and_colors: List[Tuple[str, str, str]],  # [(path, object_name, color), ...]
+    ligand_paths_and_colors: list[tuple[str, str, str]],
     outprefix: str,
-    label_top_n_res: int = 5,
-    label_cutoff: float = 5.0,
-    viewport: Tuple[int, int] = (192, 144),
+    *,
+    label_top_n_res: int = None,
+    label_cutoff: float = None,
+    viewport: tuple[int, int] | None = None,
     hide_receptor: bool = False,
-) -> None:
+) -> list[str]:
     """
     Saves <outprefix>_[front|side|top].png.
     Receptor shown as transparent surface; ligands as sticks; labels top-N closest residues (CA) within cutoff Å.
     If hide_receptor is True, receptor is not drawn (pair-only views).
     """
+    # Resolve defaults from cfg once if not provided by caller
+    if label_top_n_res is None:
+        label_top_n_res = _cfg_int("LABEL_TOP_N_RES", default=5)
+    if label_cutoff is None:
+        label_cutoff = _cfg_float("LABEL_CUTOFF_A", 5.0)
+    if viewport is None:
+        viewport = ( _cfg_int("VIEWPORT_W", default=640), _cfg_int("VIEWPORT_H", default=480) )
+    surface_transparency = _cfg_float("SURFACE_TRANSPARENCY", 0.30)
+
     if _DEFER_MODE:
         _enqueue_job("three", {
             "receptor_path": str(receptor_path),

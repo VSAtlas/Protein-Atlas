@@ -21,6 +21,29 @@ except Exception:
         from rdkit.Chem import rdMolStandardize as _std  # type: ignore
     except Exception:
         _std = None  # we'll gracefully fall back in neutralize_smiles()
+from input_and_export_functions import load_inputs, validate_config
+cfg = load_inputs(); validate_config(cfg)
+
+# Logs & CSVs (paths)
+from pathlib import Path
+logs_root = Path(cfg.get("LOGS_DIR", cfg.get("DOCKED_DIR", ".")))
+logs_root.mkdir(parents=True, exist_ok=True)
+LOG_PATH = logs_root / cfg.get("IDENTIFY_LOG_BASENAME", "fda_mapping.log")
+
+# Where to write mapping CSVs — default to DOCKED_DIR (keeps behavior close to outputs)
+out_root = Path(cfg.get("DOCKED_DIR", "."))
+base_csv = out_root / cfg.get("IDENTIFY_MAPPING_CSV", "fda_mapping_from_pdbqt.csv")
+bad_csv  = out_root / cfg.get("IDENTIFY_UNMAPPED_CSV", "fda_mapping_unmapped_or_no_smiles.csv")
+# Try to import alias tables from chemdb; fallback to in-code defaults below
+try:
+    from chemdb.chem_alias_db import SALT_WORDS as _SALT, HYDRATE_WORDS as _HYDR, FORM_WORDS as _FORM, GENERIC_SUFFIX_BONUS as _GENBONUS
+    SALT_WORDS = set(_SALT) if _SALT else set()
+    HYDRATE_WORDS = set(_HYDR) if _HYDR else set()
+    FORM_WORDS = set(_FORM) if _FORM else set()
+    GENERIC_SUFFIX_BONUS = tuple(_GENBONUS) if _GENBONUS else ()
+except Exception:
+    # fallbacks below remain as-is
+    pass
 
 # ========= User config =========
 SDF_PATH = Path(r"E:\PythonProject\protein_automation\extracted_ligands\merged_dedup.sdf")
@@ -164,10 +187,16 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_PATH, encoding="utf-8")
-    ],
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        # console: quiet if requested
+        (logging.StreamHandler())
+    ]
 )
+# Adjust console level dynamically
+for h in logging.getLogger().handlers:
+    if isinstance(h, logging.StreamHandler):
+        h.setLevel(logging.WARNING if bool(cfg.get("QUIET_CONSOLE", False)) else logging.INFO)
+
 log = logging.getLogger("fda-map")
 
 # ========= SDF & file scanning =========
@@ -512,7 +541,9 @@ import os
 def sdf_add_formula_features(df_sdf: pd.DataFrame) -> pd.DataFrame:
     inputs = list(zip(df_sdf.get("smiles"), df_sdf.get("smiles_neutral")))
     # Processes ≈ CPU cores is fine
-    with ProcessPoolExecutor(max_workers=os.cpu_count() or 2) as ex:
+    max_workers = int(cfg.get("IDENTIFY_MAX_WORKERS", 0)) or (os.cpu_count() or 2)
+    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+
         results = list(ex.map(_calc_formula_heavy_unpack, inputs))
     formulas, heavies = zip(*results) if results else ([], [])
     out = df_sdf.copy()
@@ -964,8 +995,8 @@ def enrich_with_pubchem(mapping: pd.DataFrame) -> pd.DataFrame:
     # Small pool for I/O-bound API calls
     results_local: Dict[str, dict] = {}
     extra_keys: List[Tuple[str, dict]] = []
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    http_workers = int(cfg.get("IDENTIFY_HTTP_WORKERS", 4))
+    with ThreadPoolExecutor(max_workers=http_workers) as ex:
         for cache_key, entry, neut, cid in ex.map(_worker, queries):
             results_local[cache_key] = entry
             if isinstance(neut, str):

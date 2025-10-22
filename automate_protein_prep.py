@@ -41,10 +41,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 import os, sys, shutil, subprocess, logging
 
-# -------- Project-local imports --------
 from installation import load_config
 from logger_setup import setup_logger
-# Single source of truth (YAML-backed) — do not re-implement locally
 from activesite import (
     fix_element_columns_in_file,
     scan_helium_counts,
@@ -56,15 +54,11 @@ from activesite import (
     rules_version,
 )
 ALIASES = get_atom_rules()
-# Normalize to a dict so existing RULES.get(...) calls work
 RULES = ALIASES.__dict__ if hasattr(ALIASES, "__dict__") else dict(ALIASES)
-
-# Toggle: default ON; set HELIUM_POSTWRITE_VERBOSE=0 to suppress the info line
 _HE_POSTWRITE_VERBOSE = (os.environ.get("HELIUM_POSTWRITE_VERBOSE", "1") != "0")
 
-def load_aliases(): #little shim, to fix later 
+def load_aliases():
     return get_atom_rules()
-
 def _flatten_semicolons(items):
     out = []
     for item in items or []:
@@ -73,14 +67,8 @@ def _flatten_semicolons(items):
         out.extend(parts)
     return out
 
-# Sets from YAML
 _RETAIN = set(_flatten_semicolons(RULES.get("retain_in_receptor_resnames", [])))
-
-# Optional: recognize “waters” using the retain list (makes policy consistent)
 _WATER_NAMES = {w for w in _RETAIN if w in {"HOH","WAT","DOD","H2O","TIP","TIP3","SOL"}}
-
-# For diagnostics only (not for logic): which entries look like elemental ions
-# We infer “metals/halides” from retain entries that are 1–2 char and in element tables.
 # --- Canonical element tokens (upper-cased 1�2 letter symbols) ---
 def _canonize_two_letter(xs) -> set[str]:
     out = set()
@@ -112,17 +100,23 @@ def _is_retained_ion(resname: str) -> bool:
 # =============================
 # Configuration helpers
 # =============================
-config = load_config()  # load once at import
+# Single unified config load for this module:
+# Priority: environment overrides > config.txt keys > legacy key aliases > defaults.
+try:
+    from input_and_export_functions import load_config, validate_config
+    _CFG = load_config("config.txt")
+    validate_config(_CFG)
+except Exception:
+    # Fallback for older setups
+    from installation import load_config as _legacy_load_config
+    _CFG = _legacy_load_config()
 
-# Case-insensitive lookup with alias support
-# minimal _cfg using your existing installation.load_config()
-import os
-from installation import load_config
-
-_CONFIG = load_config()
+# Keep both names so existing call-sites continue to work, ik this is lazy
+config = _CFG
+_CONFIG = _CFG
 
 def _cfg(key: str, default: str = "", legacy_key: str | None = None) -> str:
-    """env > config (key) > config (legacy_key) > default"""
+    """env > config[key] > config[legacy_key] > default (all coerced to str)"""
     v = os.environ.get(key)
     if v not in (None, ""):
         return v
@@ -132,14 +126,15 @@ def _cfg(key: str, default: str = "", legacy_key: str | None = None) -> str:
         return str(_CONFIG.get(legacy_key))
     return default
 
-PHENIX_DIR         = _cfg("PHENIX_DIR", "", "phenix_dir")
-PHENIX_LIB_PATH    = _cfg("PHENIX_LIB_PATH", "", "phenix_lib_path")
-PHENIX_CLEAN_SCRIPT= _cfg("PHENIX_CLEAN_SCRIPT", "", "phenix_clean_script")
-INPUT_DIR          = _cfg("INPUT_DIR", ".")
+PHENIX_DIR          = _cfg("PHENIX_DIR", "", "phenix_dir")
+PHENIX_LIB_PATH     = _cfg("PHENIX_LIB_PATH", "", "phenix_lib_path")
+PHENIX_CLEAN_SCRIPT = _cfg("PHENIX_CLEAN_SCRIPT", "", "phenix_clean_script")
+INPUT_DIR           = _cfg("INPUT_DIR", ".")
 
-MGLTOOLS_PYTHON         = _cfg("MGLTOOLS_PYTHON", "")
-PREPARE_RECEPTOR_SCRIPT = _cfg("PREPARE_RECEPTOR_SCRIPT", "")
-USE_MEEKO = str(_cfg("USE_MEEKO", "")).lower() in ("1", "true", "yes")
+MGLTOOLS_PYTHON          = _cfg("MGLTOOLS_PYTHON", "")
+PREPARE_RECEPTOR_SCRIPT  = _cfg("PREPARE_RECEPTOR_SCRIPT", "")
+USE_MEEKO                = str(_cfg("USE_MEEKO", "")).lower() in ("1", "true", "yes")
+
 
 # prefer explicit env var; else fall back to obabel on PATH
 OPENBABEL_PATH = os.environ.get("OPENBABEL_PATH") or shutil.which("obabel") or ""
@@ -154,42 +149,43 @@ def _pick_reduce_exe() -> str:
     Choose the actual 'reduce' binary robustly.
     Precedence:
       1) $REDUCE_EXE (env) or config value
-      2) User's local build: /stor/home/mpg2352/atlas/tools/reduce/reduce_src/reduce
+      2) Repo-relative local build: <repo>/tools/reduce/reduce_src/reduce
       3) Phenix conda_base/bin/reduce (next to PHENIX_DIR)
       4) reduce on PATH
-    Avoids 'reduce.python' wrapper entirely.
     """
     # 1) Explicit env/config
-    explicit = (
-        os.environ.get("REDUCE_EXE")
-        or os.environ.get("REDUCE_BIN")
-        or _cfg("REDUCE_EXE", "", "reduce_exe")
-    )
+    explicit = (os.environ.get("REDUCE_EXE") or os.environ.get("REDUCE_BIN") or
+                _cfg("REDUCE_EXE", "", "reduce_exe"))
     if explicit and Path(explicit).exists():
         return explicit
 
-    # 2) Known local build (user-specific)
-    user_local = Path("/stor/home/mpg2352/atlas/tools/reduce/reduce_src/reduce")
-    if user_local.exists() and os.access(str(user_local), os.X_OK):
-        return str(user_local)
+    # 2) Repo-relative (portable)
+    repo_root = Path(__file__).resolve().parent / "tools" / "reduce" / "reduce_src" / "reduce"
+    if repo_root.exists() and os.access(str(repo_root), os.X_OK):
+        return str(repo_root)
 
     # 3) Phenix conda-base candidate near PHENIX_DIR
     if PHENIX_DIR:
-        phenix_root = Path(PHENIX_DIR).resolve().parent  # .../phenix-1.21.2-5419
+        phenix_root = Path(PHENIX_DIR).resolve().parent
         cb = phenix_root / "conda_base" / "bin" / "reduce"
         if cb.exists() and os.access(str(cb), os.X_OK):
             return str(cb)
 
     # 4) PATH fallback
     which = shutil.which("reduce") or shutil.which("reduce.exe")
-    if which:
-        return which
+    return which or "reduce"
 
-    # Last resort (let subprocess resolve; will likely fail clearly)
-    return "reduce"
 
 REDUCE_EXE = _pick_reduce_exe()
 logging.info("Using Reduce at: %s", REDUCE_EXE)
+
+# Default HET dict (repo-relative) if not provided by env/config
+DEFAULT_HET = Path(__file__).resolve().parent / "tools" / "reduce" / "reduce_wwPDB_het_dict.txt"
+def _het_dict_path() -> str | None:
+    hd = os.environ.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT", "")
+    if hd and Path(hd).is_file():
+        return hd
+    return str(DEFAULT_HET) if DEFAULT_HET.is_file() else None
 
 
 import shlex
@@ -624,11 +620,25 @@ def expose_ligand_intermediates_for_debug(src_dir: Union[str, Path],
     """
     Create/refresh a symlink 'link_dir' -> 'src_dir' for easy browsing.
     On Windows, tries directory junction fallback if symlink fails.
+    Quietly skips if the source doesn't exist yet.
     """
     src = Path(src_dir).resolve()
     dst = Path(link_dir)
 
+    # Avoid noise if source not present yet during early prep
+    if not src.exists():
+        logging.debug("intermediates: skip symlink, source missing: %s", src)
+        return
+
+    # Ensure link's parent exists
     try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logging.warning("intermediates: could not ensure parent dir for %s: %s", dst, e)
+        return
+
+    try:
+        # Remove existing link/dir
         if dst.is_symlink() or dst.exists():
             try:
                 if dst.is_symlink():
@@ -638,6 +648,7 @@ def expose_ligand_intermediates_for_debug(src_dir: Union[str, Path],
             except Exception:
                 pass
 
+        # Create link (with Windows junction fallback)
         if os.name == "nt":
             try:
                 os.symlink(src, dst, target_is_directory=True)
@@ -646,9 +657,11 @@ def expose_ligand_intermediates_for_debug(src_dir: Union[str, Path],
                 subprocess.run(cmd, check=True)
         else:
             os.symlink(src, dst, target_is_directory=True)
+
         logging.info("Exposed ligand intermediates: %s -> %s", dst, src)
     except Exception as e:
-        logging.warning("Could not create debug link %s -> %s: %s", dst, src, e)
+        logging.warning("intermediates: could not create symlink %s -> %s: %s", dst, src, e)
+
 
 
 # =============================
@@ -1835,23 +1848,36 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
     default_altloc = (cfg.get("MEEKO_DEFAULT_ALTLOC") or "").strip()  # e.g. "A" or ""
 
     def _meeko_cmd() -> list[str]:
-        # 1) PATH shims (with/without .py)
+        """
+        Build a Meeko CLI command that is portable across machines/environments.
+        Prefer invoking by module with the current interpreter to avoid PATH/script shims.
+        """
+        import sys
+        # First, try module-based invocation (preferred, shim-free)
+        try:
+            import meeko  # noqa: F401
+            return [sys.executable, "-m", "meeko.cli.mk_prepare_receptor"]
+        except Exception:
+            pass
+
+        # Fallbacks (still avoid PATH hassles as much as possible)
+        import shutil, sysconfig, os
+        # 1) PATH (with/without .py)
         for name in ("mk_prepare_receptor", "mk_prepare_receptor.py"):
             exe = shutil.which(name)
             if exe:
                 return [exe]
-        # 2) Scripts directory of the current interpreter
+        # 2) Scripts dir of the current interpreter
         try:
-            import sysconfig, os
             scripts = sysconfig.get_path("scripts")
             cand = os.path.join(scripts, "mk_prepare_receptor.py")
             if os.path.exists(cand):
-                return [sys.executable, cand]  # run via python to be safe
+                return [sys.executable, cand]  # run via python for consistency
         except Exception:
             pass
-        raise FileNotFoundError(
-            "Meeko CLI not found. Try adding the Python 'scripts' dir to PATH or call mk_prepare_receptor.py directly."
-        )
+
+        raise FileNotFoundError("Meeko CLI not found via module or script.")
+
     def _run(cmd: List[str]) -> subprocess.CompletedProcess:
         logging.info("Meeko: %s", " ".join(cmd))
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -1986,12 +2012,31 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
     else:
         meeko_cmd = None
         meeko_cmd_legacy = None
+    # Only attempt ADT if BOTH are explicitly configured and present
+    if not (MGLTOOLS_PYTHON and Path(MGLTOOLS_PYTHON).is_file() and os.access(MGLTOOLS_PYTHON, os.X_OK) and
+            PREPARE_RECEPTOR_SCRIPT and Path(PREPARE_RECEPTOR_SCRIPT).is_file()):
+        logging.info("[receptor] ADT fallback disabled (missing MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT)")
+        return False  # keep modern Meeko as the only path unless ADT is truly configured
 
-    # ADT fallback command (prefer explicit env/config, but still log the exact command we try)
-    mgltools_python = MGLTOOLS_PYTHON or shutil.which("python2") or "python2"
-    prepare_script = PREPARE_RECEPTOR_SCRIPT or "prepare_receptor4.py"
-    adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt, "-A", "none", "-U",
-               "nphs_lps_nonstdres"]
+    # --- Step 3: ADT prepare_receptor4 fallback (only if both keys are valid)
+    adt_ok = False
+    mgltools_python = MGLTOOLS_PYTHON
+    prepare_script = PREPARE_RECEPTOR_SCRIPT
+    if (mgltools_python and Path(mgltools_python).is_file() and os.access(mgltools_python, os.X_OK)
+            and prepare_script and Path(prepare_script).is_file()):
+        adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt,
+                   "-A", "none", "-U", "nphs_lps_nonstdres"]
+        cp = subprocess.run(adt_cmd, capture_output=True, text=True)
+        _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
+        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            logging.info("Prepared receptor with ADT prepare_receptor4.py.")
+            return True
+        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+            head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
+            logging.warning("[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+    else:
+        logging.info("[receptor] ADT fallback disabled (MGLTOOLS_PYTHON/PREPARE_RECEPTOR_SCRIPT not set)")
+    return False
 
     # --- Step 1: Modern Meeko attempt
     if not skip_meeko and meeko_cmd:
@@ -2415,24 +2460,12 @@ def assign_protonation_states(input_pdb: Union[str, Path],
 
     def run_reduce(in_pdb: str, stage_name: str) -> str:
         env = dict(os.environ)
-        # Allow config-provided dict even if user didn't export it
-        het = env.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT", "")
+        het = _het_dict_path()
         if het:
             env["REDUCE_HET_DICT"] = het
-
         with open(output_pdb, "w", encoding="utf-8") as out:
-            cp = subprocess.run([exe] + reduce_flags + [in_pdb],
-                                stdout=out, stderr=subprocess.PIPE, text=True,
-                                cwd=exe_dir, env=env)
-        # Greppable one-liner for every Reduce attempt
-        (logging.info if cp.returncode == 0 else logging.warning)(
-            "[reduce] stage=%s rc=%s flags=%r in=%s stdout_len=%d stderr_len=%d",
-            stage_name, cp.returncode, reduce_flags, in_pdb,
-            len(cp.stdout or "") if hasattr(cp, "stdout") else 0,
-            len(cp.stderr or "") if hasattr(cp, "stderr") else 0,
-        )
-        if cp.returncode != 0:
-            raise RuntimeError(f"{stage_name} reduce failed: {cp.stderr.strip()}")
+            cp = subprocess.run([exe] + reduce_flags + [in_pdb], stdout=out, stderr=subprocess.PIPE, text=True, env=env)
+        logging.warning("[reduce] stage=%s rc=%s stderr_len=%d", stage_name, cp.returncode, len(cp.stderr or ""))
         return output_pdb
 
     status_before, h0, hv0, r0 = hydrogenation_status(input_pdb)

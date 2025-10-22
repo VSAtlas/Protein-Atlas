@@ -336,34 +336,59 @@ def extract_best_score(docked_pdbqt_path):
 # -------------------------
 # Vina config writer
 # -------------------------
-def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job):
+def generate_config(
+    output_dir,
+    pdb_id,
+    receptor_pdbqt,
+    center,
+    box_size,
+    ligand_path,
+    stage,
+    stage_info,
+    cpu_per_job,
+    docked_dir=None,
+):
+    import os
+    from pathlib import Path
+
+    # Where to write the .txt config files
     config_dir = os.path.join(output_dir, "configs", pdb_id, stage)
     os.makedirs(config_dir, exist_ok=True)
 
     ligand_name = os.path.splitext(os.path.basename(ligand_path))[0]
-    out_path = os.path.join(output_dir, "docked", pdb_id, stage, f"{ligand_name}_{stage}.pdbqt")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+    # Decide exactly where Vina should write its PDBQT
+    out_root = docked_dir or os.path.join(output_dir, "docked")
+    out_path = os.path.join(out_root, pdb_id, stage, f"{ligand_name}_{stage}.pdbqt")
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+
+    # Emit a fully self-contained config (now including 'out = ...')
     config_lines = [
         f"receptor = {receptor_pdbqt}",
-        f"ligand = {ligand_path}",
+        f"ligand   = {ligand_path}",
         f"center_x = {center[0]:.3f}",
         f"center_y = {center[1]:.3f}",
         f"center_z = {center[2]:.3f}",
-        f"size_x = {box_size[0]:.3f}",
-        f"size_y = {box_size[1]:.3f}",
-        f"size_z = {box_size[2]:.3f}",
-        f"num_modes = {stage_info['num_modes']}",
-        f"energy_range = {stage_info['energy_range']}",
-        f"exhaustiveness = {stage_info['exhaustiveness']}",
+        f"size_x   = {box_size[0]:.3f}",
+        f"size_y   = {box_size[1]:.3f}",
+        f"size_z   = {box_size[2]:.3f}",
+        f"cpu      = {int(cpu_per_job)}",
+        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
+        f"energy_range   = {int(stage_info.get('energy_range', 4))}",
+        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
+        f"verbosity      = {int(stage_info.get('verbosity', 0))}",
         f"out = {out_path}",
-        f"cpu = {cpu_per_job}",
     ]
+    if "seed" in stage_info:
+        config_lines.append(f"seed = {int(stage_info['seed'])}")
 
-    config_path = os.path.join(config_dir, f"{ligand_name}.txt")
-    with open(config_path, "w") as f:
+    cfg_path = os.path.join(config_dir, f"{ligand_name}_{stage}.txt")
+    with open(cfg_path, "w", encoding="utf-8") as f:
         f.write("\n".join(config_lines))
-    return config_path, out_path
+
+    return cfg_path, out_path
+
+
 
 
 # -------------------------

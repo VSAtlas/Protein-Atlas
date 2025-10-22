@@ -13,6 +13,25 @@ except Exception:  # RDKit optional; name-based still works
     Chem = MurckoScaffold = AllChem = rdMolDescriptors = Descriptors = None
 
 log = logging.getLogger("metabolite_resolver")
+# --- config & optional chemdb aliases ---
+from input_and_export_functions import load_config, validate_config
+_cfg = load_config("config.txt")
+validate_config(_cfg)
+
+# optional chemdb data: prefer external alias/rule tables if available
+try:
+    from chemdb.chem_alias_db import PARENT_ALIASES as _EXT_PARENT_ALIASES
+except Exception:
+    _EXT_PARENT_ALIASES = None
+try:
+    from chemdb.chem_alias_db import NAME_RULES as _EXT_NAME_RULES
+except Exception:
+    _EXT_NAME_RULES = None
+
+# RDKit fingerprint params (keep current defaults)
+_METABO_FP_RADIUS = int(_cfg.get("METABO_FINGERPRINT_RADIUS", 2))
+_METABO_FP_BITS   = int(_cfg.get("METABO_FINGERPRINT_BITS", 2048))
+_USE_SCAFFOLD     = str(_cfg.get("METABO_USE_SCAFFOLD_MATCH", "true")).lower() in ("1","true","yes","on")
 
 # --------------------------
 # Normalization helpers
@@ -97,31 +116,32 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
 # --------------------------
 # Given a metabolite string, propose plausible parent names.
 # Simple and safe rules first; you can extend this list freely.
-_NAME_RULES: List[Tuple[re.Pattern, str]] = [
-    (re.compile(r"\b4[- ]?hydroxy(tamoxifen)\b", re.I), r"\1"),  # 4-hydroxytamoxifen -> tamoxifen
+# prefer external rules/aliases if present; otherwise keep in-file defaults
+_NAME_RULES = _EXT_NAME_RULES or [
+    (re.compile(r"\b4[- ]?hydroxy(tamoxifen)\b", re.I), r"\1"),
     (re.compile(r"\b17[- ]?des?acetyl(\w+)\b", re.I), r"\1"),
     (re.compile(r"\bN[- ]?des?methyl(\w+)\b", re.I), r"\1"),
     (re.compile(r"\bdes?methyl[- ]?(\w+)\b", re.I), r"\1"),
     (re.compile(r"\bO[- ]?des?methyl(\w+)\b", re.I), r"\1"),
-    (re.compile(r"\bN[- ]?oxide\b", re.I), r""),                  # strip suffix
+    (re.compile(r"\bN[- ]?oxide\b", re.I), r""),
     (re.compile(r"\b[- ]?glucuronide\b", re.I), r""),
     (re.compile(r"\b[- ]?sulfate\b", re.I), r""),
     (re.compile(r"\b[- ]?phosphate\b", re.I), r""),
-    (re.compile(r"\bcarboxylic acid\b", re.I), r""),              # e.g., *-acid -> base
+    (re.compile(r"\bcarboxylic acid\b", re.I), r""),
 ]
 
-# Known direct HET/synonym to parent (nice to have for frequent PDBs)
-_KNOWN_PARENT_ALIASES = {
+_KNOWN_PARENT_ALIASES = _EXT_PARENT_ALIASES or {
     "oht":"tamoxifen",
     "4-hydroxytamoxifen":"tamoxifen",
-    "bax": "baxitinib",     # adjust if needed; placeholder
-    "lev": "levofloxacin",  # common PDB 3-letter vs drug
+    "bax": "baxitinib",
+    "lev": "levofloxacin",
     "axi": "axitinib",
     "nil": "nilotinib",
-    "p31": "prostaglandin e1",  # example; change for your use
+    "p31": "prostaglandin e1",
     "pg6": "prostaglandin g2",
     "pge": "prostaglandin e2",
 }
+
 
 def _propose_parent_names(metabolite_like: str) -> List[str]:
     base = metabolite_like or ""
@@ -165,7 +185,7 @@ def _murcko(m: Chem.Mol) -> Optional[str]:
         return None
 
 def _fp(m: Chem.Mol):
-    return AllChem.GetMorganFingerprintAsBitVect(m, radius=2, nBits=2048)
+    return AllChem.GetMorganFingerprintAsBitVect(m, radius=_METABO_FP_RADIUS, nBits=_METABO_FP_BITS)
 
 def _tanimoto(a, b) -> float:
     return rdMolDescriptors.TanimotoSimilarity(a, b)
@@ -177,7 +197,7 @@ def ensure_parent_drugs_for_controls(
     pdb_code: str,
     ligands_raw_dir: str,
     fda_index: LibraryIndex,
-    max_additions: int = 2
+    max_additions: int = int(_cfg.get("METABO_MAX_PARENT_ADDITIONS", 2))
 ) -> List[str]:
     """
     Look at extracted co-crystal ligands for this PDB.
@@ -204,7 +224,7 @@ def ensure_parent_drugs_for_controls(
                     candidates.append((rdk_id, 0.70))  # heuristic score
 
     # pass 2: structure-based scaffold match (RDKit only, if library has SMILES)
-    if Chem and any(rec.smiles for rec in fda_index.id_to_rec.values()):
+    if _USE_SCAFFOLD and Chem and any(rec.smiles for rec in fda_index.id_to_rec.values()):
         for path in raw_files:
             m = None
             try:

@@ -25,8 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import os, capture_pose
-os.environ["DEFER_PYMOL"] = "1"     # optional but nice for consistency
-capture_pose.set_defer_mode(True)   # explicit toggle; no shims needed
+
 
 # Rendering helpers
 from capture_pose import (
@@ -39,8 +38,8 @@ from capture_pose import (
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Config
-from input_and_export_functions import load_inputs, validate_config
-
+from input_and_export_functions import load_inputs, validate_config, load_config
+cfg = load_config()
 # Library resolution helpers
 from metabolite_resolver import (
     ensure_parent_drugs_for_controls,
@@ -60,9 +59,6 @@ from chemdb.chem_alias_db import (
     HARD_FDA_CONTROL_BY_PDB,
     PER_PDB_HINTS,
 )
-
-# Limit simultaneous PyMOL renders (1 by default; override via env PYMOL_PARALLEL)
-_RENDER_LOCK = threading.Semaphore(int(os.environ.get("PYMOL_PARALLEL", "1")))
 
 # Import core pipeline pieces from main.py (reuses logic verbatim)
 from main import (  # noqa: E402
@@ -97,6 +93,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List
 import threading
 from contextlib import contextmanager
+# --- PyMOL deferral & parallelism bootstrap
+_DEFER_DEFAULT = str(os.environ.get("DEFER_PYMOL", "1")).lower() in ("1","true","yes","on")
+capture_pose.set_defer_mode(_DEFER_DEFAULT, queue_path=os.environ.get("PYMOL_DEFER_QUEUE"))
+_RENDER_LOCK = threading.Semaphore(int(os.environ.get("PYMOL_PARALLEL", "1")))
+
 
 @contextmanager
 def _acquire(sem: threading.Semaphore):
@@ -190,6 +191,18 @@ def _enqueue_render_task(*, pdb_id: str, stage_name: str, root_project: str,
         outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
         exclude_resns=sorted(exclude_resns or []),
     )
+    try:
+        label_top_n_res = int(os.environ.get("PYMOL_LABEL_TOP_N_RES") or 5)
+    except (TypeError, ValueError):
+        label_top_n_res = 5
+
+    try:
+        label_cutoff = float(os.environ.get("PYMOL_LABEL_CUTOFF_A") or 5.0)
+    except (TypeError, ValueError):
+        label_cutoff = 5.0
+    viewport_w = int(cfg.get("VIEWPORT_W", 640))
+    viewport_h = int(cfg.get("VIEWPORT_H", 480))
+    viewport = (viewport_w, viewport_h)
     # Three-view(s)
     if ctrl_pose_path:
         _cap._render_three_views_with_pymol(
@@ -214,9 +227,8 @@ def _enqueue_render_task(*, pdb_id: str, stage_name: str, root_project: str,
                 ligand_paths_and_colors=[(ctrl_pose_path, "control", "green"),
                                          (rdk_pose_path, "rdk", "magenta")],
                 outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
-                label_top_n_res=5,
-                label_cutoff=5.0,
             )
+
 
 def run_deferred_renders(max_workers: int) -> None:
     if not _DEFERRED_RENDER_TASKS:
@@ -239,9 +251,10 @@ def _resolve_receptor_for(pdb_id: str, cfg: dict) -> Optional[Path]:
                 Path(cfg["OVERALL_DIR"]).parent / "processed_pdbs").resolve()
     d = base / f"{pdb_id}_NOLIG" / "receptor"
     for pat in [f"{pdb_id}_NOLIG_cleaned.pdb", "*_NOLIG_cleaned.pdb", "*cleaned.pdb"]:
-        c = d / pat
-        if c.exists():
-            return c.resolve()
+        hits = sorted(d.glob(pat))
+        if hits:
+            return hits[0].resolve()
+
     return None
 
 
@@ -250,6 +263,38 @@ def _resolve_receptor_for(pdb_id: str, cfg: dict) -> Optional[Path]:
 # =============================
 # Small text/path helper utils
 # =============================
+
+def _remap_to_scopes(p: Path, scope_dirs: Sequence[Path]) -> Optional[Path]:
+    """
+    Try to relocate file p into one of the chosen scope directories by:
+      (1) exact basename match, else
+      (2) rdk_XXXXXX core match allowing suffixes (e.g., *_stage5).
+    Returns the first in-scope hit or None if not found.
+    """
+    rid = _extract_rdk_id(p.name)  # may be None
+    for root in scope_dirs:
+        # (1) exact basename
+        q = root / p.name
+        if q.is_file():
+            return q.resolve()
+        # (2) rdk id core match
+        if rid:
+            hits = sorted(root.glob(f"*{rid}*.pdbqt"))
+            if hits:
+                return hits[0].resolve()
+    return None
+
+def _any_within(child: Path, parents: Sequence[Path]) -> bool:
+    return any(_path_is_within(child, pr) for pr in parents)
+
+
+
+
+
+
+
+
+
 def _collapse_name_once(p: Path) -> Path:
     # turn "...sanitized.sanitized.xyz" into "...sanitized.xyz"
     return p.with_name(re.sub(r'(?:\.sanitized)+(?=\.)', '.sanitized', p.name))
@@ -543,7 +588,9 @@ class MappingIndex:
         out: List[Tuple[MappingRow, int, str]] = []
 
         for row in self.rows:
-            if not row.path or not Path(row.path).exists():
+            # Keep rows even if the path doesn't exist; the selection phase will
+            # remap into the chosen FDA scope dirs or drop with not_exist/out_of_scope.
+            if not row.path:
                 continue
 
             best = 0
@@ -630,57 +677,26 @@ def _remap_to_prepped(p: Path, prepped_dir: Path) -> Path:
         if hits:
             return hits[0]
     return p  # unchanged if we couldn't remap
-
 def select_candidates_for_protein(
     mapping: MappingIndex,
     hints: Sequence[str],
-    prepped_dir: Path,
+    fda_scope_dirs: Sequence[Path],
     extra_parent_ids: Sequence[str],
     max_candidates: int,
 ) -> List[Tuple[MappingRow, int, str]]:
+    """
+    Build the FDA/RDK candidate list restricted to the union of fda_scope_dirs.
+    Absolute paths in the mapping CSV are treated as hints and remapped into the scope.
+    """
+    scope_dirs = [Path(d).resolve() for d in fda_scope_dirs or []]
     candidates = mapping.search(hints, inchikey=None, max_results=max(6, max_candidates * 4))
 
-    parent_rows: List[Tuple[MappingRow, int, str]] = []
-    prepped_dir_resolved = prepped_dir.resolve()
     cand_rows: List[Tuple[MappingRow, int, str]] = []
+    dropped_not_exist = 0
+    dropped_out_scope = 0
 
-    _d_exist_fail = 0
-    _d_scope_fail = 0
-
-    for row, sc, why in (candidates + parent_rows):
-        p = Path(row.path)
-
-        # NEW: remap to the current prepped_dir if needed
-        p = _remap_to_prepped(p, prepped_dir_resolved)
-
-        # Keep only files that exist *and* live inside prepped_dir
-        if not p.is_file():
-            _d_exist_fail += 1
-            continue
-        if p.resolve().parent != prepped_dir_resolved and not _path_is_within(p, prepped_dir_resolved):
-            _d_scope_fail += 1
-            continue
-
-        cand_rows.append((MappingRow(path=str(p),  # keep the remapped, absolute path
-                                     display_name=row.display_name,
-                                     generic_name=row.generic_name,
-                                     brand_names=row.brand_names,
-                                     pubchem_name=row.pubchem_name,
-                                     pubchem_record_title=row.pubchem_record_title,
-                                     pubchem_iupac_name=row.pubchem_iupac_name,
-                                     pubchem_synonyms=row.pubchem_synonyms,
-                                     rxnorm_generic_name=row.rxnorm_generic_name,
-                                     rxnorm_brand_names=row.rxnorm_brand_names,
-                                     drugcentral_generic_name=row.drugcentral_generic_name,
-                                     drugcentral_brand_names=row.drugcentral_brand_names,
-                                     remark_name=row.remark_name,
-                                     sdf_title=row.sdf_title,
-                                     inchikey=row.inchikey),
-                           sc, why))
-
-    if _d_exist_fail or _d_scope_fail:
-        print(f"[DEBUG] select_candidates: dropped not_exist={_d_exist_fail}, out_of_scope={_d_scope_fail}, kept={len(cand_rows)}")
-
+    # Expand parent (metabolite->parent) hints
+    parent_rows: List[Tuple[MappingRow, int, str]] = []
     for pid in extra_parent_ids or []:
         rid = _extract_rdk_id(pid or "")
         if rid:
@@ -689,22 +705,64 @@ def select_candidates_for_protein(
             for (r, sc, why) in mapping.search([pid], inchikey=None, max_results=2):
                 parent_rows.append((r, max(sc, 92), f"{why}|parent_from_metabolite"))
 
-    # best per path
+    # Best-per-path before fencing
     best_by_path: Dict[str, Tuple[MappingRow, int, str]] = {}
     for row, sc, why in (candidates + parent_rows):
         p_abs = str(Path(row.path).resolve())
         if (p_abs not in best_by_path) or (sc > best_by_path[p_abs][1]):
             best_by_path[p_abs] = (row, sc, why)
 
-    prepped_dir_resolved = prepped_dir.resolve()
-    cand_rows: List[Tuple[MappingRow, int, str]] = []
+    # Fence to scope and remap
+    fenced: List[Tuple[MappingRow, int, str]] = []
     for row, sc, why in best_by_path.values():
         p = Path(row.path)
-        if p.is_file() and _path_is_within(p, prepped_dir_resolved):
-            cand_rows.append((row, sc, why))
+        # Use as-is if in-scope and exists
+        if p.is_file() and _any_within(p.resolve(), scope_dirs):
+            fenced.append((row, sc, why))
+            continue
+        # Otherwise, attempt remap by basename/rdk id into the scope
+        remapped = _remap_to_scopes(p, scope_dirs)
+        if remapped and remapped.is_file() and _any_within(remapped, scope_dirs):
+            new_row = MappingRow(
+                path=str(remapped),
+                display_name=row.display_name,
+                generic_name=row.generic_name,
+                brand_names=row.brand_names,
+                pubchem_name=row.pubchem_name,
+                pubchem_record_title=row.pubchem_record_title,
+                pubchem_iupac_name=row.pubchem_iupac_name,
+                pubchem_synonyms=row.pubchem_synonyms,
+                rxnorm_generic_name=row.rxnorm_generic_name,
+                rxnorm_brand_names=row.rxnorm_brand_names,
+                drugcentral_generic_name=row.drugcentral_generic_name,
+                drugcentral_brand_names=row.drugcentral_brand_names,
+                remark_name=row.remark_name,
+                sdf_title=row.sdf_title,
+                inchikey=row.inchikey,
+            )
+            fenced.append((new_row, sc, why))
+            continue
 
-    cand_rows.sort(key=lambda t: t[1], reverse=True)
-    return cand_rows[:max_candidates]
+        # Count drop reason
+        if not p.exists():
+            dropped_not_exist += 1
+        else:
+            dropped_out_scope += 1
+
+    # Sort and cap
+    fenced.sort(key=lambda t: t[1], reverse=True)
+    kept = fenced[:max_candidates]
+
+    # Debug summary (one line)
+    try:
+        scope_txt = ", ".join(str(s) for s in scope_dirs)
+        print(f"[DEBUG] select_candidates scope=[{scope_txt}] | kept={len(kept)} "
+              f"(dropped: not_exist={dropped_not_exist}, out_of_scope={dropped_out_scope})")
+    except Exception:
+        pass
+
+    return kept
+
 
 def split_controls_and_whitelist(
     whitelist_paths: Sequence[str],
@@ -816,13 +874,14 @@ def run_benchmark_for_protein(
     cfg: Dict,
     mapping: MappingIndex,
     pdb_file: str,
-    prepped_dir: Path,
+    prepped_dir: Path,                  # controls root for this PDB
     out_root: Path,
     exhaustiveness: int,
     num_modes: int,
     max_candidates: int,
     manual_hints: Optional[List[str]] = None,
     fda_index=None,
+    fda_scope_dirs: Optional[Sequence[Path]] = None,
 ) -> None:
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = base_id.replace("_cleaned", "").upper()
@@ -997,9 +1056,11 @@ def run_benchmark_for_protein(
 
     # 3) Detect pocket (main logic)
     center, detected_box, src = detect_pocket(cleaned_pdb, paths.ligand_output_dir, logger)
+    # honor BOX_SIZE_MAX_A from config (default 28.0)
+    box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
     if center:
         pockets = [("pocket1", center)]
-        box_size = tuple(min(28.0, float(s)) for s in (detected_box or (24.0, 24.0, 24.0)))
+        box_size = tuple(min(box_cap, float(s)) for s in (detected_box or (24.0, 24.0, 24.0)))
     else:
         logger.error("[benchmark] no pocket could be detected; skipping protein")
         return
@@ -1033,17 +1094,22 @@ def run_benchmark_for_protein(
     final_hints = _merge_per_pdb_hints(pdb_id, final_hints)
 
     logger.info("[DEBUG] hint_count=%d | examples=%s", len(final_hints), ", ".join(map(str, final_hints[:8])))
-    # 5) Candidate selection
-    search_root = Path(cfg.get("PREPPED_LIGANDS_DIR", str(prepped_dir)))
+    # 5) Candidate selection (now fenced to multi-scope)
+    scope_dirs = [Path(d).resolve() for d in (fda_scope_dirs or [])]
+    if not scope_dirs:
+        # Fallback to default fda_library under PREPPED_ROOT if not provided
+        default = Path(cfg.get("OUTPUT_LIGANDS_DIR", str(prepped_dir))).resolve() / "fda_library"
+        scope_dirs = [default]
+
     cand_rows = select_candidates_for_protein(
         mapping=mapping,
         hints=final_hints,
-        prepped_dir=search_root, 
+        fda_scope_dirs=scope_dirs,
         extra_parent_ids=extra_parent_ids,
         max_candidates=max_candidates,
     )
-    cand_rows.sort(key=lambda t: t[1], reverse=True)
-    logger.info("[DEBUG] select_candidates scope=%s | kept=%d", str(search_root), len(cand_rows))
+    logger.info("[DEBUG] select_candidates scope=%s | kept=%d",
+                [str(s) for s in scope_dirs], len(cand_rows))
 
     # Force _NOLIG form for consistency
     cleaned = Path(paths.cleaned_pdb_path)
@@ -1079,10 +1145,13 @@ def run_benchmark_for_protein(
         )
         return ctrl, rdk
 
+    STAGE_NAME = str(cfg.get("BENCH_STAGE_NAME", "bench_pocket1_single"))
 
-    STAGE_NAME = "bench_pocket1_single"
-
-    def _pick_best_control_and_rdk_in_stage(pdb_id: str, root_project: str) -> Tuple[Optional[Path], Optional[Path]]:
+    def _pick_best_control_and_rdk_in_stage(
+            pdb_id: str,
+            root_project: str,
+            stage_name: str | None = None
+    ) -> Tuple[Optional[Path], Optional[Path]]:
         """
         Controls (your examples):
           P30_B1001.sanitized_bench_pocket1_single.best.pdb
@@ -1094,32 +1163,42 @@ def run_benchmark_for_protein(
         RDK (your example):
           rdk_0002967_bench_pocket1_single.pdbqt
         """
-        stage_dir = Path(root_project) / "docked" / pdb_id / STAGE_NAME
+        stage_name = stage_name or STAGE_NAME
+        logger.info("[render-pick] using stage_name=%s", stage_name)
+
+        stage_dir = Path(root_project) / "docked" / pdb_id / stage_name
         if not stage_dir.is_dir():
             return None, None
 
-        def _first_by_mtime(patterns):
-            hits = []
-            for pat in patterns:
-                hits.extend(glob.glob(str(stage_dir / pat)))
-            if not hits:
-                return None
-            hits.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
-            return Path(hits[0])
+        def _first(globpat: str) -> Optional[Path]:
+            hits = sorted(glob.glob(globpat))
+            return Path(hits[0]) if hits else None
 
-        # Controls: all are *.pdb, and they always contain "bench_pocket1_single.best"
-        # Names vary a lot before that token, sometimes include ".sanitized" once.
+        # control: crystal/control poses
         ctrl_patterns = [
-            "*bench_pocket1_single.best.pdb",  # catches both sanitized and non-sanitized variants
+            f"*{stage_name}.best.pdb",
+            f"*control*best*.pdbqt",
+            f"*CONTROL*best*.pdbqt",
+            f"*control*.pdbqt",
         ]
-        ctrl = _first_by_mtime(ctrl_patterns)
+        ctrl = None
+        for pat in ctrl_patterns:
+            ctrl = _first(str(stage_dir / pat))
+            if ctrl:
+                break
 
-        # RDK: *.pdbqt, prefixed with rdk_, sometimes with/without ".best" token.
+        # rdk: library match (nearest / selected)
         rdk_patterns = [
-            "rdk_*_bench_pocket1_single.best.pdbqt",  # prefer explicit .best if present
-            "rdk_*_bench_pocket1_single*.pdbqt",  # fallback (covers files without .best)
+            f"*rdk*best*.pdbqt",
+            f"*RDK*best*.pdbqt",
+            f"*rdk*.pdbqt",
+            f"rdk*{stage_name}*.pdbqt",
         ]
-        rdk = _first_by_mtime(rdk_patterns)
+        rdk = None
+        for pat in rdk_patterns:
+            rdk = _first(str(stage_dir / pat))
+            if rdk:
+                break
 
         return ctrl, rdk
 
@@ -1128,12 +1207,9 @@ def run_benchmark_for_protein(
     # Audit
     out_dir = Path(out_root) / pdb_id
     # Pick representative poses (best control + best rdk) from this protein's outputs
-    STAGE_NAME = "bench_pocket1_single"
-    ctrl_pose, rdk_pose = _pick_best_control_and_rdk_in_stage(
-        pdb_id=pdb_id,
-        root_project=str(Path(cfg["OVERALL_DIR"]).resolve()),
-    )
-    # in benchmark_mode.py, right before _enqueue_render_task(...)
+    ctrl_pose, rdk_pose = _pick_best_control_and_rdk_in_stage(pdb_id, str(Path(cfg["OVERALL_DIR"]).resolve()),
+                                                              STAGE_NAME)
+
     logger.info("[render-enqueue] %s %s: receptor=%s | orig=%s | ctrl=%s | rdk=%s",
                 pdb_id, STAGE_NAME, paths.cleaned_pdb_path, paths.pdb_path,
                 ctrl_pose, rdk_pose)
@@ -1232,11 +1308,11 @@ def run_benchmark_for_protein(
             heavy_atom_counts=heavy_atom_counts,
             initial_center=center,
         )
-        box_size: Tuple[float, float, float] = tuple(min(28.0, float(s)) for s in (24.0, 24.0, 24.0))
-        # prefer detect_pocket size
-        box_size = tuple(min(28.0, float(s)) for s in (box_size if not isinstance(center, tuple) else box_size))
+        # use BOX_SIZE_MAX_A from config (default 28.0) for all clamps in this loop
+        box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
+        box_size: Tuple[float, float, float] = tuple(min(box_cap, float(s)) for s in (24.0, 24.0, 24.0))
         if 'detected_box' in locals():
-            box_size = tuple(min(28.0, float(s)) for s in (detected_box or box_size))
+            box_size = tuple(min(box_cap, float(s)) for s in (detected_box or box_size))
 
         # Ligand pool
         ctrls, non_ctrls = split_controls_and_whitelist(
@@ -1576,8 +1652,8 @@ def run_benchmark_for_protein(
                                     ligand_paths_and_colors=[(ctrl_pose_path, "control", "blue"),
                                                              (rdk_pose_path, "rdk_closest", "orange")],
                                     outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
-                                    label_top_n_res=5,
-                                    label_cutoff=5.0,
+                                    label_top_n_res=label_top_n_res,
+                                    label_cutoff=label_cutoff,
                                 )
 
             scores_only = [rec.get("score") for rec in results.values() if isinstance(rec.get("score"), (int, float))]
@@ -1655,19 +1731,19 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--prepped", default=None)
     p.add_argument("--mapping", default=None)
     p.add_argument("--max-candidates", type=int, default=9)
-    p.add_argument("--exhaustiveness", type=int, default=10)
-    p.add_argument("--num-modes", type=int, default=10)
+    p.add_argument("--exhaustiveness", type=int, default=1)
+    p.add_argument("--num-modes", type=int, default=1)
     p.add_argument("--hints", help="Optional manual comma-separated hints (e.g., 'imatinib,STI571')")
 
     # Outer (proteins) parallelism
     p.add_argument(
         "--jobs",
         type=int,
-        default=max(1, (os.cpu_count() or 4) // 2),
+        default=max(1, (os.cpu_count() or 4)),
         help="Number of proteins to process in parallel",
     )
 
-    # New CPU/parallel shaping flags
+    #  CPU/parallel shaping flags
     p.add_argument(
         "--total-cpus",
         type=int,
@@ -1717,6 +1793,17 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--analysis-no-identity", action="store_true", help="Exclude identity-match from scoring.")
     p.add_argument("--analysis-out", default=None, help="Optional output dir for analysis CSVs.")
     p.add_argument("--only-pdb", default=None, help="Comma-separated PDB IDs to dock, e.g. '6GQO,4XUF'.")
+    p.add_argument(
+        "--ligands-folder",
+        dest="ligands_folders",
+        action="append",
+        default=None,
+        help=("Limit FDA/RDK search to this subfolder of PREPPED_ROOT (repeatable). "
+              "Default: fda_library. Examples: "
+              "--ligands-folder fda_library2  "
+              "--ligands-folder fda_library --ligands-folder fda_new"),
+    )
+
     return p
 
 
@@ -1788,6 +1875,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     # Load YAML config first so we can use BRCF paths by default
     cfg = load_inputs()
     validate_config(cfg)
+    # Re-apply deferral and render parallelism using config + env override
+    _defer = str(os.environ.get("DEFER_PYMOL", "") or cfg.get("DEFER_PYMOL", "1")).lower() in ("1", "true", "yes", "on")
+    capture_pose.set_defer_mode(_defer, queue_path=os.environ.get("PYMOL_DEFER_QUEUE") or cfg.get("PYMOL_DEFER_QUEUE"))
+
+    global _RENDER_LOCK
+    _RENDER_LOCK = threading.Semaphore(
+        int(os.environ.get("PYMOL_PARALLEL", str(cfg.get("PYMOL_PARALLEL", 1))))
+    )
 
     # Helper: first existing path in a list (returns Path or None)
     def _first_existing(*cands) -> Optional[Path]:
@@ -1803,9 +1898,36 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     input_dir = Path(args.input_dir or cfg.get("INPUT_DIR", ""))
     out_root  = Path(args.out_root  or cfg.get("DOCKED_DIR") or cfg.get("OUTPUT_DIR", ""))
     prepped   = Path(args.prepped   or cfg.get("OUTPUT_LIGANDS_DIR", ""))
+    # FDA scope resolution from CLI (default: ['fda_library'])
+    lig_folders = args.ligands_folders if args.ligands_folders else ["fda_library"]
+    fda_scope_dirs: List[Path] = []
+
+    _missing: List[str] = []
+    for name in lig_folders:
+        cand = (prepped / name).resolve()
+        if cand.is_dir():
+            fda_scope_dirs.append(cand)
+        else:
+            _missing.append(str(cand))
+
+    if _missing:
+        print(f"[benchmark] WARN: missing FDA scope folders ({len(_missing)}):")
+        for m in _missing:
+            print(f"  - {m}")
+
+    if not fda_scope_dirs:
+        print("[benchmark] WARN: no valid FDA scope dirs; will run controls only.")
+    else:
+        print("[DEBUG] FDA scope dirs:", [str(d) for d in fda_scope_dirs])
+        # Optional quick inventory per scope dir
+        for d in fda_scope_dirs:
+            try:
+                n = len(list(Path(d).glob("*.pdbqt")))
+                print(f"[DEBUG] in-scope files: {d} -> {n} *.pdbqt")
+            except Exception:
+                pass
 
     # 2) Resolve mapping CSV in priority order
-    brcf_fixed_mapping = Path("/stor/home/mpg2352/atlas/code/protein_automation/fda_mapping_from_pdbqt.csv")
     mapping_path = (
         Path(args.mapping) if args.mapping else
         _first_existing(
@@ -1813,7 +1935,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             prepped / "fda_mapping_from_pdbqt.csv",
             Path(cfg.get("OVERALL_DIR", Path(out_root).parent if out_root else Path.cwd())) / "fda_mapping_from_pdbqt.csv",
             Path.cwd() / "fda_mapping_from_pdbqt.csv",
-            brcf_fixed_mapping,
         )
     )
 
@@ -1839,8 +1960,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             f"    {prepped / 'fda_mapping_from_pdbqt.csv'}\n"
             f"    {Path(cfg.get('OVERALL_DIR', Path(out_root).parent)) / 'fda_mapping_from_pdbqt.csv'}\n"
             f"    {Path.cwd() / 'fda_mapping_from_pdbqt.csv'}\n"
-            f"    {brcf_fixed_mapping}\n"
-            "  Fix by passing --mapping /path/to/fda_mapping_from_pdbqt.csv or setting FDA_MAPPING_CSV in your YAML."
+            "  Fix by passing --mapping /path/to/fda_mapping_from_pdbqt.csv or setting FDA_MAPPING_CSV in your config.txt."
         )
         return
 
@@ -1920,12 +2040,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             hints.extend(CHEMCOMP_ALIAS.get(het.upper(), []))
         if manual_hints:
             hints.extend(manual_hints)
+
+        # prescan estimate uses fenced FDA scope
         try:
             est = len(select_candidates_for_protein(
                 mapping=mapping,
                 hints=hints,
-                prepped_dir=prepped,
-                extra_parent_ids=[],            # keep fast
+                fda_scope_dirs=fda_scope_dirs,  # <<< fence to chosen FDA folders
+                extra_parent_ids=[],  # keep fast
                 max_candidates=int(args.max_candidates),
             ))
         except Exception:
@@ -1958,9 +2080,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             max_candidates=int(args.max_candidates),
             manual_hints=manual_hints,
             fda_index=fda_index,
+            fda_scope_dirs=fda_scope_dirs,  
         )
         return pdb_file
-
 
     import traceback
 
@@ -2023,11 +2145,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             return default
 
     from capture_pose import replay_deferred_jobs_mp
-    workers = _int_env("PYMOL_RENDER_WORKERS", 30)
-    workers = 30 #max(1, min(workers, min(4, os.cpu_count() or 2)))
-    mode = os.environ.get("PYMOL_RENDER_MODE", "cli").lower()
+    workers = _int_env("PYMOL_RENDER_WORKERS", int(cfg.get("PYMOL_RENDER_WORKERS", 30)))
+    mode = (os.environ.get("PYMOL_RENDER_MODE") or str(cfg.get("PYMOL_RENDER_MODE", "cli"))).lower()
     print(f"[render] replaying capture_pose queue with workers={workers} mode={mode}")
-    capture_pose.replay_deferred_jobs_mp(max_workers=workers, mode="cli")
+    capture_pose.replay_deferred_jobs_mp(max_workers=workers, mode=mode)
+
+    score_tol = float(cfg.get("SCORE_TOL_KCAL", args.analysis_score_tol))
+    center_tol = float(cfg.get("CENTER_TOL_A", args.analysis_center_tol))
+    rmsd_tol = float(cfg.get("RMSD_TOL_A", args.analysis_rmsd_tol))
+    out_dir = Path(cfg.get("BENCH_ANALYSIS_OUTDIR") or (args.analysis_out or "")) if (
+                cfg.get("BENCH_ANALYSIS_OUTDIR") or args.analysis_out) else None
 
     # ----- Post-run analysis -----
     if args.run_analysis:
@@ -2036,14 +2163,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             print(f"[analysis] Docked root not found at {docked_root} - skipping.")
         else:
             details, summary = _run_auto_analysis(
-                docked_root=docked_root,
+                docked_root=Path(cfg["DOCKED_DIR"]),
                 mapping_csv=Path(mapping_path),
-                only_pdb=(args.analysis_only_pdb or None),
-                score_tol=float(args.analysis_score_tol),
-                center_tol=float(args.analysis_center_tol),
-                rmsd_tol=float(args.analysis_rmsd_tol),
+                only_pdb=args.analysis_only_pdb,
+                score_tol=score_tol,
+                center_tol=center_tol,
+                rmsd_tol=rmsd_tol,
                 include_identity=not bool(args.analysis_no_identity),
-                out_dir=(Path(args.analysis_out) if args.analysis_out else None),
+                out_dir=out_dir,
             )
             if details and summary:
                 print(f"[analysis] ✅ Details: {details}")

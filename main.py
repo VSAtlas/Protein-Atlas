@@ -912,8 +912,16 @@ def run_one_stage(
                 stage_for_cfg["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
 
                 conf_path, out_path = generate_config(
-                    cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
-                    lig, stage["name"], stage_for_cfg, threads_per_vina
+                    cfg["OVERALL_DIR"],
+                    pdb_id,
+                    receptor_pdbqt,
+                    center,
+                    box_size,
+                    lig,
+                    stage["name"],
+                    stage_for_cfg,
+                    threads_per_vina,
+                    docked_dir=cfg["DOCKED_DIR"],
                 )
 
                 lig_n, out_n = norm(lig), norm(out_path)
@@ -1032,10 +1040,17 @@ def run_one_stage(
                                 stage_retry["exhaustiveness"] = max(8, ex0 * ex_mult)
 
                                 conf_path2, out_path2 = generate_config(
-                                    cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, center, box_size,
-                                    lig, stage_retry["name"], stage_retry, threads_per_vina
+                                    cfg["OVERALL_DIR"],
+                                    pdb_id,
+                                    receptor_pdbqt,
+                                    center,
+                                    box_size,
+                                    lig,
+                                    stage_retry["name"],
+                                    stage_retry,
+                                    threads_per_vina,
+                                    docked_dir=cfg["DOCKED_DIR"],
                                 )
-
                                 if guard.expired():
                                     invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
                                     processed += 1
@@ -1135,13 +1150,22 @@ def run_one_stage(
                                     retry_center = new_c
                             if "box_pad_delta" in recipe and isinstance(recipe["box_pad_delta"], (int, float)):
                                 dx = float(recipe["box_pad_delta"])
-                                retry_box = tuple(min(28.0, s + dx) for s in box_size)
+                                box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
+                                retry_box = tuple(min(box_cap, s + dx) for s in box_size)
                         except Exception as _e:
                             logger.warning(f"Retry recenter/box tweak failed: {_e}")
 
                         conf_path3, out_path3 = generate_config(
-                            cfg["OVERALL_DIR"], pdb_id, receptor_pdbqt, retry_center, retry_box,
-                            lig, stage_retry2["name"], stage_retry2, threads_per_vina
+                            cfg["OVERALL_DIR"],
+                            pdb_id,
+                            receptor_pdbqt,
+                            retry_center,
+                            retry_box,
+                            lig,
+                            stage_retry2["name"],
+                            stage_retry2,
+                            threads_per_vina,
+                            docked_dir=cfg["DOCKED_DIR"],  
                         )
                         try:
                             _, score_r = run_docking_task(cfg["VINA_EXE"], conf_path3, lig, out_path3)
@@ -1242,7 +1266,8 @@ def early_recenter_decision(
 
     # Prefer a single mild box expand over recenter
     if params.ALLOW_BOX_EXPAND and (0.55 <= far_ratio < params.EARLY_RECENTER_RATIO) and (9.0 <= med_dist < params.EARLY_RECENTER_MEDIAN_A) and (valid_count == 0):
-        new_box = tuple(min(28.0, s + 4.0) for s in box_size)
+        box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
+        new_box = tuple(min(box_cap, s + 4.0) for s in box_size)
         if new_box != box_size:
             logger.info(
                 f"Borderline far_ratio={far_ratio:.2f}, median={med_dist:.1f} A -> "
@@ -1268,7 +1293,7 @@ def early_recenter_decision(
         )
         if new_center is not None:
             attempts_used += 1
-            new_box = tuple(min(28.0, s) for s in box_size)
+            new_box = tuple(min(float(cfg.get("BOX_SIZE_MAX_A", 28.0)), s) for s in box_size)
             guard.mark_switch()  # counts as a global switch
             logger.info("Re-running stage1 with new center and tightened box. [global switch]")
             return True, new_center, new_box, stage1_original[:], attempts_used
@@ -1365,7 +1390,7 @@ def fallback_recentering_if_empty(
         logger.warning("Fallback recovery failed.")
         return False, center, box_size, []
 
-    new_box = tuple(min(28.0, s) for s in box_size)
+    new_box = tuple(min(float(cfg.get("BOX_SIZE_MAX_A", 28.0)), s) for s in box_size)
     guard.mark_switch()  # counts as a global switch
     logger.info("Re-running stage1 with new center after no-valid fallback. [global switch]")
     return True, new_center, new_box, stage1_original[:]
@@ -1927,9 +1952,15 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     if center is None:
         return
 
+    # Override control-box size from config (keeps existing 24 Å default)
+    if center_source == "control":
+        side = float(cfg.get("CONTROL_BOX_A", 24.0))
+        box_size = (side, side, side)
+
     # clamp initial box once to keep Vina happy (detect_pocket already caps P2Rank path)
-    box_size = tuple(min(28.0, float(s)) for s in box_size)
-    logger.info(f"Initial box clamped to {box_size} (cap=28 Å)")
+    box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
+    box_size = tuple(min(box_cap, float(s)) for s in box_size)
+    logger.info(f"Initial box clamped to {box_size} (cap={box_cap} Å)")
 
     # explicit console breadcrumb so you don't need to open logs
     try:

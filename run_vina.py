@@ -6,9 +6,68 @@ from pathlib import Path
 from typing import Tuple, Optional, List
 
 from input_and_export_functions import extract_best_score
+try:
+    from input_and_export_functions import load_config, validate_config
+    _CFG = load_config("config.txt")
+    validate_config(_CFG)
+except Exception:
+    _CFG = {}
+    
+    
+    
+    
+    
+import io
 
+_SCORE_LINE = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+_MODEL_START = re.compile(r"^\s*MODEL\b", re.IGNORECASE)
+
+def _extract_best_score_robust(pdbqt_path: str) -> tuple[float|None, int]:
+    """
+    Robust score scan that tolerates spacing/case/line-endings and multi-MODEL files.
+    Returns (best_energy, n_models_seen).
+    """
+    p = Path(pdbqt_path)
+    if not p.exists() or p.stat().st_size < 32:
+        return None, 0
+    best = None
+    n_models = 0
+    try:
+        with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+            buf = []
+            saw_model_tag = False
+            for ln in fh:
+                if _MODEL_START.match(ln):
+                    # new model begins
+                    if buf:
+                        n_models += 1
+                    buf = [ln]
+                    saw_model_tag = True
+                else:
+                    buf.append(ln)
+                # Examine every line for a score marker
+                m = _SCORE_LINE.search(ln)
+                if m:
+                    try:
+                        e = float(m.group(1))
+                        if (best is None) or (e < best):
+                            best = e
+                    except Exception:
+                        pass
+            # count last unclosed model if we saw any MODEL tag
+            if saw_model_tag:
+                n_models += 1
+    except Exception:
+        return None, n_models
+    # If no explicit MODEL tags, treat file as single model (n_models=1)
+    if n_models == 0:
+        n_models = 1
+    return best, n_models
+
+    
+    
 # ----------------------------
-# Selection helper (kept here to match your current imports)
+# Selection helper 
 # ----------------------------
 def select_for_next_stage(docking_mode, i, stages, scores, logger):
     """
@@ -18,12 +77,21 @@ def select_for_next_stage(docking_mode, i, stages, scores, logger):
     if not scores:
         return []
 
-    percentages = {
-        "discovery": [1.0, 0.1, 0.01, 0.001, 0.001],
-        "polypharmacology": [1.0, 0.05, 0.005],
-    }.get(docking_mode, [1.0] * len(stages))
+    def _parse_pcts(val, default_list):
+        if isinstance(val, (list, tuple)): return [float(x) for x in val]
+        if isinstance(val, str) and val.strip():
+            try:
+                return [float(x) for x in val.split(",")]
+            except Exception:
+                return default_list
+        return default_list
 
-    pct = percentages[i + 1] if i + 1 < len(percentages) else 0.01
+    disc_default = [1.0, 0.1, 0.01, 0.001, 0.001]
+    poly_default = [1.0, 0.05, 0.005]
+    disc = _parse_pcts(_CFG.get("DISCOVERY_SELECTION_PCTS", disc_default), disc_default)
+    poly = _parse_pcts(_CFG.get("POLYPHARM_SELECTION_PCTS", poly_default), poly_default)
+    percentages = {"discovery": disc, "polypharmacology": poly}.get(docking_mode, [1.0] * len(stages))
+    pct = percentages[i + 1] if i + 1 < len(percentages) else 0.0
     num_to_select = int(len(scores) * pct)
     if num_to_select < 1:
         logger.warning(f"Percentage {pct*100:.5f}% yielded <1 ligand. Using best-scoring ligand.")
@@ -47,8 +115,11 @@ _ERR_PAT = re.compile(
 )
 
 def _should_filter_stdout() -> bool:
-    v = os.environ.get("FILTER_VINA_STDOUT", "").strip().lower()
-    return v in {"1", "true", "yes", "on"}
+    v = os.environ.get("FILTER_VINA_STDOUT")
+    if v is not None:
+        return v.strip().lower() in {"1","true","yes","on"}
+    return str(_CFG.get("FILTER_VINA_STDOUT", "false")).strip().lower() in {"1","true","yes","on"}
+
 
 def _maybe_print_useful_lines(stdout: str, stderr: str) -> None:
     """
@@ -65,8 +136,14 @@ def _maybe_print_useful_lines(stdout: str, stderr: str) -> None:
                 print(f"[vina:{label}] {ln}")
 
 def _get_timeout() -> Optional[int]:
+    v = os.environ.get("VINA_TIMEOUT_SEC")
+    if v not in (None, ""):
+        try:
+            t = int(v);  return t if t > 0 else None
+        except Exception:
+            return None
     try:
-        t = int(os.environ.get("VINA_TIMEOUT_SEC", "0"))
+        t = int(_CFG.get("VINA_TIMEOUT_SEC", 0))
         return t if t > 0 else None
     except Exception:
         return None
@@ -75,46 +152,59 @@ def _get_timeout() -> Optional[int]:
 # ----------------------------
 # Run a single docking task
 # ----------------------------
-def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path: str) -> Tuple[str, Optional[float]]:
+def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path: str):
     """
-    Runs Vina with a prepared config file.
-    - Captures stdout/stderr.
-    - Optionally filters out banner/progress noise (FILTER_VINA_STDOUT=1).
-    - Optional timeout via VINA_TIMEOUT_SEC env var.
-    - Returns (ligand_name, best_score or None).
+    Runs Vina with a prepared config file and extracts the best score.
+    Returns (ligand_name, best_score or None).
     """
     try:
-        if not Path(vina_exe).exists():
-            raise FileNotFoundError(f"[!] AutoDock Vina not found at: {vina_exe}")
+        from shutil import which
+        from pathlib import Path
+
         if not Path(config_path).exists():
             raise FileNotFoundError(f"[!] Vina config not found at: {config_path}")
 
-        # Run vina
+        # Resolve vina_exe: absolute path OR on PATH
+        resolved_exe = vina_exe
+        if not Path(resolved_exe).exists():
+            found = which(vina_exe)
+            if not found:
+                raise FileNotFoundError(f"[!] AutoDock Vina not found (VINA_EXE='{vina_exe}', not a file and not on PATH)")
+            resolved_exe = found
+
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+
         timeout = _get_timeout()
+        print(f"[vina-call] exe={resolved_exe} cfg={config_path} out={out_path}")
+
         proc = subprocess.run(
-            [vina_exe, "--config", config_path],
+            [resolved_exe, "--config", config_path, "--out", out_path],
             text=True,
-            capture_output=True,   # capture so we can filter noise
+            capture_output=True,
             timeout=timeout,
-            check=False,           # handle return codes ourselves to still extract scores when possible
+            check=False,
         )
 
-        # Optionally print only interesting lines
+
         if _should_filter_stdout():
             _maybe_print_useful_lines(proc.stdout, proc.stderr)
-        else:
-            # Fall back to original behavior: show full stderr only if nonzero exit
-            if proc.returncode != 0 and proc.stderr:
-                print(proc.stderr)
+        elif proc.returncode != 0 and proc.stderr:
+            print(proc.stderr)
 
-        # If Vina failed, still try to parse score (file might exist/contain partial output)
         if proc.returncode != 0:
-            # Surface a compact failure line
             msg = proc.stderr.strip().splitlines()[-1] if proc.stderr else f"Return code {proc.returncode}"
             print(f"Docking failed for {ligand_name}: {msg}")
 
-        # Extract best score (if pose file exists)
+        # Primary parse using project helper
         score = extract_best_score(out_path)
+
+        # Hardened fallback: tolerant scan across all MODEL blocks
+        if score is None:
+            robust_score, n_models = _extract_best_score_robust(out_path)
+            score = robust_score
+            if score is None:
+                print(f"[parser] {ligand_name} no Vina score found in {out_path} (models_in_file={n_models})")
+
         return ligand_name, score
 
     except subprocess.TimeoutExpired:
@@ -126,6 +216,7 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
     except Exception as e:
         print(f"Docking crashed for {ligand_name}: {e}")
         return ligand_name, None
+
 
 
 # ----------------------------
@@ -160,6 +251,10 @@ def validate_all_poses(
     best_valid_score: Optional[float] = None
     best_valid_model: Optional[Path] = None
     temp_paths: List[Path] = []
+    clash_thr = float(_CFG.get("POSE_CLASH_THRESHOLD_A", 2.0))
+    clash_tol = int(_CFG.get("POSE_CLASH_TOLERANCE", 3))
+    dmax_surf = float(_CFG.get("POSE_DIST_SURFACE_MAX_A", 6.0))
+    dmax_cent = float(_CFG.get("POSE_DIST_CENTROID_MAX_A", 4.5))
 
     try:
         for i, model_lines in enumerate(models):
@@ -172,10 +267,10 @@ def validate_all_poses(
                 protein_pdbqt=str(receptor_pdbqt),
                 ligand_pdbqt=str(temp_path),
                 pocket_center=center,
-                clash_threshold=2.0,
-                CLASH_TOLERANCE=3,
-                DIST_THRESHOLD_SURFACE=6.0,
-                DIST_THRESHOLD_CENTROID=4.5,
+                clash_threshold=clash_thr,
+                CLASH_TOLERANCE=clash_tol,
+                DIST_THRESHOLD_SURFACE=dmax_surf,
+                DIST_THRESHOLD_CENTROID=dmax_cent,
                 surface_atom_coords=surface_coords,
             )
 

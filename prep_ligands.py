@@ -12,6 +12,7 @@ from datetime import datetime
 import shutil
 from collections import defaultdict
 import argparse
+from input_and_export_functions import load_config, validate_config
 
 from activesite import (
     fix_pdb_elements,
@@ -35,8 +36,11 @@ try:
 except Exception:
     _std = None
     _HAS_STD = False
-LIGPREP_PH=7.4
-KEEP_NONPOLAR_H=1
+    
+    
+LIGPREP_PH = 7.4
+KEEP_NONPOLAR_H = 1
+OBABEL_TIMEOUT_S = 900
 STANDARD_AMINO_ACIDS = {
     "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
     "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
@@ -44,17 +48,17 @@ STANDARD_AMINO_ACIDS = {
 }
 
 # Exclude common crystallization additives/buffers/metals (+ porphyrins / modified residues)
-EXCLUDE_CRYSTAL_ADDITIVES = {
-    "HOH", "CIT", "TAR", "SO4", "PO4", "CA", "NA", "K", "MG", "MN", "ZN",
-    "GOL", "EDO", "PEG", "MPD", "TRS", "MES", "HEPES", "ACET", "ACT", "FMT",
-    "MAL", "DMS", "IPA", "CLU", "NAG", "BOG",
-    # common counter-ion/salt codes
-    "TOS", "BES", "PTS", "OTF", "TRF", "TFA", "BF4", "PF6", "CL", "BR", "I",
-    # porphyrins / heme family often not intended as small-mol ligands
-    "HEM", "HEC", "HEA", "HEB", "HEO", "HEG", "HEF", "HEH",
-    # phosphorylated residues frequently side-chain mods, not ligands to dock
-    "PTR", "TPO", "SEP"
-}
+try:
+    # Prefer chemdb if available
+    from chemdb.chem_alias_db import EXCLUDE_HET_IDS as EXCLUDE_CRYSTAL_ADDITIVES
+except Exception:
+    EXCLUDE_CRYSTAL_ADDITIVES = {
+        "HOH","CIT","TAR","SO4","PO4","CA","NA","K","MG","MN","ZN","GOL","EDO","PEG","MPD","TRS",
+        "MES","HEPES","ACET","ACT","FMT","MAL","DMS","IPA","CLU","NAG","BOG","TOS","BES","PTS","OTF",
+        "TRF","TFA","BF4","PF6","CL","BR","I","HEM","HEC","HEA","HEB","HEO","HEG","HEF","HEH","PTR",
+        "TPO","SEP"
+    }
+
 
 # --- Salvage / logging config ---
 RUN_TAG = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -76,6 +80,8 @@ USE_RDKIT_FOR_3D = True
 OBABEL_THREADS = 50
 OBABEL_TIMEOUT_S = 900
 CHUNK_SIZE = 200
+
+
 # --------------------------------------
 
 # --- salt remover (fallback path also uses this) ---
@@ -2616,10 +2622,18 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
     prepped_ligands_dir.mkdir(parents=True, exist_ok=True)
     status_log = prepped_ligands_dir / "ligand_prep_status.tsv"
 
-    # Intermediates for easier debugging + symlink back to source dir
+    # Intermediates for easier debugging + symlink back to source dir (per-protein; no cfg)
     try:
-        inter_dir = prepped_ligands_dir / "intermediates"
+        inter_dirname = "intermediates"
+        ref_dirname = "reference"
+        quar_dirname = "quarantine"
+        inter_dir = prepped_ligands_dir / inter_dirname
+        ref_dir = prepped_ligands_dir / ref_dirname
+        quar_dir = prepped_ligands_dir / quar_dirname
         inter_dir.mkdir(parents=True, exist_ok=True)
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        quar_dir.mkdir(parents=True, exist_ok=True)
+
         link = prepped_ligands_dir / "intermediates_src"
         if link.exists() or link.is_symlink():
             try:
@@ -2632,7 +2646,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
         link.symlink_to(ligand_output_dir.resolve(), target_is_directory=True)
         logging.info("[intermediates] symlinked source -> intermediates_src")
     except Exception as e:
-        logging.warning("Could not create intermediates symlink: %s", e)
+        logging.debug("intermediates link skipped: %s", e)
 
     for pdb_file in pdb_files:
         logging.info(f"Processing: {pdb_file.name}")
@@ -3039,8 +3053,31 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     print("Starting ligand preparation")
 
-    cfg = read_config()
+    cfg = load_config("config.txt")
+    validate_config(cfg)
 
+    # env > config precedence for toggles/ints
+    def _env_bool(name, default):
+        v = os.environ.get(name)
+        return (str(v).strip().lower() in {"1", "true", "yes", "on"}) if v is not None else bool(default)
+
+    def _env_int(name, default):
+        v = os.environ.get(name)
+        return int(v) if v not in (None, "") else int(default)
+
+    def _env_float(name, default):
+        v = os.environ.get(name)
+        return float(v) if v not in (None, "") else float(default)
+
+    USE_RDKIT_FOR_3D = _env_bool("USE_RDKIT_FOR_3D", cfg.get("USE_RDKIT_FOR_3D", True))
+    OBABEL_THREADS = _env_int("OBABEL_THREADS", cfg.get("OBABEL_THREADS", 50))
+    OBABEL_TIMEOUT_S = _env_int("OBABEL_TIMEOUT_S", cfg.get("OBABEL_TIMEOUT_S", 900))
+    CHUNK_SIZE = _env_int("LIGPREP_CHUNK_SIZE", cfg.get("LIGPREP_CHUNK_SIZE", 200))
+    LIGPREP_PH = _env_float("LIGPREP_PH", cfg.get("LIGPREP_PH", 7.4))
+    KEEP_NONPOLAR_H = _env_int("KEEP_NONPOLAR_H", cfg.get("KEEP_NONPOLAR_H", 1))
+    MAX_HEAVY_ATOMS = _env_int("MAX_HEAVY_ATOMS", cfg.get("MAX_HEAVY_ATOMS", 1200))
+    MIN_ATOMS_FOR_DOCKING = _env_int("MIN_ATOMS_FOR_DOCKING", cfg.get("MIN_ATOMS_FOR_DOCKING", 5))
+    MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
     ligand_extracted_dir = Path(cfg["LIGAND_EXTRACTED_DIR"]).resolve()
     ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]).resolve()
     output_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]).resolve()
@@ -3090,7 +3127,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     prepare_script_short = get_short_path_name(str(prepare_script.resolve()))
 
     # Per-target status log (SDF pipeline)
-    status_log = output_ligands_dir / "ligand_prep_status.tsv"
+    status_log = output_ligands_dir / cfg.get("LIGAND_STATUS_LOG_BASENAME", "ligand_prep_status.tsv")
 
     # =========================
     # TRUE TEST-MODE: prefer per-ligand SDFs and filter by ONLY

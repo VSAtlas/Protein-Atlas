@@ -1,46 +1,57 @@
-OVERALL_DIR=/stor/home/mpg2352/atlas/code/protein_automation
-INPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs
-LIGAND_DIR=/stor/home/mpg2352/atlas/code/protein_automation/input_ligands
-LIGAND_EXTRACTED_DIR=/stor/home/mpg2352/atlas/code/protein_automation/extracted_ligands
-LIGANDS_MOL2_DIR=/stor/home/mpg2352/atlas/code/protein_automation/ligands_mol2
-OUTPUT_LIGANDS_DIR=/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands
-PREPPED_LIGANDS_DIR=/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands
-PREPPED_LIGANDS_ROOT=/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands
-OUTPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs
-PDBQT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/pdbqts
-DOCKED_DIR=/stor/home/mpg2352/atlas/code/protein_automation/docked
-P2RANK_PATH=/stor/home/mpg2352/atlas/tools/p2rank/bin/p2rank.jar
-P2RANK_OUTPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/p2rank_out
-MGLTOOLS_DIR=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7
-MGLTOOLS_PYTHON=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/bin/pythonsh
-PREPARE_RECEPTOR_SCRIPT=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
-PREPARE_LIGAND_SCRIPT=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
-PREPARE_LIGAND4=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
-ADFRSUITE_BIN=/stor/home/mpg2352/atlas/tools/ADFRsuite/bin
-PHENIX_DIR=/stor/home/mpg2352/atlas/tools/phenix/phenix-1.21.2-5419/build/bin
-PHENIX_LIB_PATH=/stor/home/mpg2352/atlas/tools/phenix/phenix-1.21.2-5419/conda_base/lib
-PHENIX_CLEAN_SCRIPT=/stor/home/mpg2352/atlas/code/protein_automation/phenix_clean.py
-REDUCE_EXE=/stor/home/mpg2352/atlas/tools/reduce/reduce_src/reduce
-VINA_EXE=/stor/home/mpg2352/atlas/tools/vina1.sh
+OVERALL_DIR=/stor/home/mpg2352/atlas2/code/protein_automation
+INPUT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/input_pdbs
+LIGAND_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/input_ligands
+LIGAND_EXTRACTED_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/extracted_ligands
+EXTRACTED_LIGANDS_DIR=${OVERALL_DIR}/extracted_ligands
+LIGANDS_MOL2_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/ligands_mol2
+OUTPUT_LIGANDS_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/prepped_ligands
+PREPPED_LIGANDS_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/prepped_ligands
+PREPPED_LIGANDS_ROOT=/stor/home/mpg2352/atlas2/code/protein_automation/prepped_ligands
+OUTPUT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/processed_pdbs
+PDBQT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/pdbqts
+DOCKED_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/docked
+
+P2RANK_PATH=/stor/home/mpg2352/atlas2/tools/p2rank/bin/p2rank.jar
+P2RANK_OUTPUT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/p2rank_out
+
+MGLTOOLS_PATH=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7
+MGLTOOLS_DIR=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7
+MGLTOOLS_PYTHON=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/bin/pythonsh
+PREPARE_RECEPTOR_SCRIPT=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
+PREPARE_LIGAND_SCRIPT=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+PREPARE_LIGAND4=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+ADFRSUITE_BIN=/stor/home/mpg2352/atlas2/tools/ADFRsuite/bin
+
+PHENIX_DIR=/stor/home/mpg2352/atlas2/tools/phenix/phenix-1.21.2-5419/build/bin
+PHENIX_LIB_PATH=/stor/home/mpg2352/atlas2/tools/phenix/phenix-1.21.2-5419/conda_base/lib
+PHENIX_CLEAN_SCRIPT=/stor/home/mpg2352/atlas2/code/protein_automation/phenix_clean.py
+
+REDUCE_EXE=/stor/home/mpg2352/atlas2/tools/reduce/reduce_src/reduce
+REDUCE_LOCAL_CANDIDATE=/stor/home/mpg2352/atlas2/tools/reduce/reduce_src/reduce
+REDUCE_HET_DICT=/stor/home/mpg2352/atlas2/tools/reduce/reduce_wwPDB_het_dict.txt
+
+VINA_EXE=/stor/home/mpg2352/atlas2/tools/vina1.sh
+
 OPENBABEL_PATH=/stor/home/mpg2352/micromamba/envs/docking-env/bin/obabel
+BABEL_LIBDIR=/stor/home/mpg2352/micromamba/envs/docking-env/lib/openbabel/3.1.0
+BABEL_DATADIR=
+
 PYMOL_PATH=pymol
 PYMOL_EXE=pymol
+
 CPU_ONLY=True
-CPU=100
-MAX_PARALLEL_JOBS=100
+CPU=128
+MAX_PARALLEL_JOBS=128
 FORCE_REPROCESS=True
 DOCKING_MODE=polypharmacology
 QUIET_CONSOLE=False
+
 EARLY_RECENTER_RATIO=0.70
 EARLY_RECENTER_MIN_EVAL=10
 EARLY_RECENTER_FAR_A=15.0
 EARLY_RECENTER_MEDIAN_A=10.0
 ALLOW_BOX_EXPAND=True
-MAX_RECENTER_ATTEMPTS=3
-MGLTOOLS_PATH=/stor/home/mpg2352/atlas/tools/MGLTOOLS-1.5.7
-REDUCE_HET_DICT=/stor/home/mpg2352/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
-BABEL_LIBDIR=/stor/home/mpg2352/micromamba/envs/docking-env/lib/openbabel/3.1.0
-
+MAX_RECENTER_ATTEMPTS=1
 
 CHAIN_PRUNE=1
 CHAIN_POCKET_RADIUS_ANG=10.0
@@ -48,3 +59,97 @@ CHAIN_CONTACT_DIST_ANG=5.0
 CHAIN_MIN_CONTACTS=200
 CHAIN_KEEP_LIST=
 CHAIN_LOG_DECISIONS=1
+
+# ---- Benchmark & Analysis (paths) ----
+FDA_MAPPING_CSV=
+BENCH_ANALYSIS_OUTDIR=
+
+# ---- Naming patterns ----
+BENCH_STAGE_NAME=bench_pocket1_single
+NOLIG_CLEANED_PATTERN=*_NOLIG_cleaned.pdb
+
+# ---- Rendering & PyMOL ----
+DEFER_PYMOL=true
+PYMOL_DEFER_QUEUE=
+PYMOL_PARALLEL=50
+PYMOL_RENDER_WORKERS=100
+PYMOL_RENDER_MODE=pymol2     # or "cli"
+VIEWPORT_W=640
+VIEWPORT_H=480
+SURFACE_TRANSPARENCY=0.30
+LABEL_TOP_N_RES=5
+LABEL_CUTOFF_A=5.0
+
+# ---- Analysis tolerances ----
+SCORE_TOL_KCAL=1.0
+CENTER_TOL_A=1.0
+RMSD_TOL_A=3.0
+ANALYSIS_HTML_EXPECTED_ONLY=true
+
+DEDUP_ID_PREFIX=fda_
+DEDUP_ID_WIDTH=4
+DEDUP_ID_SEED=1
+
+# ---- Box & recenter ----
+BOX_SIZE_MAX_A=28.0
+
+# ---- Logs (default to DOCKED_DIR if unset) ----
+LOGS_DIR=${DOCKED_DIR}
+
+# ---- Identify-ligand outputs (files live under LOGS_DIR / DOCKED_DIR) ----
+IDENTIFY_LOG_BASENAME=fda_mapping.log
+IDENTIFY_MAPPING_CSV=fda_mapping_from_pdbqt.csv
+IDENTIFY_UNMAPPED_CSV=fda_mapping_unmapped_or_no_smiles.csv
+
+# Identify-ligand workers (0 = auto)
+IDENTIFY_MAX_WORKERS=100
+IDENTIFY_HTTP_WORKERS=100
+
+# Optional: list of PDB IDs for massinstall.py
+# PDB_ID_LIST=${OVERALL_DIR}/pdb_ids.txt
+
+# Vina verbosity (0=minimal, 1=normal, 2=verbose)
+VINA_VERBOSITY=2
+
+# --- Metabolite resolver ---
+# FDA_MAPPING_CSV=
+METABO_USE_SCAFFOLD_MATCH=true
+METABO_FINGERPRINT_RADIUS=2
+METABO_FINGERPRINT_BITS=2048
+# ALIASES_PATH=${OVERALL_DIR}/chemdb/aliases.yaml
+
+# --- Phenix clean ---
+PHENIX_CLEAN_OUTDIR=${OUTPUT_DIR}/phenix_clean
+PHENIX_CLEAN_SUFFIX=_cleaned.pdb
+
+# --- Pose validation thresholds (GLOBAL defaults) ----
+POSE_CLASH_THRESHOLD_A=2.0
+POSE_CLASH_TOLERANCE=3
+POSE_DIST_SURFACE_MAX_A=8.0
+POSE_DIST_CENTROID_MAX_A=6.0
+POSE_HBOND_MAX_A=3.5
+POSE_RMSD_TOL_A=2.0
+POSE_MAX_MODELS=
+
+# --- Ligand prep artifacts & knobs ---
+LIGAND_STATUS_LOG_BASENAME=ligand_prep_status.tsv
+LIGPREP_INTERMEDIATES_DIRNAME=intermediates
+LIGPREP_REFERENCE_DIRNAME=reference
+LIGPREP_QUARANTINE_DIRNAME=quarantine
+MALFORMED_LOG_BASENAME=malformed_ligands.txt
+
+USE_RDKIT_FOR_3D=true
+OBABEL_THREADS=50
+OBABEL_TIMEOUT_S=900
+LIGPREP_CHUNK_SIZE=200
+LIGPREP_PH=7.4
+KEEP_NONPOLAR_H=1
+MAX_HEAVY_ATOMS=1200
+MIN_ATOMS_FOR_DOCKING=5
+MIN_PARENT_HEAVY=8
+
+# --- Vina & run control ---
+VINA_TIMEOUT_SEC=0
+FILTER_VINA_STDOUT=false
+DISCOVERY_SELECTION_PCTS=1.0,0.1,0.01,0.001,0.001
+POLYPHARM_SELECTION_PCTS=1.0,0.05,0.005

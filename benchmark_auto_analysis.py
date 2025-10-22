@@ -44,6 +44,9 @@ from typing import List, Dict, Tuple, Optional, Iterable, Set, Sequence, Mapping
 import numpy as np
 from chemdb.chem_alias_db import alias_list_for_het as _alias_list_for_het
 
+
+
+
 # -----------------------------
 # Defaults (edit for IDE usage)
 # -----------------------------
@@ -55,6 +58,25 @@ DEFAULT_CENTER_TOL = 1.0  # Å
 DEFAULT_RMSD_TOL = 3.0    # Å
 DEFAULT_OUTDIR = None     # None -> <DOCKED>\_analysis
 DEFAULT_INCLUDE_IDENTITY = True  # toggle 4th criterion
+
+try:
+    from input_and_export_functions import load_config, validate_config
+    _cfg = load_config("config.txt") or {}
+    try:
+        validate_config(_cfg)
+    except Exception:
+        pass
+except Exception:
+    _cfg = {}
+
+DEFAULT_DOCKED_ROOT = _cfg.get("DOCKED_DIR") or DEFAULT_DOCKED_ROOT
+DEFAULT_MAPPING_CSV = _cfg.get("FDA_MAPPING_CSV") or DEFAULT_MAPPING_CSV
+DEFAULT_ONLY_PDB     = _cfg.get("ANALYSIS_ONLY_PDB") or DEFAULT_ONLY_PDB
+DEFAULT_SCORE_TOL    = float(_cfg.get("SCORE_TOL_KCAL", DEFAULT_SCORE_TOL))
+DEFAULT_CENTER_TOL   = float(_cfg.get("CENTER_TOL_A",   DEFAULT_CENTER_TOL))
+DEFAULT_RMSD_TOL     = float(_cfg.get("RMSD_TOL_A",     DEFAULT_RMSD_TOL))
+DEFAULT_OUTDIR       = _cfg.get("BENCH_ANALYSIS_OUTDIR") or DEFAULT_OUTDIR
+
 # -----------------------------
 # Filename patterns
 # -----------------------------
@@ -1319,7 +1341,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     # honor CLI --debug
     global DEBUG
     DEBUG = DEBUG or bool(args.debug)
-    os.environ["ANALYSIS_HTML_EXPECTED_ONLY"] = "1" if bool(getattr(args, "html_expected_only", True)) else "0"
+    _default_expected_only = str(_cfg.get("ANALYSIS_HTML_EXPECTED_ONLY", "true")).lower() in ("1", "true", "yes")
 
     run_analysis(
         docked_root=docked_root,

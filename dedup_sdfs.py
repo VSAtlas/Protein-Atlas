@@ -1,31 +1,32 @@
 # dedup_sdfs.py
 from __future__ import annotations
-
-import csv
-import sys
-import re
+import csv, sys, re
 from pathlib import Path
 from typing import Iterable, List, Dict, Tuple, Any
-
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
-
 # --- robust imports for standardization ---
 Standardize = None
 try:
-    # Some RDKit builds put it here
     from rdkit.Chem import rdMolStandardize as Standardize  # type: ignore
 except Exception:
     try:
-        # Others put it here
         from rdkit.Chem.MolStandardize import rdMolStandardize as Standardize  # type: ignore
     except Exception:
-        Standardize = None  # Fallback path below
-
-# Fallback tools if rdMolStandardize is missing
+        Standardize = None
 from rdkit.Chem.SaltRemover import SaltRemover
+from input_and_export_functions import load_config, validate_config
+_cfg = load_config("config.txt") or {}
+try:
+    validate_config(_cfg)
+except Exception:
+    pass
 
-FDA_RE = re.compile(r"^fda_\d{4}$", re.IGNORECASE)
+_ID_PREFIX = str(_cfg.get("DEDUP_ID_PREFIX", "fda_"))
+_ID_WIDTH  = int(_cfg.get("DEDUP_ID_WIDTH", 4))
+_FDA_RE = re.compile(rf"^{re.escape(_ID_PREFIX)}\d{{{_ID_WIDTH}}}$", re.IGNORECASE)
+
+
 
 
 def _iter_mols(paths: Iterable[Path]):
@@ -91,11 +92,12 @@ def _choose_rep(existing: Chem.Mol, candidate: Chem.Mol) -> Chem.Mol:
 
 
 def _pick_rep_name(members: List[str], fallback_name: str) -> str:
-    """If any member already has an fda_#### name, keep that exact name as representative."""
+    """If any member already has a minted ID, keep that exact name as representative."""
     for nm in members:
-        if FDA_RE.match(nm):
+        if _FDA_RE.match(nm):
             return nm
     return fallback_name
+
 
 
 def dedup_sdfs(
@@ -141,23 +143,21 @@ def dedup_sdfs(
             reps[key_full] = m
 
     # Assign representative names: keep existing fda_#### else mint
-    next_id = id_seed
+    next_id = int(id_seed)
     key_to_repname: Dict[str, str] = {}
     used_ids = set()
-
-    # First pass: reserve any pre-existing fda_#### names
+    # First pass: reserve any pre-existing minted IDs
     for key, rep in reps.items():
         rep_name = _pick_rep_name(names_by_key[key], rep.GetProp("_Name"))
-        if FDA_RE.match(rep_name):
+        if _FDA_RE.match(rep_name):
             rep_name = rep_name.lower()
             key_to_repname[key] = rep_name
             used_ids.add(rep_name)
 
-    # Second pass: mint new IDs
     def mint() -> str:
         nonlocal next_id
         while True:
-            cand = f"fda_{next_id:04d}"
+            cand = f"{_ID_PREFIX}{next_id:0{_ID_WIDTH}d}"
             next_id += 1
             if cand not in used_ids:
                 used_ids.add(cand)
@@ -214,7 +214,7 @@ def dedup_sdfs(
     return {
         "n_unique_exact": len(reps),
         "n_parent_groups": len(parent_groups),
-        "last_id_used": max(int(x.split("_")[1]) for x in used_ids if FDA_RE.match(x)) if used_ids else None,
+        "last_id_used": max(int(x.split("_")[1]) for x in used_ids if _FDA_RE.match(x)) if used_ids else None,
         "out_file": str(out_file),
         "map_file": str(map_file),
         "dups_file": str(dups_file),
@@ -224,15 +224,14 @@ def dedup_sdfs(
 # Optional CLI wrapper so this file also works as a script if you ever need it.
 def _main_cli():
     import argparse
-
-    ap = argparse.ArgumentParser(description="De-duplicate SDFs and mint/keep fda_#### IDs.")
-    ap.add_argument("--in", dest="inputs", nargs="+", required=True, help="One or more input SDF files")
-    ap.add_argument("--out", dest="out_file", required=True, help="Output merged SDF")
-    ap.add_argument("--map", dest="map_file", required=True, help="CSV mapping of originals to representatives")
-    ap.add_argument("--dups", dest="dups_file", required=True, help="CSV report of parent14 variant counts")
-    ap.add_argument("--id-seed", type=int, default=1, help="First number to use when minting new fda_#### IDs")
+    ap = argparse.ArgumentParser(description="De-duplicate SDFs and mint/keep IDs.")
+    ap.add_argument("--in",  dest="inputs",   nargs="+", required=True)
+    ap.add_argument("--out", dest="out_file", required=True)
+    ap.add_argument("--map", dest="map_file", required=True)
+    ap.add_argument("--dups",dest="dups_file",required=True)
+    # [ANCHOR CLI default from cfg; user-provided still wins]
+    ap.add_argument("--id-seed", type=int, default=int(_cfg.get("DEDUP_ID_SEED", 1)))
     args = ap.parse_args()
-
     summary = dedup_sdfs(
         input_files=args.inputs,
         out_file=args.out_file,
@@ -241,7 +240,6 @@ def _main_cli():
         id_seed=args.id_seed,
     )
     print(f"Done. Summary: {summary}")
-
 
 if __name__ == "__main__":
     _main_cli()

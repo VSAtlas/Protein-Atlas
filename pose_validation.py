@@ -3,6 +3,28 @@ from rdkit.Chem import Descriptors
 from input_and_export_functions import extract_best_score
 import numpy as np
 
+
+# --- config and tunables ---
+from input_and_export_functions import load_config, validate_config
+_cfg = load_config("config.txt")
+validate_config(_cfg)
+
+_POSE_CLASH_THRESHOLD_A   = float(_cfg.get("POSE_CLASH_THRESHOLD_A", 2.0))
+_POSE_CLASH_TOLERANCE     = int(_cfg.get("POSE_CLASH_TOLERANCE", 3))
+_POSE_DIST_SURFACE_MAX_A  = float(_cfg.get("POSE_DIST_SURFACE_MAX_A", 8.0))
+_POSE_DIST_CENTROID_MAX_A = float(_cfg.get("POSE_DIST_CENTROID_MAX_A", 6.0))
+_POSE_HBOND_MAX_A         = float(_cfg.get("POSE_HBOND_MAX_A", 3.5))
+_POSE_RMSD_TOL_A          = float(_cfg.get("POSE_RMSD_TOL_A", 2.0))
+_POSE_MAX_MODELS          = _cfg.get("POSE_MAX_MODELS", None)  # "", None or integer string
+try:
+    _POSE_MAX_MODELS = int(_POSE_MAX_MODELS) if str(_POSE_MAX_MODELS).strip() else None
+except Exception:
+    _POSE_MAX_MODELS = None
+
+
+
+
+
 def parse_pdbqt_coordinates(pdbqt_file):
     coords, elements = [], []
     with open(pdbqt_file, "r") as f:
@@ -76,7 +98,7 @@ def compute_self_rmsd(pdbqt_path: str):
         return None
     return _kabsch(A[:n], B[:n])
 
-def detect_hydrogen_bonds(protein_coords, protein_elements, ligand_coords, ligand_elements, max_dist=3.5):
+def detect_hydrogen_bonds(protein_coords, protein_elements, ligand_coords, ligand_elements, max_dist=_POSE_HBOND_MAX_A):
     donors = {'N', 'O'}
     acceptors = {'O', 'N'}
 
@@ -152,16 +174,20 @@ def attempt_fallback_recenter(
             score = None
 
         # Validate pose relative to current (possibly wrong) center to get a distance
+        _fb_surface = min(_POSE_DIST_SURFACE_MAX_A, 6.0)
+        _fb_centroid = min(_POSE_DIST_CENTROID_MAX_A, 4.5)
+
         res = validate_pose_pdbqt(
             protein_pdbqt=receptor_pdbqt,
             ligand_pdbqt=pose_path,
             pocket_center=pocket_center,
-            clash_threshold=2.0,
-            CLASH_TOLERANCE=3,
-            DIST_THRESHOLD_SURFACE=6.0,
-            DIST_THRESHOLD_CENTROID=4.5,
+            clash_threshold=_POSE_CLASH_THRESHOLD_A,
+            CLASH_TOLERANCE=_POSE_CLASH_TOLERANCE,
+            DIST_THRESHOLD_SURFACE=_fb_surface,
+            DIST_THRESHOLD_CENTROID=_fb_centroid,
             surface_atom_coords=None
         )
+
         dist = res.get("distance_to_pocket", float("inf"))
         valid = bool(res.get("valid", False))
         base = os.path.basename(lig_path)
@@ -221,10 +247,10 @@ def validate_pose_pdbqt(
     protein_pdbqt,
     ligand_pdbqt,
     pocket_center,
-    clash_threshold=2.0,
-    CLASH_TOLERANCE=3,
-    DIST_THRESHOLD_SURFACE=8.0,
-    DIST_THRESHOLD_CENTROID=6.0,
+    clash_threshold=_POSE_CLASH_THRESHOLD_A,
+    CLASH_TOLERANCE=_POSE_CLASH_TOLERANCE,
+    DIST_THRESHOLD_SURFACE=_POSE_DIST_SURFACE_MAX_A,
+    DIST_THRESHOLD_CENTROID=_POSE_DIST_CENTROID_MAX_A,
     ligand_smiles=None,
     surface_atom_coords=None
 ):
@@ -408,7 +434,7 @@ def _kabsch(P: np.ndarray, Q: np.ndarray) -> float:
     diff = P_rot - Qc
     return float(np.sqrt((diff * diff).sum() / P.shape[0]))
 
-def cluster_models_by_rmsd(blocks: List[List[str]], rmsd_tol: float = 2.0) -> List[int]:
+def cluster_models_by_rmsd(blocks: List[List[str]], rmsd_tol: float = _POSE_RMSD_TOL_A) -> List[int]:
     """
     Greedy clustering: keep the first model, then keep any model whose RMSD
     to all kept models is >= rmsd_tol. Returns indices of kept models.
@@ -459,7 +485,7 @@ def _sort_model_indices_by_score(blocks: List[List[str]]) -> List[int]:
     return [i for (i, sc) in sorted(scored, key=lambda t: (t[1] is None, t[1]))]
 
 def filter_and_rewrite_poses_by_rmsd(pdbqt_path: str,
-                                     rmsd_tol: float = 2.0,
+                                     rmsd_tol: float = _POSE_RMSD_TOL_A,
                                      max_models: Optional[int] = None) -> Tuple[int, int]:
     """
     In-place filter: keep only unique poses >= rmsd_tol apart (Kabsch RMSD).
@@ -480,8 +506,9 @@ def filter_and_rewrite_poses_by_rmsd(pdbqt_path: str,
     # map back to original indices
     kept_idx = [order[i] for i in kept_sorted_idx]
     # optional cap
-    if max_models is not None and len(kept_idx) > max_models:
-        # re-sort kept by score (ascending) and take top-N
+    if max_models is None:
+        max_models = _POSE_MAX_MODELS
+    if max_models is not None and len(kept_idx) > max_models:        # re-sort kept by score (ascending) and take top-N
         kept_idx = [i for i in _sort_model_indices_by_score([blocks[j] for j in kept_idx])][:max_models]
 
     # write back (preserve MODEL/ENDMDL if present)

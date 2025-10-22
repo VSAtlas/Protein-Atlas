@@ -1,26 +1,37 @@
-import logging
-import os
+import logging, os
+from pathlib import Path
+from input_and_export_functions import load_inputs, validate_config
 
-def setup_logger(pdb_id: str):
+def setup_logger(pdb_id: str, cfg: dict | None = None):
     """
-    Sets up a logger that logs to 'docked/<pdb_id>/protein.log'.
-    Also prints to console.
+    Portable logger.
+    Logs to {cfg.get('LOGS_DIR', cfg['DOCKED_DIR'])}/{pdb_id}/protein.log
+    Console level honors QUIET_CONSOLE (WARNING if true else INFO).
     """
-    log_dir = os.path.join("docked", pdb_id)
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "protein.log")
+    if cfg is None:
+        cfg = load_inputs(); validate_config(cfg)
 
-    # Remove existing handlers to avoid duplicate logs
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
+    logs_root = Path(cfg.get("LOGS_DIR", cfg["DOCKED_DIR"]))
+    log_dir = logs_root / pdb_id
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "protein.log"
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
+    logger = logging.getLogger(f"protein.{pdb_id}")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
 
-    logging.info(f"Logger initialized for PDB: {pdb_id}")
+    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    fh = logging.FileHandler(log_file, mode="w", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.WARNING if bool(cfg.get("QUIET_CONSOLE", False)) else logging.INFO)
+    ch.setFormatter(fmt)
+
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    logger.propagate = False
+
+    logger.info(f"Logger initialized for PDB: {pdb_id} @ {log_file}")
+    return logger
