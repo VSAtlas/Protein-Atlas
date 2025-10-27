@@ -102,6 +102,94 @@ def _iter_jobs(path: str):
             except Exception:
                 continue
 
+
+
+# --- Diagnostics helpers for deferred replay (add above replay_deferred_jobs_mp) ---
+import os, time, math
+from pathlib import Path
+from typing import Iterable, List, Tuple, Dict
+from collections import defaultdict
+
+def _rss_mb_fallback() -> int:
+    try:
+        # Linux ru_maxrss is KB; macOS is bytes; normalize to MB
+        import resource
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if r <= 0:
+            return -1
+        # Heuristic: treat big numbers as bytes (mac), small as KB (linux)
+        return int(r / (1024*1024)) if r > 1_000_000 else int(r / 1024)
+    except Exception:
+        return -1
+
+def _rss_mb() -> int:
+    try:
+        import psutil  # optional
+        return int(psutil.Process(os.getpid()).memory_info().rss / (1024*1024))
+    except Exception:
+        return _rss_mb_fallback()
+
+def _percentile(vals: List[int], p: float) -> int:
+    if not vals:
+        return 0
+    vals_sorted = sorted(vals)
+    idx = max(0, min(len(vals_sorted)-1, int(math.ceil(p * len(vals_sorted)) - 1)))
+    return int(vals_sorted[idx])
+
+def _common_root(paths: Iterable[str]) -> str:
+    paths = [str(Path(p).resolve()) for p in paths if p]
+    if not paths:
+        return ""
+    try:
+        import os
+        return os.path.commonpath(paths)
+    except Exception:
+        return str(Path(paths[0]).resolve().parent)
+
+def _chunk_jobs(jobs: List[dict], batch: int) -> List[List[dict]]:
+    if batch <= 0 or batch >= len(jobs):
+        return [jobs]
+    return [jobs[i:i+batch] for i in range(0, len(jobs), batch)]
+
+def _diagnostics_header(*, workers: int, mode: str, queue_path: str, batch: int,
+                        ab_modes: List[str], viewport: Tuple[int,int], antialias: int,
+                        out_root: str) -> None:
+    ab_txt = ",".join(ab_modes) if ab_modes else "none"
+    b_txt  = str(batch) if batch > 0 else "none"
+    aa_txt = str(antialias)
+    print(
+        "[render-diagnostics] "
+        f"workers={workers} mode={mode} batch={b_txt} AB={ab_txt} "
+        f"queue={queue_path} viewport={viewport[0]}x{viewport[1]} antialias={aa_txt} out_root={out_root}"
+    )
+    # Clarify semaphore behavior for replay:
+    print("[render-diagnostics] note: deferred replay uses a ProcessPool; in-process semaphores "
+          "(_RENDER_LOCK / GLOBAL_LIGAND_SEM) do not gate this phase.")
+
+def _summarize_pass(tag: str, jobs: List[dict], records: List[Tuple[dict, bool, int, int, int, str]], elapsed_s: float, workers: int):
+    # records: (job, ok, t_ms, pid, rss_mb, err)
+    durations = [t for (_j, ok, t, _pid, _rss, _e) in records]
+    ok_count  = sum(1 for r in records if r[1])
+    fail_count= sum(1 for r in records if not r[1])
+    p50 = _percentile(durations, 0.50)
+    p90 = _percentile(durations, 0.90)
+    avg = int(sum(durations) / len(durations)) if durations else 0
+    thr = (len(jobs) / elapsed_s) if elapsed_s > 0 else 0.0
+    # simple breakdown by kind
+    by_kind: Dict[str, List[int]] = defaultdict(list)
+    for (j, ok, t, _pid, _rss, _e) in records:
+        by_kind[j.get("kind","?")].append(t)
+    kinds_txt = "; ".join(
+        f"{k}:n={len(v)},p50={_percentile(v,0.5)}ms,p90={_percentile(v,0.9)}ms"
+        for k,v in sorted(by_kind.items())
+    )
+    print(f"[render-summary] pass={tag} jobs={len(jobs)} ok={ok_count} fail={fail_count} "
+          f"avg_ms={avg} p50={p50} p90={p90} elapsed_s={elapsed_s:.2f} throughput={thr:.2f} jobs/s "
+          f"workers_used<={workers} | {kinds_txt}")
+
+
+
+
 def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2):
     qp = str(queue_path or _QUEUE_PATH)
     jobs = list(_iter_jobs(qp)) or []
@@ -153,9 +241,12 @@ def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
                             slow_ms: int = 15) -> int:
     """
     Multi-process renderer that replays JSONL queue without sharing a PyMOL session.
-    Uses a single persistent pool to avoid per-batch spawn overhead.
-    - mode: "cli" (pymol -cq) preferred; "pymol2" fallback per process.
-    - slow_ms: only used for summary stats (no automatic backoff here).
+    - Default behavior unchanged if no env toggles are set.
+    - Env overrides (opt-in):
+        PYMOL_RENDER_SOFT_CAP   : integer min() cap on workers
+        PYMOL_RENDER_MODE_FORCE : 'cli' | 'pymol2'
+        PYMOL_RENDER_BATCH      : positive int => fixed-size chunks
+        PYMOL_RENDER_AB         : comma list of modes => run back-to-back passes on contiguous slices
     """
     qp = str(queue_path or _QUEUE_PATH)
     jobs = list(_iter_jobs(qp)) or []
@@ -163,52 +254,114 @@ def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
         print(f"[render-replay] workers=0 jobs=0 mode={mode}")
         return 0
 
+    # Resolve env-only toggles (do nothing unless set)
+    def _env_int(name: str, default: int = 0) -> int:
+        try:
+            v = os.environ.get(name, "")
+            if v is None or str(v).strip() == "":
+                return default
+            n = int(str(v).strip())
+            return n if n > 0 else default
+        except Exception:
+            return default
+
+    soft_cap  = _env_int("PYMOL_RENDER_SOFT_CAP", 0)
+    batch_sz  = _env_int("PYMOL_RENDER_BATCH", 0)
+    mode_force = (os.environ.get("PYMOL_RENDER_MODE_FORCE") or "").strip().lower()
+    ab_env     = (os.environ.get("PYMOL_RENDER_AB") or "").strip()
+    ab_modes   = [m.strip().lower() for m in ab_env.split(",") if m.strip()] if ab_env else []
+
+    workers_cfg = max(1, int(max_workers))
+    workers_eff = min(workers_cfg, soft_cap) if soft_cap else workers_cfg
+    mode_eff    = mode_force if mode_force in ("cli","pymol2") else mode
+
+    # Diagnostics header (viewport & AA are inferred from cfg + chosen mode)
+    viewport = (_cfg_int("VIEWPORT_W", default=640), _cfg_int("VIEWPORT_H", default=480))
+    antialias = 1 if mode_eff == "cli" else 2
+    out_roots = [str(Path(j.get("outprefix","")).parent) for j in jobs if j.get("outprefix")]
+    out_root_common = _common_root(out_roots)
+    _diagnostics_header(
+        workers=workers_eff, mode=mode_eff, queue_path=qp, batch=batch_sz,
+        ab_modes=ab_modes, viewport=viewport, antialias=antialias, out_root=out_root_common
+    )
+
+    # Disable deferral while replaying
     global _DEFER_MODE
     prev = _DEFER_MODE
     _DEFER_MODE = False
-    workers = max(1, int(max_workers))
-    print(f"[render-replay] workers={workers} jobs={len(jobs)} mode={mode}")
 
-    ok_count = fail_count = 0
-    durations: List[int] = []
+    def _render_pass(pass_jobs: List[dict], pass_mode: str, tag: str) -> List[Tuple[dict, bool, int, int, int, str]]:
+        records: List[Tuple[dict, bool, int, int, int, str]] = []
+        start = time.time()
+        # Use a single persistent pool for this pass
+        with ProcessPoolExecutor(max_workers=workers_eff) as ex:
+            fut2job = {ex.submit(_run_one_job_mp, job, pass_mode): job for job in pass_jobs}
+            for fut in as_completed(fut2job):
+                j = fut2job[fut]
+                kind = j.get("kind", "?")
+                tag_out = Path(j.get("outprefix", "?")).name
+                try:
+                    ok, t_ms, err, pid, rss = fut.result()
+                except Exception as e:
+                    ok, t_ms, err, pid, rss = False, 0, str(e), -1, -1
+                records.append((j, ok, t_ms, pid, rss, err))
+                # per-job line (PID + RSS)
+                err_txt = f" err={str(err).splitlines()[0][:80]}" if err else ""
+                print(f"[render-done] {kind}:{tag_out} t_ms={t_ms} pid={pid} rss_mb={rss} ok={int(ok)}{err_txt}")
+        elapsed = time.time() - start
+        _summarize_pass(tag, pass_jobs, records, elapsed, workers_eff)
+        return records
 
-    # Use a stable mapping so we can print tags with the right job
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        fut2job = {ex.submit(_run_one_job_mp, job, mode): job for job in jobs}
-        for fut in as_completed(fut2job):
-            j = fut2job[fut]
-            kind = j.get("kind", "?")
-            tag = Path(j.get("outprefix", "?")).name
-            try:
-                ok, t_ms, err = fut.result()
-            except Exception as e:
-                ok, t_ms, err = False, 0, str(e)
-            durations.append(t_ms)
-            print(f"[render-done] {kind}:{tag} t_ms={t_ms} ok={int(ok)}"
-                  + (f" err={str(err).splitlines()[0][:80]}" if err else ""))
-            if ok:
-                ok_count += 1
-            else:
-                fail_count += 1
-
-    # Clear queue
     try:
-        Path(qp).unlink()
-    except Exception:
-        pass
-    _DEFER_MODE = prev
+        total_ok = total_fail = 0
 
-    # Summary
-    if durations:
-        avg = int(sum(durations) / len(durations))
-        import statistics
-        p50 = int(statistics.median(durations))
-        p90 = int(sorted(durations)[max(0, int(0.9 * len(durations)) - 1)])
-    else:
-        avg = p50 = p90 = 0
-    print(f"[render-summary] jobs={len(jobs)} ok={ok_count} fail={fail_count} avg_ms={avg} p50={p50} p90={p90} workers_used<={workers}")
-    return ok_count
+        if ab_modes:
+            # Split into contiguous blocks for each mode
+            n = len(ab_modes)
+            sizes = [len(jobs)//n + (1 if i < (len(jobs) % n) else 0) for i in range(n)]
+            slices: List[List[dict]] = []
+            idx = 0
+            for sz in sizes:
+                slices.append(jobs[idx:idx+sz])
+                idx += sz
+
+            for i, ab_mode in enumerate(ab_modes):
+                tag = f"ab[{i+1}/{len(ab_modes)}] mode={ab_mode}"
+                pass_jobs = slices[i]
+                if not pass_jobs:
+                    print(f"[render-summary] pass={tag} jobs=0 (skipped)")
+                    continue
+                if batch_sz > 0:
+                    batches = _chunk_jobs(pass_jobs, batch_sz)
+                    for b_ix, batch_jobs in enumerate(batches, start=1):
+                        _ = _render_pass(batch_jobs, ab_mode, f"{tag} batch={b_ix}/{len(batches)}")
+                else:
+                    _ = _render_pass(pass_jobs, ab_mode, tag)
+                # We **do not** unlink the queue file until after the final pass
+            # After A/B passes, clear queue once
+            try:
+                Path(qp).unlink()
+            except Exception:
+                pass
+        else:
+            # Single-mode run (default behavior; optionally batched)
+            tag = f"mode={mode_eff}"
+            if batch_sz > 0:
+                batches = _chunk_jobs(jobs, batch_sz)
+                for b_ix, batch_jobs in enumerate(batches, start=1):
+                    _ = _render_pass(batch_jobs, mode_eff, f"{tag} batch={b_ix}/{len(batches)}")
+            else:
+                _ = _render_pass(jobs, mode_eff, tag)
+            # Clear queue after successful replay
+            try:
+                Path(qp).unlink()
+            except Exception:
+                pass
+    finally:
+        _DEFER_MODE = prev
+
+    return sum(1 for _ in jobs)  # keep return type simple
+
 
 
 
@@ -774,9 +927,10 @@ def _job_to_pml(job: dict, tmpdir: Path) -> Optional[Path]:
     return None
 def _run_one_job_mp(job: dict, mode: str = "cli") -> tuple:
     """
-    Returns: (ok:bool, t_ms:int, err:str|None)
+    Returns: (ok:bool, t_ms:int, err:str|None, pid:int, rss_mb:int)
     """
     t0 = time.time()
+    pid = os.getpid()
     err_first = None
     try:
         if mode == "cli":
@@ -808,10 +962,11 @@ def _run_one_job_mp(job: dict, mode: str = "cli") -> tuple:
             else:
                 ok = False
         t_ms = int((time.time() - t0) * 1000)
-        return (ok, t_ms, err_first)
+        return (ok, t_ms, err_first, pid, _rss_mb())
     except Exception as e:
         t_ms = int((time.time() - t0) * 1000)
-        return (False, t_ms, str(e))
+        return (False, t_ms, str(e), pid, _rss_mb())
+
 
 def launch_pymol_with_pml(pml_path: Path, pymol_exe: Optional[str] = None) -> None:
     """

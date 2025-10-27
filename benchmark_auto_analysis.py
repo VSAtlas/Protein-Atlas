@@ -46,18 +46,25 @@ from chemdb.chem_alias_db import alias_list_for_het as _alias_list_for_het
 
 
 
+# -----------------------------
+# Portable defaults: prefer env, then relative to this file
+from pathlib import Path
+_SCRIPT_ROOT = Path(__file__).resolve().parent
 
-# -----------------------------
-# Defaults (edit for IDE usage)
-# -----------------------------
-DEFAULT_DOCKED_ROOT = r"/stor/home/mpg2352/atlas/code/protein_automation/docked"
-DEFAULT_MAPPING_CSV = r"/stor/home/mpg2352/atlas/code/protein_automation/fda_mapping_from_pdbqt.csv" 
+DEFAULT_DOCKED_ROOT  = os.environ.get("DOCKED_DIR") \
+    or os.environ.get("OUTPUT_DIR") \
+    or str(_SCRIPT_ROOT / "docked")
+
+DEFAULT_MAPPING_CSV  = os.environ.get("MAPPING_CSV") \
+    or str(_SCRIPT_ROOT / "fda_mapping_from_pdbqt.csv")
 DEFAULT_ONLY_PDB = None  # e.g., "5MO4"
 DEFAULT_SCORE_TOL = 2   # kcal/mol
 DEFAULT_CENTER_TOL = 1.0  # Å
 DEFAULT_RMSD_TOL = 3.0    # Å
 DEFAULT_OUTDIR = None     # None -> <DOCKED>\_analysis
 DEFAULT_INCLUDE_IDENTITY = True  # toggle 4th criterion
+# Prefer explicit analysis cutoff if provided; else use the run's stamped epoch
+DEFAULT_SINCE_EPOCH = os.environ.get("BENCH_ANALYSIS_SINCE_EPOCH") or os.environ.get("BENCH_RUN_START_EPOCH")
 
 try:
     from input_and_export_functions import load_config, validate_config
@@ -76,6 +83,7 @@ DEFAULT_SCORE_TOL    = float(_cfg.get("SCORE_TOL_KCAL", DEFAULT_SCORE_TOL))
 DEFAULT_CENTER_TOL   = float(_cfg.get("CENTER_TOL_A",   DEFAULT_CENTER_TOL))
 DEFAULT_RMSD_TOL     = float(_cfg.get("RMSD_TOL_A",     DEFAULT_RMSD_TOL))
 DEFAULT_OUTDIR       = _cfg.get("BENCH_ANALYSIS_OUTDIR") or DEFAULT_OUTDIR
+VARIANT = (os.environ.get("APO_HOLO_MODE") or str(_cfg.get("APO_HOLO_MODE") or "holo")).strip().lower()
 
 # -----------------------------
 # Filename patterns
@@ -352,6 +360,67 @@ def parse_coords(path: Path) -> np.ndarray:
     return np.asarray(coords, dtype=float)
 
 
+# --- Prepped ligand path resolver (module-scope) ------------------------------
+
+def _collapse_core_stem(stem: str) -> str:
+    # strip stage suffixes like "_bench_pocket1_single" and optional ".best"
+    s = re.sub(r"_bench_pocket\d+_single(?:\.best)?$", "", stem, flags=re.I)
+    # strip trailing ".sanitized" tokens if present
+    s = re.sub(r"(?:\.sanitized)+$", "", s, flags=re.I)
+    return s
+
+def _prepped_search_dirs_for(pdb_id: str) -> list[Path]:
+    """
+    Likely directories that contain the *input* prepped ligands for a given PDB.
+    Uses config/env fallbacks consistent with the rest of this script.
+    """
+    base_overall = Path(DEFAULT_DOCKED_ROOT).parent
+    processed_root = Path(_cfg.get("OUTPUT_DIR") or (base_overall / "processed_pdbs"))
+    lib_root = Path(_cfg.get("OUTPUT_LIGANDS_DIR") or (base_overall / "prepped_ligands"))
+
+    dirs: list[Path] = []
+    # per-PDB prepped ligands
+    dirs.append(processed_root / pdb_id / "prepped_ligands")
+    # library roots (if user keeps FDA libraries here)
+    for sub in ("", "fda_library", "fda_library2", "fda_new"):
+        d = lib_root if not sub else (lib_root / sub)
+        if d.is_dir():
+            dirs.append(d)
+
+    # de-dup, keep order
+    out, seen = [], set()
+    for d in dirs:
+        try:
+            key = str(d.resolve())
+        except Exception:
+            key = str(d)
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+def guess_prepped_from_pose(pose_path: Path, pdb_id: str) -> Optional[Path]:
+    """
+    Best-effort guess for the *input* prepped ligand (.pdbqt) that produced a pose file.
+    Works for both controls and RDKs by stem matching and searching known roots.
+    """
+    core = _collapse_core_stem(pose_path.stem)
+
+    # 1) try exact file name in likely dirs
+    for d in _prepped_search_dirs_for(pdb_id):
+        q = d / f"{core}.pdbqt"
+        if q.is_file():
+            return q
+        q2 = d / f"{core}.sanitized.pdbqt"
+        if q2.is_file():
+            return q2
+
+    # 2) looser glob as fallback
+    for d in _prepped_search_dirs_for(pdb_id):
+        hits = sorted(d.glob(f"*{core}*.pdbqt"))
+        if hits:
+            return hits[0]
+    return None
 
 def extract_raw_text_block(path: Path, max_chars: int = 20000, only_header: bool = False) -> str:
     """
@@ -379,7 +448,7 @@ def extract_raw_text_block(path: Path, max_chars: int = 20000, only_header: bool
             if len(raw) > max_chars:
                 raw = raw[:max_chars].rstrip() + " …"
             return raw
-
+        
         # Header-only path (kept for possible re-use)
         keep_prefixes = ("MODEL", "REMARK", "TORSDOF", "ENDMDL")
         out_lines = []
@@ -550,33 +619,40 @@ def find_pair_only_screenshots(pdb_id: str, pocket_dir: Path, rdk_id: Optional[s
 class PairEval:
     pdb_id: str
     pocket: str
-    control_id: str          # e.g., NIL_A601
-    control_het: str         # e.g., NIL
+    control_id: str
+    control_het: str
     control_file: Path
     rdk_file: Path
     rdk_id: str
-    rdk_name: Optional[str]
-    control_score: Optional[float]
-    rdk_score: Optional[float]
-    delta_kcal: Optional[float]
-    rmsd: Optional[float]
-    flag_score: int
-    flag_center: int
-    flag_rmsd: int
-    flag_identity: int
-    total_points: int
-    n_atoms_ctrl: int
-    n_atoms_rdk: int
-    pick_reason: str
+
+    # fields with defaults must come after all required fields
+    control_prepped: Optional[Path] = None
+    rdk_prepped: Optional[Path] = None
+    rdk_name: Optional[str] = None
+    control_score: Optional[float] = None
+    rdk_score: Optional[float] = None
+
+    delta_kcal: Optional[float] = None
+    rmsd: Optional[float] = None
+    flag_score: int = 0
+    flag_center: int = 0
+    flag_rmsd: int = 0
+    flag_identity: int = 0
+    total_points: int = 0
+    n_atoms_ctrl: int = 0
+    n_atoms_rdk: int = 0
+    pick_reason: str = ""
+
     png_side: Optional[Path] = None
     png_front: Optional[Path] = None
     png_top: Optional[Path] = None
-    #interpretability/readability fields
-    control_display_name: Optional[str] = None  # guessed control drug name
-    flags_sum: int = 0                          # how many flags passed (incl. identity when enabled)
-    confidence_label: str = ""                 # confident / plausible / weak
-    confident_match: int = 0                    # 1 if confident
-    good_control: int = 0                       # 1 if control looks sane (recognized + has score + size)
+
+    # interpretability/readability
+    control_display_name: Optional[str] = None
+    flags_sum: int = 0
+    confidence_label: str = ""
+    confident_match: int = 0
+    good_control: int = 0
     png_pair_side: Optional[Path] = None
     png_pair_front: Optional[Path] = None
     png_pair_top: Optional[Path] = None
@@ -603,13 +679,23 @@ def find_pocket_dirs(pdb_dir: Path) -> List[Path]:
             out.append(child)
     return sorted(out)
 
-
-def load_controls_and_rdks(pocket_dir: Path, mapping: MappingIndex) -> Tuple[List[Tuple[str, Pose]], List[Pose]]:
+def load_controls_and_rdks(
+    pocket_dir: Path,
+    mapping: MappingIndex,
+    since_epoch: Optional[float] = None
+) -> Tuple[List[Tuple[str, Pose]], List[Pose]]:
     controls: List[Tuple[str, Pose]] = []
     rdks: List[Pose] = []
+    cutoff = float(since_epoch) if since_epoch is not None else None
     for p in pocket_dir.iterdir():
         if not p.is_file():
             continue
+        if cutoff is not None:
+            try:
+                if float(p.stat().st_mtime) < cutoff:
+                    continue
+            except Exception:
+                pass
         name = p.name
         if CONTROL_PAT.match(name):
             control_id = name.split("_bench_")[0]  # NIL_A601
@@ -620,10 +706,10 @@ def load_controls_and_rdks(pocket_dir: Path, mapping: MappingIndex) -> Tuple[Lis
             coords = parse_coords(p)
             sc = parse_vina_score(p)
             rdk_id = _rdk_id_from_stem(Path(name).stem)
-
             rname = resolve_rdk_name_from_mapping(rdk_id or "", mapping)
             rdks.append(Pose(path=p, score=sc, coords=coords, rdk_name=rname))
     return controls, rdks
+
 
 #should stay unused
 def _closest_by_centroid(ctrl: Pose, rdks: Sequence[Pose]) -> Optional[Pose]:
@@ -732,8 +818,7 @@ def evaluate_pairs(
         # No centroid flag in this version
         flag_center = 0
 
-
-        if DEBUG and rmsd_val is not None and raw_ctr is not None and raw_ctr > (center_tol + 0.25) and flag_rmsd:
+        if DEBUG and rmsd_val is not None and flag_rmsd:
             print(f"[debug] {pdb_id}/{pocket_name}/{control_id}: RMSD ok ({rmsd_val:.2f} Å) "
                   f"Using aligned for scoring. pick={picked.path.name} via {pick_reason}")
 
@@ -785,6 +870,10 @@ def evaluate_pairs(
 
         total_points = flag_score + flag_center + flag_rmsd + (identity_flag if include_identity else 0)
         lig_e, prot_e = _lookup_errors(picked.path)
+        # resolve the actual prepped input ligands (best-effort)
+        _control_prepped = guess_prepped_from_pose(ctrl.path, pdb_id)
+        _rdk_prepped     = guess_prepped_from_pose(picked.path, pdb_id)
+
         rows.append(
             PairEval(
                 pdb_id=pdb_id,
@@ -793,6 +882,8 @@ def evaluate_pairs(
                 control_het=het,
                 control_file=ctrl.path,
                 rdk_file=picked.path,
+                control_prepped=_control_prepped,
+                rdk_prepped=_rdk_prepped,
                 rdk_id=rdk_id,
                 rdk_name=picked.rdk_name,
                 control_score=ctrl.score,
@@ -862,7 +953,8 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow([
-            "pdb_id", "pocket", "control_id", "control_het", "control_file", "rdk_file", "rdk_id",
+            "variant", "pdb_id", "pocket", "control_id", "control_het",
+            "control_file", "control_prepped", "rdk_file", "rdk_prepped", "rdk_id",
             "control_drug_guess", "rdk_suspected_fda_name",
             "control_score_kcal", "rdk_score_kcal", "delta_kcal",
             "rmsd_ctrl_to_rdk_A", "rmsd_rdk_to_ctrl_A",
@@ -877,8 +969,11 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
         ])
         for r in rows:
             w.writerow([
+                VARIANT,
                 r.pdb_id, r.pocket, r.control_id, r.control_het,
-                str(r.control_file), str(r.rdk_file), r.rdk_id,
+                str(r.control_file), (str(r.control_prepped) if r.control_prepped else ""),
+                str(r.rdk_file), (str(r.rdk_prepped) if r.rdk_prepped else ""),
+                r.rdk_id,
                 (r.control_display_name or ""), (r.rdk_name or ""),
                 _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal),
                 _fmt(r.rmsd), _fmt(r.rmsd),
@@ -976,10 +1071,27 @@ def _img_to_data_uri_or_link(p: Optional[Path], max_width_px: int = 280) -> str:
         except Exception:
             return _html_escape(str(p))
 
+def _mtime_ok(p: Optional[Path], since_epoch: Optional[float]) -> bool:
+    if not p or not Path(p).is_file():
+        return False
+    if since_epoch is None:
+        return True
+    try:
+        return float(Path(p).stat().st_mtime) >= float(since_epoch)
+    except Exception:
+        return False
 
-def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity: bool) -> Path:
+def write_details_html(
+    out_dir: Path,
+    rows: Sequence[PairEval],
+    include_identity: bool,
+    *,
+    html_success_only: Optional[bool] = None,
+    since_epoch: Optional[float] = None,
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "benchmark_analysis_details_with_images.html"
+
     def _badge(label: str) -> str:
         cls = "bad"
         if label == "confident":
@@ -987,36 +1099,6 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
         elif label == "plausible":
             cls = "ok"
         return f"<span class='badge {cls}'>{_html_escape(label)}</span>"
-
-    # --- Expected-only HTML filter ---
-    def _norm(s: str) -> str:
-        return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
-    def _exp_list_for(pid: str):
-        return [_norm(x) for x in EXPECTED_RDK_BY_PDB.get((pid or '').upper(), [])]
-    def _is_expected_row(r: PairEval) -> bool:
-        # prefer precomputed flag if present
-        try:
-            return bool(r.is_expected)
-        except Exception:
-            pass
-        exp = _exp_list_for(r.pdb_id)
-        nm = _norm(r.rdk_name or '')
-        if not exp or not nm:
-            return True  # fail-open (will tag)
-        return any(en and (en in nm or nm in en) for en in exp)
-
-    # --- Expected-only HTML filter ---
-    want_expected_only = bool(int(os.environ.get("ANALYSIS_HTML_EXPECTED_ONLY", "1")))
-    rows_to_render: list[PairEval] = []
-    if want_expected_only:
-        for r in rows:
-            if _is_expected_row(r):
-                rows_to_render.append(r)
-            else:
-                # hidden (non-expected with configured allow-list and a resolvable name)
-                pass
-    else:
-        rows_to_render = list(rows)
 
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("""
@@ -1036,13 +1118,13 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
     max-width:420px;
     overflow-wrap:anywhere;
     margin:0;
-    font-size:9px;         /* tiny */
-    line-height:1.05;      /* tight lines */
-    max-height:96px;       /* clamp – tweak to taste (e.g., 80–120px) */
-    overflow:auto;         /* scroll if longer, don't expand row */
+    font-size:9px;
+    line-height:1.05;
+    max-height:96px;
+    overflow:auto;
   }
-  /* Slightly reduce padding for those cols so they look compact */
-  td.rawcol{ padding:2px 4px; }  .num{text-align:right;white-space:nowrap}
+  td.rawcol{ padding:2px 4px; }
+  .num{text-align:right;white-space:nowrap}
   .imgcell{white-space:nowrap}
   .muted{color:#777}
   .badge{display:inline-block;padding:2px 8px;border-radius:12px;border:1px solid #ddd;font-size:12px}
@@ -1053,10 +1135,11 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
 </head>
 <body>
 <h2>Benchmark Analysis — Details (with images)</h2>
-<p class="muted">Columns mirror <code>benchmark_analysis_details.csv</code>, with extra readability fields (scores for control & RDK, suspected FDA name, confidence, good-control) and <b>six image columns</b>. Generated by the script.</p>
+<p class="muted">Columns mirror <code>benchmark_analysis_details.csv</code>, plus raw pose text and six image columns.</p>
 <table>
 <thead><tr>
-  <th>pdb_id</th><th>pocket</th><th>control_id</th><th>rdk_id</th>
+  <th>variant</th><th>pdb_id</th><th>pocket</th><th>control_id</th><th>rdk_id</th>
+  <th>rdk_prepped</th><th>control_prepped</th>
   <th>control_drug</th><th>rdk_suspected_fda</th>
   <th class="num">ctrl_score</th><th class="num">rdk_score</th><th class="num">Δkcal</th>
   <th class="num">RMSD_A</th>
@@ -1068,45 +1151,63 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
 </tr></thead>
 <tbody>
 """)
+
+        # Do NOT filter rows: render everything provided in `rows`.
         for r in rows:
+            # Gate images by mtime ≥ since_epoch (rows are never filtered)
+            def _maybe(p: Optional[Path]) -> Optional[Path]:
+                return p if _mtime_ok(p, since_epoch) else None
+            side = _maybe(r.png_side)
+            front = _maybe(r.png_front)
+            top = _maybe(r.png_top)
+            pside = _maybe(r.png_pair_side)
+            pfront = _maybe(r.png_pair_front)
+            ptop = _maybe(r.png_pair_top)
+
             fh.write("<tr>")
+            fh.write(f"<td>{_html_escape(VARIANT.upper())}</td>")
             fh.write(f"<td>{_html_escape(r.pdb_id)}</td>")
             fh.write(f"<td>{_html_escape(r.pocket)}</td>")
             fh.write(f"<td>{_html_escape(r.control_id)}</td>")
             fh.write(f"<td>{_html_escape(r.rdk_id)}</td>")
+            fh.write(f"<td>{_html_escape(str(r.rdk_prepped or ''))}</td>")
+            fh.write(f"<td>{_html_escape(str(r.control_prepped or ''))}</td>")
             fh.write(f"<td>{_html_escape(r.control_display_name or '')}</td>")
+
             _nm = r.rdk_name or ''
             def _norm(s: str) -> str:
                 return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
-
             _exp = [_norm(x) for x in EXPECTED_RDK_BY_PDB.get((r.pdb_id or '').upper(), [])]
             _nm_norm = _norm(_nm)
             _match = (not _exp) or (not _nm_norm) or any(en and (en in _nm_norm or _nm_norm in en) for en in _exp)
             note = '' if _match else " <span class='muted'>(not-in-expected)</span>"
             fh.write(f"<td>{_html_escape(_nm)}{note}</td>")
+
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.control_score))}</td>")
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.rdk_score))}</td>")
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.delta_kcal))}</td>")
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.rmsd))}</td>")
             fh.write(f"<td>{_html_escape(r.expected_rdks)}</td>")
             fh.write(f"<td>{'True' if r.matched_success else 'False'}</td>")
+
             fh.write(f"<td class='rawcol'><pre class='raw'>{_html_escape(r.rdk_raw_text)}</pre></td>")
             fh.write(f"<td class='rawcol'><pre class='raw'>{_html_escape(r.control_raw_text)}</pre></td>")
+
             fh.write(f"<td>{_html_escape(r.pick_reason)}</td>")
             fh.write(f"<td>{_badge(r.confidence_label)}</td>")
             fh.write(f"<td class='num'>{'✔' if r.good_control else '—'}</td>")
             fh.write(f"<td class='num'>{r.flag_score}</td>")
             fh.write(f"<td class='num'>{r.flag_rmsd}</td>")
             fh.write(f"<td class='num'>{r.flag_identity}</td>")
-            # overlay images
-            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(r.png_side)}</td>")
-            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(r.png_front)}</td>")
-            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(r.png_top)}</td>")
-            # pair-only images
-            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(r.png_pair_side)}</td>")
-            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(r.png_pair_front)}</td>")
-            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(r.png_pair_top)}</td>")
+
+            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(side)}</td>")
+            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(front)}</td>")
+            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(top)}</td>")
+            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(pside)}</td>")
+            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(pfront)}</td>")
+            fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(ptop)}</td>")
             fh.write("</tr>")
+
         fh.write("""
 </tbody>
 </table>
@@ -1114,6 +1215,7 @@ def write_details_html(out_dir: Path, rows: Sequence[PairEval], include_identity
 </html>
 """)
     return path
+
 
 def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity: bool) -> Optional[Path]:
     """Try to write an .xlsx with embedded images. Uses xlsxwriter if available, else openpyxl. Returns path or None."""
@@ -1214,12 +1316,21 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
 
 
 
-def write_details_visual_report(out_dir: Path, rows: Sequence[PairEval], include_identity: bool) -> Path:
+def write_details_visual_report(
+    out_dir: Path,
+    rows: Sequence[PairEval],
+    include_identity: bool,
+    *,
+    html_success_only: Optional[bool] = None,
+    since_epoch: Optional[float] = None
+) -> Path:
     """Create a visual report attempting XLSX (with images) first, else HTML with inline images."""
     xlsx = write_details_xlsx(out_dir, rows, include_identity)
     if xlsx is not None:
         return xlsx
-    return write_details_html(out_dir, rows, include_identity)
+    return write_details_html(out_dir, rows, include_identity,
+                              html_success_only=html_success_only, since_epoch=since_epoch)
+
 
 
 # -----------------------------
@@ -1237,7 +1348,6 @@ def find_pdb_dirs(docked_root: Path, only_pdb: Optional[str]) -> List[Path]:
     pdb_dirs.sort()
     return pdb_dirs
 
-
 def run_analysis(
     docked_root: Path,
     mapping_csv: Optional[Path],
@@ -1247,6 +1357,8 @@ def run_analysis(
     rmsd_tol: float,
     include_identity: bool,
     out_dir: Optional[Path] = None,
+    since_epoch: Optional[float] = None,
+    html_success_only: Optional[bool] = None,
 ) -> Tuple[Optional[Path], Optional[Path]]:
     if not docked_root.is_dir():
         print(f"[analysis] DOCKED root not found: {docked_root}")
@@ -1258,7 +1370,18 @@ def run_analysis(
     for pdb_dir in find_pdb_dirs(docked_root, only_pdb):
         pdb_id = pdb_dir.name.upper()
         for pocket_dir in find_pocket_dirs(pdb_dir):
-            controls, rdks = load_controls_and_rdks(pocket_dir, mapping)
+            # Skip pockets explicitly marked as having no RDKs this run
+            sentinel = pocket_dir / ".rdk_skipped"
+            if sentinel.exists():
+                try:
+                    has_rdk = any(RDK_PAT.match(ch.name) for ch in pocket_dir.iterdir() if ch.is_file())
+                except Exception:
+                    has_rdk = False
+                if not has_rdk:
+                    if DEBUG:
+                        print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} due to .rdk_skipped sentinel")
+                    continue
+            controls, rdks = load_controls_and_rdks(pocket_dir, mapping, since_epoch=since_epoch)
             if not controls or not rdks:
                 if DEBUG:
                     print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} (controls={len(controls)} rdks={len(rdks)})")
@@ -1266,7 +1389,7 @@ def run_analysis(
             rows = evaluate_pairs(
                 pdb_id,
                 pocket_dir.name,
-                pocket_dir,  # pass pocket path for PNG discovery
+                pocket_dir,
                 controls,
                 rdks,
                 score_tol=score_tol,
@@ -1283,10 +1406,10 @@ def run_analysis(
     out_root = out_dir if out_dir else (docked_root / "_analysis")
     details_path = write_details_csv(out_root, all_rows, include_identity)
     summary_path = write_summary_csv(out_root, all_rows, include_identity)
-    # Also write a *visual* details report that actually shows images (XLSX if possible, else HTML)
-    visual_path = write_details_visual_report(out_root, all_rows, include_identity)
+    visual_path = write_details_visual_report(out_root, all_rows, include_identity,
+                                              html_success_only=html_success_only,
+                                              since_epoch=since_epoch)
 
-    # ---- Nice console rollup: list PDBs by category + global best ----
     max_points = 4 if include_identity else 3
     by_pdb_best: Dict[str, int] = {}
     for r in all_rows:
@@ -1328,6 +1451,13 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="Show only expected FDA RDKs in the HTML report (env ANALYSIS_HTML_EXPECTED_ONLY=1).")
     p.add_argument("--no-html-expected-only", dest="html_expected_only", action="store_false",
                    help="Disable expected-only filtering in HTML (env ANALYSIS_HTML_EXPECTED_ONLY=0).")
+    p.add_argument("--since-epoch", type=float,
+                   default=(float(DEFAULT_SINCE_EPOCH) if DEFAULT_SINCE_EPOCH else None),
+                   help="Only ingest files with mtime >= this UNIX epoch (env BENCH_ANALYSIS_SINCE_EPOCH or BENCH_RUN_START_EPOCH).")
+    p.add_argument("--html-success-only", dest="html_success_only", action="store_true", default=True,
+                   help="HTML shows only success rows (score✔ & RMSD✔ & identity✔). Env ANALYSIS_HTML_SUCCESS_ONLY=1.")
+    p.add_argument("--no-html-success-only", dest="html_success_only", action="store_false",
+                   help="Disable success-only filtering for HTML (env ANALYSIS_HTML_SUCCESS_ONLY=0).")
 
     return p
 
@@ -1352,6 +1482,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         rmsd_tol=float(args.rmsd_tol),
         include_identity=not bool(args.no_identity),
         out_dir=out,
+        since_epoch=(float(args.since_epoch) if args.since_epoch is not None else None),
+        html_success_only=bool(args.html_success_only),
     )
 
 
@@ -1369,4 +1501,6 @@ if __name__ == "__main__":
             rmsd_tol=DEFAULT_RMSD_TOL,
             include_identity=DEFAULT_INCLUDE_IDENTITY,
             out_dir=Path(DEFAULT_OUTDIR) if DEFAULT_OUTDIR else None,
+            since_epoch=(float(DEFAULT_SINCE_EPOCH) if DEFAULT_SINCE_EPOCH else None),
+            html_success_only=True,
         )

@@ -34,11 +34,24 @@ from capture_pose import (
     _safe_open_csv_for_write,
     pick_control_and_nearest_rdk,
 )
+# Per-run timestamp (exported later after RUN_DIR is set)
+RUN_START_EPOCH: float = float(time.time())
+
+def _bool_env(name: str, default: bool) -> bool:
+    v = str(os.environ.get(name, "")).strip().lower()
+    if not v:
+        return default
+    return v in ("1", "true", "yes", "on")
+
+def _render_only_current_run_enabled(cfg: dict) -> bool:
+    # Default true: pre-docking render enqueue is disabled
+    return _bool_env("BENCH_RENDER_ONLY_CURRENT_RUN", True)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Config
-from input_and_export_functions import load_inputs, validate_config, load_config
+from input_and_export_functions import load_inputs, validate_config, load_config, init_config_run_dir
+import logging, sys
 cfg = load_config()
 # Library resolution helpers
 from metabolite_resolver import (
@@ -85,18 +98,127 @@ from main import (  # noqa: E402
     RetryManager,
 )
 from prep_ligands import prep_ligands_from_pdb
-
-
-
 # ----- Deferred render queue (global) -----
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List
 import threading
 from contextlib import contextmanager
+
+# --- [AUTO-ENV/LOG GUARD for micromamba + tee logging] ---
+import os, sys, shutil, datetime, atexit
+from pathlib import Path
+
+TARGET_ENV = "docking-env"
+
+def _in_target_env():
+    # Treat either micromamba or conda naming as "already in docking-env"
+    return (os.environ.get("MAMBA_DEFAULT_ENV") == TARGET_ENV) or \
+           (os.environ.get("CONDA_DEFAULT_ENV") == TARGET_ENV)
+
+def _prepare_logfile_from_cwd():
+    logs_dir = Path(os.getcwd()) / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return str(logs_dir / ("bench_%s.log" % ts))
+
+class _Tee(object):
+    def __init__(self, stream, file_path):
+        self._stream = stream
+        self._fh = open(file_path, "a", buffering=1, encoding="utf-8", errors="replace")
+    def write(self, data):
+        try:
+            self._stream.write(data)
+        except Exception:
+            pass
+        try:
+            self._fh.write(data)
+        except Exception:
+            pass
+    def flush(self):
+        try: self._stream.flush()
+        except Exception: pass
+        try: self._fh.flush()
+        except Exception: pass
+    def isatty(self):
+        try: return self._stream.isatty()
+        except Exception: return False
+    def close(self):
+        try: self._fh.close()
+        except Exception: pass
+
+def _tee_stdio_to(log_path):
+    _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+    tee_out, tee_err = _Tee(_orig_stdout, log_path), _Tee(_orig_stderr, log_path)
+    sys.stdout, sys.stderr = tee_out, tee_err
+    def _announce_and_close():
+        try:
+            sys.stdout.write("Log -> %s\n" % log_path)
+            sys.stdout.flush()
+        finally:
+            try:
+                tee_out.close()
+                tee_err.close()
+            except Exception:
+                pass
+    atexit.register(_announce_and_close)
+
+# Require Python 3+ to parse this file at all.
+if sys.version_info[0] < 3:
+    sys.stderr.write("[FATAL] This program requires Python 3+. Your interpreter is: %s\n" % sys.version.split()[0])
+    sys.stderr.write("Use `python3 benchmark_mode.py` or `micromamba run -n %s python -u benchmark_mode.py ...`\n" % TARGET_ENV)
+    sys.exit(2)
+
+# If not in docking-env, re-exec via micromamba (no conda fallback).
+if not _in_target_env():
+    mm = shutil.which("micromamba")
+    if not mm:
+        sys.stderr.write("[FATAL] micromamba not found on PATH; cannot enter '%s'.\n" % TARGET_ENV)
+        sys.stderr.write("Hint: ensure micromamba is on PATH, then try again.\n")
+        sys.exit(2)
+    log_path = _prepare_logfile_from_cwd()
+    env = os.environ.copy()
+    env["ATLAS_LOG_FILE"] = log_path
+    script_path = os.path.abspath(__file__)
+    cmd = [mm, "run", "-n", TARGET_ENV, "python", "-u", script_path] + sys.argv[1:]
+    os.execvpe(cmd[0], cmd, env)
+
+# Already inside docking-env: enable tee logging (use provided path if any).
+_log_path = os.environ.get("ATLAS_LOG_FILE") or _prepare_logfile_from_cwd()
+os.environ["ATLAS_LOG_FILE"] = _log_path
+_tee_stdio_to(_log_path)
+# --- [end AUTO-ENV/LOG GUARD] ---
+
+
+
 # --- PyMOL deferral & parallelism bootstrap
 _DEFER_DEFAULT = str(os.environ.get("DEFER_PYMOL", "1")).lower() in ("1","true","yes","on")
 capture_pose.set_defer_mode(_DEFER_DEFAULT, queue_path=os.environ.get("PYMOL_DEFER_QUEUE"))
 _RENDER_LOCK = threading.Semaphore(int(os.environ.get("PYMOL_PARALLEL", "1")))
+def _parse_image_variants(cfg) -> tuple[set[str], bool]:
+    """
+    Returns (variants, is_subset_mode)
+
+    variants: normalized set in {"ctrl", "rdk", "ctrl+rdk"}.
+    is_subset_mode: True iff the user explicitly set PYMOL_IMAGE_VARIANTS
+                    (i.e., filter strictly to those; otherwise keep back-compat extras).
+    """
+    raw = (os.environ.get("PYMOL_IMAGE_VARIANTS")
+           or str(cfg.get("PYMOL_IMAGE_VARIANTS") or "")).strip().lower()
+
+    def _bool_from_cfg_env(key: str, default: bool) -> bool:
+        v = (os.environ.get(key) or str(cfg.get(key) or "")).strip().lower()
+        if v in ("", None):
+            return default
+        return v not in ("0", "false", "no", "off")
+
+    include_native = _bool_from_cfg_env("PYMOL_IMAGE_INCLUDE_NATIVE", False)
+
+    if not raw:
+        # Back-compat default: render everything we render today
+        return {"ctrl", "rdk", "ctrl+rdk"}, False
+    toks = {t.strip() for t in raw.split(",") if t.strip()}
+    valid = {"ctrl", "rdk", "ctrl+rdk"}
+    return (toks & valid) or set(), True
 
 
 @contextmanager
@@ -185,12 +307,25 @@ def _enqueue_render_task(*, pdb_id: str, stage_name: str, root_project: str,
     stage_dir_target = Path(root_project) / "docked" / pdb_id / stage_name
     stage_dir_target.mkdir(parents=True, exist_ok=True)
 
+    # Viewport first (used by native + three-views)
+    viewport_w = int(cfg.get("VIEWPORT_W", 640))
+    viewport_h = int(cfg.get("VIEWPORT_H", 480))
+    viewport = (viewport_w, viewport_h)
+
+    # Resolve which three-view sets to generate
+    _variants, _subset = _parse_image_variants(cfg)
+    include_native = str(os.environ.get("PYMOL_IMAGE_INCLUDE_NATIVE", "") or
+                         str(cfg.get("PYMOL_IMAGE_INCLUDE_NATIVE", ""))).strip().lower() in ("1", "true", "yes", "on")
+
     # Native view
-    _cap._render_native_on_original_pdb(
-        original_pdb=original_pdb_path,
-        outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
-        exclude_resns=sorted(exclude_resns or []),
-    )
+    if include_native and original_pdb_path:
+        _cap._render_native_on_original_pdb(
+            original_pdb=original_pdb_path,
+            outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
+            exclude_resns=exclude_resns,
+            viewport=viewport,
+        )
+
     try:
         label_top_n_res = int(os.environ.get("PYMOL_LABEL_TOP_N_RES") or 5)
     except (TypeError, ValueError):
@@ -204,30 +339,40 @@ def _enqueue_render_task(*, pdb_id: str, stage_name: str, root_project: str,
     viewport_h = int(cfg.get("VIEWPORT_H", 480))
     viewport = (viewport_w, viewport_h)
     # Three-view(s)
-    if ctrl_pose_path:
+    # ctrl-only (cleaned receptor + control)
+    if ctrl_pose_path and ("ctrl" in _variants):
         _cap._render_three_views_with_pymol(
             receptor_path=cleaned_pdb_path,
             ligand_paths_and_colors=[(ctrl_pose_path, "control", "green")],
             outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL"),
         )
-    if rdk_pose_path:
+
+    # rdk-only (cleaned receptor + rdk)
+    if rdk_pose_path and ("rdk" in _variants):
         _cap._render_three_views_with_pymol(
             receptor_path=cleaned_pdb_path,
             ligand_paths_and_colors=[(rdk_pose_path, "rdk", "magenta")],
             outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__RDKclosest"),
         )
+
+    # Historical extra: rdk on original receptor (kept only for back-compat when user didn’t set PYMOL_IMAGE_VARIANTS)
+    if rdk_pose_path and not _subset:
         _cap._render_three_views_with_pymol(
             receptor_path=original_pdb_path,
             ligand_paths_and_colors=[(rdk_pose_path, "rdk", "magenta")],
             outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-rdk__RDKclosest"),
         )
-        if ctrl_pose_path:
-            _cap._render_three_views_with_pymol(
-                receptor_path=cleaned_pdb_path,
-                ligand_paths_and_colors=[(ctrl_pose_path, "control", "green"),
-                                         (rdk_pose_path, "rdk", "magenta")],
-                outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
-            )
+
+    # ctrl+rdk (cleaned receptor + both ligands)
+    if ctrl_pose_path and rdk_pose_path and ("ctrl+rdk" in _variants):
+        _cap._render_three_views_with_pymol(
+            receptor_path=cleaned_pdb_path,
+            ligand_paths_and_colors=[
+                (ctrl_pose_path, "control", "green"),
+                (rdk_pose_path, "rdk", "magenta"),
+            ],
+            outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
+        )
 
 
 def run_deferred_renders(max_workers: int) -> None:
@@ -246,19 +391,57 @@ def run_deferred_renders(max_workers: int) -> None:
 
 
 def _resolve_receptor_for(pdb_id: str, cfg: dict) -> Optional[Path]:
-    # Prefer explicit PROCESSED_PDBS_DIR, else try to infer from OVERALL_DIR OUTPUT_DIR=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs
-    base = Path(cfg.get("OUTPUT_DIR") or
-                Path(cfg["OVERALL_DIR"]).parent / "processed_pdbs").resolve()
-    d = base / f"{pdb_id}_NOLIG" / "receptor"
-    for pat in [f"{pdb_id}_NOLIG_cleaned.pdb", "*_NOLIG_cleaned.pdb", "*cleaned.pdb"]:
-        hits = sorted(d.glob(pat))
+    """
+    Locate the cleaned receptor PDB for <pdb_id>.
+    Canonical: processed_pdbs/<PDB>/receptor/<PDB>_cleaned.pdb
+    Legacy fallback (read-only): processed_pdbs/<PDB>_NOLIG/receptor/*_NOLIG_cleaned.pdb (or *cleaned.pdb)
+    """
+    base = Path(cfg.get("OUTPUT_DIR") or Path(cfg["OVERALL_DIR"]).parent / "processed_pdbs").resolve()
+    canonical = base / pdb_id / "receptor" / f"{pdb_id}_cleaned.pdb"
+    if canonical.exists():
+        return canonical.resolve()
+
+    # Back-compat (read-only): accept legacy sibling if present
+    legacy_dir = base / f"{pdb_id}_NOLIG" / "receptor"
+    for pat in (f"{pdb_id}_NOLIG_cleaned.pdb", "*_NOLIG_cleaned.pdb", "*cleaned.pdb"):
+        hits = sorted(legacy_dir.glob(pat))
         if hits:
             return hits[0].resolve()
 
     return None
 
+def _resolve_allowed_rdk_ids(mapping: MappingIndex, names: Sequence[str]) -> set[str]:
+    """Resolve allow-list of drug names to concrete RDK ids via mapping CSV."""
+    ids: set[str] = set()
+    base: list[str] = [n for n in (names or []) if n]
+    SYN = {  # minimal shim; extend as needed
+        "venetoclax": ["venclexta", "abt-199", "abt199"],
+    }
+    for nm in base:
+        q = [nm]
+        extra = SYN.get(str(nm).strip().lower())
+        if extra:
+            q.extend(extra)
+        for row, _sc, _why in mapping.search(q, inchikey=None, max_results=6):
+            rid = _extract_rdk_id(Path(row.path).name)
+            if rid:
+                ids.add(rid.lower())
+    return ids
 
 
+def _find_control_files(prepped_dir: Path, control_names: list[str]) -> list[str]:
+    """Return full paths to existing .pdbqt files matching the requested control base names."""
+    found = []
+    for name in control_names:
+        # Match typical variants (prefix, suffix, stage suffixes); keep existing selection heuristics downstream.
+        for p in prepped_dir.glob(f"{name}*.pdbqt"):
+            try:
+                if p.is_file():
+                    found.append(str(p))
+            except Exception:
+                pass
+    # Stable order helps reproducibility
+    return sorted(set(found))
 
 # =============================
 # Small text/path helper utils
@@ -914,12 +1097,13 @@ def run_benchmark_for_protein(
             pass
 
     paths = make_paths(cfg, base_id, pdb_file)
-    # --- enforce _NOLIG directory consistency for receptor paths ---
-    nolig_dir = Path(cfg["OUTPUT_DIR"]) / f"{pdb_id}_NOLIG" / "receptor"
-    nolig_file = nolig_dir / f"{pdb_id}_NOLIG_cleaned.pdb"
-    if nolig_file.exists():
-        paths.cleaned_pdb_path = nolig_file
-    # else: let prepare_receptor create nolig
+
+    # Prefer canonical cleaned receptor; if missing, allow legacy read-only fallback.
+    if not Path(paths.cleaned_pdb_path).exists():
+        base = Path(cfg.get("OUTPUT_DIR") or Path(cfg["OVERALL_DIR"]).parent / "processed_pdbs").resolve()
+        legacy = base / f"{pdb_id}_NOLIG" / "receptor" / f"{pdb_id}_NOLIG_cleaned.pdb"
+        if legacy.exists():
+            paths.cleaned_pdb_path = legacy
 
     # --- DEBUG visibility (clarify scopes) ---
     try:
@@ -1092,6 +1276,24 @@ def run_benchmark_for_protein(
             final_hints.append(h)
             seen.add(hn)
     final_hints = _merge_per_pdb_hints(pdb_id, final_hints)
+    allowed_rdk_ids: set[str] = set()
+
+    # STRICT policy (default ON): only extracted controls + hard-coded per-PDB RDK identities
+    if bool(cfg.get("BENCH_ONLY_EXTRACTED_CTRL_AND_RDK", True)):
+        final_hints = list(PER_PDB_HINTS.get(pdb_id, []))  # keep scope narrow
+        try:
+            allowed_rdk_ids = _resolve_allowed_rdk_ids(mapping, final_hints)
+        except Exception:
+            allowed_rdk_ids = set()
+        logger.info("[policy] %s restrict_hints → PER_PDB_HINTS=%s | resolved_rdk=%s",
+                    pdb_id, final_hints, sorted(list(allowed_rdk_ids))[:6])
+    # --- Controls-only policy vars (used to guard candidate selection) ---
+    is_hardcoded = pdb_id in HARD_FDA_CONTROL_BY_PDB
+    enforce_controls_only = bool(cfg.get("BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY", True))
+    allow_fallback = bool(cfg.get("BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING", False))
+    hardcoded_names = HARD_FDA_CONTROL_BY_PDB.get(pdb_id, []) if is_hardcoded else []
+    prepped_dir = Path(paths.prepped_ligands_dir)
+    ctrl_paths_from_disk = _find_control_files(prepped_dir, hardcoded_names) if is_hardcoded else []
 
     logger.info("[DEBUG] hint_count=%d | examples=%s", len(final_hints), ", ".join(map(str, final_hints[:8])))
     # 5) Candidate selection (now fenced to multi-scope)
@@ -1110,15 +1312,6 @@ def run_benchmark_for_protein(
     )
     logger.info("[DEBUG] select_candidates scope=%s | kept=%d",
                 [str(s) for s in scope_dirs], len(cand_rows))
-
-    # Force _NOLIG form for consistency
-    cleaned = Path(paths.cleaned_pdb_path)
-    if not cleaned.name.endswith("_NOLIG_cleaned.pdb"):
-        nolig_variant = cleaned.with_name(
-            cleaned.stem.replace("_cleaned", "_NOLIG_cleaned") + cleaned.suffix
-        )
-        if nolig_variant.exists():
-            paths.cleaned_pdb_path = nolig_variant
 
     # --- render enqueue helpers (inside run_benchmark_for_protein) ---
     def _first(globpat: str) -> Optional[Path]:
@@ -1213,18 +1406,23 @@ def run_benchmark_for_protein(
     logger.info("[render-enqueue] %s %s: receptor=%s | orig=%s | ctrl=%s | rdk=%s",
                 pdb_id, STAGE_NAME, paths.cleaned_pdb_path, paths.pdb_path,
                 ctrl_pose, rdk_pose)
-    _enqueue_render_task(
-        pdb_id=pdb_id,
-        stage_name=STAGE_NAME,
-        root_project=str(Path(cfg["OVERALL_DIR"]).resolve()),
-        cleaned_pdb_path=str(Path(paths.cleaned_pdb_path).resolve()),
-        original_pdb_path=str(Path(paths.pdb_path).resolve()),
-        ctrl_pose_path=(str(ctrl_pose) if ctrl_pose else None),
-        rdk_pose_path=(str(rdk_pose) if rdk_pose else None),
-        exclude_resns=list(EXCLUDE_HET_IDS),
-    )
-    logger.info("[render-enqueue-final] %s %s: ctrl=%s | rdk=%s",
-                pdb_id, STAGE_NAME, bool(ctrl_pose), bool(rdk_pose))
+    if not _render_only_current_run_enabled(cfg):
+        _enqueue_render_task(
+            pdb_id=pdb_id,
+            stage_name=STAGE_NAME,
+            root_project=str(Path(cfg["OVERALL_DIR"]).resolve()),
+            cleaned_pdb_path=str(Path(paths.cleaned_pdb_path).resolve()),
+            original_pdb_path=str(Path(paths.pdb_path).resolve()),
+            ctrl_pose_path=(str(ctrl_pose) if ctrl_pose else None),
+            rdk_pose_path=(str(rdk_pose) if rdk_pose else None),
+            exclude_resns=list(EXCLUDE_HET_IDS),
+        )
+        logger.info("[render-enqueue-final] %s %s: ctrl=%s | rdk=%s (pre-docking allowed)",
+                    pdb_id, STAGE_NAME, bool(ctrl_pose), bool(rdk_pose))
+    else:
+        logger.info("[render-pre-skip] %s %s: BENCH_RENDER_ONLY_CURRENT_RUN=1 → "
+                    "skip pre-docking enqueue; renders will come only from current-run poses.",
+                    pdb_id, STAGE_NAME)
 
     # Enqueue consolidated renders (native + control + rdk + overlay)
     fh, cand_csv_path = _safe_open_csv_for_write(out_dir / f"benchmark_candidates_{pdb_id}.csv")
@@ -1248,11 +1446,39 @@ def run_benchmark_for_protein(
             w.writerow([i, sc, why, row.path, row.display_name, row.generic_name, row.brand_names, row.inchikey, corr])
     if str(cand_csv_path) != str(out_dir / f"benchmark_candidates_{pdb_id}.csv"):
         logger.info(f"[benchmark] candidates CSV was locked; wrote to {cand_csv_path.name}")
+    # --- Controls-only policy gate for HARD_FDA_CONTROL_BY_PDB ---
+    is_hardcoded = pdb_id in HARD_FDA_CONTROL_BY_PDB
+    enforce_controls_only = bool(cfg.get("BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY", True))
+    allow_fallback = bool(cfg.get("BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING", False))
+
+    hardcoded_names = HARD_FDA_CONTROL_BY_PDB.get(pdb_id, []) if is_hardcoded else []
+    prepped_dir = Path(paths.prepped_ligands_dir)
+    ctrl_paths_from_disk = _find_control_files(prepped_dir, hardcoded_names) if is_hardcoded else []
+
+    # Start with "controls" as discovered by today's flow (e.g., promotion/lock), then overlay if hardcoded hit:
+    controls = list(controls) if "controls" in locals() else []  # keep existing discovery if already computed
+    if is_hardcoded and enforce_controls_only:
+        if ctrl_paths_from_disk:
+            # Enforce: controls only; nuke whitelist later by feeding empty non_ctrls.
+            controls = ctrl_paths_from_disk
+            whitelist = []  # will be ignored; we’ll still let downstream two-wave code run with 0 whitelist
+            logger.info(f"[policy] {pdb_id} policy=controls-only n_ctrl={len(controls)} n_whitelist=0 reason=hardcoded")
+        else:
+            looked_for = ", ".join(hardcoded_names) if hardcoded_names else "(none)"
+            logger.warning(
+                f"[hardcoded-control-missing-noabort] {pdb_id}: looked_for=[{looked_for}]; "
+                f"continuing with discovered controls and keeping RDK whitelist.")
+    else:
+        # Non-hardcoded: keep current behavior. We'll print the audit once counts are known.
+        pass
+    # --- end controls-only policy gate ---
 
     whitelist = [row.path for (row, _, _) in cand_rows]
-    if not whitelist:
+
+    if (not whitelist) and not (is_hardcoded and enforce_controls_only and ctrl_paths_from_disk):
         logger.warning("[benchmark] no candidate ligands matched mapping; skipping protein")
         return
+
 
     # Heavy atom counts
     heavy_atom_counts: Dict[str, int] = {}
@@ -1323,6 +1549,32 @@ def run_benchmark_for_protein(
             cfg=cfg,
             logger=logger,
         )
+        # When a per-PDB hardcoded list exists, filter RDK to those names (by resolved brand/generic).
+        if is_hardcoded and hardcoded_names:
+            allowed = {_norm(n) for n in hardcoded_names}
+
+            def _rdk_name_ok(p: str) -> bool:
+                # Prefer exact RDK id fence when available
+                rid = _extract_rdk_id(Path(p).name)
+                if allowed_rdk_ids and rid:
+                    return rid.lower() in allowed_rdk_ids
+                nm = _resolve_name_for_path_or_text(p, fda_index)
+                return _norm(nm) in allowed
+
+            filtered = [p for p in non_ctrls if _rdk_name_ok(p)]
+            before = len(non_ctrls)
+            if filtered:
+                non_ctrls = filtered
+                logger.info("[rdk-whitelist] %s: filtered RDK from %d→%d using %s",
+                            pdb_id, before, len(non_ctrls), hardcoded_names)
+            else:
+                if bool(cfg.get("BENCH_ONLY_EXTRACTED_CTRL_AND_RDK", False)):
+                    non_ctrls = []
+                    logger.warning("[rdk-whitelist-empty-enforced] %s: no matches for %s; non_ctrls cleared by policy.",
+                                   pdb_id, hardcoded_names)
+                else:
+                    logger.warning("[rdk-whitelist-empty] %s: no matches for %s; keeping original list.",
+                                   pdb_id, hardcoded_names)
 
         # toggles to adjust
         max_ctrls = int(cfg.get("BENCH_MAX_CONTROLS", 8))
@@ -1339,8 +1591,27 @@ def run_benchmark_for_protein(
                 non_ctrls = non_ctrls[:allowed_non_ctrls]
 
         ligands = _dedupe_str(ctrls + non_ctrls)
+        # If strict allow-list yielded 0 RDKs, mark sentinel so analysis can skip cleanly
+        if not non_ctrls:
+            try:
+                root_project = Path(cfg.get("OVERALL_DIR", str(Path(cfg["OUTPUT_DIR"]).parent)))
+                stage_dir_target = root_project / "docked" / pdb_id / stage["name"]
+                stage_dir_target.mkdir(parents=True, exist_ok=True)
+                (stage_dir_target / ".rdk_skipped").touch()
+                logger.info(f"[rdk-sentinel] {pdb_id} {stage['name']}: no RDK candidates -> wrote .rdk_skipped")
+            except Exception as _e:
+                logger.warning(f"[rdk-sentinel] {pdb_id} {stage['name']}: could not write .rdk_skipped: {_e}")
         stage1_original = ligands[:]
         logger.info(f"[DEBUG] pools: ctrls={len(ctrls)}, whitelist={len(non_ctrls)}, total={len(ligands)}")
+        if not (is_hardcoded and enforce_controls_only and ctrl_paths_from_disk):
+            # Default path (or fallback enabled): print the same audit but marked as default
+            try:
+                logger.info(
+                    f"[policy] {pdb_id} policy=controls+whitelist n_ctrl={len(controls)} "
+                    f"n_whitelist={len(whitelist)} reason=default"
+                )
+            except Exception:
+                pass
 
         # Per-ligand budget guards (persist across restarts/waves)
         per_ligand_seconds = float(cfg.get("BENCH_MAX_SECONDS", 9000.0))
@@ -1693,6 +1964,8 @@ def _run_auto_analysis(
     rmsd_tol: float,
     include_identity: bool,
     out_dir: Optional[Path] = None,
+    since_epoch: Optional[float] = None,
+    html_success_only: Optional[bool] = None,
 ) -> Tuple[Optional[Path], Optional[Path]]:
     try:
         import benchmark_auto_analysis as ana
@@ -1712,6 +1985,8 @@ def _run_auto_analysis(
             rmsd_tol=rmsd_tol,
             include_identity=include_identity,
             out_dir=out_dir,
+            since_epoch=since_epoch,
+            html_success_only=html_success_only,
         )
     except Exception as e:
         print(f"[analysis] ERROR running run_analysis(): {e}")
@@ -1734,6 +2009,18 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--exhaustiveness", type=int, default=1)
     p.add_argument("--num-modes", type=int, default=1)
     p.add_argument("--hints", help="Optional manual comma-separated hints (e.g., 'imatinib,STI571')")
+    # Controls-only policy toggles
+    p.add_argument("--enforce-hardcoded-controls-only",
+                   dest="enforce_controls_only", action="store_true",
+                   help="If PDB has a hardcoded control, dock only that control.")
+    p.add_argument("--no-enforce-hardcoded-controls-only",
+                   dest="enforce_controls_only", action="store_false",
+                   help="Disable controls-only enforcement (use whitelist).")
+    p.set_defaults(enforce_controls_only=None)  # let YAML/ENV decide unless provided
+
+    p.add_argument("--allow-whitelist-fallback-if-controls-missing",
+                   dest="allow_whitelist_fallback", action="store_true",
+                   help="If hardcoded controls are missing on disk, allow RDK whitelist fallback.")
 
     # Outer (proteins) parallelism
     p.add_argument(
@@ -1803,6 +2090,12 @@ def build_argparser() -> argparse.ArgumentParser:
               "--ligands-folder fda_library2  "
               "--ligands-folder fda_library --ligands-folder fda_new"),
     )
+    p.add_argument("--apo-holo-mode",
+                   choices=["holo", "apo", "apo_vs_holo", "apovsholo"],
+                   default="apo_vs_holo",
+                   help="Dock holo, apo, or both (default: apo_vs_holo).")
+
+
 
     return p
 
@@ -1863,6 +2156,24 @@ def _set_thread_env(n: int) -> None:
         os.environ.setdefault(key, str(n))
 
 
+# -----------------------------
+# Small CLI helper shims (match main.py behavior)
+# -----------------------------
+def _cli_has(argv, flag: str) -> bool:
+    try:
+        return any((x or "").strip() == flag for x in argv)
+    except Exception:
+        return False
+
+def _cli_val(argv, flag: str):
+    try:
+        argv = list(argv or [])
+        for i, tok in enumerate(argv):
+            if (tok or "").strip() == flag and i + 1 < len(argv):
+                return argv[i + 1]
+    except Exception:
+        pass
+    return None
 
 
 # =============================
@@ -1875,6 +2186,36 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     # Load YAML config first so we can use BRCF paths by default
     cfg = load_inputs()
     validate_config(cfg)
+    # --- Per-run configs (RUN_DIR) ---  # (copied from main.py)
+    cfg.setdefault("CONFIGS_DIR", str(Path(cfg["OVERALL_DIR"]) / "configs"))
+    cfg.setdefault("RESET_CONFIGS", True)
+
+    # CLI > ENV > CFG
+    cli_cfg_dir = _cli_val(sys.argv, "--configs-dir")
+    cli_run_id = _cli_val(sys.argv, "--run-id")
+    cli_no_reset = _cli_has(sys.argv, "--no-reset-configs")
+
+    if cli_cfg_dir:  cfg["CONFIGS_DIR"] = cli_cfg_dir
+    if cli_run_id:   cfg["RUN_ID"] = cli_run_id
+    if cli_no_reset: cfg["RESET_CONFIGS"] = False
+
+    init_config_run_dir(cfg,
+                        run_id=cfg.get("RUN_ID"),
+                        reset=cfg.get("RESET_CONFIGS"),
+                        logger=logging.getLogger("run"),
+                        )
+    print(f"[cfg.run] run_id={cfg['RUN_ID']} run_dir={cfg['CONFIG_RUN_DIR']}")
+    # Stamp the run start and export for analysis (HTML/CSV mtime filter)
+    global RUN_START_EPOCH
+    RUN_START_EPOCH = float(time.time())
+    os.environ["BENCH_RUN_START_EPOCH"] = str(RUN_START_EPOCH)
+
+    # CLI → cfg overrides for new knobs (only if explicitly passed)
+    if getattr(args, "enforce_controls_only", None) is not None:
+        cfg["BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY"] = bool(args.enforce_controls_only)
+    if getattr(args, "allow_whitelist_fallback", False):
+        cfg["BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING"] = True
+
     # Re-apply deferral and render parallelism using config + env override
     _defer = str(os.environ.get("DEFER_PYMOL", "") or cfg.get("DEFER_PYMOL", "1")).lower() in ("1", "true", "yes", "on")
     capture_pose.set_defer_mode(_defer, queue_path=os.environ.get("PYMOL_DEFER_QUEUE") or cfg.get("PYMOL_DEFER_QUEUE"))
@@ -1898,6 +2239,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     input_dir = Path(args.input_dir or cfg.get("INPUT_DIR", ""))
     out_root  = Path(args.out_root  or cfg.get("DOCKED_DIR") or cfg.get("OUTPUT_DIR", ""))
     prepped   = Path(args.prepped   or cfg.get("OUTPUT_LIGANDS_DIR", ""))
+
+
     # FDA scope resolution from CLI (default: ['fda_library'])
     lig_folders = args.ligands_folders if args.ligands_folders else ["fda_library"]
     fda_scope_dirs: List[Path] = []
@@ -2069,19 +2412,34 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         # Let the global semaphore be the true limiter.
         cfg_local["MAX_PARALLEL_JOBS"] = max(int(cfg_local.get("MAX_PARALLEL_JOBS") or 0), total_cpus)
 
-        run_benchmark_for_protein(
-            cfg=cfg_local,
-            mapping=mapping,
-            pdb_file=pdb_file,
-            prepped_dir=prepped,
-            out_root=out_root,
-            exhaustiveness=int(args.exhaustiveness),
-            num_modes=int(args.num_modes),
-            max_candidates=int(args.max_candidates),
-            manual_hints=manual_hints,
-            fda_index=fda_index,
-            fda_scope_dirs=fda_scope_dirs,  
-        )
+        # Determine which variants to run for this protein
+        _mode = (args.apo_holo_mode or os.environ.get("APO_HOLO_MODE") or cfg.get(
+            "APO_HOLO_MODE") or "apo_vs_holo").lower().replace(" ", "")
+        _variants = ["holo", "apo"] if _mode in {"apo_vs_holo", "apovsholo"} else [_mode or "holo"]
+
+        for _variant in _variants:
+            os.environ["APO_HOLO_MODE"] = _variant
+            out_root_variant = Path(out_root) / _variant.upper()
+            out_root_variant.mkdir(parents=True, exist_ok=True)
+
+            cfg_v = dict(cfg_local)
+            # (Optional) if any downstream uses cfg["DOCKED_DIR"], keep it variant-scoped too:
+            cfg_v["DOCKED_DIR"] = str(out_root_variant)
+
+            run_benchmark_for_protein(
+                cfg=cfg_v,
+                mapping=mapping,
+                pdb_file=pdb_file,
+                prepped_dir=prepped,
+                out_root=out_root_variant,
+                exhaustiveness=int(args.exhaustiveness),
+                num_modes=int(args.num_modes),
+                max_candidates=int(args.max_candidates),
+                manual_hints=manual_hints,
+                fda_index=fda_index,
+                fda_scope_dirs=fda_scope_dirs,
+            )
+
         return pdb_file
 
     import traceback
@@ -2133,7 +2491,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 running[fut2] = (next_pdb, inner)
                 sum_inner += inner
     # ----- Post-run: render everything without stalling -----
-    # Turn OFF capture_pose deferral so _execute_render_task actually renders now.
     capture_pose.set_defer_mode(False)
 
     # ----- Post-run: render everything out-of-process (multi-process) -----
@@ -2145,16 +2502,39 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             return default
 
     from capture_pose import replay_deferred_jobs_mp
-    workers = _int_env("PYMOL_RENDER_WORKERS", int(cfg.get("PYMOL_RENDER_WORKERS", 30)))
-    mode = (os.environ.get("PYMOL_RENDER_MODE") or str(cfg.get("PYMOL_RENDER_MODE", "cli"))).lower()
-    print(f"[render] replaying capture_pose queue with workers={workers} mode={mode}")
-    capture_pose.replay_deferred_jobs_mp(max_workers=workers, mode=mode)
+    workers_cfg = _int_env("PYMOL_RENDER_WORKERS", int(cfg.get("PYMOL_RENDER_WORKERS", 30)))
+    mode_cfg    = (os.environ.get("PYMOL_RENDER_MODE") or str(cfg.get("PYMOL_RENDER_MODE", "cli"))).lower()
+
+    # Env-only diagnostics (no behavior change unless envs are set)
+    soft_cap  = _int_env("PYMOL_RENDER_SOFT_CAP", 0)
+    batch_sz  = _int_env("PYMOL_RENDER_BATCH", 0)
+    mode_force = (os.environ.get("PYMOL_RENDER_MODE_FORCE") or "").strip().lower()
+    ab_env     = (os.environ.get("PYMOL_RENDER_AB") or "").strip()
+    queue_path = os.environ.get("PYMOL_DEFER_QUEUE") or cfg.get("PYMOL_DEFER_QUEUE") or "<default>"
+
+    eff_workers = min(workers_cfg, soft_cap) if soft_cap else workers_cfg
+    eff_mode    = mode_force if mode_force in ("cli","pymol2") else mode_cfg
+
+    print("[render] replay start | "
+          f"workers={workers_cfg} soft_cap={soft_cap or 'none'} -> used={eff_workers} "
+          f"mode={mode_cfg} force={mode_force or 'none'} batch={batch_sz or 'none'} "
+          f"AB={ab_env or 'none'} queue={queue_path}")
+
+    # Replay (A/B/batching handled inside capture_pose.replay_deferred_jobs_mp)
+    capture_pose.replay_deferred_jobs_mp(max_workers=eff_workers, mode=eff_mode)
 
     score_tol = float(cfg.get("SCORE_TOL_KCAL", args.analysis_score_tol))
     center_tol = float(cfg.get("CENTER_TOL_A", args.analysis_center_tol))
     rmsd_tol = float(cfg.get("RMSD_TOL_A", args.analysis_rmsd_tol))
     out_dir = Path(cfg.get("BENCH_ANALYSIS_OUTDIR") or (args.analysis_out or "")) if (
                 cfg.get("BENCH_ANALYSIS_OUTDIR") or args.analysis_out) else None
+    # HTML success-only default ON (env ANALYSIS_HTML_SUCCESS_ONLY=1/0)
+    html_success_only = (str(os.environ.get("ANALYSIS_HTML_SUCCESS_ONLY", "1")).strip().lower()
+                         in ("1", "true", "yes", "on"))
+
+    # since_epoch default: BENCH_ANALYSIS_SINCE_EPOCH or this run's start (BENCH_RUN_START_EPOCH)
+    _since_env = os.environ.get("BENCH_ANALYSIS_SINCE_EPOCH") or os.environ.get("BENCH_RUN_START_EPOCH")
+    since_epoch = float(_since_env) if _since_env else None
 
     # ----- Post-run analysis -----
     if args.run_analysis:
@@ -2171,7 +2551,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 rmsd_tol=rmsd_tol,
                 include_identity=not bool(args.analysis_no_identity),
                 out_dir=out_dir,
+                since_epoch=since_epoch,
+                html_success_only=html_success_only,
             )
+
             if details and summary:
                 print(f"[analysis] ✅ Details: {details}")
                 print(f"[analysis] ✅ Summary: {summary}")

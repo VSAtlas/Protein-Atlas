@@ -720,6 +720,14 @@ retain_in_receptor_resnames:
   - SEC; PYL
   - SEP; TPO; PTR
   - ACE; NME
+  - CBL; COB; CNC         # cobalamin
+  - H4B; BH4; THB         # tetrahydrobiopterin
+  - HEO                   # heme O
+  - PQQ                   # pyrroloquinoline quinone
+  - PMP                   # pyridoxamine-5'-phosphate
+  - LLP                   # PLP-lysine Schiff base (covalent)
+  - F420                  # deazaflavin cofactor
+
 
 # Common solvents / buffers / cryo / detergents that should be extracted (never chosen as ligand)
 remove_as_solvent_resnames:

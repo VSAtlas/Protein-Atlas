@@ -108,7 +108,7 @@ def _default_runtime() -> Dict[str, Any]:
         "CPU": os.cpu_count() or 8,
         "MAX_PARALLEL_JOBS": max(1, (os.cpu_count() or 8) // 2),
         "FORCE_REPROCESS": False,
-        "DOCKING_MODE": "discovery",  # or "polypharmacology" / "benchmark" set elsewhere
+        "DOCKING_MODE": "discovery",
         "QUIET_CONSOLE": False,
         # docking/recenter knobs
         "EARLY_RECENTER_RATIO": 0.70,
@@ -117,7 +117,17 @@ def _default_runtime() -> Dict[str, Any]:
         "EARLY_RECENTER_MEDIAN_A": 10.0,
         "ALLOW_BOX_EXPAND": True,
         "MAX_RECENTER_ATTEMPTS": 3,
+        # control-centering knobs
+        "CONTROL_CENTER_POLICY": "best_redock",
+        "CONTROL_CENTER_CLOSE_MAX_A": 8.0,
+        "CTRL_REDOCK_EXHAUSTIVENESS": 64,
+        "CTRL_REDOCK_NMODES": 9,
+
+        # --- benchmark policy knobs ---
+        "BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY": True,
+        "BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING": False,
     }
+
 
 # -------------------------
 # Config loading & validation
@@ -131,6 +141,17 @@ _ALLOWED_ENV_OVERRIDES = {
     "P2RANK_OUTPUT_DIR",
     "CPU","CPU_ONLY","MAX_PARALLEL_JOBS","DOCKING_MODE","REDUCE_EXE",
     "USE_MEEKO","OVERALL_DIR","PROTEIN_DIR",
+
+    # ---  allow ENV override for the knobs ---
+    "BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY",
+    "BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING",
+    "CONTROL_CENTER_POLICY",
+    "CONTROL_CENTER_CLOSE_MAX_A",
+    "CTRL_REDOCK_EXHAUSTIVENESS",
+    "CTRL_REDOCK_NMODES",
+    # logging/topic gates (opt-in; safe to ignore if unset)
+    "LOG_TOPICS", "LOG_LEVEL_FILE", "LOG_LEVEL_CONSOLE",
+
 }
 
 def _parse_kv_config(path: Path) -> Dict[str, str]:
@@ -201,13 +222,15 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
         if k in cfg:
             cfg[k] = _to_bool(cfg[k])
 
-    for k in ["MAX_PARALLEL_JOBS","CPU","MAX_RECENTER_ATTEMPTS","EARLY_RECENTER_MIN_EVAL"]:
+    for k in ["MAX_PARALLEL_JOBS","CPU","MAX_RECENTER_ATTEMPTS","EARLY_RECENTER_MIN_EVAL","CTRL_REDOCK_EXHAUSTIVENESS","CTRL_REDOCK_NMODES"]:
         if k in cfg:
             cfg[k] = _to_int(cfg[k], cfg[k])
 
-    for k in ["EARLY_RECENTER_RATIO","EARLY_RECENTER_FAR_A","EARLY_RECENTER_MEDIAN_A"]:
+
+    for k in ["EARLY_RECENTER_RATIO","EARLY_RECENTER_FAR_A","EARLY_RECENTER_MEDIAN_A","CONTROL_CENTER_CLOSE_MAX_A"]:
         if k in cfg:
             cfg[k] = _to_float(cfg[k], cfg[k])
+
 
     # normalize mode
     cfg["DOCKING_MODE"] = str(cfg.get("DOCKING_MODE","discovery")).lower()
@@ -248,6 +271,102 @@ def validate_config(cfg: Dict[str, Any]):
             p.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             raise FileNotFoundError(f"Could not create directory for {path_key}: {p} ({e})")
+
+
+
+
+
+import time, logging, tempfile
+
+def init_config_run_dir(cfg, run_id=None, reset=None, logger=None):
+    root = Path(cfg.get("CONFIGS_DIR", Path(cfg["OVERALL_DIR"]) / "configs"))
+    rid = run_id or cfg.get("RUN_ID")
+    if not rid:
+        rid = time.strftime("%Y%m%d_%H%M%S")
+    cfg["RUN_ID"] = rid
+    run_dir = root / rid
+    cfg["CONFIG_RUN_DIR"] = str(run_dir)
+
+    reset = bool(cfg.get("RESET_CONFIGS", True)) if reset is None else bool(reset)
+    removed = 0
+    if reset and run_dir.exists():
+        for p in run_dir.rglob("*"):
+            removed += 1
+        shutil.rmtree(run_dir, ignore_errors=False)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    msg = f"[cfg.reset] run_dir={run_dir} removed={removed}"
+    (logger.info(msg) if logger else print(msg))
+
+def emit_vina_config(
+    cfg: Dict[str, Any],
+    pdb_id: str,
+    receptor_pdbqt: str,
+    center: tuple[float, float, float],
+    box_size: tuple[float, float, float],
+    ligand_path: str,
+    stage_name: str,
+    stage_info: Dict[str, Any],
+    cpu_per_job: int,
+    logger: logging.Logger | None = None,
+):
+    run_dir = Path(cfg["CONFIG_RUN_DIR"])
+    conf_dir = run_dir / pdb_id / stage_name
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    # GUARD: only .pdbqt ligands are allowed
+    if not str(ligand_path).lower().endswith(".pdbqt"):
+        raise ValueError(f"Ligand is not a .pdbqt file: {ligand_path}")
+
+    lig_base = Path(ligand_path).stem
+    out_root = Path(cfg.get("DOCKED_DIR", Path(cfg["OVERALL_DIR"]) / "docked"))
+    out_path = out_root / pdb_id / stage_name / f"{lig_base}_{stage_name}.pdbqt"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        f"receptor = {receptor_pdbqt}",
+        f"ligand   = {ligand_path}",
+        f"center_x = {center[0]:.3f}",
+        f"center_y = {center[1]:.3f}",
+        f"center_z = {center[2]:.3f}",
+        f"size_x   = {box_size[0]:.3f}",
+        f"size_y   = {box_size[1]:.3f}",
+        f"size_z   = {box_size[2]:.3f}",
+        f"cpu      = {int(cpu_per_job)}",
+        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
+        f"energy_range   = {int(stage_info.get('energy_range', 4))}",
+        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
+        f"verbosity      = {int(stage_info.get('verbosity', 0))}",
+        f"out = {out_path}",
+    ]
+
+    if "seed" in stage_info:
+        lines.append(f"seed = {int(stage_info['seed'])}")
+    # --- AUDIT: compact Vina config trace ---
+    if logger:
+        cx, cy, cz = center
+        sx, sy, sz = box_size
+        lig_name = os.path.basename(str(ligand_path))
+        logger.info("[vina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
+                    lig_name, cx, cy, cz, sx, sy, sz)
+    cfg_path = conf_dir / f"{lig_base}_{stage_name}.txt"
+    payload = ("\n".join(lines)).encode("utf-8")
+    overwrite = cfg_path.exists()
+
+    # atomic write
+    tmp = cfg_path.with_suffix(".part")
+    with open(tmp, "wb") as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, cfg_path)
+
+    msg = f"[cfg.emit] pdb={pdb_id} stage={stage_name} ligand={lig_base} path={cfg_path} overwrite={str(overwrite).lower()} bytes={len(payload)}"
+    (logger.info(msg) if logger else print(msg))
+
+    return str(cfg_path), str(out_path)
+
+
+
 
 # -------------------------
 # P2Rank helpers (optional)
@@ -334,59 +453,23 @@ def extract_best_score(docked_pdbqt_path):
 
 
 # -------------------------
-# Vina config writer
+# Vina config writer, uses shim(lazy yeah)
 # -------------------------
-def generate_config(
-    output_dir,
-    pdb_id,
-    receptor_pdbqt,
-    center,
-    box_size,
-    ligand_path,
-    stage,
-    stage_info,
-    cpu_per_job,
-    docked_dir=None,
-):
-    import os
-    from pathlib import Path
+def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job, docked_dir=None):
+    # Legacy shim: derive a minimal cfg for older callers
+    cfg = {
+        "OVERALL_DIR": output_dir,
+        "CONFIGS_DIR": os.path.join(output_dir, "configs"),
+        "DOCKED_DIR": docked_dir or os.path.join(output_dir, "docked"),
+        "RUN_ID": "legacy",
+        "RESET_CONFIGS": False,
+    }
+    cfg["CONFIG_RUN_DIR"] = os.path.join(cfg["CONFIGS_DIR"], cfg["RUN_ID"])
+    Path(cfg["CONFIG_RUN_DIR"]).mkdir(parents=True, exist_ok=True)
+    if not str(ligand_path).lower().endswith(".pdbqt"):
+        raise ValueError(f"Ligand is not a .pdbqt file: {ligand_path}")
+    return emit_vina_config(cfg, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job, logger=None)
 
-    # Where to write the .txt config files
-    config_dir = os.path.join(output_dir, "configs", pdb_id, stage)
-    os.makedirs(config_dir, exist_ok=True)
-
-    ligand_name = os.path.splitext(os.path.basename(ligand_path))[0]
-
-    # Decide exactly where Vina should write its PDBQT
-    out_root = docked_dir or os.path.join(output_dir, "docked")
-    out_path = os.path.join(out_root, pdb_id, stage, f"{ligand_name}_{stage}.pdbqt")
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # Emit a fully self-contained config (now including 'out = ...')
-    config_lines = [
-        f"receptor = {receptor_pdbqt}",
-        f"ligand   = {ligand_path}",
-        f"center_x = {center[0]:.3f}",
-        f"center_y = {center[1]:.3f}",
-        f"center_z = {center[2]:.3f}",
-        f"size_x   = {box_size[0]:.3f}",
-        f"size_y   = {box_size[1]:.3f}",
-        f"size_z   = {box_size[2]:.3f}",
-        f"cpu      = {int(cpu_per_job)}",
-        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
-        f"energy_range   = {int(stage_info.get('energy_range', 4))}",
-        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
-        f"verbosity      = {int(stage_info.get('verbosity', 0))}",
-        f"out = {out_path}",
-    ]
-    if "seed" in stage_info:
-        config_lines.append(f"seed = {int(stage_info['seed'])}")
-
-    cfg_path = os.path.join(config_dir, f"{ligand_name}_{stage}.txt")
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(config_lines))
-
-    return cfg_path, out_path
 
 
 
@@ -451,15 +534,18 @@ def write_scores_csv(cfg, pdb_id, score_history):
 # -------------------------
 def build_paths_for_protein(cfg, base_id, pdb_file):
     pdb_id = base_id
-    ligand_output_dir = Path(cfg["OUTPUT_DIR"]) / pdb_id / f"{pdb_id}_cleaned_ligands"
-    ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
-    prepped_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]) / pdb_id
-    protein_dir = Path(cfg["OUTPUT_DIR"]) / f"{base_id}_nolig"
-    cleaned_pdb_path = protein_dir / f"{base_id}_nolig_cleaned.pdb"
-    receptor_pdbqt_path = Path(cfg["PDBQT_DIR"]) / f"{base_id}_receptor.pdbqt"
-    pdb_path = os.path.join(cfg["INPUT_DIR"], pdb_file)
-    nolig_pdb_path = os.path.join(cfg["OUTPUT_DIR"], f"{base_id}_nolig.pdb")
+    cleaned_suffix   = cfg.get("CLEANED_LIGANDS_SUFFIX", "_cleaned_ligands")
+    nolig_suffix     = cfg.get("NOLIG_SUFFIX", "_nolig")
+    nolig_cleaned_fn = cfg.get("NOLIG_CLEANED_BASENAME", "_nolig_cleaned.pdb")
 
+    ligand_output_dir    = Path(cfg["OUTPUT_DIR"]) / pdb_id / f"{pdb_id}{cleaned_suffix}"
+    ligands_mol2_dir     = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
+    prepped_ligands_dir  = Path(cfg["OUTPUT_LIGANDS_DIR"]) / pdb_id
+    protein_dir          = Path(cfg["OUTPUT_DIR"]) / f"{base_id}{nolig_suffix}"
+    cleaned_pdb_path     = protein_dir / f"{base_id}{nolig_cleaned_fn}"
+    receptor_pdbqt_path  = Path(cfg["PDBQT_DIR"]) / f"{base_id}_receptor.pdbqt"
+    pdb_path             = os.path.join(cfg["INPUT_DIR"], pdb_file)
+    
     ligand_output_dir.mkdir(parents=True, exist_ok=True)
     prepped_ligands_dir.mkdir(parents=True, exist_ok=True)
     protein_dir.mkdir(parents=True, exist_ok=True)
