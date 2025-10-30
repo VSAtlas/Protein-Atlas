@@ -1,0 +1,11 @@
+mkdir -p protein_automation/consolidated
+for d in docked/*; do
+  [ -d "$d" ] || continue
+  pdb="$(basename "$d")"
+  if [ -f "$d/docking_score_long.csv" ]; then
+    mkdir -p "protein_automation/consolidated/$pdb"
+    cp -f "$d/docking_score_long.csv" "protein_automation/consolidated/$pdb/"
+  else
+    echo "No docking_score_long.csv in $d" >&2
+  fi
+done

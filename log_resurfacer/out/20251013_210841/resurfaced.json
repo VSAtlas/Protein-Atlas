@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-13 21:08:41",
+    "rules_path": "<embedded>",
+    "pdb_filter": "3CS9"
+  },
+  "scanned": {
+    "proteins": [
+      "docked/3CS9/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/3CS9/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_210841.log"
+    ]
+  },
+  "stats": {
+    "soft": 10,
+    "hard": 44
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 44,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_210841.log",
+          "samples": [
+            "[21:08:46] Explicit valence for atom # 27 C, 5, is greater than permitted",
+            "[21:08:46] Explicit valence for atom # 27 C, 5, is greater than permitted",
+            "[21:08:46] Explicit valence for atom # 27 C, 5, is greater than permitted"
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "ligprep.sanitize",
+      "paths": {}
+    },
+    {
+      "rank": 2,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3CS9",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 8,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_210841.log",
+          "samples": [
+            "[21:08:46] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[21:08:46] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[21:08:48] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "ligprep.add_h",
+      "paths": {
+        "pre_raw_pdb": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_D600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.pdb"
+        ],
+        "pre_raw_pdb_sanitized": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_D600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.pdb"
+        ],
+        "post_pdbqt": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_A600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_B600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_C600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_D600.pdbqt"
+        ],
+        "ligand_prep_status_tsv": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/ligand_prep_status.tsv"
+        ],
+        "protein_log": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/protein.log"
+        ],
+        "bench_logs": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_210841.log"
+        ]
+      }
+    },
+    {
+      "rank": 3,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "3CS9",
+      "ligand": "3CS9_cleaned",
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-13 21:09:09",
+      "last_seen": "2025-10-13 21:09:09",
+      "files": [
+        {
+          "path": "docked/3CS9/protein.log",
+          "samples": [
+            "2025-10-13 21:09:09,423 - INFO - [render-enqueue] 3CS9 bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/receptor/3CS9_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/3CS9.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "render",
+      "paths": {
+        "ligand_prep_status_tsv": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/ligand_prep_status.tsv"
+        ],
+        "dock_inputs": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL+RDKclosest_front.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__RDKclosest_top.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL+RDKclosest_side.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL_top.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__RDKclosest_front.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL_side.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL+RDKclosest_top.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__RDKclosest_side.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL_front.png"
+        ],
+        "protein_log": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/protein.log"
+        ]
+      }
+    },
+    {
+      "rank": 4,
+      "severity": "soft",
+      "rule_id": "render.enqueue_none",
+      "pdb": "3CS9",
+      "ligand": "3CS9_cleaned",
+      "message": "Controls/RDK not enqueued",
+      "hint": "Control selection failed or disabled; check 'hint_count' and control whitelist.",
+      "count": 1,
+      "first_seen": "2025-10-13 21:09:09",
+      "last_seen": "2025-10-13 21:09:09",
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_210841.log",
+          "samples": [
+            "2025-10-13 21:09:09,423 - INFO - [render-enqueue] 3CS9 bench_pocket1_single: receptor=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/receptor/3CS9_cleaned.pdb | orig=/stor/home/mpg2352/atlas/code/protein_automation/input_pdbs/3CS9.pdb | ctrl=None | rdk=None"
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "render",
+      "paths": {
+        "ligand_prep_status_tsv": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/ligand_prep_status.tsv"
+        ],
+        "dock_inputs": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL+RDKclosest_front.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__RDKclosest_top.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL+RDKclosest_side.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL_top.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__RDKclosest_front.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL_side.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL+RDKclosest_top.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__RDKclosest_side.png",
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/bench_pocket1_single/3CS9_cleaned__CONTROL_front.png"
+        ],
+        "protein_log": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/protein.log"
+        ],
+        "bench_logs": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_210841.log"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-13 15:28:31",
+    "rules_path": "<embedded>",
+    "pdb_filter": ""
+  },
+  "scanned": {
+    "proteins": [
+      "docked/1T46/protein.log",
+      "docked/2GQG/protein.log",
+      "docked/2HYY/protein.log",
+      "docked/2WGJ/protein.log",
+      "docked/2XP2/protein.log",
+      "docked/3CS9/protein.log",
+      "docked/3ERT/protein.log",
+      "docked/3LXK/protein.log",
+      "docked/3OG7/protein.log",
+      "docked/3OXZ/protein.log",
+      "docked/3WZD/protein.log",
+      "docked/3WZE/protein.log",
+      "docked/3ZBF/protein.log",
+      "docked/3ZOS/protein.log",
+      "docked/4AG8/protein.log",
+      "docked/4ASD/protein.log",
+      "docked/4RT7/protein.log",
+      "docked/4U5J/protein.log",
+      "docked/4XUF/protein.log",
+      "docked/4XV2/protein.log",
+      "docked/5I96/protein.log",
+      "docked/5L2I/protein.log",
+      "docked/5L7I/protein.log",
+      "docked/5MO4/protein.log",
+      "docked/6JQR/protein.log",
+      "docked/6O0K/protein.log",
+      "docked/6O0L/protein.log",
+      "docked/6U4J/protein.log",
+      "docked/6WTN/protein.log",
+      "docked/_analysis/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/1T46/ligand_prep_status.tsv",
+      "prepped_ligands/2GQG/ligand_prep_status.tsv",
+      "prepped_ligands/2HYY/ligand_prep_status.tsv",
+      "prepped_ligands/2WGJ/ligand_prep_status.tsv",
+      "prepped_ligands/2XP2/ligand_prep_status.tsv",
+      "prepped_ligands/3CS9/ligand_prep_status.tsv",
+      "prepped_ligands/3ERT/ligand_prep_status.tsv",
+      "prepped_ligands/3LXK/ligand_prep_status.tsv",
+      "prepped_ligands/3OG7/ligand_prep_status.tsv",
+      "prepped_ligands/3OXZ/ligand_prep_status.tsv",
+      "prepped_ligands/3WZD/ligand_prep_status.tsv",
+      "prepped_ligands/3WZE/ligand_prep_status.tsv",
+      "prepped_ligands/3ZBF/ligand_prep_status.tsv",
+      "prepped_ligands/3ZOS/ligand_prep_status.tsv",
+      "prepped_ligands/4AG8/ligand_prep_status.tsv",
+      "prepped_ligands/4ASD/ligand_prep_status.tsv",
+      "prepped_ligands/4RT7/ligand_prep_status.tsv",
+      "prepped_ligands/4U5J/ligand_prep_status.tsv",
+      "prepped_ligands/4XUF/ligand_prep_status.tsv",
+      "prepped_ligands/4XV2/ligand_prep_status.tsv",
+      "prepped_ligands/5I96/ligand_prep_status.tsv",
+      "prepped_ligands/5L2I/ligand_prep_status.tsv",
+      "prepped_ligands/5L7I/ligand_prep_status.tsv",
+      "prepped_ligands/5MO4/ligand_prep_status.tsv",
+      "prepped_ligands/6JQR/ligand_prep_status.tsv",
+      "prepped_ligands/6O0K/ligand_prep_status.tsv",
+      "prepped_ligands/6O0L/ligand_prep_status.tsv",
+      "prepped_ligands/6U4J/ligand_prep_status.tsv",
+      "prepped_ligands/6WTN/ligand_prep_status.tsv",
+      "prepped_ligands/_analysis/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_152831.log"
+    ]
+  },
+  "stats": {
+    "hard": 8
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 8,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_152831.log",
+          "samples": [
+            "[15:29:06] Explicit valence for atom # 18 C, 5, is greater than permitted",
+            "[15:29:06] ERROR: Explicit valence for atom # 18 C, 5, is greater than permitted",
+            "[15:29:07] Explicit valence for atom # 18 C, 5, is greater than permitted"
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "ligprep.sanitize",
+      "paths": {}
+    }
+  ]
+}

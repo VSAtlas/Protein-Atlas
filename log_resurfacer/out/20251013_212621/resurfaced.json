@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-13 21:26:21",
+    "rules_path": "<embedded>",
+    "pdb_filter": "3CS9"
+  },
+  "scanned": {
+    "proteins": [
+      "docked/3CS9/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/3CS9/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_212621.log"
+    ]
+  },
+  "stats": {
+    "soft": 8,
+    "hard": 76
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 72,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_212621.log",
+          "samples": [
+            "[21:26:27] Explicit valence for atom # 27 C, 5, is greater than permitted",
+            "[21:26:27] Explicit valence for atom # 27 C, 5, is greater than permitted",
+            "[21:26:27] Explicit valence for atom # 27 C, 5, is greater than permitted"
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "ligprep.sanitize",
+      "paths": {}
+    },
+    {
+      "rank": 2,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "3CS9",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 4,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_212621.log",
+          "samples": [
+            "[21:26:27] sanitize [21:26:27] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.sanitized.pdb: WARNING:root:[ligprep] ADT wrote fewer atoms (63 -> 45); invoking OBabel MOL2->PDBQT fallback",
+            "[21:26:28] sanitize [21:26:28] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.sanitized.pdb: WARNING:root:[ligprep] ADT wrote fewer atoms (63 -> 45); invoking OBabel MOL2->PDBQT fallback",
+            "[21:26:29] sanitize [21:26:29] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.sanitized.sanitized.pdb: [ligprep-extracted] discovery_root=/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw exists=True is_dir=True"
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "ligprep.sanitize",
+      "paths": {
+        "pre_raw_pdb": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_D600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.pdb"
+        ],
+        "pre_raw_pdb_sanitized": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_D600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.pdb"
+        ],
+        "post_pdbqt": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_C600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_D600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_A600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_A600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_B600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_C600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_B600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_D600.pdbqt"
+        ],
+        "ligand_prep_status_tsv": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/ligand_prep_status.tsv"
+        ],
+        "protein_log": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/protein.log"
+        ],
+        "bench_logs": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_212621.log"
+        ]
+      }
+    },
+    {
+      "rank": 3,
+      "severity": "soft",
+      "rule_id": "ligprep.obabel_h_charge",
+      "pdb": "3CS9",
+      "ligand": null,
+      "message": "OpenBabel H/charge warning(s)",
+      "hint": "Run Reduce/OpenBabel addH; if Reduce already ran, try -nohyd branch then addH fallback.",
+      "count": 8,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_212621.log",
+          "samples": [
+            "[21:26:27] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[21:26:27] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation.",
+            "[21:26:28] /stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.sanitized.pdb: Warning - no explicit hydrogens in mol2 file but needed for formal charge estimation."
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "ligprep.add_h",
+      "paths": {
+        "pre_raw_pdb": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_D600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.pdb"
+        ],
+        "pre_raw_pdb_sanitized": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_D600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_B600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_C600.sanitized.pdb",
+          "/stor/home/mpg2352/atlas/code/protein_automation/processed_pdbs/3CS9/ligands_raw/NIL_A600.sanitized.pdb"
+        ],
+        "post_pdbqt": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_C600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_D600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_A600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_A600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_B600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_C600.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_B600.sanitized.pdbqt",
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/NIL_D600.pdbqt"
+        ],
+        "ligand_prep_status_tsv": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/prepped_ligands/3CS9/ligand_prep_status.tsv"
+        ],
+        "protein_log": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/docked/3CS9/protein.log"
+        ],
+        "bench_logs": [
+          "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_212621.log"
+        ]
+      }
+    }
+  ]
+}

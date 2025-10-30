@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-12 14:18:34",
+    "rules_path": "<embedded>",
+    "pdb_filter": "5MO4"
+  },
+  "scanned": {
+    "proteins": [
+      "docked/5MO4/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/5MO4/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251012_141834.log"
+    ]
+  },
+  "stats": {},
+  "items": []
+}

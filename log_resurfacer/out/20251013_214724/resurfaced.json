@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "generator": "atlas.log_resurfacer.v2",
+  "config": {
+    "fail_on": "hard",
+    "top": 30,
+    "since": "2025-10-13 21:47:24",
+    "rules_path": "<embedded>",
+    "pdb_filter": "3CS9"
+  },
+  "scanned": {
+    "proteins": [
+      "docked/3CS9/protein.log"
+    ],
+    "ligand_tsvs": [
+      "prepped_ligands/3CS9/ligand_prep_status.tsv"
+    ],
+    "bench_logs": [
+      "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_214724.log"
+    ]
+  },
+  "stats": {
+    "hard": 56
+  },
+  "items": [
+    {
+      "rank": 1,
+      "severity": "hard",
+      "rule_id": "ligprep.rdkit_valence",
+      "pdb": "",
+      "ligand": null,
+      "message": "RDKit sanitize/valence/kekulize error(s)",
+      "hint": "Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.",
+      "count": 56,
+      "first_seen": null,
+      "last_seen": null,
+      "files": [
+        {
+          "path": "/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_214724.log",
+          "samples": [
+            "[21:47:29] Explicit valence for atom # 27 C, 5, is greater than permitted",
+            "[21:47:29] ERROR: Explicit valence for atom # 27 C, 5, is greater than permitted",
+            "[21:47:29] Explicit valence for atom # 27 C, 5, is greater than permitted"
+          ]
+        }
+      ],
+      "joins": [],
+      "step": "ligprep.sanitize",
+      "paths": {}
+    }
+  ]
+}
