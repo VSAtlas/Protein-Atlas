@@ -40,6 +40,9 @@ from math import sqrt
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 import os, sys, shutil, subprocess, logging, re
+# >>> PATHS IMPORT START
+from path_router import make_paths
+# >>> PATHS IMPORT END
 from propka_wire import pdb2pqr_protonate
 
 from installation import load_config
@@ -2950,11 +2953,29 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
         raw_stem = Path(pdb_filename).stem
         pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
         logging.info("[prep.id] main stem=%s -> base_id=%s", raw_stem, pdb_id)
-        paths = canon_paths(pdb_id, output_dir)
+        # >>> LEGACY PATHS PATCH START
+        legacy_paths = canon_paths(pdb_id, output_dir)
         logging.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
-                     paths["protein_root"], paths["receptor"], paths["nolig"], paths["work"])
-
-        output_pdbqt = str((paths["receptor"] / f"{pdb_id}.pdbqt").resolve())
+                     legacy_paths["protein_root"], legacy_paths["receptor"],
+                     legacy_paths["nolig"], legacy_paths["work"])
+        # >>> LEGACY PATHS PATCH END
+        # >>> PATHS INIT START
+        paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        # >>> PATHS INIT END
+        # >>> RECEPTOR PATHS PATCH START
+        cleaned_pdb_out = str(paths.receptor_cleaned_pdb(None))
+        receptor_pdbqt_out = str(paths.receptor_pdbqt(None, ph_token=None))
+        # >>> RECEPTOR PATHS PATCH END
+        # >>> RECEPTOR OUTPUT PATCH START
+        cleaned_target = Path(cleaned_pdb_out)
+        cleaned_target.parent.mkdir(parents=True, exist_ok=True)
+        if Path(cleaned_pdb).resolve() != cleaned_target.resolve():
+            shutil.copyfile(cleaned_pdb, str(cleaned_target))
+        cleaned_pdb = str(cleaned_target)
+        receptor_target = Path(receptor_pdbqt_out)
+        receptor_target.parent.mkdir(parents=True, exist_ok=True)
+        output_pdbqt = str(receptor_target)
+        # >>> RECEPTOR OUTPUT PATCH END
         fix_element_columns_in_file(cleaned_pdb, cleaned_pdb, rewrite_atoms=True)
 
         if not run_prepare_receptor(cleaned_pdb, output_pdbqt, config):
