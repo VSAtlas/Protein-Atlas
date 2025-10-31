@@ -86,7 +86,6 @@ from main import (  # noqa: E402
     extract_ligands_to_nolig,
     final_pose_validation_and_screenshots,
     get_recenter_params,
-    make_paths,
     make_protein_logger,
     prepare_receptor,
     record_le,
@@ -97,6 +96,9 @@ from main import (  # noqa: E402
     early_recenter_decision,
     RetryManager,
 )
+# >>> PATHS IMPORT START
+from path_router import make_paths, expand_variants
+# >>> PATHS IMPORT END
 from prep_ligands import prep_ligands_from_pdb
 # ----- Deferred render queue (global) -----
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -296,7 +298,7 @@ def run_deferred_captures(max_workers: int):
 
 
 
-def _enqueue_render_task(*, pdb_id: str, stage_name: str, root_project: str,
+def _enqueue_render_task(*, pdb_id: str, stage_name: str, paths, variant: Optional[str],
                          cleaned_pdb_path: str, original_pdb_path: str,
                          ctrl_pose_path: str | None, rdk_pose_path: str | None,
                          exclude_resns: List[str]) -> None:
@@ -304,8 +306,7 @@ def _enqueue_render_task(*, pdb_id: str, stage_name: str, root_project: str,
     Unified producer: enqueue directly into capture_pose's JSONL by calling its APIs with DEFER_PYMOL=1.
     """
     import capture_pose as _cap
-    stage_dir_target = Path(root_project) / "docked" / pdb_id / stage_name
-    stage_dir_target.mkdir(parents=True, exist_ok=True)
+    stage_dir_target = paths.docked_stage_dir(variant, stage_name)
 
     # Viewport first (used by native + three-views)
     viewport_w = int(cfg.get("VIEWPORT_W", 640))
@@ -1058,13 +1059,14 @@ def run_benchmark_for_protein(
     mapping: MappingIndex,
     pdb_file: str,
     prepped_dir: Path,                  # controls root for this PDB
-    out_root: Path,
     exhaustiveness: int,
     num_modes: int,
     max_candidates: int,
     manual_hints: Optional[List[str]] = None,
     fda_index=None,
     fda_scope_dirs: Optional[Sequence[Path]] = None,
+    variant: Optional[str] = None,
+    ph_token: Optional[str] = None,
 ) -> None:
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = base_id.replace("_cleaned", "").upper()
@@ -1096,18 +1098,34 @@ def run_benchmark_for_protein(
         except Exception:
             pass
 
-    paths = make_paths(cfg, base_id, pdb_file)
+    variant_mode = variant if variant is not None else (
+        cfg.get("APO_HOLO_MODE") or os.environ.get("APO_HOLO_MODE")
+    )
+    variant_candidates = expand_variants(variant_mode)
+    variant = variant_candidates[0] if variant_candidates else None
+    ph_token = ph_token or None
+
+    # >>> PATHS INIT START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> PATHS INIT END
+
+    prepped_lig_dir = paths.prepped_ligands_dir
+    ligands_raw_dir = paths.ligand_output_dir
+    ligands_mol2 = paths.ligands_mol2_dir
 
     # Prefer canonical cleaned receptor; if missing, allow legacy read-only fallback.
-    if not Path(paths.cleaned_pdb_path).exists():
+    cleaned_pdb_path = paths.receptor_cleaned_pdb(variant)
+    if not cleaned_pdb_path.exists():
         base = Path(cfg.get("OUTPUT_DIR") or Path(cfg["OVERALL_DIR"]).parent / "processed_pdbs").resolve()
         legacy = base / f"{pdb_id}_NOLIG" / "receptor" / f"{pdb_id}_NOLIG_cleaned.pdb"
         if legacy.exists():
-            paths.cleaned_pdb_path = legacy
+            cleaned_pdb_path = legacy
+
+    input_pdb_path = Path(paths.input_pdb_path)
 
     # --- DEBUG visibility (clarify scopes) ---
     try:
-        per_pdb_prepped = paths.prepped_ligands_dir.resolve()
+        per_pdb_prepped = prepped_lig_dir.resolve()
         lib_root = Path(cfg.get("PREPPED_LIGANDS_DIR", str(per_pdb_prepped.parent))).resolve()
 
         logger.info("[DEBUG] per_pdb_prepped_dir=%s", str(per_pdb_prepped))
@@ -1141,8 +1159,8 @@ def run_benchmark_for_protein(
     # 1) Extract controls & build nolig
     _, control_stems = extract_ligands_to_nolig(paths, logger)
     # Always prep the extracted crystal ligands with the same sanitizer/ADT flags (-A hydrogens)
-    prep_marker = paths.prepped_ligands_dir / ".prepped.ok"
-    paths.prepped_ligands_dir.mkdir(parents=True, exist_ok=True)
+    prep_marker = prepped_lig_dir / ".prepped.ok"
+    prepped_lig_dir.mkdir(parents=True, exist_ok=True)
 
 
 
@@ -1191,23 +1209,23 @@ def run_benchmark_for_protein(
     # -------------------------------------
 
     # 0) Normalize RAW filenames first so our freshness check is stable
-    _collapse_sanitized_suffixes(paths.ligand_output_dir, (".pdb", ".mol2"))
+    _collapse_sanitized_suffixes(ligands_raw_dir, (".pdb", ".mol2"))
 
     # 1) Freshness check (consider both .pdb and .mol2 as raw inputs)
     raw_latest = max(
-        _latest_mtime(str(paths.ligand_output_dir / "*.pdb")),
-        _latest_mtime(str(paths.ligand_output_dir / "*.mol2")),
+        _latest_mtime(str(ligands_raw_dir / "*.pdb")),
+        _latest_mtime(str(ligands_raw_dir / "*.mol2")),
     )
-    prepped_latest = _latest_mtime(str(paths.prepped_ligands_dir / "*.pdbqt"))
+    prepped_latest = _latest_mtime(str(prepped_lig_dir / "*.pdbqt"))
 
     if prep_marker.exists() and prepped_latest >= raw_latest:
         logger.info("[prep] prepped ligands present & up-to-date; skipping ligand prep.")
     else:
         logger.info("[prep] running ligand prep (raw newer than prepped or first run).")
         prep_ligands_from_pdb(
-            ligand_output_dir=paths.ligand_output_dir,
-            ligands_mol2_dir=paths.ligands_mol2_dir,
-            prepped_ligands_dir=paths.prepped_ligands_dir,
+            ligand_output_dir=ligands_raw_dir,
+            ligands_mol2_dir=ligands_mol2,
+            prepped_ligands_dir=prepped_lig_dir,
         )
         try:
             prep_marker.touch()
@@ -1215,15 +1233,15 @@ def run_benchmark_for_protein(
             pass
 
     # 2) Always normalize both trees after the decision (whether we ran prep or not)
-    _collapse_sanitized_suffixes(paths.ligand_output_dir, (".pdb", ".mol2"))
-    _collapse_sanitized_suffixes(paths.prepped_ligands_dir, (".pdbqt",))
+    _collapse_sanitized_suffixes(ligands_raw_dir, (".pdb", ".mol2"))
+    _collapse_sanitized_suffixes(prepped_lig_dir, (".pdbqt",))
 
     # 1b) metabolites -> parents
     extra_parent_ids: List[str] = []
     try:
         extra_parent_ids = ensure_parent_drugs_for_controls(
             pdb_code=pdb_id,
-            ligands_raw_dir=str(paths.ligand_output_dir),
+            ligands_raw_dir=str(ligands_raw_dir),
             fda_index=fda_index,
             max_additions=3,
         ) or []
@@ -1239,7 +1257,7 @@ def run_benchmark_for_protein(
         return
 
     # 3) Detect pocket (main logic)
-    center, detected_box, src = detect_pocket(cleaned_pdb, paths.ligand_output_dir, logger)
+    center, detected_box, src = detect_pocket(cleaned_pdb, ligands_raw_dir, logger)
     # honor BOX_SIZE_MAX_A from config (default 28.0)
     box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
     if center:
@@ -1257,7 +1275,7 @@ def run_benchmark_for_protein(
             return
 
     # 4) Build hints
-    het_ids, het_names = parse_pdb_het_hints(Path(paths.pdb_path))
+    het_ids, het_names = parse_pdb_het_hints(input_pdb_path)
     hints: List[str] = []
     hints.extend(het_names)
     hints.extend(het_ids)
@@ -1341,8 +1359,8 @@ def run_benchmark_for_protein(
     STAGE_NAME = str(cfg.get("BENCH_STAGE_NAME", "bench_pocket1_single"))
 
     def _pick_best_control_and_rdk_in_stage(
-            pdb_id: str,
-            root_project: str,
+            paths,
+            variant: Optional[str],
             stage_name: str | None = None
     ) -> Tuple[Optional[Path], Optional[Path]]:
         """
@@ -1359,7 +1377,7 @@ def run_benchmark_for_protein(
         stage_name = stage_name or STAGE_NAME
         logger.info("[render-pick] using stage_name=%s", stage_name)
 
-        stage_dir = Path(root_project) / "docked" / pdb_id / stage_name
+        stage_dir = paths.docked_variant_root(variant) / stage_name
         if not stage_dir.is_dir():
             return None, None
 
@@ -1398,21 +1416,21 @@ def run_benchmark_for_protein(
 
 
     # Audit
-    out_dir = Path(out_root) / pdb_id
+    out_dir = paths.docked_variant_root(variant)
     # Pick representative poses (best control + best rdk) from this protein's outputs
-    ctrl_pose, rdk_pose = _pick_best_control_and_rdk_in_stage(pdb_id, str(Path(cfg["OVERALL_DIR"]).resolve()),
-                                                              STAGE_NAME)
+    ctrl_pose, rdk_pose = _pick_best_control_and_rdk_in_stage(paths, variant, STAGE_NAME)
 
     logger.info("[render-enqueue] %s %s: receptor=%s | orig=%s | ctrl=%s | rdk=%s",
-                pdb_id, STAGE_NAME, paths.cleaned_pdb_path, paths.pdb_path,
+                pdb_id, STAGE_NAME, cleaned_pdb_path, input_pdb_path,
                 ctrl_pose, rdk_pose)
     if not _render_only_current_run_enabled(cfg):
         _enqueue_render_task(
             pdb_id=pdb_id,
             stage_name=STAGE_NAME,
-            root_project=str(Path(cfg["OVERALL_DIR"]).resolve()),
-            cleaned_pdb_path=str(Path(paths.cleaned_pdb_path).resolve()),
-            original_pdb_path=str(Path(paths.pdb_path).resolve()),
+            paths=paths,
+            variant=variant,
+            cleaned_pdb_path=str(cleaned_pdb_path.resolve()),
+            original_pdb_path=str(input_pdb_path.resolve()),
             ctrl_pose_path=(str(ctrl_pose) if ctrl_pose else None),
             rdk_pose_path=(str(rdk_pose) if rdk_pose else None),
             exclude_resns=list(EXCLUDE_HET_IDS),
@@ -1594,9 +1612,7 @@ def run_benchmark_for_protein(
         # If strict allow-list yielded 0 RDKs, mark sentinel so analysis can skip cleanly
         if not non_ctrls:
             try:
-                root_project = Path(cfg.get("OVERALL_DIR", str(Path(cfg["OUTPUT_DIR"]).parent)))
-                stage_dir_target = root_project / "docked" / pdb_id / stage["name"]
-                stage_dir_target.mkdir(parents=True, exist_ok=True)
+                stage_dir_target = paths.docked_stage_dir(variant, stage["name"])
                 (stage_dir_target / ".rdk_skipped").touch()
                 logger.info(f"[rdk-sentinel] {pdb_id} {stage['name']}: no RDK candidates -> wrote .rdk_skipped")
             except Exception as _e:
@@ -1861,15 +1877,14 @@ def run_benchmark_for_protein(
             # Optional PyMOL renders (when DOCKING_MODE == "benchmark")
             if str(cfg.get("DOCKING_MODE", "")).lower() == "benchmark":
                 stage_name = stage["name"]
-                root_project = Path(cfg.get("OVERALL_DIR", str(Path(cfg["OUTPUT_DIR"]).parent)))
 
                 results_for_stage = score_history.get(stage_name, {})
                 best_ctrl_lig, nearest_rdk_lig = pick_control_and_nearest_rdk(
                     results_for_stage, raw_docked, control_stems_lower
                 )
 
-                cleaned_pdb_path = str(cleaned_pdb)
-                original_pdb_path = str(Path(paths.pdb_path))
+                cleaned_pdb_str = str(cleaned_pdb)
+                original_pdb_str = str(input_pdb_path)
                 ctrl_pose_path = raw_docked.get(best_ctrl_lig) if best_ctrl_lig else None
                 rdk_pose_path = raw_docked.get(nearest_rdk_lig) if nearest_rdk_lig else None
 
@@ -1883,43 +1898,43 @@ def run_benchmark_for_protein(
                     _enqueue_render_task(
                         pdb_id=pdb_id,
                         stage_name=stage_name,
-                        root_project=str(root_project),
-                        cleaned_pdb_path=cleaned_pdb_path,
-                        original_pdb_path=original_pdb_path,
+                        paths=paths,
+                        variant=variant,
+                        cleaned_pdb_path=cleaned_pdb_str,
+                        original_pdb_path=original_pdb_str,
                         ctrl_pose_path=ctrl_pose_path,
                         rdk_pose_path=rdk_pose_path,
                         exclude_resns=sorted(list(EXCLUDE_HET_IDS)),
                     )
                 else:
                     with _RENDER_LOCK:
-                        stage_dir_target = root_project / "docked" / pdb_id / stage_name
-                        stage_dir_target.mkdir(parents=True, exist_ok=True)
+                        stage_dir_target = paths.docked_stage_dir(variant, stage_name)
 
                         _render_native_on_original_pdb(
-                            original_pdb=original_pdb_path,
+                            original_pdb=original_pdb_str,
                             outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-native__NATIVE"),
                             exclude_resns=sorted(list(EXCLUDE_HET_IDS)),
                         )
                         if ctrl_pose_path and Path(ctrl_pose_path).is_file():
                             _render_three_views_with_pymol(
-                                receptor_path=cleaned_pdb_path,
+                                receptor_path=cleaned_pdb_str,
                                 ligand_paths_and_colors=[(ctrl_pose_path, "control", "blue")],
                                 outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL"),
                             )
                         if rdk_pose_path and Path(rdk_pose_path).is_file():
                             _render_three_views_with_pymol(
-                                receptor_path=cleaned_pdb_path,
+                                receptor_path=cleaned_pdb_str,
                                 ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "orange")],
                                 outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__RDKclosest"),
                             )
                             _render_three_views_with_pymol(
-                                receptor_path=original_pdb_path,
+                                receptor_path=original_pdb_str,
                                 ligand_paths_and_colors=[(rdk_pose_path, "rdk_closest", "orange")],
                                 outprefix=str(stage_dir_target / f"{pdb_id}_orig-with-rdk__RDKclosest"),
                             )
                             if ctrl_pose_path and Path(ctrl_pose_path).is_file():
                                 _render_three_views_with_pymol(
-                                    receptor_path=cleaned_pdb_path,
+                                    receptor_path=cleaned_pdb_str,
                                     ligand_paths_and_colors=[(ctrl_pose_path, "control", "blue"),
                                                              (rdk_pose_path, "rdk_closest", "orange")],
                                     outprefix=str(stage_dir_target / f"{pdb_id}_cleaned__CONTROL+RDKclosest"),
@@ -2413,31 +2428,29 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         cfg_local["MAX_PARALLEL_JOBS"] = max(int(cfg_local.get("MAX_PARALLEL_JOBS") or 0), total_cpus)
 
         # Determine which variants to run for this protein
-        _mode = (args.apo_holo_mode or os.environ.get("APO_HOLO_MODE") or cfg.get(
-            "APO_HOLO_MODE") or "apo_vs_holo").lower().replace(" ", "")
-        _variants = ["holo", "apo"] if _mode in {"apo_vs_holo", "apovsholo"} else [_mode or "holo"]
+        variant_mode = args.apo_holo_mode or os.environ.get("APO_HOLO_MODE") or cfg.get("APO_HOLO_MODE")
 
-        for _variant in _variants:
-            os.environ["APO_HOLO_MODE"] = _variant
-            out_root_variant = Path(out_root) / _variant.upper()
-            out_root_variant.mkdir(parents=True, exist_ok=True)
+        for variant in expand_variants(variant_mode):
+            if variant is None:
+                os.environ.pop("APO_HOLO_MODE", None)
+            else:
+                os.environ["APO_HOLO_MODE"] = variant
 
             cfg_v = dict(cfg_local)
-            # (Optional) if any downstream uses cfg["DOCKED_DIR"], keep it variant-scoped too:
-            cfg_v["DOCKED_DIR"] = str(out_root_variant)
+            cfg_v["APO_HOLO_MODE"] = variant
 
             run_benchmark_for_protein(
                 cfg=cfg_v,
                 mapping=mapping,
                 pdb_file=pdb_file,
                 prepped_dir=prepped,
-                out_root=out_root_variant,
                 exhaustiveness=int(args.exhaustiveness),
                 num_modes=int(args.num_modes),
                 max_candidates=int(args.max_candidates),
                 manual_hints=manual_hints,
                 fda_index=fda_index,
                 fda_scope_dirs=fda_scope_dirs,
+                variant=variant,
             )
 
         return pdb_file
@@ -2538,7 +2551,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # ----- Post-run analysis -----
     if args.run_analysis:
-        docked_root = Path(cfg.get("OVERALL_DIR", str(Path(out_root).parent))) / "docked"
+        docked_root = Path(cfg["DOCKED_DIR"])
         if not docked_root.is_dir():
             print(f"[analysis] Docked root not found at {docked_root} - skipping.")
         else:
