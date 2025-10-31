@@ -4,6 +4,9 @@ from distutils.util import strtobool
 from typing import Any, Dict
 import re, csv, math
 from collections import defaultdict
+# >>> PATHS IMPORT START
+from path_router import make_paths
+# >>> PATHS IMPORT END
 
 # -------------------------
 # OS guards (Windows-only)
@@ -533,32 +536,20 @@ def write_scores_csv(cfg, pdb_id, score_history):
 # -------------------------
 # Common path builder per protein
 # -------------------------
-def build_paths_for_protein(cfg, base_id, pdb_file):
-    pdb_id = base_id
-    ligand_output_dir = Path(cfg["OUTPUT_DIR"]) / pdb_id / f"{pdb_id}_cleaned_ligands"
-    ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
-    prepped_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]) / pdb_id
-    protein_dir = Path(cfg["OUTPUT_DIR"]) / f"{base_id}_nolig"
-    cleaned_pdb_path = protein_dir / f"{base_id}_nolig_cleaned.pdb"
-    receptor_pdbqt_path = Path(cfg["PDBQT_DIR"]) / f"{base_id}_receptor.pdbqt"
-    pdb_path = os.path.join(cfg["INPUT_DIR"], pdb_file)
-    nolig_pdb_path = os.path.join(cfg["OUTPUT_DIR"], f"{base_id}_nolig.pdb")
-
-    ligand_output_dir.mkdir(parents=True, exist_ok=True)
-    prepped_ligands_dir.mkdir(parents=True, exist_ok=True)
-    protein_dir.mkdir(parents=True, exist_ok=True)
-    receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
-
+# >>> BUILD_PATHS SHIM START
+def build_paths_for_protein(cfg, base_id, pdb_file, variant=None, ph_token=None):
+    p = make_paths(cfg, base_id=base_id, pdb_file=pdb_file)
     return {
-        "pdb_id": pdb_id,
-        "pdb_path": pdb_path,
-        "nolig_pdb_path": nolig_pdb_path,
-        "ligand_output_dir": ligand_output_dir,
-        "ligands_mol2_dir": ligands_mol2_dir,
-        "prepped_ligands_dir": prepped_ligands_dir,
-        "cleaned_pdb_path": cleaned_pdb_path,
-        "receptor_pdbqt_path": receptor_pdbqt_path,
+        "pdb_id": base_id.upper(),
+        "pdb_path":             str(p.input_pdb_path),
+        "nolig_pdb_path":       str(p.nolig_pdb_path),
+        "ligand_output_dir":    str(p.ligand_output_dir),
+        "ligands_mol2_dir":     str(p.ligands_mol2_dir),
+        "prepped_ligands_dir":  str(p.prepped_ligands_dir),
+        "cleaned_pdb_path":     str(p.receptor_cleaned_pdb(variant)),
+        "receptor_pdbqt_path":  str(p.receptor_pdbqt(variant, ph_token=ph_token)),
     }
+# >>> BUILD_PATHS SHIM END
 # -------------------------
 # Backward-compat shims
 # -------------------------
