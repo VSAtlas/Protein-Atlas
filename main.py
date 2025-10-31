@@ -47,6 +47,9 @@ from pose_validation import (
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
 )
 from run_vina import run_docking_task, validate_all_poses
+# >>> PATHS IMPORT START
+from path_router import make_paths, Paths as RouterPaths
+# >>> PATHS IMPORT END
 def _prepare_run_logfile():
     logs_dir = Path.cwd() / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -302,17 +305,9 @@ class GlobalCenterGuard:
         self.locked = True
 
 
-@dataclass
-class Paths:
-    """File/dir paths relevant to one protein."""
-    pdb_id: str
-    pdb_path: str
-    nolig_pdb_path: str
-    ligand_output_dir: Path
-    ligands_mol2_dir: Path
-    prepped_ligands_dir: Path
-    cleaned_pdb_path: Path
-    receptor_pdbqt_path: Path
+# >>> PATHS CLASS START
+Paths = RouterPaths
+# >>> PATHS CLASS END
 
 
 def norm(p: str | Path) -> str:
@@ -695,43 +690,9 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
 
 
 
-def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
-    pdb_id = base_id.upper()  # keep consistent casing
-    root = Path(cfg["OUTPUT_DIR"]) / pdb_id  # e.g., processed_pdbs/1IEP
-
-    # Canonical subfolders
-    raw_dir      = root / "raw"
-    lig_raw_dir  = root / "ligands_raw"
-    nolig_dir    = root / "nolig"
-    receptor_dir = root / "receptor"
-    work_dir     = root / "work"
-
-    # Ensure they exist
-    for d in (raw_dir, lig_raw_dir, nolig_dir, receptor_dir, work_dir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    # Inputs / outputs
-    pdb_path           = os.path.join(cfg["INPUT_DIR"], pdb_file)
-    nolig_pdb_path     = str(nolig_dir / f"{pdb_id}_nolig.pdb")                 # intermediate nolig
-    cleaned_pdb_path   = receptor_dir / f"{pdb_id}_cleaned.pdb"                 # final cleaned PDB
-    receptor_pdbqt     = receptor_dir / f"{pdb_id}.pdbqt"                       # final receptor PDBQT
-    ligand_output_dir  = lig_raw_dir                                            # extracted controls
-    ligands_mol2_dir   = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
-    prepped_lig_dir    = Path(cfg["OUTPUT_LIGANDS_DIR"]) / pdb_id               # prepped .pdbqt library
-
-    prepped_lig_dir.mkdir(parents=True, exist_ok=True)
-    ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
-
-    return Paths(
-        pdb_id=pdb_id,
-        pdb_path=pdb_path,
-        nolig_pdb_path=nolig_pdb_path,
-        ligand_output_dir=ligand_output_dir,
-        ligands_mol2_dir=ligands_mol2_dir,
-        prepped_ligands_dir=prepped_lig_dir,
-        cleaned_pdb_path=cleaned_pdb_path,
-        receptor_pdbqt_path=receptor_pdbqt,
-    )
+# >>> MAKE_PATHS SHIM START
+# make_paths is imported from path_router above (legacy helper removed).
+# >>> MAKE_PATHS SHIM END
 
 
 # --------- control ligand lookup (prefer SDF > MOL2 > PDB; search ligands_raw + reference) ---------
@@ -825,7 +786,10 @@ def _fingerprint_stage(cfg: Dict,
 
 
 def _checkpoint_path(cfg: Dict, pdb_id: str, stage_name: str) -> Path:
-    return Path(cfg["DOCKED_DIR"]) / pdb_id / f".ckpt_{stage_name}.json"
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    return paths.docked_pdb_root() / f".ckpt_{stage_name}.json"
+    # >>> DOCKED PATHS PATCH END
 
 
 def checkpoint_should_skip(cfg: Dict,
@@ -866,7 +830,10 @@ def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
     try:
         if not cfg.get("AUDIT_JSON", True):
             return
-        out = Path(cfg["DOCKED_DIR"]) / pdb_id / "audit.json"
+        # >>> DOCKED PATHS PATCH START
+        paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        out = paths.docked_pdb_root() / "audit.json"
+        # >>> DOCKED PATHS PATCH END
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, indent=2))
     except Exception:
@@ -900,9 +867,11 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
     if malformed_log.exists():
         malformed_log.unlink()
 
+    # >>> EXTRACT LIGANDS PATH PATCH START
     ligands_dict, _ = extract_and_remove_ligands(
-        paths.pdb_path, paths.nolig_pdb_path, str(paths.ligand_output_dir)
+        str(paths.input_pdb_path), str(paths.nolig_pdb_path), str(paths.ligand_output_dir)
     )
+    # >>> EXTRACT LIGANDS PATH PATCH END
     logger.info(f"Extracted {len(ligands_dict)} ligands -> {paths.ligand_output_dir}")
 
     control_stems = set()
@@ -918,21 +887,27 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     from distutils.util import strtobool
 
     force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
+    # >>> RECEPTOR PATHS PATCH START
+    variant = None
+    ph_token = None
+    cleaned_pdb_path = paths.receptor_cleaned_pdb(variant)
+    receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
+    # >>> RECEPTOR PATHS PATCH END
     logger.info(
         f"FORCE_REPROCESS={force_reprocess} | "
-        f"cleaned_exists={paths.cleaned_pdb_path.exists()} "
-        f"receptor_exists={paths.receptor_pdbqt_path.exists()}"
+        f"cleaned_exists={cleaned_pdb_path.exists()} "
+        f"receptor_exists={receptor_pdbqt_path.exists()}"
     )
 
-    if paths.cleaned_pdb_path.exists() and paths.receptor_pdbqt_path.exists() and not force_reprocess:
+    if cleaned_pdb_path.exists() and receptor_pdbqt_path.exists() and not force_reprocess:
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
         try:
-            if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)) and not receptor_sanity_check(str(paths.receptor_pdbqt_path)):
+            if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)) and not receptor_sanity_check(str(receptor_pdbqt_path)):
                 logger.warning("Receptor sanity check failed (cached receptor).")
                 return None, None
         except Exception as _e:
             logger.warning(f"Receptor sanity check skipped due to error: {_e}")
-        return norm(paths.cleaned_pdb_path), norm(paths.receptor_pdbqt_path)
+        return norm(cleaned_pdb_path), norm(receptor_pdbqt_path)
 
     result = automate_protein_prep.main(str(paths.nolig_pdb_path))
     if not result or not isinstance(result, tuple) or len(result) != 2:
@@ -942,11 +917,11 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     cleaned_pdb, receptor_pdbqt = result
 
     try:
-        if Path(receptor_pdbqt).resolve() != paths.receptor_pdbqt_path.resolve():
+        if Path(receptor_pdbqt).resolve() != receptor_pdbqt_path.resolve():
             from shutil import copy2
-            paths.receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
-            copy2(receptor_pdbqt, paths.receptor_pdbqt_path)
-            receptor_pdbqt = str(paths.receptor_pdbqt_path)
+            receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
+            copy2(receptor_pdbqt, receptor_pdbqt_path)
+            receptor_pdbqt = str(receptor_pdbqt_path)
     except Exception as e:
         logger.warning(f"Could not relocate receptor PDBQT: {e}")
 
@@ -1564,6 +1539,10 @@ def run_one_stage(
 
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     max_workers = int(cfg["MAX_PARALLEL_JOBS"])
+    # >>> DOCKED PATHS PATCH START
+    variant = None
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> DOCKED PATHS PATCH END
 
     scores: Dict[str, float] = {}
     validated_ligands: List[str] = []
@@ -1902,7 +1881,7 @@ def run_one_stage(
                                 fb_pose, new_c, _bs, _ch = attempt_fallback_recenter(
                                     fallback_ligands={lig: out_path},
                                     receptor_pdbqt=receptor_pdbqt,
-                                    docking_dir=os.path.join(cfg['DOCKED_DIR'], pdb_id),
+                                    docking_dir=str(paths.docked_pdb_root()),
                                     stage_name=stage_retry2["name"],
                                     pocket_center=center,
                                     logger=logger,
@@ -2043,10 +2022,13 @@ def early_recenter_decision(
             return False, center, box_size, [], attempts_used
 
         logger.warning(f"Early recenter trigger: far_ratio={far_ratio:.2f}, median={med_dist:.1f} �, valid=0 -> recentering.")
+        # >>> DOCKED PATHS PATCH START
+        paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        # >>> DOCKED PATHS PATCH END
         fb_pose, new_center, _best_score, _chosen = attempt_fallback_recenter(
             fallback_ligands=raw_docked,
             receptor_pdbqt=receptor_pdbqt,
-            docking_dir=os.path.join(cfg['DOCKED_DIR'], pdb_id),
+            docking_dir=str(paths.docked_pdb_root()),
             stage_name="stage1",
             pocket_center=center,
             logger=logger,
@@ -2138,10 +2120,13 @@ def fallback_recentering_if_empty(
         return False, center, box_size, []
 
     logger.warning(f"No valid ligands in {stage_name}. Attempting fallback recentering...")
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> DOCKED PATHS PATCH END
     fb_pose, new_center, _best_score, _chosen_lig = attempt_fallback_recenter(
         fallback_ligands=raw_docked_ligands,
         receptor_pdbqt=receptor_pdbqt,
-        docking_dir=os.path.join(cfg["DOCKED_DIR"], pdb_id),
+        docking_dir=str(paths.docked_pdb_root()),
         stage_name=stage_name,
         pocket_center=center,
         logger=logger,
@@ -2404,7 +2389,12 @@ def final_pose_validation_and_screenshots(
     if not validated_ligands_last:
         return
 
+    # >>> DOCKED PATHS PATCH START
+    variant = None
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> DOCKED PATHS PATCH END
     last_stage = stages[-1]["name"]
+    stage_dir = paths.docked_stage_dir(variant, last_stage)
     final_surface = extract_surface_atoms(pdbqt_path=receptor_pdbqt, center=center)
 
     if docking_mode == "polypharmacology":
@@ -2414,7 +2404,7 @@ def final_pose_validation_and_screenshots(
         logger.info(f"[Polypharmacology] Selected top {len(validated_ligands_last)} ligands for images/validation.")
 
     for lig in validated_ligands_last:
-        out_path = Path(cfg["DOCKED_DIR"]) / pdb_id / last_stage / f"{Path(lig).stem}_{last_stage}.pdbqt"
+        out_path = stage_dir / f"{Path(lig).stem}_{last_stage}.pdbqt"
         if not out_path.exists():
             logger.warning(f"Pose file not found for {os.path.basename(lig)} — likely filtered earlier.")
             continue
@@ -2448,9 +2438,9 @@ def final_pose_validation_and_screenshots(
         try:
             import subprocess
             top = validated_ligands_last[0]
-            pose = Path(cfg["DOCKED_DIR"]) / pdb_id / last_stage / f"{Path(top).stem}_{last_stage}.pdbqt"
+            pose = stage_dir / f"{Path(top).stem}_{last_stage}.pdbqt"
             if pose.exists():
-                out_prefix = Path(cfg["DOCKED_DIR"]) / pdb_id / "top_pose"
+                out_prefix = paths.docked_pdb_root() / "top_pose"
                 out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
                 # -- PyMOL screenshot block (Option A: -r + -d python) --
@@ -2480,17 +2470,24 @@ def final_pose_validation_and_screenshots(
 def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str) -> str:
     """Build the expected pose path for a ligand at a given stage."""
     from pathlib import Path
-    return str(Path(csv_cfg["DOCKED_DIR"]) / pdb_id / stage_name / f"{Path(lig_path).stem}_{stage_name}.pdbqt")
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(csv_cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    stage_dir = paths.docked_stage_dir(None, stage_name)
+    return str(stage_dir / f"{Path(lig_path).stem}_{stage_name}.pdbqt")
+    # >>> DOCKED PATHS PATCH END
 
 
 def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, Dict]]) -> str:
     import csv, math
 
-    dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
-    os.makedirs(dock_dir, exist_ok=True)
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    dock_dir = paths.docked_pdb_root()
+    dock_dir.mkdir(parents=True, exist_ok=True)
+    # >>> DOCKED PATHS PATCH END
 
     # --- Wide summary (unchanged shape) ---
-    csv_out_wide = os.path.join(dock_dir, "docking_score_summary.csv")
+    csv_out_wide = str(dock_dir / "docking_score_summary.csv")
     flat = {}
     for stage_name, stage_map in score_history.items():
         flat[stage_name] = {}
@@ -2504,7 +2501,7 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
     write_score_summary_to_csv(flat, output_path=csv_out_wide)
 
     # --- Long format with self_rmsd added ---
-    csv_out_long = os.path.join(dock_dir, "docking_score_long.csv")
+    csv_out_long = str(dock_dir / "docking_score_long.csv")
     with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd", "pains_flag"])
@@ -2674,10 +2671,12 @@ import subprocess
 def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = base_id.replace("_cleaned", "")
-    logger = make_protein_logger(cfg["DOCKED_DIR"], pdb_id, cfg)
-    logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
+    # >>> PATHS INIT START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> PATHS INIT END
 
-    paths = make_paths(cfg, base_id, pdb_file)
+    logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
+    logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
 
     # 1) Extract ligands → produce nolig PDB
     _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
