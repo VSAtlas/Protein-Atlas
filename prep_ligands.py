@@ -13,6 +13,9 @@ import shutil
 from collections import defaultdict
 import argparse
 from input_and_export_functions import load_config, validate_config
+# >>> PATHS IMPORT START
+from path_router import make_paths
+# >>> PATHS IMPORT END
 
 from activesite import (
     fix_pdb_elements,
@@ -3271,6 +3274,19 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     cfg = load_config("config.txt")
     validate_config(cfg)
+    pdb_token = (
+        os.environ.get("PDB_ID")
+        or cfg.get("PDB_ID")
+        or cfg.get("TARGET_PDB")
+        or cfg.get("PDB")
+        or cfg.get("INPUT_PDB")
+        or cfg.get("PDB_FILE")
+        or ""
+    )
+    pdb_id = Path(str(pdb_token)).stem.upper() if pdb_token else "LIGPREP"
+    # >>> PATHS INIT START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> PATHS INIT END
     # ---------- resolve numeric/env knobs you already had ----------
     MIN_TORS_DOF = _env_int("MIN_TORS_DOF", cfg.get("MIN_TORS_DOF", 0))
     MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
@@ -3285,9 +3301,15 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     status_log_env = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
 
     # default to config when not overridden
-    ligand_extracted_dir = Path(in_sdf_dir_env or cfg["LIGAND_EXTRACTED_DIR"]).resolve()
-    ligands_mol2_dir = Path(mol2_dir_env or cfg["LIGANDS_MOL2_DIR"]).resolve()
-    output_ligands_dir = Path(out_dir_env or cfg["OUTPUT_LIGANDS_DIR"]).resolve()
+    # >>> LIGAND PATHS PATCH START
+    ligands_raw_dir  = paths.ligand_output_dir
+    prepped_lig_dir  = paths.prepped_ligands_dir
+    ligands_mol2_dir = paths.ligands_mol2_dir
+    # >>> LIGAND PATHS PATCH END
+
+    ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
+    ligands_mol2_dir = Path(mol2_dir_env).resolve() if mol2_dir_env else ligands_mol2_dir
+    output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
     prepped_ligands_dir = output_ligands_dir
     # direct all malformed logs for this protein to its prepped_ligands dir
     global MALFORMED_DIR
@@ -3329,10 +3351,6 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     MAX_HEAVY_ATOMS = _env_int("MAX_HEAVY_ATOMS", cfg.get("MAX_HEAVY_ATOMS", 1200))
     MIN_ATOMS_FOR_DOCKING = _env_int("MIN_ATOMS_FOR_DOCKING", cfg.get("MIN_ATOMS_FOR_DOCKING", 5))
     MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
-    ligand_extracted_dir = Path(cfg["LIGAND_EXTRACTED_DIR"]).resolve()
-    ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]).resolve()
-    output_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]).resolve()
-    prepped_ligands_dir = output_ligands_dir
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     # If someone pointed MOL2s at 'prepped_ligands', redirect to 'ligands_mol2' (compat warning).
     if "prepped_ligands" in str(ligands_mol2_dir):
