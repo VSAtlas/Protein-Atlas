@@ -321,8 +321,11 @@ def emit_vina_config(
         raise ValueError(f"Ligand is not a .pdbqt file: {ligand_path}")
 
     lig_base = Path(ligand_path).stem
-    out_root = Path(cfg.get("DOCKED_DIR", Path(cfg["OVERALL_DIR"]) / "docked"))
-    out_path = out_root / pdb_id / stage_name / f"{lig_base}_{stage_name}.pdbqt"
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    out_root = paths.docked_pdb_root()
+    # >>> DOCKED PATHS PATCH END
+    out_path = out_root / stage_name / f"{lig_base}_{stage_name}.pdbqt"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     lines = [
@@ -515,7 +518,10 @@ def score_key(item):
     return s if rec.get("valid", False) else s + 1e-6
 
 def write_scores_csv(cfg, pdb_id, score_history):
-    protein_dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    protein_dock_dir = str(paths.docked_pdb_root())
+    # >>> DOCKED PATHS PATCH END
     os.makedirs(protein_dock_dir, exist_ok=True)
     csv_output_path = os.path.join(protein_dock_dir, "docking_score_summary.csv")
 
