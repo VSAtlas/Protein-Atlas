@@ -1,4 +1,8 @@
 
+# >>> PATHS IMPORT START
+from path_router import make_paths
+# >>> PATHS IMPORT END
+
 def general_fallback_recenter_if_needed(cfg, pdb_id, stage_name, scores, raw_docked_ligands,
                                         receptor_pdbqt, center, box_size, logger, ligands_stage1_original):
     """
@@ -9,15 +13,19 @@ def general_fallback_recenter_if_needed(cfg, pdb_id, stage_name, scores, raw_doc
         return False, center, box_size, None
 
     logger.warning(f"No valid ligands in {stage_name}. Attempting fallback recentering...")
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    docking_dir = str(paths.docked_pdb_root())
     fb_pose, new_center, best_score, chosen_ligand = attempt_fallback_recenter(
         fallback_ligands=raw_docked_ligands,
         receptor_pdbqt=receptor_pdbqt,
-        docking_dir=os.path.join(cfg["DOCKED_DIR"], pdb_id),
+        docking_dir=docking_dir,
         stage_name=stage_name,
         pocket_center=center,
         logger=logger,
         exclude_basenames=set(),
     )
+    # >>> DOCKED PATHS PATCH END
     if not fb_pose or new_center is None:
         logger.warning("Fallback recovery failed. Ending docking for this protein.")
         return False, center, box_size, None
@@ -63,15 +71,19 @@ def early_recenter(stage_index, all_distances, scores, recenter_knobs, box_size,
         logger.warning(f"Early recenter trigger: far_ratio={far_ratio:.2f}, median={med_dist:.1f} Å, valid=0 → recentering.")
         remaining = max(0, max_recenter_attempts - recenter_attempts)
         while remaining > 0:
+            # >>> DOCKED PATHS PATCH START
+            paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+            docking_dir = str(paths.docked_pdb_root())
             fb_pose, new_center, best_score, chosen_ligand = attempt_fallback_recenter(
                 fallback_ligands=raw_docked_ligands,
                 receptor_pdbqt=receptor_pdbqt,
-                docking_dir=os.path.join(cfg['DOCKED_DIR'], pdb_id),
+                docking_dir=docking_dir,
                 stage_name="stage1",
                 pocket_center=center,
                 logger=logger,
                 exclude_basenames=set()
             )
+            # >>> DOCKED PATHS PATCH END
             if new_center is None:
                 logger.warning("Fallback couldn’t produce a new center from remaining candidates.")
                 break
