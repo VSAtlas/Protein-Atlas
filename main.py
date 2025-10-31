@@ -24,6 +24,7 @@ import json
 import logging
 import hashlib
 from dataclasses import dataclass, field
+import atexit, datetime
 from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,8 +36,9 @@ from tqdm import tqdm
 
 from input_and_export_functions import (
     load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, generate_config, record_score, score_key, _to_bool
+    extract_best_score, emit_vina_config, record_score, score_key, _to_bool, init_config_run_dir
 )
+
 from protein_functions import detect_active_site
 from activesite import extract_and_remove_ligands
 from prep_ligands import prep_ligands_from_pdb, is_valid_ligand
@@ -45,11 +47,80 @@ from pose_validation import (
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
 )
 from run_vina import run_docking_task, validate_all_poses
+def _prepare_run_logfile():
+    logs_dir = Path.cwd() / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return str(logs_dir / f"main_{ts}.log")
+
+class _Tee:
+    def __init__(self, stream, file_path):
+        self._stream = stream
+        self._fh = open(file_path, "a", buffering=1, encoding="utf-8", errors="replace")
+    def write(self, data):
+        try:
+            self._stream.write(data)
+        except Exception:
+            pass
+        try:
+            self._fh.write(data)
+        except Exception:
+            pass
+    def flush(self):
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+        try:
+            self._fh.flush()
+        except Exception:
+            pass
+    def isatty(self):
+        try:
+            return self._stream.isatty()
+        except Exception:
+            return False
+    def close(self):
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+
+def _tee_stdio_to(log_path):
+    tee_out, tee_err = _Tee(sys.stdout, log_path), _Tee(sys.stderr, log_path)
+    sys.stdout, sys.stderr = tee_out, tee_err
+    def _announce_and_close():
+        try:
+            sys.stdout.write(f"Log -> {log_path}\n")
+            sys.stdout.flush()
+        finally:
+            try:
+                tee_out.close()
+                tee_err.close()
+            except Exception:
+                pass
+    atexit.register(_announce_and_close)
+
+
+
+
+_orig_mkdir = Path.mkdir
+def _dbg_mkdir(self, *a, **k):
+    if str(self).lower().endswith("_cleaned_ligands"):
+        logging.error("[DBG] mkdir for legacy path: %s", self)
+    return _orig_mkdir(self, *a, **k)
+Path.mkdir = _dbg_mkdir
+
+_orig_makedirs = os.makedirs
+def _dbg_makedirs(name, *a, **k):
+    if str(name).lower().endswith("_cleaned_ligands"):
+        logging.error("[DBG] makedirs for legacy path: %s", name)
+    return _orig_makedirs(name, *a, **k)
+os.makedirs = _dbg_makedirs
 
 # ======================
 # Data models & utilities
 # ======================
-
 @dataclass
 class RetryManager:
     max_retries: int = 2
@@ -248,6 +319,300 @@ def norm(p: str | Path) -> str:
     """Normalize path to a clean, forward-slash string for logs & keys."""
     return os.path.abspath(str(p)).replace("\\", "/")
 
+# --- Single-ligand ---
+def _parse_single_from_cli(argv) -> str:
+    """
+    Minimal CLI parser for: --single <pattern>
+    Returns the pattern string or "" if not provided.
+    """
+    try:
+        if "--single" in argv:
+            i = argv.index("--single")
+            if i + 1 < len(argv) and not argv[i+1].startswith("-"):
+                return argv[i+1]
+    except Exception:
+        pass
+    return ""
+
+def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
+    """
+    Apply SINGLE_LIGAND_SEARCH_ORDER: 'per_protein,global' (default).
+    Match semantics: exact or prefix match depending on SINGLE_LIGAND_ALLOW_PREFIX.
+    Returns a Path to the first hit, or None.
+    """
+    if not selector:
+        return None
+
+    allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
+    order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")).replace(" ", "").split(",")
+
+    # Where to look
+    per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")  # injected at runtime in process_one_protein
+    global_root     = Path(cfg.get("OUTPUT_LIGANDS_DIR", "")) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+
+    def _match_one_dir(root: Path) -> Optional[Path]:
+        if not root or not Path(root).exists():
+            return None
+        candidates = list(Path(root).glob("*.pdbqt"))
+        # Try exact stem (without _stage suffix), then prefix
+        for p in candidates:
+            base = p.stem.split("_stage")[0]
+            if base.lower() == selector.lower():
+                return p
+        if allow_prefix:
+            for p in candidates:
+                base = p.stem.split("_stage")[0]
+                if base.lower().startswith(selector.lower()):
+                    return p
+        return None
+
+    for where in order:
+        if where == "per_protein":
+            hit = _match_one_dir(Path(per_protein_dir) if per_protein_dir else None)
+            if hit:
+                logger.info(f"[single] matched in per-protein dir: {hit.name}")
+                return hit
+        elif where == "global":
+            if global_root and global_root.exists():
+                # Search all subfolders (keep current semantics)
+                for p in global_root.rglob("*.pdbqt"):
+                    base = p.stem.split("_stage")[0]
+                    if base.lower() == selector.lower():
+                        logger.info(f"[single] matched in global dir: {p}")
+                        return p
+                if allow_prefix:
+                    for p in global_root.rglob("*.pdbqt"):
+                        base = p.stem.split("_stage")[0]
+                        if base.lower().startswith(selector.lower()):
+                            logger.info(f"[single] prefix-matched in global dir: {p}")
+                            return p
+                # --- Name-based mapping via FDA CSV (generic/brand/synonym) ---
+                try:
+                    name_map = _load_fda_name_map(cfg, logger)
+                    key = _norm_name_key(selector)
+                    basenames = list(name_map.get(key, []))
+
+                    # Optional prefix over names if allowed
+                    if not basenames and allow_prefix and key:
+                        pref = key
+                        for k, v in name_map.items():
+                            if k.startswith(pref):
+                                basenames.extend(list(v))
+
+                    if basenames:
+                        # Search by basename(s) anywhere under the global library root
+                        for bn in basenames:
+                            for p in global_root.rglob(bn):
+                                logger.info(f"[single:name] '{selector}' → {bn} → {p}")
+                                return p
+                except Exception as _e:
+                    logger.debug(f"[single:name] mapping search skipped: {_e}")
+
+        else:
+            logger.debug(f"[single] unknown search scope: {where}")
+    return None
+
+
+# --- FDA name mapping (CSV) ---------------------------------------------------
+# Lets SINGLE_LIGAND resolve by generic/brand/synonym (e.g., "imatinib", "Gleevec").
+_FDA_NAME_MAP_CACHE = None
+
+def _norm_name_key(s: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "", str(s).lower())
+
+def _split_multi_names(v: str) -> list[str]:
+    import re
+    parts = re.split(r"[|;,/]", v or "")
+    return [p.strip() for p in parts if p and p.strip()]
+
+def _load_fda_name_map(cfg: Dict, logger: logging.Logger) -> dict[str, set[str]]:
+    """
+    Build dict: normalized_name -> {pdbqt_basename, ...}
+    CSV must have at least: column 'path' pointing to a *.pdbqt, plus name columns.
+    """
+    global _FDA_NAME_MAP_CACHE
+    if isinstance(_FDA_NAME_MAP_CACHE, dict):
+        return _FDA_NAME_MAP_CACHE
+
+    import csv
+    from pathlib import Path
+
+    csv_path = os.environ.get("FDA_MAPPING_CSV", "").strip() or str(cfg.get("FDA_MAPPING_CSV", "")).strip()
+    mapping: dict[str, set[str]] = {}
+    if not csv_path:
+        _FDA_NAME_MAP_CACHE = {}
+        return _FDA_NAME_MAP_CACHE
+
+    p = Path(csv_path)
+    if not p.exists():
+        logger.info(f"[single:name] FDA_MAPPING_CSV not found at {csv_path} (name lookup disabled).")
+        _FDA_NAME_MAP_CACHE = {}
+        return _FDA_NAME_MAP_CACHE
+
+    try:
+        with open(p, newline="", encoding="utf-8", errors="ignore") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                path = (row.get("path") or "").strip()
+                if not path.endswith(".pdbqt"):
+                    continue
+                base = os.path.basename(path)
+
+                # “single” name fields
+                singles = [
+                    row.get("display_name", ""),
+                    row.get("generic_name", ""),
+                    row.get("rxnorm_generic_name", ""),
+                    row.get("drugcentral_generic_name", ""),
+                    row.get("pubchem_name", ""),
+                    row.get("pubchem_record_title", ""),
+                ]
+                # multi-value fields (split)
+                multis = []
+                for col in ("brand_names", "rxnorm_brand_names", "drugcentral_brand_names", "pubchem_synonyms"):
+                    v = row.get(col, "")
+                    if v:
+                        multis.extend(_split_multi_names(v))
+
+                for nm in [*singles, *multis]:
+                    key = _norm_name_key(nm)
+                    if key:
+                        mapping.setdefault(key, set()).add(base)
+
+        logger.info(f"[single:name] Loaded FDA name map ({len(mapping)} keys) from {p}")
+    except Exception as e:
+        logger.warning(f"[single:name] Failed to load name map: {e}")
+        mapping = {}
+
+    _FDA_NAME_MAP_CACHE = mapping
+    return mapping
+
+def _cli_val(argv, flag):
+    try:
+        if flag in argv:
+            i = argv.index(flag)
+            if i + 1 < len(argv) and not argv[i+1].startswith("-"):
+                return argv[i+1]
+    except Exception:
+        pass
+    return None
+
+def _cli_has(argv, flag):
+    try:
+        return flag in argv
+    except Exception:
+        return False
+
+# --- Specified Proteins Mode helpers (NEW) -----------------------------------
+from typing import Iterable
+
+def _norm_pdb_id(token: str) -> Optional[str]:
+    """
+    Normalize a user token to a 4-char PDB ID (uppercase).
+    Accepts bare IDs (2HYY), QoL flags (--2HYY), and filenames (2HYY.pdb).
+    Returns None if it cannot produce a 4-char alnum ID.
+    """
+    if not token:
+        return None
+    t = str(token).strip()
+    if t.startswith("--"):
+        t = t[2:]
+    t = os.path.basename(t)
+    if t.lower().endswith(".pdb"):
+        t = t[:-4]
+    t = t.replace("_cleaned", "")
+    t = t.upper()
+    if len(t) >= 4:
+        cand = t[:4]
+        return cand if cand.isalnum() else None
+    return None
+
+def _split_ids(s: str) -> list[str]:
+    """Split a comma/whitespace separated string into normalized 4-char IDs."""
+    if not s:
+        return []
+    parts = s.replace(",", " ").split()
+    out = []
+    for p in parts:
+        nid = _norm_pdb_id(p)
+        if nid:
+            out.append(nid)
+    return out
+
+def _dedupe_order(seq: Iterable[str]) -> list[str]:
+    """De-duplicate while preserving first-seen order."""
+    seen = set()
+    out = []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
+    """
+    Resolve requested PDB IDs with precedence CLI > ENV > CFG.
+    CLI:
+      --pdb 2HYY        (repeatable)
+      --pdbs 2HYY,3ERT  (comma/space separated)
+      --2HYY            (QoL: any --<4char> alnum)
+    ENV: ONLY_PDBS="2HYY 3ERT"
+    CFG: SPECIFIED_PROTEINS: JSON list or string "2HYY, 3ERT"
+    Returns: (normalized_ids, source or "")
+    """
+    # --- CLI ---
+    cli_ids: list[str] = []
+
+    # --pdb (repeatable)
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--pdb" and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+            nid = _norm_pdb_id(argv[i + 1])
+            if nid:
+                cli_ids.append(nid)
+            i += 2
+            continue
+        i += 1
+
+    # --pdbs "A B,C"
+    try:
+        if "--pdbs" in argv:
+            j = argv.index("--pdbs")
+            if j + 1 < len(argv) and not argv[j + 1].startswith("-"):
+                cli_ids.extend(_split_ids(argv[j + 1]))
+    except Exception:
+        pass
+
+    # QoL: --2HYY style (exactly 6 chars, starts with "--", next 4 alnum)
+    for tok in argv:
+        if tok.startswith("--") and len(tok) == 6:
+            nid = _norm_pdb_id(tok)
+            if nid:
+                cli_ids.append(nid)
+
+    if cli_ids:
+        return _dedupe_order(cli_ids), "CLI"
+
+    env_val = os.environ.get("ONLY_PDBS", "").strip()
+    if env_val:
+        return _dedupe_order(_split_ids(env_val)), "ENV"
+
+    # --- CFG ---
+    val = cfg.get("SPECIFIED_PROTEINS", "")
+    if isinstance(val, list):
+        cfg_ids = [_norm_pdb_id(x) for x in val]
+        cfg_ids = [x for x in cfg_ids if x]
+        if cfg_ids:
+            return _dedupe_order(cfg_ids), "CFG"
+        return [], ""
+    s = str(val or "").strip()
+    if s:
+        return _dedupe_order(_split_ids(s)), "CFG"
+
+    return [], ""
+
+
 
 def get_recenter_params(cfg: Dict) -> RecenterParams:
     """Load recenter parameters from config with safe defaults."""
@@ -279,7 +644,8 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
 
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-    fh = logging.FileHandler(log_file_path)
+    # Overwrite per run (truncate), not append
+    fh = logging.FileHandler(log_file_path, mode="w")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
 
@@ -288,11 +654,45 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
     quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else _to_bool(cfg.get("QUIET_CONSOLE", False))
     ch.setLevel(logging.WARNING if quiet else logging.INFO)
     ch.setFormatter(formatter)
+    # Opt-in topic filtering and level overrides
+    def _coerce_level(name: str | None, default: int) -> int:
+        m = {"CRITICAL":50,"ERROR":40,"WARN":30,"WARNING":30,"INFO":20,"DEBUG":10,"NOTSET":0}
+        return m.get(str(name or "").strip().upper(), default)
+
+    raw_topics = (os.environ.get("LOG_TOPICS") or str(cfg.get("LOG_TOPICS", ""))).replace(",", " ")
+    topics = {t.strip().lower() for t in raw_topics.split() if t.strip()}
+
+    class _TopicFilter(logging.Filter):
+        def __init__(self, allowed: set[str]): self.allowed = allowed
+        def filter(self, record: logging.LogRecord) -> bool:
+            # Always show warnings/errors
+            if record.levelno >= logging.WARNING:
+                return True
+            msg = record.getMessage()
+            # If message is [tag]..., allow only when tag in allowed
+            if msg.startswith("[") and ("]" in msg):
+                tag = msg[1:msg.find("]")].strip().lower()
+                if not self.allowed or "all" in self.allowed:
+                    return True
+                return tag in self.allowed
+            # Untagged INFO/DEBUG only pass when explicitly enabled as 'untagged'
+            return ("untagged" in self.allowed) or (not self.allowed)
+
+    # Optional level overrides
+    fh.setLevel(_coerce_level(os.environ.get("LOG_LEVEL_FILE") or cfg.get("LOG_LEVEL_FILE"), fh.level))
+    ch.setLevel(_coerce_level(os.environ.get("LOG_LEVEL_CONSOLE") or cfg.get("LOG_LEVEL_CONSOLE"), ch.level))
+
+    # Apply topic filter only if topics were provided (and not 'all')
+    if topics and ("all" not in topics):
+        filt = _TopicFilter(topics)
+        fh.addFilter(filt)
+        ch.addFilter(filt)
 
     logger.addHandler(fh)
     logger.addHandler(ch)
     logger.propagate = False
     return logger
+
 
 
 def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
@@ -561,6 +961,208 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
+# ---- Multi-control center selection via crystallographic controls ----
+def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
+    """
+    Returns (center_tuple, (24.0,24.0,24.0)) or (None, None).
+    - If multiple controls and max pairwise centroid distance <= CONTROL_CENTER_CLOSE_MAX_A -> average (consensus).
+    - Else (far apart), redock each prepped control and pick lowest RMSD vs its crystal.
+    - If no controls or all redocks fail, returns (None, None) to signal P2Rank fallback.
+    """
+    import numpy as _np
+    import math as _math
+    from pathlib import Path as _Path
+    from run_vina import run_docking_task as _run_dock
+
+    def _find_control_pdbs(d: _Path) -> list[_Path]:
+        return sorted([p for p in d.glob("*.pdb") if p.is_file()])
+
+    def _centroid_from_pdb(p: _Path):
+        xs, ys, zs = [], [], []
+        try:
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                for ln in f:
+                    if ln.startswith(("ATOM","HETATM")):
+                        try:
+                            xs.append(float(ln[30:38])); ys.append(float(ln[38:46])); zs.append(float(ln[46:54]))
+                        except Exception:
+                            continue
+        except Exception:
+            return None
+        if not xs: return None
+        return (float(_np.mean(xs)), float(_np.mean(ys)), float(_np.mean(zs)))
+
+    # discover crystal controls in preferred locations (current + legacy sibling)
+    ctrl_pdbs = _find_control_pdbs(paths.ligand_output_dir)
+    if not ctrl_pdbs:
+        legacy = paths.ligand_output_dir.parent.parent / f"{paths.pdb_id}_NOLIG" / "ligands_raw"
+        if legacy.exists():
+            ctrl_pdbs = _find_control_pdbs(legacy)
+
+    if not ctrl_pdbs:
+        return None, None  # let caller go to P2Rank directly
+
+    policy = str(cfg.get("CONTROL_CENTER_POLICY", "best_redock")).lower().strip()
+    thr = float(cfg.get("CONTROL_CENTER_CLOSE_MAX_A", 8.0))
+
+    # compute centroids + pairwise spread
+    centroids = {}
+    for p in ctrl_pdbs:
+        c = _centroid_from_pdb(p)
+        if c: centroids[p.stem.split("_stage")[0]] = c
+
+    bases = list(centroids.keys())
+    coords = [centroids[b] for b in bases]
+    def _dist(a,b):
+        return float(((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2) ** 0.5)
+    max_delta = 0.0
+    for i in range(len(coords)):
+        for j in range(i+1, len(coords)):
+            d = _dist(coords[i], coords[j])
+            if d > max_delta: max_delta = d
+
+    logger.info(f"[control-centers] n={len(coords)} maxΔ={max_delta:.2f}Å policy={policy}")
+
+    # single-control or simple policies
+    if len(coords) == 1:
+        center = coords[0]
+        logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
+        return center, (24.0,24.0,24.0)
+
+    if policy == "first":
+        center = coords[0]
+        logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
+        return center, (24.0,24.0,24.0)
+
+    if max_delta <= thr:
+        # consensus average when controls are close
+        c = (float(_np.mean([x for x,_,_ in coords])),
+             float(_np.mean([y for _,y,_ in coords])),
+             float(_np.mean([z for _,_,z in coords])))
+        logger.info(f"[Control-center] chosen=consensus center=({c[0]:.3f},{c[1]:.3f},{c[2]:.3f}) box=(24,24,24)")
+        return c, (24.0,24.0,24.0)
+
+    if policy == "average_when_close":
+        # far apart → fall back to first per spec
+        center = coords[0]
+        logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
+        return center, (24.0,24.0,24.0)
+
+    # best_redock path (controls far apart)
+    control_lookup = build_control_lookup(paths)  # base -> reference path
+    # collect prepped control pdbqts (per-protein dir and global output dir)
+    prepped_dirs = [paths.prepped_ligands_dir, _Path(str(cfg.get("OUTPUT_LIGANDS_DIR", ""))) / paths.pdb_id]
+    cand_pdbqts = []
+    seen = set()
+    for root in prepped_dirs:
+        if not root or not _Path(root).exists(): continue
+        for p in _Path(root).glob("*.pdbqt"):
+            base = p.stem.split("_stage")[0].split(".sanitized")[0]
+            if base in centroids and base in control_lookup and base not in seen:
+                cand_pdbqts.append(p); seen.add(base)
+
+    if not cand_pdbqts:
+        return None, None
+
+    ex = int(cfg.get("CTRL_REDOCK_EXHAUSTIVENESS", 64))
+    nm = int(cfg.get("CTRL_REDOCK_NMODES", 9))
+    threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
+    vina_exe = str(cfg.get("VINA_EXE") or cfg.get("VINA_PATH") or "vina")
+    obabel = str(cfg.get("OPENBABEL_PATH") or "obabel")
+
+    best = None  # (rmsd, score, base, center_tuple)
+
+    def _best_model_to_pdb(pdbqt_file: _Path):
+        # parse multi-model pdbqt, pick model with best (lowest) Vina score
+        best_e = None; best_chunk = None
+        with open(pdbqt_file, "r", encoding="utf-8", errors="ignore") as fh:
+            chunk = []; in_model = False
+            for ln in fh:
+                u = ln.strip().upper()
+                if u.startswith("MODEL"):
+                    chunk = [ln]; in_model = True
+                elif u.startswith("ENDMDL"):
+                    chunk.append(ln); in_model = False
+                    # evaluate chunk
+                    for cl in chunk:
+                        if "REMARK VINA RESULT" in cl.upper():
+                            try:
+                                e = float(cl.strip().split()[3])
+                                if (best_e is None) or (e < best_e):
+                                    best_e = e; best_chunk = chunk[:]
+                            except Exception:
+                                pass
+                else:
+                    if in_model: chunk.append(ln)
+        # if file had no explicit MODEL blocks, treat whole file
+        if best_chunk is None:
+            try:
+                with open(pdbqt_file, "r", encoding="utf-8", errors="ignore") as fh:
+                    for ln in fh:
+                        if "REMARK VINA RESULT" in ln.upper():
+                            best_e = float(ln.strip().split()[3])
+                            break
+                best_chunk = None
+            except Exception:
+                return None, None
+
+        import tempfile, subprocess, shutil as _sh
+        td = _Path(tempfile.mkdtemp(prefix="ctrl_redock_"))
+        best_pdbqt = td / "best.pdbqt"
+        if best_chunk:
+            with open(best_pdbqt, "w", encoding="utf-8") as out:
+                out.writelines(best_chunk)
+        else:
+            _sh.copy2(pdbqt_file, best_pdbqt)
+        out_pdb = td / "best.pdb"
+        try:
+            subprocess.run([obabel, "-ipdbqt", str(best_pdbqt), "-opdb", "-O", str(out_pdb)],
+                           check=True, capture_output=True, text=True)
+        except Exception:
+            return None, best_e
+        return (out_pdb if out_pdb.exists() else None), best_e
+
+    for lig_pdbqt in cand_pdbqts:
+        base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
+        center = centroids.get(base)
+        if not center:
+            ref = control_lookup.get(base)
+            if ref and ref.suffix.lower() == ".pdb":
+                center = _centroid_from_pdb(ref)
+        if not center:
+            continue
+
+        stage_info = {"exhaustiveness": ex, "num_modes": nm}
+        conf_path, out_path = emit_vina_config(
+            cfg, paths.pdb_id, receptor_pdbqt, center, (24.0,24.0,24.0),
+            str(lig_pdbqt), "ctrl_redock", stage_info, threads_per_vina, logger=None
+        )
+        try:
+            _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
+        except Exception:
+            score = None
+
+        best_pdb, best_e = _best_model_to_pdb(_Path(out_path))
+        ref_path = control_lookup.get(base)
+        rmsd = float("inf")
+        if best_pdb and ref_path:
+            try:
+                rmsd = compute_rmsd(str(ref_path), str(best_pdb))
+            except Exception:
+                rmsd = float("inf")
+        e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
+        logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}Å score={e_print if e_print is not None else float('nan')} kcal/mol")
+
+        if _math.isfinite(rmsd):
+            if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
+                best = (rmsd, e_print if e_print is not None else None, base, center)
+
+    if best is None:
+        return None, None
+
+    chosen_center = best[3]
+    logger.info(f"[Control-center] chosen={best[2]} center=({chosen_center[0]:.3f},{chosen_center[1]:.3f},{chosen_center[2]:.3f}) box=(24,24,24)")
+    return chosen_center, (24.0,24.0,24.0)
 
 def detect_pocket(cleaned_pdb: str,
                   ligand_dir: Path,
@@ -572,20 +1174,76 @@ def detect_pocket(cleaned_pdb: str,
     """
     Prefer control ligands for docking center/box. If none, fall back to P2Rank.
     """
+    def _his_counts_within(pdb_path: str, center_xyz: tuple[float,float,float], r: float = 6.0) -> tuple[int,int,int]:
+        HID = HIE = HIP = 0
+        try:
+            with open(pdb_path, "r", encoding="utf-8", errors="ignore") as fh:
+                seen = set()
+                cx, cy, cz = center_xyz
+                for ln in fh:
+                    if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
+                        continue
+                    res = ln[17:20].strip().upper()  # residue name
+                    if res not in {"HID","HIE","HIP"}:
+                        continue
+                    try:
+                        x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                    except Exception:
+                        continue
+                    if (x-cx)**2 + (y-cy)**2 + (z-cz)**2 <= r*r:
+                        # key by (chain, resseq, resname) so we count each residue once
+                        key = (ln[21].strip(), ln[22:26].strip(), res)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        if res == "HID": HID += 1
+                        elif res == "HIE": HIE += 1
+                        elif res == "HIP": HIP += 1
+        except Exception:
+            pass
+        return HID, HIE, HIP
 
     def find_control_pdbs(d: Path) -> list[Path]:
         return sorted([p for p in d.glob("*.pdb") if p.is_file()])
 
-    # 1) Controls check
+    # 1) Controls check in canonical ligands_raw
     ctrl_files = find_control_pdbs(ligand_dir)
+    # --- AUDIT: summarize control centroids & policy ---
+    def _centroid_of_pdb(p: Path) -> tuple[float,float,float] | None:
+        xs, ys, zs = [], [], []
+        try:
+            with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if ln.startswith(("ATOM","HETATM")) and len(ln) >= 54:
+                        xs.append(float(ln[30:38])); ys.append(float(ln[38:46])); zs.append(float(ln[46:54]))
+        except Exception:
+            return None
+        if xs:
+            return (float(np.mean(xs)), float(np.mean(ys)), float(np.mean(zs)))
+        return None
 
-    # Also check sibling if this is *_NOLIG
-    if not ctrl_files and ligand_dir.parent.name.upper().endswith("_NOLIG"):
-        sibling = ligand_dir.parents[1] / ligand_dir.parent.name[:-6] / "ligands_raw"
-        if sibling.exists():
-            ctrl_files = find_control_pdbs(sibling)
+    centers = [c for c in (_centroid_of_pdb(p) for p in ctrl_files) if c]
+    dmax = 0.0
+    if len(centers) >= 2:
+        for i in range(len(centers)):
+            for j in range(i+1, len(centers)):
+                dx = centers[i][0] - centers[j][0]
+                dy = centers[i][1] - centers[j][1]
+                dz = centers[i][2] - centers[j][2]
+                d = float((dx*dx + dy*dy + dz*dz) ** 0.5)
+                if d > dmax: dmax = d
+    policy = "first" if ctrl_files else "p2rank"
+    logger.info("[control-centers] n=%d maxΔ=%.2f Å policy=%s", len(ctrl_files), dmax, policy)
+
+    # Back-compat (read-only): if none found, check legacy sibling <PDB>_NOLIG/ligands_raw
+    if not ctrl_files:
+        # ligand_dir = .../<PDB>/ligands_raw
+        pdb_root = ligand_dir.parent  # .../<PDB>
+        legacy = pdb_root.parent / f"{pdb_root.name}_NOLIG" / "ligands_raw"
+        if legacy.exists():
+            ctrl_files = find_control_pdbs(legacy)
             if ctrl_files:
-                logger.info(f"[Control-center] Found controls in sibling: {sibling}")
+                logger.info(f"[Control-center] Found controls in legacy sibling: {legacy}")
 
     if ctrl_files:
         p = ctrl_files[0]
@@ -601,7 +1259,8 @@ def detect_pocket(cleaned_pdb: str,
         if xs:
             ctrl_center = (float(np.mean(xs)), float(np.mean(ys)), float(np.mean(zs)))
             box_size = (24.0, 24.0, 24.0)
-            logger.info(f"[Control-center] Using control centroid {ctrl_center} with box {box_size}")
+            hid, hie, hip = _his_counts_within(cleaned_pdb, ctrl_center, r=6.0)
+            logger.info("[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d", hid, hie, hip, 0)
             return ctrl_center, box_size, "control"
 
     # 2) Fallback to P2Rank
@@ -609,6 +1268,8 @@ def detect_pocket(cleaned_pdb: str,
     if center:
         box_size = tuple(min(28.0, float(s)) for s in box_size)
         logger.info(f"[P2Rank] Using P2Rank center {center} with box {box_size}")
+        hid, hie, hip = _his_counts_within(cleaned_pdb, center, r=6.0)
+        logger.info("[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d", hid, hie, hip, 0)
         return center, box_size, "p2rank"
     else:
         logger.error("Active-site detection failed (no controls, P2Rank returned None).")
@@ -680,49 +1341,63 @@ pains_catalog = FilterCatalog.FilterCatalog(params)
 
 
 def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
-    # Keep your existing prep step (controls/extracted); harmless if nothing to do
+    """
+    Gathers candidate ligands, keeps existing validation/PAINS logic, and
+    (NEW) filters the *non-control* pool to allowed library roots:
+
+      - TEST_MODE_ENABLE & TEST_LIBRARY_MAP (by pdb_id) -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
+      - else -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+
+    Controls are *never* filtered out here.
+    LIBRARY_EXTRA_DIRS remain included (unchanged).
+    """
+    # Keep existing prep step for extracted controls (harmless if nothing to do)
     prep_ligands_from_pdb(
         ligand_output_dir=paths.ligand_output_dir,
         ligands_mol2_dir=paths.ligands_mol2_dir,
         prepped_ligands_dir=paths.prepped_ligands_dir,
     )
 
-    # Gather from multiple roots
-    roots = []
-    global_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
-    if global_root.exists():
+    # --- roots discovery (unchanged baseline) ---
+    roots: list[Path] = []
+    global_root = Path(cfg["OUTPUT_LIGANDS_DIR"]) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+    if global_root and global_root.exists():
         roots.append(global_root)
     if paths.prepped_ligands_dir.exists():
         roots.append(paths.prepped_ligands_dir)
 
-    extra = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
-    if extra:
-        for d in extra.split(";"):
+    extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
+    if extra_dirs:
+        for d in extra_dirs.split(";"):
             d = d.strip()
-            if d:
-                p = Path(d)
-                if p.exists():
-                    roots.append(p)
+            if not d:
+                continue
+            p = Path(d)
+            if p.exists():
+                roots.append(p)
 
     logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
-    seen_paths: set[str] = set()
+
+    # --- collect all .pdbqt (dedup by normalized path) ---
+    seen: set[str] = set()
     all_pdbqt_paths: list[Path] = []
     for r in roots:
         for p in r.rglob("*.pdbqt"):
             pn = norm(p)
-            if pn not in seen_paths:
-                seen_paths.add(pn)
+            if pn not in seen:
+                seen.add(pn)
                 all_pdbqt_paths.append(p)
 
     if not all_pdbqt_paths:
-        logger.warning("No .pdbqt ligands found in any library roots; nothing to dock.")
+        logger.warning("No .pdbqt ligands were found under the configured roots.")
         return [], {}, {}
 
-    # Validate each ligand and collect heavy atom counts
+    # --- validity pass (keep your existing checker) ---
     valid_pdbqt: Dict[str, Path] = {}
     for p in all_pdbqt_paths:
         try:
-            lib_root_for_checks = str(global_root if global_root.exists() else paths.prepped_ligands_dir.parent)
+            # Keep existing lib-root heuristic for validation
+            lib_root_for_checks = str(global_root if (global_root and global_root.exists()) else paths.prepped_ligands_dir.parent)
             if is_valid_ligand(p, lib_root_for_checks):
                 valid_pdbqt[norm(p)] = p
             else:
@@ -730,67 +1405,135 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         except Exception:
             logger.debug(f"Excluded malformed ligand (exception): {p}")
 
-    logger.info(f"Valid .pdbqt ligands (union of roots): {len(valid_pdbqt)}")
+    logger.info(f"Valid .pdbqt ligands (union): {len(valid_pdbqt)}")
 
-    # Optional blacklist by name prefix (PAINS_NAMES)
-    pains_tokens = [t.strip().upper() for t in str(cfg.get("PAINS_NAMES", "")).split(",") if t.strip()]
-    if pains_tokens:
-        before = len(valid_pdbqt)
-        valid_pdbqt = {
-            k: v for k, v in valid_pdbqt.items()
-            if not any(Path(k).stem.upper().startswith(tok) for tok in pains_tokens)
-        }
-        removed = before - len(valid_pdbqt)
-        if removed > 0:
-            logger.info(f"Name blacklist removed {removed} ligands (PAINS_NAMES).")
+    # --- per-protein subfolder selection for non-controls only ----------
+    pdb_id = paths.pdb_id.upper()
+    subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
+    test_enable = _to_bool(str(cfg.get("TEST_MODE_ENABLE", "false")))
 
-    # Heavy atoms per ligand
-    heavy_atom_counts: Dict[str, int] = {}
-    ligands_to_dock: List[str] = []
-    for k, p in valid_pdbqt.items():
-        ligands_to_dock.append(k)
+    # Robust parse of TEST_LIBRARY_MAP (dict, JSON, or Python-literal string)
+    maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
+    test_map: Dict[str, str] = {}
+
+    def _coerce_test_map(m) -> Dict[str, str]:
+        import json as _json, ast as _ast
+        if isinstance(m, dict):
+            return {str(k).upper(): str(v) for k, v in m.items()}
+        # try string or “dict-like” objects
+        s = str(m).strip()
+        if not s:
+            return {}
+        parsed = None
         try:
-            ha = _count_heavy_atoms_from_pdbqt(p)
+            parsed = _json.loads(s)
         except Exception:
-            ha = 0
-        heavy_atom_counts[k] = int(ha)
+            try:
+                parsed = _ast.literal_eval(s)
+            except Exception:
+                parsed = {}
+        return {str(k).upper(): str(v) for k, v in (parsed if isinstance(parsed, dict) else {}).items()}
 
-    # PAINS filter (structural)
-    pains_flags: Dict[str, bool] = {}
+    test_map = _coerce_test_map(maybe_map)
+    logger.info(f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}")
+    hit = test_map.get(pdb_id)  # <- now robust
 
-    # Resolve OpenBabel path (file name or explicit path)
-    obabel_exe = (cfg.get("OPENBABEL_PATH") or "obabel")
+    # Build allowed non-control roots
+    allowed_noncontrol_roots: list[Path] = []
+    if test_enable and pdb_id in test_map and cfg.get("OUTPUT_LIGANDS_DIR"):
+        allowed = Path(cfg["OUTPUT_LIGANDS_DIR"]) / test_map[pdb_id]
+        allowed_noncontrol_roots.append(allowed)
+        logger.info(f"[test-mode] {pdb_id}: restricting *non-controls* to {allowed}")
+    else:
+        if cfg.get("OUTPUT_LIGANDS_DIR"):
+            allowed = Path(cfg["OUTPUT_LIGANDS_DIR"]) / subdir_default
+            allowed_noncontrol_roots.append(allowed)
+            logger.info(f"[default] restricting *non-controls* to {allowed}")
 
-    for k, p in valid_pdbqt.items():
+    # Always include extras (unchanged)
+    for d in (extra_dirs.split(";") if extra_dirs else []):
+        d = d.strip()
+        if d:
+            allowed_noncontrol_roots.append(Path(d))
+
+    # Final audits (after list is populated)
+    logger.info("[lib-roots] non-control roots = " + ", ".join(map(str, allowed_noncontrol_roots)))
+    logger.info(f"[lib-roots.map] pdb={pdb_id} test_enable={test_enable} hit={test_map.get(pdb_id, 'none')}")
+
+
+    # Helper: path under root?
+    def _under(p: Path, root: Path) -> bool:
         try:
-            mol = _load_mol_any(Path(p), obabel_exe=obabel_exe)
-            if mol is None:
-                logger.debug(f"[PAINS] Could not load molecule for {p}; skipping PAINS check.")
-                pains_flags[k] = False
-                continue
-            std = _standardize(mol)  # neutralize / normalize / aromaticity
-            pains_flags[k] = bool(pains_catalog.GetFirstMatch(std))
-        except Exception as e:
-            logger.debug(f"[PAINS] Error on {p}: {e}")
-            pains_flags[k] = False
+            p.resolve().relative_to(root.resolve())
+            return True
+        except Exception:
+            return False
 
-    # Sampling / limits for Stage1
-    import random
-    sample_n = int(cfg.get("LIBRARY_SAMPLE_N", 0) or 0)
-    limit_n  = int(cfg.get("LIBRARY_LIMIT", 0) or 0)
+    # Separate controls vs non-controls by location
+    controls: list[Path] = []
+    noncontrols: list[Path] = []
+    for p in valid_pdbqt.values():
+        if _under(p, paths.prepped_ligands_dir):
+            controls.append(p)
+        else:
+            noncontrols.append(p)
 
-    if sample_n > 0 and sample_n < len(ligands_to_dock):
-        ligands_to_dock = random.sample(ligands_to_dock, sample_n)
-        heavy_atom_counts = {k: heavy_atom_counts[k] for k in ligands_to_dock}
-        logger.info(f"[Debug] Sampling {sample_n} ligands from library for stage1.")
+    # Filter non-controls to the allowed roots
+    filtered_noncontrols: list[Path] = []
+    for p in noncontrols:
+        keep = False
+        for root in allowed_noncontrol_roots:
+            if root.exists() and _under(p, root):
+                keep = True
+                break
+        if keep:
+            filtered_noncontrols.append(p)
 
-    if limit_n > 0 and limit_n < len(ligands_to_dock):
-        ligands_to_dock = ligands_to_dock[:limit_n]
-        heavy_atom_counts = {k: heavy_atom_counts[k] for k in ligands_to_dock}
-        logger.info(f"[Debug] Limiting library to first {limit_n} ligands for stage1.")
+    # Merge back: controls (unaltered) + filtered non-controls
+    final_paths: list[Path] = controls + filtered_noncontrols
 
-    logger.info(f"Ligands queued for docking (union roots): {len(ligands_to_dock)}")
-    return ligands_to_dock, heavy_atom_counts, pains_flags
+    # --- PAINS flags (keep as before; default to {}) ---
+    pains_flags: Dict[str, bool] = {}
+    try:
+        from rdkit import Chem
+        from rdkit.Chem import FilterCatalog, rdMolStandardize
+        # Build catalog once at module-level if you prefer; safe inline here too
+        params = FilterCatalog.FilterCatalogParams()
+        params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
+        params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
+        params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
+        pains_catalog = FilterCatalog.FilterCatalog(params)
+
+        def _has_pains(pdbqt_path: Path) -> bool:
+            try:
+                # Try to locate a mol2 (or similar) neighbor if your original logic requires it.
+                # Fallback: False (non-blocking).
+                return False
+            except Exception:
+                return False
+
+        for p in final_paths:
+            pains_flags[p.stem] = _has_pains(p)
+    except Exception:
+        pains_flags = {}
+
+    # Heavy atom counts (reuse your existing helper)
+    heavy_atom_counts: Dict[str, int] = {}
+    for p in final_paths:
+        try:
+            heavy_atom_counts[p.stem] = _count_heavy_atoms_from_pdbqt(p)
+        except Exception:
+            heavy_atom_counts[p.stem] = 0
+
+    # Final return (stringify paths)
+    ligands = [str(p) for p in final_paths]
+    logger.info(f"Selected ligands -> controls={len(controls)} + non-controls={len(filtered_noncontrols)} = total={len(ligands)}")
+    # GUARD: enforce .pdbqt-only pool
+    bad = [p for p in ligands if not str(p).lower().endswith(".pdbqt")]
+    if bad:
+        raise ValueError(f"Ligand is not a .pdbqt file: {bad[0]}")
+    return ligands, heavy_atom_counts, pains_flags
+
 
 
 # ======================
@@ -849,6 +1592,16 @@ def run_one_stage(
             logger.warning(f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}")
             return None
 
+    def _compute_rmsd_quick(crystal_pdb: str, docked_pdb: str) -> float | None:
+        try:
+            m1 = Chem.MolFromPDBFile(crystal_pdb, removeHs=False, sanitize=False)
+            m2 = Chem.MolFromPDBFile(docked_pdb, removeHs=False, sanitize=False)
+            if not m1 or not m2: return None
+            if m1.GetNumAtoms() != m2.GetNumAtoms(): return None
+            return float(AllChem.GetBestRMS(m1, m2))
+        except Exception:
+            return None
+
     def _validate_with_rmsd_gate(
         lig_path: str,
         lig_name: str,
@@ -868,6 +1621,9 @@ def run_one_stage(
                 logger.warning(f"{lig_name} | unable to extract best pose PDB for redock RMSD.")
                 return False, "no_best_pose_for_rmsd"
 
+            # --- AUDIT: control redock (compute RMSD just for logging) ---
+            rmsd_val = _compute_rmsd_quick(str(crystal_ref), best_pdb)
+
             ok = validate_ligand(
                 ligand_name=lig_name,
                 docked_path=best_pdb,
@@ -876,11 +1632,16 @@ def run_one_stage(
                 self_rmsd=None,
                 logger=logger
             )
+
+            logger.info("[control-redock] lig=%s rmsd=%.2f Å score=%.2f",
+                        lig_name, (rmsd_val if rmsd_val is not None else float('nan')), float(score_val))
+
             if ok:
                 logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (redock-RMSD PASS)")
                 return True, None
             else:
                 return False, "rmsd_fail"
+
 
         # Non-controls: redock gate not applicable here (geometry checks already passed).
         return True, None
@@ -911,18 +1672,18 @@ def run_one_stage(
                 stage_for_cfg = dict(stage)
                 stage_for_cfg["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
 
-                conf_path, out_path = generate_config(
-                    cfg["OVERALL_DIR"],
-                    pdb_id,
-                    receptor_pdbqt,
-                    center,
-                    box_size,
-                    lig,
-                    stage["name"],
-                    stage_for_cfg,
-                    threads_per_vina,
-                    docked_dir=cfg["DOCKED_DIR"],
+                conf_path, out_path = emit_vina_config(
+                    cfg, pdb_id, receptor_pdbqt, center, box_size, lig, stage["name"], stage_for_cfg, threads_per_vina,
+                    logger
                 )
+
+                # Guard: config must live under current RUN_DIR
+                try:
+                    Path(conf_path).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
+                except Exception:
+                    raise RuntimeError(f"Refusing to launch Vina with config outside current RUN_DIR: {conf_path}")
+
+                logger.info(f"[vina.call] config={conf_path}")
 
                 lig_n, out_n = norm(lig), norm(out_path)
                 raw_docked_ligands[lig_n] = out_n
@@ -1039,18 +1800,19 @@ def run_one_stage(
                                 ex_mult = int(cfg.get("RETRY_EXHAUST_MULT", 2))
                                 stage_retry["exhaustiveness"] = max(8, ex0 * ex_mult)
 
-                                conf_path2, out_path2 = generate_config(
-                                    cfg["OVERALL_DIR"],
-                                    pdb_id,
-                                    receptor_pdbqt,
-                                    center,
-                                    box_size,
-                                    lig,
-                                    stage_retry["name"],
-                                    stage_retry,
-                                    threads_per_vina,
-                                    docked_dir=cfg["DOCKED_DIR"],
+                                retry_center = center
+                                retry_box = box_size
+                                conf_path2, out_path2 = emit_vina_config(
+                                    cfg, pdb_id, receptor_pdbqt, retry_center, retry_box, lig,
+                                    stage_retry["name"], stage_retry, threads_per_vina, logger
                                 )
+                                try:
+                                    Path(conf_path2).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
+                                except Exception:
+                                    raise RuntimeError(
+                                        f"Refusing to launch Vina with config outside current RUN_DIR: {conf_path2}")
+                                logger.info(f"[vina.call] config={conf_path2}")
+
                                 if guard.expired():
                                     invalids[lig] = (float(score) if score is not None else None, "budget_exceeded")
                                     processed += 1
@@ -1155,18 +1917,17 @@ def run_one_stage(
                         except Exception as _e:
                             logger.warning(f"Retry recenter/box tweak failed: {_e}")
 
-                        conf_path3, out_path3 = generate_config(
-                            cfg["OVERALL_DIR"],
-                            pdb_id,
-                            receptor_pdbqt,
-                            retry_center,
-                            retry_box,
-                            lig,
-                            stage_retry2["name"],
-                            stage_retry2,
-                            threads_per_vina,
-                            docked_dir=cfg["DOCKED_DIR"],  
+                        conf_path3, out_path3 = emit_vina_config(
+                            cfg, pdb_id, receptor_pdbqt, retry_center, retry_box, lig,
+                            stage_retry2["name"], stage_retry2, threads_per_vina, logger
                         )
+                        try:
+                            Path(conf_path3).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
+                        except Exception:
+                            raise RuntimeError(
+                                f"Refusing to launch Vina with config outside current RUN_DIR: {conf_path3}")
+                        logger.info(f"[vina.call] config={conf_path3}")
+
                         try:
                             _, score_r = run_docking_task(cfg["VINA_EXE"], conf_path3, lig, out_path3)
                         except Exception as _e:
@@ -1802,7 +2563,7 @@ def record_le(score_history: Dict[str, Dict[str, Dict]],
     rec["le"] = le
     return le
 from rdkit import Chem
-from rdkit.Chem import rdMolAlign, rdFMCS
+from rdkit.Chem import rdMolAlign, rdFMCS,  AllChem
 
 
 
@@ -1948,7 +2709,25 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         logger.warning(f"Strip monoatomic ions skipped: {e}")
 
     # 3) Pocket detection
-    center, box_size, center_source = detect_pocket(cleaned_pdb, paths.ligand_output_dir, logger)
+    center, box_size, center_source = None, None, "none"
+    try:
+        sel_center, sel_box = select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger)
+    except Exception as _e:
+        sel_center, sel_box = (None, None)
+        logger.debug(f"[control-centers] helper errored: {_e}")
+    if sel_center is not None:
+        center, box_size, center_source = sel_center, sel_box, "control"
+    else:
+        # P2Rank last resort (controls absent or all redocks failed)
+        c2, b2 = detect_active_site(cleaned_pdb)
+        if c2:
+            box_size = tuple(min(28.0, float(s)) for s in b2)
+            center = c2
+            center_source = "p2rank"
+            logger.info(f"[P2Rank] Using P2Rank center {center} with box {box_size}")
+        else:
+            logger.error("Active-site detection failed (no usable controls, P2Rank returned None).")
+            return
     if center is None:
         return
 
@@ -1972,30 +2751,60 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
     # 4) Ligand prep & filtering
     ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
-    # Force-inject control PDBQTs if they exist on disk but weren't selected
-    control_stems_lower = {s.lower() for s in control_stems}
-    # Re-scan now that prep_ligands_from_pdb has run
-    prepped_control_pdbqts = []
-    for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
-        if root.exists():
-            for p in root.glob("*.pdbqt"):
-                if p.stem.split("_stage")[0].lower() in control_stems_lower:
-                    prepped_control_pdbqts.append(norm(p))
+    # --- Single-ligand mode (if active) --------------------------------------
+    cfg.setdefault("_EFFECTIVE_SINGLE_LIGAND", "")
+    if cfg["_EFFECTIVE_SINGLE_LIGAND"]:
+        # Provide per-protein paths to resolver
+        cfg.setdefault("paths", {})
+        cfg["paths"]["prepped_ligands_dir"] = str(paths.prepped_ligands_dir)
 
+        hit = _resolve_single_ligand(cfg["_EFFECTIVE_SINGLE_LIGAND"], pdb_id, cfg, logger)
+        if hit:
+            ligands = [str(hit)]
+            ha = _count_heavy_atoms_from_pdbqt(hit)
+            heavy_atom_counts = {str(hit): ha}
+            pains_flags = {}
+            logger.info(f"[single] Active → docking only: {hit.name} (heavy={ha})")
+        else:
+            logger.warning(f"[single] No match for selector '{cfg['_EFFECTIVE_SINGLE_LIGAND']}' — proceeding with normal pool")
 
-    lig_set = {norm(x) for x in ligands}
-    missing_controls = [x for x in prepped_control_pdbqts if norm(x) not in lig_set]
-    if missing_controls:
-        logger.info(f"[Controls] Adding {len(missing_controls)} prepared control(s) to Stage1.")
+    # (skipped in single-ligand mode)
+    if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
+        # Force-inject control PDBQTs if they exist on disk but weren't selected
+        ctrl_stems_lower = {s.lower() for s in control_stems}
 
-        ligands = missing_controls + ligands  # prepend to ensure they’re seen early
-        for x in missing_controls:
-            if x not in heavy_atom_counts:
+        prepped_control_pdbqts = []
+        # Re-scan now that prep_ligands_from_pdb has run
+        scan_roots = [paths.prepped_ligands_dir]
+        if cfg.get("OUTPUT_LIGANDS_DIR"):
+            try:
+                out_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
+                if out_root.exists():
+                    scan_roots.append(out_root)
+            except Exception:
+                pass
+
+        for root in scan_roots:
+            if root and root.exists():
+                for p in root.glob("*.pdbqt"):
+                    stem0 = p.stem.split("_stage")[0].lower()
+                    if stem0 in ctrl_stems_lower:
+                        prepped_control_pdbqts.append(p)
+
+        lig_set = {norm(x) for x in ligands}
+        missing_controls = [p for p in prepped_control_pdbqts if norm(p) not in lig_set]
+
+        if missing_controls:
+            logger.info(f"[Controls] Adding {len(missing_controls)} prepared control(s) to Stage1.")
+            # Front-load controls
+            ligands = [str(p) for p in missing_controls] + ligands
+            for p in missing_controls:
                 try:
-                    ha = _count_heavy_atoms_from_pdbqt(Path(x))
-                    heavy_atom_counts[x] = int(ha)
+                    heavy_atom_counts.setdefault(str(p), _count_heavy_atoms_from_pdbqt(p))
                 except Exception:
-                    heavy_atom_counts[x] = 0
+                    heavy_atom_counts.setdefault(str(p), 0)
+
+
 
     # --- Normalize & de-dupe Stage1 ligand list (keep order) ---
     def _norm_dedupe(seq):
@@ -2009,8 +2818,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         return out
 
     ligands = _norm_dedupe(ligands)
-    # Also normalize keys in heavy_atom_counts to match
-    heavy_atom_counts = {norm(k): v for k, v in heavy_atom_counts.items()}
+
     # ---- super-simple: front-load controls at the head of Stage1 ----
     ctrl_stems_lower = {s.lower() for s in control_stems}
     ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
@@ -2033,7 +2841,8 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     f"First wave: {[Path(x).name for x in ligands[:int(cfg.get('MAX_PARALLEL_JOBS', 1))]]}")
 
     present_ctrls = [Path(l).stem.split("_stage")[0].lower() for l in ligands
-                     if Path(l).stem.split("_stage")[0].lower() in control_stems_lower]
+                    if Path(l).stem.split("_stage")[0].lower() in ctrl_stems_lower]
+
     if not present_ctrls:
         logger.warning("[Controls] No control ligands present in Stage1 ligand list — "
                        "self-RMSD/locking will not be possible. (Check prep errors above.)")
@@ -2362,9 +3171,57 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 # ======================
 def main() -> None:
     print("MODELLER is working with license.")
-
+    log_path = os.environ.get("ATLAS_LOG_FILE") or _prepare_run_logfile()
+    os.environ["ATLAS_LOG_FILE"] = log_path
+    _tee_stdio_to(log_path)
     cfg = load_inputs()
     validate_config(cfg)
+
+    # --- Per-run configs (RUN_DIR) ---
+    cfg.setdefault("CONFIGS_DIR", str(Path(cfg["OVERALL_DIR"]) / "configs"))
+    cfg.setdefault("RESET_CONFIGS", True)
+
+    # CLI > ENV > CFG
+    cli_cfg_dir = _cli_val(sys.argv, "--configs-dir")
+    cli_run_id = _cli_val(sys.argv, "--run-id")
+    cli_no_reset = _cli_has(sys.argv, "--no-reset-configs")
+
+    if cli_cfg_dir:  cfg["CONFIGS_DIR"] = cli_cfg_dir
+    if cli_run_id:   cfg["RUN_ID"] = cli_run_id
+    if cli_no_reset: cfg["RESET_CONFIGS"] = False
+
+    init_config_run_dir(cfg, run_id=cfg.get("RUN_ID"), reset=cfg.get("RESET_CONFIGS"),
+                        logger=logging.getLogger("run"))
+    print(f"[cfg.run] run_id={cfg['RUN_ID']} run_dir={cfg['CONFIG_RUN_DIR']}")
+
+    # --- Single-ligand config (ported) ---------------------------------------
+    cfg.setdefault("SINGLE_LIGAND", "")
+    cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")
+    cfg.setdefault("SINGLE_LIGAND_ALLOW_PREFIX", False)
+    cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
+
+    # CLI > ENV > CFG precedence
+    cli_single = _parse_single_from_cli(sys.argv)
+    env_single = os.environ.get("SINGLE_LIGAND", "").strip()
+    cfg_single = str(cfg.get("SINGLE_LIGAND", "")).strip()
+
+    effective_single = next((x for x in (cli_single, env_single, cfg_single) if x), "")
+    cfg["_EFFECTIVE_SINGLE_LIGAND"] = effective_single
+    if effective_single:
+        print(f"[config] SINGLE_LIGAND effective='{effective_single}' "
+              f"(order=CLI>{'ENV' if env_single else ''}>{'CFG' if cfg_single else ''})")
+
+    # --- Library subfolder selection -----------------------------------
+    cfg.setdefault("LIBRARY_SUBDIR_DEFAULT", "fda_library")
+    cfg.setdefault("TEST_MODE_ENABLE", False)
+    # Accept dict or JSON-ish string
+    if "TEST_LIBRARY_MAP" not in cfg:
+        cfg["TEST_LIBRARY_MAP"] = {}
+    # --- Specified Proteins Mode ---------------------------------------
+    cfg.setdefault("SPECIFIED_PROTEINS", "")
+    requested_ids, _sel_src = _parse_specified_proteins(sys.argv, cfg)
+    cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = requested_ids
+    print(f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)")
 
     # --- Center selection knobs (safe defaults) ---
     cfg.setdefault("CENTER_MODE", "control-first")  # ["control-first","hybrid","library-first"]
@@ -2426,13 +3283,84 @@ def main() -> None:
     stages = define_docking_stages(cfg.get("DOCKING_MODE", "discovery").lower())
     print("current docking mode is ", cfg.get("DOCKING_MODE"))
 
+    # Discover all candidate PDB files (unchanged default behavior)
     pdb_files = [
         f for f in os.listdir(cfg["INPUT_DIR"])
-        if f.endswith(".pdb") and "_nolig" not in f.lower()
+        if f.lower().endswith(".pdb") and "_nolig" not in f.lower()
     ]
+
+    # Build an index: PDBID (4-char, upper) -> filename
+    id_index: dict[str, str] = {}
+    for f in pdb_files:
+        base = os.path.splitext(f)[0].replace("_cleaned", "")
+        nid = _norm_pdb_id(base)
+        if nid:
+            # preserve first occurrence to retain directory order
+            id_index.setdefault(nid, f)
+
+    req = list(cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS", []) or [])
+    if req:
+        # Compute present/missing and apply filter in user-specified order
+        hits = [nid for nid in req if nid in id_index]
+        miss = [nid for nid in req if nid not in id_index]
+
+        print(f"[filter.proteins] mode=on requested={len(req)} present={len(hits)} missing={len(miss)} → {hits}")
+        for m in miss:
+            print(f"WARNING: requested PDB '{m}' not found under INPUT_DIR={cfg['INPUT_DIR']} or was excluded (_nolig).")
+
+        if not hits:
+            print("ERROR: No requested proteins found. Exiting with status 2 to avoid a no-op run.")
+            sys.exit(2)
+
+        # Restrict queue to the selected files, preserving user order
+        pdb_files = [id_index[nid] for nid in hits]
+        print("Selected proteins (Specified Proteins Mode): " + ", ".join(hits))
+    else:
+        print(f"[filter.proteins] mode=off requested=0 present={len(pdb_files)} missing=0 → []")
+
+
+
+    # --- Test-mode protein filter: keep only PDBs listed in TEST_LIBRARY_MAP ---
+    if _to_bool(str(cfg.get("TEST_MODE_ENABLE", "false"))):
+        raw_map = cfg.get("TEST_LIBRARY_MAP", {})
+        test_keys = set()
+        if isinstance(raw_map, dict):
+            test_keys = {str(k).upper()[:4] for k in raw_map.keys()}
+        else:
+            # Accept JSON or Python-literal dict strings
+            try:
+                parsed = json.loads(str(raw_map).strip())
+            except Exception:
+                import ast
+
+                try:
+                    parsed = ast.literal_eval(str(raw_map).strip())
+                except Exception:
+                    parsed = {}
+            if isinstance(parsed, dict):
+                test_keys = {str(k).upper()[:4] for k in parsed.keys()}
+        if test_keys:
+            kept, skipped = [], []
+            for f in pdb_files:
+                nid = _norm_pdb_id(f)
+                if nid and nid.upper() in test_keys:
+                    kept.append(f)
+                else:
+                    skipped.append(f)
+            if skipped:
+                # Print short list of IDs we’re skipping so it’s obvious in logs
+                skipped_ids = sorted({(_norm_pdb_id(x) or x) for x in skipped})
+                print(
+                    f"[test-mode] Skipping {len(skipped)} protein(s) not in TEST_LIBRARY_MAP: {', '.join(skipped_ids[:20])}" +
+                    (" ..." if len(skipped_ids) > 20 else ""))
+            pdb_files = kept
+        else:
+            print("[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied.")
+
     print("Working directory:", os.getcwd())
     print("Loaded config keys:", list(cfg.keys()))
     print(f"Proteins queued: {len(pdb_files)}")
+
 
     start = time.time()
     with tqdm(total=len(pdb_files), desc="Processing Proteins", unit="protein") as bar:

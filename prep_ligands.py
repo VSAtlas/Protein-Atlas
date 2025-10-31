@@ -62,15 +62,13 @@ except Exception:
 
 # --- Salvage / logging config ---
 RUN_TAG = datetime.now().strftime("%Y%m%d_%H%M%S")
-MALFORMED_LOG = Path(f"malformed_ligands_{RUN_TAG}.txt")
+MALFORMED_LOG = Path("malformed_ligands.txt")
 QUARANTINE_DIRNAME = "quarantine"
 
 # --- Resume mode toggle ---
 RESUME_SKIP = False
 
-ALLOWED_ELEMENTS = {
-    "H", "C", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B", "Si", "Se", "Zn", "Mg", "Ca", "Mn", "Fe", "K", "Na"
-}
+
 MAX_HEAVY_ATOMS = 1200
 MIN_ATOMS_FOR_DOCKING = 5
 MIN_PARENT_HEAVY = 8
@@ -86,13 +84,108 @@ CHUNK_SIZE = 200
 
 # --- salt remover (fallback path also uses this) ---
 _REM = SaltRemover()
+# =========================
+# Alias/rules centralization
+# =========================
+from typing import Optional
+
+# Effective, alias-derived sets/maps populated at import:
+RULES = None
+ALLOWED_ELEMENTS: Set[str] = set()
+MONOATOMIC_IONS: Set[str] = set()
+# AD4_TYPES already exists later in the file; we will reconcile it here.
+
+def _alias_token_to_element_symbol(tok: str) -> Optional[str]:
+    """
+    Convert an alias token from YAML (usually uppercase like 'CL','NA','ZN')
+    into an RDKit-style element symbol ('Cl','Na','Zn'). Falls back to
+    first letter uppercase for non-standard tokens.
+    """
+    if not tok:
+        return None
+    u = tok.strip().upper()
+    if len(u) == 1:
+        return u  # C, N, O, F, H, B, P, I
+    # two-letter common case
+    if len(u) == 2 and u.isalpha():
+        return u[0] + u[1].lower()
+    # Handle a few known multi-letter symbols that appear as 2 chars in YAML already
+    return u[0] + (u[1:].lower() if len(u) > 1 else "")
+
+def allowed_elements_from_aliases(rules) -> Set[str]:
+    """
+    Build RDKit-style element symbols from YAML-driven one- and two-letter sets.
+    """
+    out: Set[str] = set()
+    for e in (rules.one_letter or []):
+        if e: out.add(e.strip().upper())
+    for e2 in (rules.two_letter or []):
+        sym = _alias_token_to_element_symbol(e2)
+        if sym: out.add(sym)
+    return out
+
+def free_ion_elements_from_aliases(rules) -> Set[str]:
+    """
+    Translate meeko.drop_free_ions and halide resnames into element symbols for
+    'one-atom free ion' filtering during ligand prep.
+    """
+    out: Set[str] = set()
+    for tok in (getattr(rules, "meeko_drop_free_ions", []) or []):
+        sym = _alias_token_to_element_symbol(tok)
+        if sym: out.add(sym)
+    for hal in (getattr(rules, "halide_resnames", []) or []):
+        sym = _alias_token_to_element_symbol(hal)
+        if sym: out.add(sym)
+    return out
+
+def _init_alias_rules_cache() -> None:
+    """
+    Resolve RULES from activesite.get_atom_rules() and derive:
+      - ALLOWED_ELEMENTS (RDKit symbols, canonical)
+      - MONOATOMIC_IONS (elements considered free ions for 1-atom ligands)
+      - AD4_TYPES (prefer YAML-driven; fallback to existing set)
+    Also emit quiet DEBUG logs when LIGPREP_DEBUG=1.
+    """
+    global RULES, ALLOWED_ELEMENTS, MONOATOMIC_IONS, AD4_TYPES
+    try:
+        RULES = get_atom_rules()
+    except Exception as e:
+        logging.warning("[ligprep] get_atom_rules() failed; using built-ins only (%s)", e)
+        RULES = None
+
+    if RULES is not None:
+        try:
+            # Centralized allow-list
+            ALLOWED_ELEMENTS = allowed_elements_from_aliases(RULES)
+            # Derive free-ion set for monatomic ligand guard
+            derived_free_ions = free_ion_elements_from_aliases(RULES)
+            # Keep behavior stable: union with historical set if present
+            try:
+                _legacy = MONOATOMIC_IONS if isinstance(MONOATOMIC_IONS, set) else set()
+            except NameError:
+                _legacy = set()
+            MONOATOMIC_IONS = (derived_free_ions or set()) | _legacy
+
+            # Prefer canonical AD4 types from YAML if available
+            if hasattr(RULES, "ad4_types") and RULES.ad4_types:
+                AD4_TYPES = set(RULES.ad4_types)
+
+            if os.environ.get("LIGPREP_DEBUG", "") == "1":
+                logging.debug("[ligprep] aliases version=%s", rules_version())
+                logging.debug("[ligprep] ALLOWED_ELEMENTS=%s", ", ".join(sorted(ALLOWED_ELEMENTS)))
+                if AD4_TYPES:
+                    logging.debug("[ligprep] AD4_TYPES(sample)=%s", ", ".join(sorted(list(AD4_TYPES))[:12]))
+                if MONOATOMIC_IONS:
+                    logging.debug("[ligprep] MONOATOMIC_IONS=%s", ", ".join(sorted(MONOATOMIC_IONS)))
+        except Exception as e:
+            logging.warning("[ligprep] alias init error; falling back to local lists (%s)", e)
+
+# Initialize once at import
+_init_alias_rules_cache()
 
 # =========================
 # Utility / logging helpers
 # =========================
-MONOATOMIC_IONS = {"Cl", "Br", "I", "F", "Na", "K", "Ca", "Mg", "Zn", "Mn", "Fe", "Cu", "Co", "Ni", "Al", "Ag", "Au",
-                   "Pt", "Li", "Ba", "Sr", "Cs", "Rb"}
-
 
 def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
     atom_lines = [ln for ln in lines if ln.startswith(("ATOM", "HETATM"))]
@@ -170,27 +263,107 @@ def _collect_only_from_env_and_cli(cli_only: Optional[List[str]] = None) -> Set[
 
     return out
 
-def _log_malformed(path: Path, reason: str):
+MALFORMED_DIR: Path | None = None
+def _log_malformed(p: Path, reason: str, log_dir: Path | None = None) -> None:
+    """
+    Append a one-line reason for a malformed ligand into the per-protein log
+    under prepped_ligands/<PDB>/, never the CWD.
+    """
     try:
-        MALFORMED_LOG.parent.mkdir(parents=True, exist_ok=True)
+        line = f"{p.name}\t{reason}\n"
+        base = Path(log_dir) if log_dir else (Path(MALFORMED_DIR) if MALFORMED_DIR else Path.cwd())
+        dest = base / MALFORMED_LOG.name  # preserve original filename/timestamp pattern
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "a", encoding="utf-8") as out:
+            out.write(line)
     except Exception:
         pass
-    with open(MALFORMED_LOG, "a", encoding="utf-8") as fh:
-        fh.write(f"{path}\t{reason}\n")
 
 
+def standardize_mol_with_activesite(mol: Chem.Mol) -> Chem.Mol:
+    """
+    Apply canonical ligand standardization before filtering:
+      - RDKit metal disconnection, salt removal, largest fragment, uncharge
+      - (light) sanitize to normalize valences where possible
+      - Do NOT change protonation (keep existing behavior)
+    Uses the same internal passes as _standardize_then_sanitize when available.
+    """
+    if mol is None:
+        return mol
+    m = mol
+    # Prefer the existing standardization pipeline if available
+    try:
+        std, why = _standardize_then_sanitize(m)
+        if std is not None:
+            m = std
+    except Exception:
+        # fall through; keep original m
+        pass
+
+    # Guardrail: strip clearly invalid/dummy atoms if any slipped through
+    try:
+        bad = [a for a in m.GetAtoms() if (a.GetAtomicNum() == 0 or a.GetSymbol() == "*")]
+        if bad:
+            emsg = f"dummy_atoms({len(bad)})"
+            m.SetProp("_ligprep_filter_hint", emsg)
+    except Exception:
+        pass
+
+    return m
 def _quick_filters(mol: Chem.Mol) -> Tuple[bool, str]:
+    """
+    Fast ligand gate: run *after* canonical standardization to avoid alias/case drift.
+    Preserves legacy thresholds/messages; adds clearer diagnostics for element rejects.
+    """
+    # 1) Standardize first (aliases/salts) so checks run on a normalized molecule
+    try:
+        mol = standardize_mol_with_activesite(mol) or mol
+    except Exception:
+        # keep going; downstream checks are defensive
+        pass
+
+    # 2) Size/atom-count thresholds (unchanged)
     heavy = mol.GetNumHeavyAtoms()
     if heavy == 0:
         return False, "no_heavy_atoms"
     if heavy > MAX_HEAVY_ATOMS:
         return False, f"too_large({heavy})"
-    if mol.GetNumAtoms() < MIN_ATOMS_FOR_DOCKING:
-        return False, f"too_few_atoms({mol.GetNumAtoms()})"
-    for a in mol.GetAtoms():
-        if a.GetSymbol() not in ALLOWED_ELEMENTS:
-            return False, f"disallowed_element:{a.GetSymbol()}"
+    total_atoms = mol.GetNumAtoms()
+    if total_atoms < MIN_ATOMS_FOR_DOCKING:
+        return False, f"too_few_atoms({total_atoms})"
+
+    # 3) Element allow-list using aliases-derived set
+    offending: Set[str] = set()
+    try:
+        for a in mol.GetAtoms():
+            sym = a.GetSymbol()
+            if sym not in ALLOWED_ELEMENTS:
+                offending.add(sym)
+    except Exception:
+        # if RDKit access fails for any atom, be conservative and report failure
+        return False, "element_scan_error"
+
+    if offending:
+        # Provide a hint for common alias/case drift
+        sym = sorted(offending)[0]
+        hint = ""
+        if sym.upper() != sym and sym.capitalize() in ALLOWED_ELEMENTS:
+            hint = f" (did_you_mean:{sym.capitalize()})"
+        elif sym.upper() in (getattr(RULES, "two_letter", set()) or set()):
+            hint = f" (did_you_mean:{sym[0].upper()}{sym[1:].lower()})"
+        return False, f"disallowed_element:{sym}{hint}"
+
+    # 4) Monatomic free-ion guard via aliases (canonical set; unions legacy)
+    try:
+        if mol.GetNumAtoms() == 1:
+            s = mol.GetAtomWithIdx(0).GetSymbol()
+            if s in MONOATOMIC_IONS:
+                return False, f"free_monoatomic_ion:{s}"
+    except Exception:
+        pass
+
     return True, ""
+
 
 
 def _standardize_then_sanitize(mol: Chem.Mol) -> Tuple[Optional[Chem.Mol], str]:
@@ -762,6 +935,17 @@ def add_hydrogens_mol2(in_path: Path, out_path: Path, obabel_exe: str) -> tuple[
         return True, (res.stderr or "").strip()
     except subprocess.CalledProcessError as e:
         return False, (e.stderr or "").strip()
+def _log_std_diff(log_dir: Path, lig_name: str, branch: str, old_smiles: str, new_smiles: str) -> None:
+    """Append SMILES diffs caused by standardization so we can spot chemistry changes."""
+    try:
+        path = Path(log_dir) / "standardization_diffs.tsv"
+        if not path.exists():
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("ligand\tbranch\told_smiles\tnew_smiles\n")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"{lig_name}\t{branch}\t{old_smiles}\t{new_smiles}\n")
+    except Exception:
+        pass
 
 
 def quick_pdbqt_validate(path: Path) -> tuple[bool, int, str]:
@@ -1074,7 +1258,7 @@ def _write_obabel_friendly_sdf(mol: Chem.Mol, out_path: Path) -> bool:
 def _reserialize_mol_via_obabel(mol, obabel_exe_short: str, target_mol2: Path):
     tmp_sdf = target_mol2.with_suffix(".std.sdf")
     if not _write_obabel_friendly_sdf(mol, tmp_sdf):
-        _log_malformed(target_mol2, "rdkit_sdf_write_fail:kekulize_or_aromaticity")
+        _log_malformed(target_mol2, "rdkit_sdf_write_fail:kekulize_or_aromaticity", log_dir=MALFORMED_DIR)
         return None
 
     fresh_mol2 = target_mol2.with_suffix(".std.mol2")
@@ -2660,7 +2844,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
             logging.info(f"Skipping standard amino acid residue: {pdb_file.name}")
             continue
         if residue_name in EXCLUDE_CRYSTAL_ADDITIVES:
-            _log_malformed(pdb_file, f"excluded_crystal_additive:{residue_name}")
+            _log_malformed(pdb_file, f"excluded_crystal_additive:{residue_name}", log_dir=prepped_ligands_dir)
             logging.info(f"Skipping crystallization additive: {pdb_file.name}")
             continue
 
@@ -2668,7 +2852,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
         with open(pdb_file, "r", encoding="utf-8", errors="ignore") as f:
             atom_lines = [line for line in f if line.startswith(("HETATM", "ATOM"))]
         if len(atom_lines) < MIN_ATOMS_FOR_DOCKING:
-            _log_malformed(pdb_file, f"tiny_ligand_fewer_than_{MIN_ATOMS_FOR_DOCKING}_atoms")
+            _log_malformed(pdb_file, f"tiny_ligand_fewer_than_{MIN_ATOMS_FOR_DOCKING}_atoms", log_dir=prepped_ligands_dir)
             logging.info(f"Skipping tiny ligand: {pdb_file.name}")
             continue
 
@@ -2791,7 +2975,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                 o = sum(1 for a in m_chk.GetAtoms() if a.GetSymbol() == "O")
                 hac = m_chk.GetNumHeavyAtoms()
                 if rings == 0 and arom == 0 and hac >= 12 and (o / float(hac)) >= 0.40:
-                    _log_malformed(pdb_file, "UNL_O_rich_ringless")
+                    _log_malformed(pdb_file, "UNL_O_rich_ringless", log_dir=prepped_ligands_dir)
                     logging.info(f"Skipping UNL O-rich ringless fragment: {pdb_file.name}")
                     continue
         except Exception:
@@ -2913,6 +3097,38 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                 _re_aromatize_mol2_in_place(Path(proto_mol2), obabel_exe_short)
             except Exception as e:
                 logging.error("[ligprep] re_arom crash for %s: %s", Path(proto_mol2).name, e)
+            # --- Enforce active-site standardization on extracted ligands (parity with bulk) ---
+            try:
+                # Parse the chosen proto_mol2 safely
+                m_raw = Chem.MolFromMol2File(str(proto_mol2), sanitize=False, removeHs=False)
+                old_smiles = ""
+                try:
+                    m_old = Chem.MolFromMol2File(str(proto_mol2), sanitize=True, removeHs=False)
+                    if m_old:
+                        old_smiles = Chem.MolToSmiles(m_old, isomericSmiles=True)
+                except Exception:
+                    pass
+
+                m_std = standardize_mol_with_activesite(m_raw)
+                if m_std is not None:
+                    # Audit: if chemistry changed, log it
+                    new_smiles = ""
+                    try:
+                        new_smiles = Chem.MolToSmiles(m_std, isomericSmiles=True)
+                    except Exception:
+                        pass
+                    if old_smiles and new_smiles and old_smiles != new_smiles:
+                        logging.warning("[std:audit][extracted] %s: SMILES changed %s -> %s",
+                                        Path(proto_mol2).name, old_smiles, new_smiles)
+                        _log_std_diff(prepped_ligands_dir, lig_id, "extracted", old_smiles, new_smiles)
+
+                    # Feed standardized MOL2 downstream
+                    std_path = Path(proto_mol2).with_suffix(".std.mol2")
+                    Chem.MolToMol2File(m_std, str(std_path))
+                    proto_mol2 = str(std_path)
+            except Exception as e:
+                logging.warning("[std][extracted] skip for %s: %s", Path(proto_mol2).name, e)
+            # --- end standardization parity block ---
 
             # --- Unified writer (bulk parity): use existing _prepare_one signature (MOL2 -> PDBQT) ---
             name, status = _prepare_one(
@@ -2985,7 +3201,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                             has_protein_res = True
                             break
             if has_protein_res:
-                _log_malformed(pdb_file, "protein_residue_in_pdbqt")
+                _log_malformed(pdb_file, "protein_residue_in_pdbqt", log_dir=prepped_ligands_dir)
                 quarantine = prepped_ligands_dir / QUARANTINE_DIRNAME
                 quarantine.mkdir(exist_ok=True)
                 try:
@@ -3017,7 +3233,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
 
         # Final validation + quarantine (use correct log_dir)
         if (not pdbqt_path.exists()) or (pdbqt_path.stat().st_size < 100) or (not is_valid_ligand(pdbqt_path, log_dir=prepped_ligands_dir)):
-            _log_malformed(pdb_file, "pdbqt_postcheck_fail_or_small")
+            _log_malformed(pdb_file, "pdbqt_postcheck_fail_or_small", log_dir=prepped_ligands_dir)
             quarantine = prepped_ligands_dir / QUARANTINE_DIRNAME
             quarantine.mkdir(exist_ok=True)
             try:
@@ -3055,6 +3271,41 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     cfg = load_config("config.txt")
     validate_config(cfg)
+    # ---------- resolve numeric/env knobs you already had ----------
+    MIN_TORS_DOF = _env_int("MIN_TORS_DOF", cfg.get("MIN_TORS_DOF", 0))
+    MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
+
+    # ---------- NEW: resolve overrideable effective paths ----------
+    # read ENV once here; CLI (if used) will populate these env vars in __main__
+    in_sdf_env = (os.environ.get("LIGPREP_IN_SDF", "") or "").strip() or None
+    in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
+    in_pdb_dir_env = (os.environ.get("LIGPREP_IN_PDB_DIR", "") or "").strip() or None
+    mol2_dir_env = (os.environ.get("LIGPREP_MOL2_DIR", "") or "").strip() or None
+    out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
+    status_log_env = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
+
+    # default to config when not overridden
+    ligand_extracted_dir = Path(in_sdf_dir_env or cfg["LIGAND_EXTRACTED_DIR"]).resolve()
+    ligands_mol2_dir = Path(mol2_dir_env or cfg["LIGANDS_MOL2_DIR"]).resolve()
+    output_ligands_dir = Path(out_dir_env or cfg["OUTPUT_LIGANDS_DIR"]).resolve()
+    prepped_ligands_dir = output_ligands_dir
+    # direct all malformed logs for this protein to its prepped_ligands dir
+    global MALFORMED_DIR
+    MALFORMED_DIR = prepped_ligands_dir
+    # create working/output dirs
+    output_ligands_dir.mkdir(parents=True, exist_ok=True)
+    ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
+
+    # emit a compact audit banner (single line)
+    print(
+        "[paths.effective]"
+        f" in_sdf={in_sdf_env or 'None'}"
+        f" in_sdf_dir={ligand_extracted_dir}"
+        f" in_pdb_dir={in_pdb_dir_env or 'None'}"
+        f" mol2_dir={ligands_mol2_dir}"
+        f" out_pdbqt_dir={output_ligands_dir}"
+        f" status_log={(status_log_env or cfg.get('LIGAND_STATUS_LOG_BASENAME', 'ligand_prep_status.tsv'))}"
+    )
 
     # env > config precedence for toggles/ints
     def _env_bool(name, default):
@@ -3127,7 +3378,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     prepare_script_short = get_short_path_name(str(prepare_script.resolve()))
 
     # Per-target status log (SDF pipeline)
-    status_log = output_ligands_dir / cfg.get("LIGAND_STATUS_LOG_BASENAME", "ligand_prep_status.tsv")
+    status_log = (
+        Path(status_log_env).resolve()
+        if (status_log_env and Path(status_log_env).suffix)
+        else (output_ligands_dir / (status_log_env or cfg.get("LIGAND_STATUS_LOG_BASENAME", "ligand_prep_status.tsv")))
+    )
 
     # =========================
     # TRUE TEST-MODE: prefer per-ligand SDFs and filter by ONLY
@@ -3232,6 +3487,35 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
                 if force and pdbqt_path.exists():
                     logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_path.name)
+                # --- Enforce active-site standardization on bulk MOL2s (explicit, before _prepare_one) ---
+                try:
+                    m_raw = Chem.MolFromMol2File(str(mol2_file), sanitize=False, removeHs=False)
+                    old_smiles = ""
+                    try:
+                        m_old = Chem.MolFromMol2File(str(mol2_file), sanitize=True, removeHs=False)
+                        if m_old:
+                            old_smiles = Chem.MolToSmiles(m_old, isomericSmiles=True)
+                    except Exception:
+                        pass
+
+                    m_std = standardize_mol_with_activesite(m_raw)
+                    if m_std is not None:
+                        new_smiles = ""
+                        try:
+                            new_smiles = Chem.MolToSmiles(m_std, isomericSmiles=True)
+                        except Exception:
+                            pass
+                        if old_smiles and new_smiles and old_smiles != new_smiles:
+                            logging.warning("[std:audit][bulk] %s: SMILES changed %s -> %s",
+                                            Path(mol2_file).name, old_smiles, new_smiles)
+                            _log_std_diff(output_ligands_dir, Path(mol2_file).stem, "bulk", old_smiles, new_smiles)
+
+                        std_path = Path(mol2_file).with_suffix(".std.mol2")
+                        Chem.MolToMol2File(m_std, str(std_path))
+                        mol2_file = std_path  # pass standardized path downstream
+                except Exception as e:
+                    logging.warning("[std][bulk] skip for %s: %s", Path(mol2_file).name, e)
+                # --- end standardization parity block ---
 
                 futures.append(ex.submit(
                     _prepare_one,
@@ -3272,9 +3556,14 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     # END test-mode, fall back to legacy bulk-SDF path below
     # =========================
 
+    # : crystal-safe dispatch (takes precedence over bulk scan when in_sdf not set)
+    if in_pdb_dir_env and not in_sdf_env:
+        return prep_ligands_from_pdb(Path(in_pdb_dir_env).resolve(), ligands_mol2_dir, output_ligands_dir)
 
-    sdf_files = list(ligand_extracted_dir.glob("*.sdf"))
+    #  single-file override; else scan directory as before
+    sdf_files = [Path(in_sdf_env).resolve()] if in_sdf_env else list(ligand_extracted_dir.glob("*.sdf"))
     print(f"Found {len(sdf_files)} SDF file(s)")
+
     if not sdf_files:
         return
 
@@ -3576,6 +3865,8 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 fold_legacy_layout(pdb_id, output_root)
                 # 2) Run the original pipeline
                 out = _orig_clean_pdb(pdb_file, output_root)
+                fold_legacy_layout(pdb_id, output_root)
+
                 # 3) Expose intermediates via a symlink next to prepped_ligands/<PDB>
                 try:
                     # Use the same canonical path helper your code already uses, if present
@@ -3607,8 +3898,42 @@ if __name__ == "__main__":
                         help="Limit extracted prep to specific ligand basenames (e.g., RXT_A1204). Mirrors EXTRACT_ONLY.")
     parser.add_argument("--test-extracted", action="store_true",
                         help="Verbose test mode for extracted ligands (mirrors EXTRACT_TEST=1).")
+    # --- optional I/O override flags (non-breaking) ---
+    parser.add_argument("--in-sdf", help="Path to a single SDF file (process only this file)")
+    parser.add_argument("--in-sdf-dir", help="Directory of bulk SDFs (replaces default extracted-SDF root)")
+    parser.add_argument("--in-pdb-dir", help="Directory of extracted ligand PDBs (crystal-safe path)")
+    parser.add_argument("--mol2-dir", help="Directory for MOL2 intermediates")
+    parser.add_argument("--out-pdbqt-dir", help="Destination directory for final PDBQTs")
+    parser.add_argument("--status-log", help="Basename or full path for the TSV status log")
 
     args = parser.parse_args()
+
+
+    # Promote CLI overrides to ENV so the core pipeline (and your config precedence)
+    # can pick them up without changing existing logic. Precedence stays: CLI > ENV > config.
+    def _set_env(k, v):
+        if v is not None and str(v).strip() != "":
+            os.environ[k] = str(v)
+
+
+    _set_env("LIGPREP_IN_SDF", args.in_sdf)
+    _set_env("LIGPREP_IN_SDF_DIR", args.in_sdf_dir)
+    _set_env("LIGPREP_IN_PDB_DIR", args.in_pdb_dir)
+    _set_env("LIGPREP_MOL2_DIR", args.mol2_dir)
+    _set_env("LIGPREP_OUT_DIR", args.out_pdbqt_dir)
+    _set_env("LIGPREP_STATUS_LOG", args.status_log)
+
+    # Compact one-line audit of the effective overrides seen at startup
+    print(
+        "[paths.effective]",
+        f"in_sdf={os.environ.get('LIGPREP_IN_SDF', 'None')}",
+        f"in_sdf_dir={os.environ.get('LIGPREP_IN_SDF_DIR', 'None')}",
+        f"in_pdb_dir={os.environ.get('LIGPREP_IN_PDB_DIR', 'None')}",
+        f"mol2_dir={os.environ.get('LIGPREP_MOL2_DIR', 'None')}",
+        f"out_pdbqt_dir={os.environ.get('LIGPREP_OUT_DIR', 'None')}",
+        f"status_log={os.environ.get('LIGPREP_STATUS_LOG', 'None')}",
+    )
+
     # Build ONLY set from env + file + CLI
     only_set = _collect_only_from_env_and_cli(args.only if hasattr(args, "only") else None)
     # --- extracted path entrypoint ---

@@ -116,13 +116,28 @@ def get_atom_rules():
     ad4_types_yaml = a.get("ad4_types") or (a.get("pdbqt_types") or {}).get("ad4_types")
     ad4_types = _as_set(ad4_types_yaml) if ad4_types_yaml else set()
 
-    # NEW: ligand & Meeko lists from YAML
+    #  ligand & Meeko lists from YAML
     nucleotide_like_resnames = _as_set(ligand_sets.get("nucleotide_like_resnames"))
     meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"))
 
     # retain list (and a compat copy)
     retain_raw = a.get("retain_in_receptor_resnames", []) or []
     retain_res = _as_set(retain_raw)
+
+    # --- APO/HOLO mode (env or config) ---
+    mode = str(os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "")).strip().lower()
+
+    # water names come directly from the YAML retain list:
+    water_names = {w for w in retain_res if w in {"HOH", "WAT", "DOD", "H2O", "TIP", "TIP3", "SOL"}}
+
+    # element-token ions/metals: 1–2 letter tokens present in element sets
+    elem_tokens = {t for t in retain_res if ((len(t) in (1, 2)) and (t in one_letter or t in two_letter))}
+
+    if mode == "apo":
+        # apo keeps waters + ions only; drop other small-molecule cofactors
+        retain_res = water_names | elem_tokens
+    # else (holo/default): keep full retain_res from YAML
+
     compat_element_sets = dict(es)      # keep YAML shape
     compat_retain_list  = list(retain_raw)
 
@@ -550,7 +565,11 @@ def _fix_ligand_element_columns_in_memory(lines):
             resn  = line[17:20]
             is_het = line.startswith("HETATM")
             el = derive_element(aname, resn, is_het, rules)
+            # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
+            if aname.strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+                el = "H"
             line = line[:76] + f"{el:>2}" + line[78:]
+
         out.append(line)
     return out
 
@@ -573,7 +592,11 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
                 aname = line[12:16]
                 resn  = line[17:20]
                 el = derive_element(aname, resn, is_het, rules)
+                # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
+                if str(aname).strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+                    el = "H"
                 line = line[:76] + f"{el:>2}" + line[78:]
+
             out_lines.append(line)
     with open(dst_path, "w", encoding="utf-8") as out:
         out.writelines(out_lines)

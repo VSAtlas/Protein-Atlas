@@ -39,7 +39,8 @@ from collections import Counter, defaultdict
 from math import sqrt
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
-import os, sys, shutil, subprocess, logging
+import os, sys, shutil, subprocess, logging, re
+from propka_wire import pdb2pqr_protonate
 
 from installation import load_config
 from logger_setup import setup_logger
@@ -338,8 +339,15 @@ def _helium_postwrite_counter(step_name: str, pdb_path: str | Path) -> None:
         )
 
     if he_after > 0:
+        try:
+            bad = [ln for ln in after.splitlines()
+                   if (" He" in ln) or (len(ln) >= 78 and ln[76:78].strip() == "HE")][:3]
+            logging.warning("[helium] residual examples: %r", bad)
+        except Exception:
+            pass
         # Fail fast so we can see which step leaked helium
         raise RuntimeError("helium_residual_post_write")
+
 
 
 
@@ -384,6 +392,109 @@ def _powershell(cmd: str) -> subprocess.CompletedProcess:
 
 def _as_path(p) -> Path:
     return p if isinstance(p, Path) else Path(p)
+def collapse_sanitized_once(p: Union[str, Path]) -> Path:
+    """
+    Return a Path with a sanitized basename (single pass; no filesystem changes).
+    Keeps directory the same, replaces non [A-Za-z0-9._-] with underscores.
+    """
+    p = Path(p)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", p.name)
+    return p.with_name(safe)
+
+
+def compute_control_centroids(ligands_dir: Union[str, Path]) -> list[tuple[float, float, float]]:
+    """Return one centroid per *.pdb control ligand under ligands_dir."""
+    ligands_dir = _as_path(ligands_dir)
+    pts: list[tuple[float, float, float]] = []
+    if not ligands_dir.exists():
+        return pts
+    for p in sorted(ligands_dir.glob("*.pdb")):
+        try:
+            n = 0
+            sx = sy = sz = 0.0
+            with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if not ln.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    # drop hydrogens by element column (77–78)
+                    if len(ln) >= 78 and ln[76:78].strip().upper() == "H":
+                        continue
+                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                    sx += x; sy += y; sz += z; n += 1
+            if n > 0:
+                pts.append((sx / n, sy / n, sz / n))
+        except Exception:
+            # best-effort; ignore malformed ligand files
+            pass
+    return pts
+
+
+def filter_waters_near_points(src_pdb: Union[str, Path],
+                              dst_pdb: Union[str, Path],
+                              points: list[tuple[float, float, float]],
+                              radius_A: float) -> int:
+    """
+    Copy src_pdb → dst_pdb keeping all non-HOH records and only HOH residues
+    with any atom within radius_A of any reference point. Returns #HOH residues kept.
+    """
+    R2 = float(radius_A) * float(radius_A)
+    keep: set[tuple[str, str]] = set()  # (chain, resseq+icode)
+    try:
+        with open(src_pdb, "r", encoding="utf-8", errors="ignore") as fh:
+            for ln in fh:
+                if not ln.startswith(("ATOM  ", "HETATM")):
+                    continue
+                if ln[17:20] != "HOH":
+                    continue
+                try:
+                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                except Exception:
+                    continue
+                for (cx, cy, cz) in points:
+                    dx = x - cx; dy = y - cy; dz = z - cz
+                    if (dx*dx + dy*dy + dz*dz) <= R2:
+                        keep.add((ln[21], ln[22:27]))  # chain, resseq+icode
+                        break
+    except Exception:
+        pass
+
+    with open(src_pdb, "r", encoding="utf-8", errors="ignore") as fh, \
+         open(dst_pdb, "w", encoding="utf-8") as out:
+        for ln in fh:
+            if ln.startswith(("ATOM  ", "HETATM")) and ln[17:20] == "HOH":
+                key = (ln[21], ln[22:27])
+                if key in keep:
+                    out.write(ln)
+                # else: drop HOH atom line
+            else:
+                out.write(ln)
+    return len(keep)
+
+
+def count_waters_within(pdb_path: Union[str, Path],
+                        point_xyz: tuple[float, float, float],
+                        radius_A: float) -> int:
+    """Count distinct HOH residues within radius_A of point_xyz."""
+    R2 = float(radius_A) * float(radius_A)
+    seen: set[tuple[str, str]] = set()
+    try:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as fh:
+            for ln in fh:
+                if not ln.startswith(("ATOM  ", "HETATM")) or ln[17:20] != "HOH":
+                    continue
+                try:
+                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                except Exception:
+                    continue
+                dx = x - point_xyz[0]; dy = y - point_xyz[1]; dz = z - point_xyz[2]
+                if (dx*dx + dy*dy + dz*dz) <= R2:
+                    seen.add((ln[21], ln[22:27]))
+    except Exception:
+        return 0
+    return len(seen)
+
+
+
 
 def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
     """Prefer env var, then config.txt (sibling of this file), else default."""
@@ -737,6 +848,12 @@ def strip_monoatomic_ions_inplace(pdb_path: Union[str, Path],
     if removed:
         logging.info("Stripped %d monoatomic ions from %s", removed, pdb_path)
     return removed
+
+# Compatibility alias for older callers
+def _strip_monoatomic_ions_inplace(*args, **kwargs):
+    return strip_monoatomic_ions_inplace(*args, **kwargs)
+
+
 
 def detect_catalytic_metals(pdb_path: Union[str, Path]) -> Set[str]:
     """
@@ -1492,6 +1609,61 @@ def prune_to_chains(input_pdb: Union[str, Path],
 
 
 
+
+
+
+
+
+
+
+
+def _maybe_get_target_ph() -> float | None:
+    # Priority: explicit env, then context_ph json drop, else None.
+    v = os.environ.get("TARGET_PH", "").strip()
+    if v:
+        try: return float(v)
+        except Exception: pass
+    # allow a sidecar json dumped by context_ph: <pdb_id>.ph.json with {"target_pH": 7.8}
+    try:
+        pdb_base = os.path.splitext(os.path.basename(input_pdb_path))[0]
+        sidecar = Path(input_pdb_path).parent / f"{pdb_base}.ph.json"
+        if sidecar.exists():
+            import json
+            data = json.loads(sidecar.read_text())
+            t = data.get("target_pH", None)
+            if isinstance(t, (int, float)): return float(t)
+    except Exception:
+        pass
+    return None
+
+def _protonate_with_pdb2pqr_if_available(nolig_pdb_path: str, out_dir: Path, logger) -> tuple[Path, bool, str|None]:
+    """
+    Try PDB2PQR at the *pipeline pH* if available; fall back to the input PDB.
+    Returns: (pdb_for_reduce, used_pdb2pqr, propka_log_path_or_None)
+    """
+    # Choose a pH: use context_ph if you already resolved one before calling this,
+    # otherwise default to 7.0 (harmless; you can feed in your target later).
+    try:
+        from context_ph import select_ph_values_for_protonation
+        phs = select_ph_values_for_protonation(nolig_pdb_path)
+        target_ph = float(phs[0]) if phs else 7.0
+    except Exception:
+        target_ph = 7.0
+
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    pdb_from_p2p, pk_log = pdb2pqr_protonate(nolig_pdb_path, target_ph, out_dir)
+    if pdb_from_p2p:
+        logger.info("PDB2PQR succeeded at pH %.2f -> %s", target_ph, pdb_from_p2p)
+        return Path(pdb_from_p2p), True, pk_log
+    else:
+        logger.warning("PDB2PQR unavailable/failed; Reduce will build hydrogens.")
+        return Path(nolig_pdb_path), False, None
+
+
+
+
+
+
 # ============================
 # End-to-end Cleaning Pipeline
 # =============================
@@ -1500,8 +1672,13 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     output_root = str(output_root)
     Path(output_root).mkdir(parents=True, exist_ok=True)
 
-    pdb_id = os.path.splitext(os.path.basename(str(pdb_file)))[0].upper()
+    raw_stem = os.path.splitext(os.path.basename(str(pdb_file)))[0]
+    pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
+    logging.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
     paths = canon_paths(pdb_id, output_root)
+    logging.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
+                 paths["protein_root"], paths["receptor"], paths["nolig"], paths["work"])
+
 
     logging.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
 
@@ -1575,20 +1752,64 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
             os.path.basename(loop_fixed_pdb) == "modeller_filled.pdb"
             and os.path.isfile(loop_fixed_pdb)
     )
-    # (6) Optional external Phenix polish (non-fatal if missing)
-    receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
 
-    # PHENIX (capture success straight from the function)
+
+    receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
+    # (6) Optional external Phenix polish (non-fatal if missing)
     phenix_ok = False
-    if config.get("use_phenix", False):
-        phenix_ok = run_phenix_pdbtools(
-            input_pdb=loop_fixed_pdb,
-            output_pdb=receptor_pdb,  # write here (no temporary name)
-            work_dir=paths["work"],
-            mode=config.get("phenix_mode", "clean_pdb")
-        )
+    _use_phenix = str(config.get("use_phenix", config.get("USE_PHENIX", "false"))).strip().lower() in ("1", "true",
+                                                                                                       "yes")
+    if _use_phenix:        # Water policy & radius
+        _remove_waters = str(_cfg_env_or_default("REMOVE_WATERS", "true")).strip().lower() in ("1", "true", "yes")
+        _policy = (_cfg_env_or_default("WATER_KEEP_POLICY", "none") or "none").strip().lower()
+        _keep_R = float(_cfg_env_or_default("KEEP_WATERS_WITHIN_A", "6.0") or 6.0)
+
+        # Default: feed Phenix the loop-fixed input
+        _phenix_in = loop_fixed_pdb
+
+        if _remove_waters and _policy != "none":
+            # Policy active: derive reference points
+            ref_pts: list[tuple[float, float, float]] = []
+            # Prefer chosen center when available; here we’re early, so fall back to control centroids
+            try:
+                ref_pts = compute_control_centroids(paths["ligands_raw"])
+            except Exception:
+                ref_pts = []
+            if ref_pts:
+                _phenix_in = paths["work"] / f"{pdb_id}_prefiltered_waters.pdb"
+                kept = filter_waters_near_points(loop_fixed_pdb, _phenix_in, ref_pts, _keep_R)
+                logging.info("[waters] policy=%s kept=%d within %.1f Å of %d centers",
+                             _policy, kept, _keep_R, len(ref_pts))
+            else:
+                logging.info("[waters] policy=%s but no reference points found; skipping prefilter", _policy)
+
+        # Blanket removal only when policy is 'none'
+        _phenix_remove = bool(_remove_waters and _policy == "none")
+        phenix_ok = run_phenix_pdbtools(input_pdb=_phenix_in, output_pdb=receptor_pdb, remove_waters=_phenix_remove)
+
+        # (6b) Dry-run sanity: count HOH within 8 Å of control-centroid center in final receptor
+        try:
+            ref_pts = compute_control_centroids(paths["ligands_raw"])
+            center0 = None
+            if ref_pts:
+                # quick average as an approximate center for the dry-run note
+                cx = sum(p[0] for p in ref_pts) / len(ref_pts)
+                cy = sum(p[1] for p in ref_pts) / len(ref_pts)
+                cz = sum(p[2] for p in ref_pts) / len(ref_pts)
+                center0 = (cx, cy, cz)
+            if center0:
+                kept8 = count_waters_within(receptor_pdb, center0, 8.0)
+                logging.info("[waters] dry-run kept_within_8A=%d center=(%.2f,%.2f,%.2f) file=%s",
+                             kept8, center0[0], center0[1], center0[2], receptor_pdb)
+        except Exception as _e:
+            logging.debug("[waters] dry-run check skipped: %s", _e)
+
     if not phenix_ok:
         shutil.copyfile(loop_fixed_pdb, receptor_pdb)
+
+
+
+
 
     _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
     
@@ -1657,16 +1878,29 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     present_resnames = _present_resnames(chain_validated_pdb)
     NUC_LIKE = set(_flatten_semicolons(RULES.get("nucleotide_like_resnames", [])))
     use_reduce = not any(r in NUC_LIKE for r in present_resnames)
+    # ---- Prefer PDB2PQR (with PROPKA) at pipeline pH; fall back to Reduce ----
+    # This uses the helper already defined earlier in this file.
+    pdb_for_reduce, used_pdb2pqr, pk_log = _protonate_with_pdb2pqr_if_available(
+        str(chain_validated_pdb),         # protonate the validated, ligand-free coordinates
+        str(paths["work"]),               # write PROPKA/PDB2PQR artifacts into the work directory
+        logging
+    )
+
+    # If PDB2PQR succeeded, pdb_for_reduce now has hydrogens and titration states.
+    # assign_protonation_states() will detect H presence and run Reduce WITHOUT -BUILD,
+    # i.e., do flips/cleanup only. If PDB2PQR failed, pdb_for_reduce == chain_validated_pdb
+    # and Reduce will run with -BUILD as needed.
 
     if not use_reduce:
         logging.info("[protonation] Skipping Reduce due to detected nucleotides; using OpenBabel path.")
 
     reduced_pdb = paths["work"] / f"{pdb_id}_reduced.pdb"
     assign_protonation_states(
-        chain_validated_pdb,
+        pdb_for_reduce,
         reduced_pdb,
         reduce_exe=REDUCE_EXE if use_reduce else None,  # skip Reduce for nucleotide cofactors
     )
+
     _helium_postwrite_counter("reduce_or_fallback", reduced_pdb)
     print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
 
@@ -2454,7 +2688,9 @@ def assign_protonation_states(input_pdb: Union[str, Path],
         logging.warning("[reduce precheck] coverage_skip note=%s", _e)
 
     has_h = hydrogenation_status(input_pdb)[0] != "NO_H"
-    reduce_flags = ["-quiet"] if has_h else ["-BUILD", "-quiet"]
+    # If input already has H (e.g., from PDB2PQR), do flip/cleanup only; else do a full H build.
+    reduce_flags = ["-FLIP", "-Quiet"] if has_h else ["-BUILD", "-Quiet"]
+
     exe = reduce_exe
     exe_dir = os.path.dirname(exe) if exe else None
 
@@ -2465,7 +2701,19 @@ def assign_protonation_states(input_pdb: Union[str, Path],
             env["REDUCE_HET_DICT"] = het
         with open(output_pdb, "w", encoding="utf-8") as out:
             cp = subprocess.run([exe] + reduce_flags + [in_pdb], stdout=out, stderr=subprocess.PIPE, text=True, env=env)
-        logging.warning("[reduce] stage=%s rc=%s stderr_len=%d", stage_name, cp.returncode, len(cp.stderr or ""))
+        # Persist stderr and count atoms written
+        try:
+            (Path(output_pdb).parent / f"{stage_name}.stderr.txt").write_text(cp.stderr or "", encoding="utf-8")
+        except Exception:
+            pass
+        wrote_atoms = 0
+        try:
+            with open(output_pdb, "r", encoding="utf-8", errors="ignore") as fh:
+                wrote_atoms = sum(1 for ln in fh if ln.startswith(("ATOM  ", "HETATM")))
+        except Exception:
+            wrote_atoms = 0
+        logging.warning("[reduce] stage=%s rc=%s flags=%s wrote_atoms=%d", stage_name, cp.returncode,
+                        " ".join(reduce_flags), wrote_atoms)
         return output_pdb
 
     status_before, h0, hv0, r0 = hydrogenation_status(input_pdb)
@@ -2483,6 +2731,25 @@ def assign_protonation_states(input_pdb: Union[str, Path],
         sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
         if sz == 0:
             raise RuntimeError("protonation_empty_output")
+
+        #  strict ATOM/HETATM guard (Reduce can write tiny, header-only files)
+        def _file_has_atoms(p: str) -> bool:
+            try:
+                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                    return any(ln.startswith(("ATOM  ", "HETATM")) for ln in fh)
+            except Exception:
+                return False
+
+        if not _file_has_atoms(output_pdb):
+            logging.error("[protonate] wrote_atoms=0 after Reduce; attempting OpenBabel fallback")
+            try:
+                tmp_babel = output_pdb + ".babel.pdb"
+                run_openbabel_add_h(input_pdb, tmp_babel)
+                shutil.move(tmp_babel, output_pdb)
+                logging.warning("[fallback] openbabel applied (post-Reduce)")
+            except Exception as e:
+                logging.error("[fallback] openbabel failed: %s; copying input→output", str(e)[:200])
+                shutil.copy(input_pdb, output_pdb)
         status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
         logging.info("[H-Scan after ] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_after, h1, hv1, r1)
         return output_pdb
@@ -2654,15 +2921,22 @@ def run_molprobity_validate(pdb_path: Union[str, Path], work_dir: Optional[Union
 def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
     """High-level wrapper: clean a PDB and prepare the receptor PDBQT."""
     try:
-        # Resolve input path (abs path takes precedence)
-        if os.path.isabs(pdb_filename) and os.path.isfile(pdb_filename):
-            pdb_path = pdb_filename
+        # Resolve input path robustly:
+        # 1) If the provided path already points to a file (absolute or relative), use it as-is.
+        # 2) Otherwise, fall back to INPUT_DIR/pdb_filename.
+        cand = Path(pdb_filename)
+        if cand.is_file():
+            pdb_path = str(cand.resolve())
         else:
-            pdb_path = os.path.join(_cfg("INPUT_DIR", "."), pdb_filename)
+            pdb_path = str(Path(_cfg("INPUT_DIR", ".")).joinpath(pdb_filename))
+
+        logging.info("[prep] argv pdb_filename=%s resolved=%s output_dir=%s cwd=%s",
+                     pdb_filename, pdb_path, str(output_dir), os.getcwd())
 
         if not os.path.isfile(pdb_path):
             logging.error("ERROR: File does not exist: %s", pdb_path)
-            return None
+            raise FileNotFoundError(pdb_path)
+
 
         # Run cleaning → returns the final cleaned receptor PDB path
         output_dir = Path(output_dir).resolve()
@@ -2670,17 +2944,21 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
         cleaned_pdb = clean_pdb(pdb_path, output_dir)
         if not cleaned_pdb:
             logging.error("ERROR: Cleaning failed for %s", pdb_filename)
-            return None
+            raise RuntimeError(f"cleaning_failed: {pdb_filename}")
 
         # Prepare receptor PDBQT next to the cleaned tree
-        pdb_id = Path(pdb_filename).stem.upper()
+        raw_stem = Path(pdb_filename).stem
+        pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
+        logging.info("[prep.id] main stem=%s -> base_id=%s", raw_stem, pdb_id)
         paths = canon_paths(pdb_id, output_dir)
+        logging.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
+                     paths["protein_root"], paths["receptor"], paths["nolig"], paths["work"])
+
         output_pdbqt = str((paths["receptor"] / f"{pdb_id}.pdbqt").resolve())
         fix_element_columns_in_file(cleaned_pdb, cleaned_pdb, rewrite_atoms=True)
 
         if not run_prepare_receptor(cleaned_pdb, output_pdbqt, config):
             logging.error("ERROR: Failed to prepare receptor PDBQT for %s", pdb_id)
-            # Always emit a summary even on failure
             try:
                 rp = Path(output_pdbqt)
                 exists = rp.exists()
@@ -2693,7 +2971,8 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
                          "receptor_pdbqt=%s exists=%s size=%d\n"
                          "meeko_attempts=(see work/*.cmd.txt | *.stderr.txt)",
                          cleaned_pdb, output_pdbqt, exists, size)
-            return None
+            raise RuntimeError(f"receptor_pdbqt_failed: {pdb_id}")
+
 
         # Success path summary
         try:
@@ -2708,13 +2987,14 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
                      "receptor_pdbqt=%s exists=%s size=%d\n"
                      "meeko_attempts=(see work/*.cmd.txt | *.stderr.txt)",
                      cleaned_pdb, output_pdbqt, exists, size)
-
+        
+        logging.info("[prep.return] cleaned=%s receptor_pdbqt=%s", cleaned_pdb, output_pdbqt)
         logging.info("Prepared receptor PDBQT: %s", output_pdbqt)
         return cleaned_pdb, output_pdbqt
 
-
     except Exception as e:
         logging.exception("[FATAL] automate_protein_prep.main() failed: %s", e)
-        return None
+        raise
+
 
 

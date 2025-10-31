@@ -4,6 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Tuple, Optional, List
+import logging
+_log = logging.getLogger("vina")
 
 from input_and_export_functions import extract_best_score
 try:
@@ -133,7 +135,7 @@ def _maybe_print_useful_lines(stdout: str, stderr: str) -> None:
         for ln in stream.splitlines():
             if _ERR_PAT.search(ln):
                 # Surface only meaningful lines
-                print(f"[vina:{label}] {ln}")
+                _log.warning("[vina.emit] %s", ln)
 
 def _get_timeout() -> Optional[int]:
     v = os.environ.get("VINA_TIMEOUT_SEC")
@@ -175,7 +177,6 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
 
         timeout = _get_timeout()
-        print(f"[vina-call] exe={resolved_exe} cfg={config_path} out={out_path}")
 
         proc = subprocess.run(
             [resolved_exe, "--config", config_path, "--out", out_path],
@@ -189,11 +190,12 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
         if _should_filter_stdout():
             _maybe_print_useful_lines(proc.stdout, proc.stderr)
         elif proc.returncode != 0 and proc.stderr:
-            print(proc.stderr)
+            _log.warning("[vina.emit] %s", proc.stderr.strip())
 
         if proc.returncode != 0:
             msg = proc.stderr.strip().splitlines()[-1] if proc.stderr else f"Return code {proc.returncode}"
-            print(f"Docking failed for {ligand_name}: {msg}")
+            _log.warning("[vina.emit] Docking failed for %s: %s", ligand_name, msg)
+
 
         # Primary parse using project helper
         score = extract_best_score(out_path)
@@ -203,19 +205,20 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
             robust_score, n_models = _extract_best_score_robust(out_path)
             score = robust_score
             if score is None:
-                print(f"[parser] {ligand_name} no Vina score found in {out_path} (models_in_file={n_models})")
+                _log.info("[parser] %s no Vina score found in %s (models_in_file=%d)", ligand_name, out_path, n_models)
 
         return ligand_name, score
-
+    
     except subprocess.TimeoutExpired:
-        print(f"Docking timed out for {ligand_name} (>{_get_timeout()}s)")
+        _log.error("[vina.emit] Docking timed out for %s (> %ss)", ligand_name, _get_timeout())
         return ligand_name, None
     except FileNotFoundError as e:
-        print(f"File error for {ligand_name}: {e}")
+        _log.error("[vina.emit] File error for %s: %s", ligand_name, e)
         return ligand_name, None
     except Exception as e:
-        print(f"Docking crashed for {ligand_name}: {e}")
+        _log.error("[vina.emit] Docking crashed for %s: %s", ligand_name, e)
         return ligand_name, None
+
 
 
 
