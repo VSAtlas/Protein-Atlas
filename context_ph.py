@@ -18,6 +18,10 @@ import argparse
 from typing import Dict, List, Tuple, Optional
 import logging
 
+# >>> PATHS IMPORT START
+from path_router import make_paths
+# >>> PATHS IMPORT END
+
 logger = logging.getLogger("context_ph")
 if not logger.handlers:
     _h = logging.StreamHandler()
@@ -387,6 +391,16 @@ def select_ph_from_pdb(
     result["is_alphafold"] = bool(is_af)
     result["uniprot_accessions"] = uniprot_accs
     return result
+
+# >>> CONTEXTPH PATHS PATCH START
+def select_ph_for_pdbid(cfg, pdb_id: str, **kwargs) -> Dict:
+    """
+    Resolve input PDB via path router and call select_ph_from_pdb.
+    kwargs are forwarded to select_ph_from_pdb (buffer_ph, assay_ph, project_compartment, ...).
+    """
+    p = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    return select_ph_from_pdb(str(p.input_pdb_path), **kwargs)
+# >>> CONTEXTPH PATHS PATCH END
 
 # -------------------------
 # CLI
