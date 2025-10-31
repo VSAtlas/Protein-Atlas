@@ -59,7 +59,8 @@ CONTROL_CENTER_CLOSE_MAX_A = 8.0
 REMOVE_WATERS = true
 KEEP_WATERS_WITHIN_A = 6.0     # only meaningful if REMOVE_WATERS=false or as a prefilter
 WATER_KEEP_POLICY = "near_center"  # near_center | near_controls | none
-APO_HOLO_MODE = apo_vs_holo   # apo | holo | apo_vs_holo
+APO_HOLO_MODE = None
+# apo | holo | apo_vs_holo | None 
 
 
 CHAIN_PRUNE=1

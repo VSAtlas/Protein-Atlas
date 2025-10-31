@@ -14,12 +14,16 @@ try:
     validate_config(_CFG)
 except Exception:
     _CFG = {}
-    
-    
-    
-    
-    
+
+
+
+
+
 import io
+
+# >>> PATHS IMPORT START
+from path_router import make_paths
+# >>> PATHS IMPORT END
 
 _SCORE_LINE = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 _MODEL_START = re.compile(r"^\s*MODEL\b", re.IGNORECASE)
@@ -293,3 +297,38 @@ def validate_all_poses(
                     p.unlink()
             except Exception:
                 pass
+
+
+# ----------------------------
+# Path routing helpers
+# ----------------------------
+def resolve_stage_and_config_dirs(
+    cfg,
+    pdb_id: str,
+    run_id: str,
+    stage: str,
+    variant: Optional[str] = None,
+    ph_token: Optional[str] = None,
+) -> Tuple[Path, Path]:
+    """Return (stage_dir, config_dir) using the centralized path router."""
+
+    if not pdb_id:
+        raise ValueError("pdb_id must be provided")
+
+    # >>> PATHS INIT START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> PATHS INIT END
+
+    # >>> DOCKED PATHS PATCH START
+    stage_dir = paths.docked_stage_dir(variant, stage)
+    # >>> DOCKED PATHS PATCH END
+
+    cfg_dir_call = paths.configs_stage_dir
+    # >>> CONFIG PATHS PATCH START
+    try:
+        cfg_dir = cfg_dir_call(run_id, variant, stage, ph_token)
+    except TypeError:
+        cfg_dir = cfg_dir_call(run_id, variant, stage)
+    # >>> CONFIG PATHS PATCH END
+
+    return stage_dir, cfg_dir

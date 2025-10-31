@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # High-level pipeline for multi-stage docking.
 #
 # Phases per protein:
@@ -47,6 +48,9 @@ from pose_validation import (
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
 )
 from run_vina import run_docking_task, validate_all_poses
+# >>> PATHS IMPORT START
+from path_router import make_paths, Paths as RouterPaths
+# >>> PATHS IMPORT END
 def _prepare_run_logfile():
     logs_dir = Path.cwd() / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -125,7 +129,7 @@ os.makedirs = _dbg_makedirs
 class RetryManager:
     max_retries: int = 2
     recipes: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
-        # If we docked far from the pocket, try small geometry tweaks � not more modes
+        # If we docked far from the pocket, try small geometry tweaks   not more modes
         "too_far_from_pocket": [
             {"recenter": True, "box_pad_delta": +1.0, "num_modes": 4},
             {"recenter": True, "box_pad_delta": +2.0, "exhaustiveness": 6, "num_modes": 4},
@@ -302,17 +306,9 @@ class GlobalCenterGuard:
         self.locked = True
 
 
-@dataclass
-class Paths:
-    """File/dir paths relevant to one protein."""
-    pdb_id: str
-    pdb_path: str
-    nolig_pdb_path: str
-    ligand_output_dir: Path
-    ligands_mol2_dir: Path
-    prepped_ligands_dir: Path
-    cleaned_pdb_path: Path
-    receptor_pdbqt_path: Path
+# >>> PATHS CLASS START
+Paths = RouterPaths
+# >>> PATHS CLASS END
 
 
 def norm(p: str | Path) -> str:
@@ -403,7 +399,7 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
                         # Search by basename(s) anywhere under the global library root
                         for bn in basenames:
                             for p in global_root.rglob(bn):
-                                logger.info(f"[single:name] '{selector}' → {bn} → {p}")
+                                logger.info(f"[single:name] '{selector}' ? {bn} ? {p}")
                                 return p
                 except Exception as _e:
                     logger.debug(f"[single:name] mapping search skipped: {_e}")
@@ -459,7 +455,7 @@ def _load_fda_name_map(cfg: Dict, logger: logging.Logger) -> dict[str, set[str]]
                     continue
                 base = os.path.basename(path)
 
-                # “single” name fields
+                # "single" name fields
                 singles = [
                     row.get("display_name", ""),
                     row.get("generic_name", ""),
@@ -695,43 +691,9 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
 
 
 
-def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
-    pdb_id = base_id.upper()  # keep consistent casing
-    root = Path(cfg["OUTPUT_DIR"]) / pdb_id  # e.g., processed_pdbs/1IEP
-
-    # Canonical subfolders
-    raw_dir      = root / "raw"
-    lig_raw_dir  = root / "ligands_raw"
-    nolig_dir    = root / "nolig"
-    receptor_dir = root / "receptor"
-    work_dir     = root / "work"
-
-    # Ensure they exist
-    for d in (raw_dir, lig_raw_dir, nolig_dir, receptor_dir, work_dir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    # Inputs / outputs
-    pdb_path           = os.path.join(cfg["INPUT_DIR"], pdb_file)
-    nolig_pdb_path     = str(nolig_dir / f"{pdb_id}_nolig.pdb")                 # intermediate nolig
-    cleaned_pdb_path   = receptor_dir / f"{pdb_id}_cleaned.pdb"                 # final cleaned PDB
-    receptor_pdbqt     = receptor_dir / f"{pdb_id}.pdbqt"                       # final receptor PDBQT
-    ligand_output_dir  = lig_raw_dir                                            # extracted controls
-    ligands_mol2_dir   = Path(cfg["LIGANDS_MOL2_DIR"]) / pdb_id
-    prepped_lig_dir    = Path(cfg["OUTPUT_LIGANDS_DIR"]) / pdb_id               # prepped .pdbqt library
-
-    prepped_lig_dir.mkdir(parents=True, exist_ok=True)
-    ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
-
-    return Paths(
-        pdb_id=pdb_id,
-        pdb_path=pdb_path,
-        nolig_pdb_path=nolig_pdb_path,
-        ligand_output_dir=ligand_output_dir,
-        ligands_mol2_dir=ligands_mol2_dir,
-        prepped_ligands_dir=prepped_lig_dir,
-        cleaned_pdb_path=cleaned_pdb_path,
-        receptor_pdbqt_path=receptor_pdbqt,
-    )
+# >>> MAKE_PATHS SHIM START
+# make_paths is imported from path_router above (legacy helper removed).
+# >>> MAKE_PATHS SHIM END
 
 
 # --------- control ligand lookup (prefer SDF > MOL2 > PDB; search ligands_raw + reference) ---------
@@ -825,7 +787,10 @@ def _fingerprint_stage(cfg: Dict,
 
 
 def _checkpoint_path(cfg: Dict, pdb_id: str, stage_name: str) -> Path:
-    return Path(cfg["DOCKED_DIR"]) / pdb_id / f".ckpt_{stage_name}.json"
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    return paths.docked_pdb_root() / f".ckpt_{stage_name}.json"
+    # >>> DOCKED PATHS PATCH END
 
 
 def checkpoint_should_skip(cfg: Dict,
@@ -866,7 +831,10 @@ def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
     try:
         if not cfg.get("AUDIT_JSON", True):
             return
-        out = Path(cfg["DOCKED_DIR"]) / pdb_id / "audit.json"
+        # >>> DOCKED PATHS PATCH START
+        paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        out = paths.docked_pdb_root() / "audit.json"
+        # >>> DOCKED PATHS PATCH END
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, indent=2))
     except Exception:
@@ -893,16 +861,18 @@ def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
 
 
 # ======================
-# Phase 1�5: Prep steps
+# Phase 1 5: Prep steps
 # ======================
 def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int, set]:
     malformed_log = paths.ligands_mol2_dir / "malformed_ligands.txt"
     if malformed_log.exists():
         malformed_log.unlink()
 
+    # >>> EXTRACT LIGANDS PATH PATCH START
     ligands_dict, _ = extract_and_remove_ligands(
-        paths.pdb_path, paths.nolig_pdb_path, str(paths.ligand_output_dir)
+        str(paths.input_pdb_path), str(paths.nolig_pdb_path), str(paths.ligand_output_dir)
     )
+    # >>> EXTRACT LIGANDS PATH PATCH END
     logger.info(f"Extracted {len(ligands_dict)} ligands -> {paths.ligand_output_dir}")
 
     control_stems = set()
@@ -918,21 +888,27 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     from distutils.util import strtobool
 
     force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
+    # >>> RECEPTOR PATHS PATCH START
+    variant = None
+    ph_token = None
+    cleaned_pdb_path = paths.receptor_cleaned_pdb(variant)
+    receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
+    # >>> RECEPTOR PATHS PATCH END
     logger.info(
         f"FORCE_REPROCESS={force_reprocess} | "
-        f"cleaned_exists={paths.cleaned_pdb_path.exists()} "
-        f"receptor_exists={paths.receptor_pdbqt_path.exists()}"
+        f"cleaned_exists={cleaned_pdb_path.exists()} "
+        f"receptor_exists={receptor_pdbqt_path.exists()}"
     )
 
-    if paths.cleaned_pdb_path.exists() and paths.receptor_pdbqt_path.exists() and not force_reprocess:
+    if cleaned_pdb_path.exists() and receptor_pdbqt_path.exists() and not force_reprocess:
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
         try:
-            if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)) and not receptor_sanity_check(str(paths.receptor_pdbqt_path)):
+            if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)) and not receptor_sanity_check(str(receptor_pdbqt_path)):
                 logger.warning("Receptor sanity check failed (cached receptor).")
                 return None, None
         except Exception as _e:
             logger.warning(f"Receptor sanity check skipped due to error: {_e}")
-        return norm(paths.cleaned_pdb_path), norm(paths.receptor_pdbqt_path)
+        return norm(cleaned_pdb_path), norm(receptor_pdbqt_path)
 
     result = automate_protein_prep.main(str(paths.nolig_pdb_path))
     if not result or not isinstance(result, tuple) or len(result) != 2:
@@ -942,11 +918,11 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     cleaned_pdb, receptor_pdbqt = result
 
     try:
-        if Path(receptor_pdbqt).resolve() != paths.receptor_pdbqt_path.resolve():
+        if Path(receptor_pdbqt).resolve() != receptor_pdbqt_path.resolve():
             from shutil import copy2
-            paths.receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
-            copy2(receptor_pdbqt, paths.receptor_pdbqt_path)
-            receptor_pdbqt = str(paths.receptor_pdbqt_path)
+            receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
+            copy2(receptor_pdbqt, receptor_pdbqt_path)
+            receptor_pdbqt = str(receptor_pdbqt_path)
     except Exception as e:
         logger.warning(f"Could not relocate receptor PDBQT: {e}")
 
@@ -1021,7 +997,7 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
             d = _dist(coords[i], coords[j])
             if d > max_delta: max_delta = d
 
-    logger.info(f"[control-centers] n={len(coords)} maxΔ={max_delta:.2f}Å policy={policy}")
+    logger.info(f"[control-centers] n={len(coords)} max?={max_delta:.2f}A policy={policy}")
 
     # single-control or simple policies
     if len(coords) == 1:
@@ -1043,7 +1019,7 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
         return c, (24.0,24.0,24.0)
 
     if policy == "average_when_close":
-        # far apart → fall back to first per spec
+        # far apart ? fall back to first per spec
         center = coords[0]
         logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
         return center, (24.0,24.0,24.0)
@@ -1151,7 +1127,7 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
             except Exception:
                 rmsd = float("inf")
         e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
-        logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}Å score={e_print if e_print is not None else float('nan')} kcal/mol")
+        logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
 
         if _math.isfinite(rmsd):
             if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
@@ -1233,7 +1209,7 @@ def detect_pocket(cleaned_pdb: str,
                 d = float((dx*dx + dy*dy + dz*dz) ** 0.5)
                 if d > dmax: dmax = d
     policy = "first" if ctrl_files else "p2rank"
-    logger.info("[control-centers] n=%d maxΔ=%.2f Å policy=%s", len(ctrl_files), dmax, policy)
+    logger.info("[control-centers] n=%d max?=%.2f A policy=%s", len(ctrl_files), dmax, policy)
 
     # Back-compat (read-only): if none found, check legacy sibling <PDB>_NOLIG/ligands_raw
     if not ctrl_files:
@@ -1420,7 +1396,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         import json as _json, ast as _ast
         if isinstance(m, dict):
             return {str(k).upper(): str(v) for k, v in m.items()}
-        # try string or “dict-like” objects
+        # try string or "dict-like" objects
         s = str(m).strip()
         if not s:
             return {}
@@ -1564,6 +1540,10 @@ def run_one_stage(
 
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     max_workers = int(cfg["MAX_PARALLEL_JOBS"])
+    # >>> DOCKED PATHS PATCH START
+    variant = None
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> DOCKED PATHS PATCH END
 
     scores: Dict[str, float] = {}
     validated_ligands: List[str] = []
@@ -1633,7 +1613,7 @@ def run_one_stage(
                 logger=logger
             )
 
-            logger.info("[control-redock] lig=%s rmsd=%.2f Å score=%.2f",
+            logger.info("[control-redock] lig=%s rmsd=%.2f A score=%.2f",
                         lig_name, (rmsd_val if rmsd_val is not None else float('nan')), float(score_val))
 
             if ok:
@@ -1902,7 +1882,7 @@ def run_one_stage(
                                 fb_pose, new_c, _bs, _ch = attempt_fallback_recenter(
                                     fallback_ligands={lig: out_path},
                                     receptor_pdbqt=receptor_pdbqt,
-                                    docking_dir=os.path.join(cfg['DOCKED_DIR'], pdb_id),
+                                    docking_dir=str(paths.docked_pdb_root()),
                                     stage_name=stage_retry2["name"],
                                     pocket_center=center,
                                     logger=logger,
@@ -2042,11 +2022,14 @@ def early_recenter_decision(
             logger.warning("Early recenter max attempts reached; proceeding without recenter.")
             return False, center, box_size, [], attempts_used
 
-        logger.warning(f"Early recenter trigger: far_ratio={far_ratio:.2f}, median={med_dist:.1f} �, valid=0 -> recentering.")
+        logger.warning(f"Early recenter trigger: far_ratio={far_ratio:.2f}, median={med_dist:.1f}  , valid=0 -> recentering.")
+        # >>> DOCKED PATHS PATCH START
+        paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        # >>> DOCKED PATHS PATCH END
         fb_pose, new_center, _best_score, _chosen = attempt_fallback_recenter(
             fallback_ligands=raw_docked,
             receptor_pdbqt=receptor_pdbqt,
-            docking_dir=os.path.join(cfg['DOCKED_DIR'], pdb_id),
+            docking_dir=str(paths.docked_pdb_root()),
             stage_name="stage1",
             pocket_center=center,
             logger=logger,
@@ -2083,7 +2066,7 @@ def select_ligands_for_next(
 
     pct = schedule[i + 1] if i + 1 < len(schedule) else 0.01
 
-    # Use provided base if given (e.g., Stage1 pool size) — otherwise fall back to valid-count
+    # Use provided base if given (e.g., Stage1 pool size) -- otherwise fall back to valid-count
     pool_n = base_pool_n if (base_pool_n is not None) else len(scores)
 
     # Select K by the base pool, but cap at the number of valid scores available
@@ -2138,10 +2121,13 @@ def fallback_recentering_if_empty(
         return False, center, box_size, []
 
     logger.warning(f"No valid ligands in {stage_name}. Attempting fallback recentering...")
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> DOCKED PATHS PATCH END
     fb_pose, new_center, _best_score, _chosen_lig = attempt_fallback_recenter(
         fallback_ligands=raw_docked_ligands,
         receptor_pdbqt=receptor_pdbqt,
-        docking_dir=os.path.join(cfg["DOCKED_DIR"], pdb_id),
+        docking_dir=str(paths.docked_pdb_root()),
         stage_name=stage_name,
         pocket_center=center,
         logger=logger,
@@ -2387,7 +2373,7 @@ class CenterSelector:
 
 
 # ======================
-# Phase 7–8: Finalization
+# Phase 7-8: Finalization
 # ======================
 def final_pose_validation_and_screenshots(
         cfg: Dict,
@@ -2404,7 +2390,12 @@ def final_pose_validation_and_screenshots(
     if not validated_ligands_last:
         return
 
+    # >>> DOCKED PATHS PATCH START
+    variant = None
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> DOCKED PATHS PATCH END
     last_stage = stages[-1]["name"]
+    stage_dir = paths.docked_stage_dir(variant, last_stage)
     final_surface = extract_surface_atoms(pdbqt_path=receptor_pdbqt, center=center)
 
     if docking_mode == "polypharmacology":
@@ -2414,9 +2405,9 @@ def final_pose_validation_and_screenshots(
         logger.info(f"[Polypharmacology] Selected top {len(validated_ligands_last)} ligands for images/validation.")
 
     for lig in validated_ligands_last:
-        out_path = Path(cfg["DOCKED_DIR"]) / pdb_id / last_stage / f"{Path(lig).stem}_{last_stage}.pdbqt"
+        out_path = stage_dir / f"{Path(lig).stem}_{last_stage}.pdbqt"
         if not out_path.exists():
-            logger.warning(f"Pose file not found for {os.path.basename(lig)} — likely filtered earlier.")
+            logger.warning(f"Pose file not found for {os.path.basename(lig)} -- likely filtered earlier.")
             continue
         try:
             filter_and_rewrite_poses_by_rmsd(
@@ -2448,9 +2439,9 @@ def final_pose_validation_and_screenshots(
         try:
             import subprocess
             top = validated_ligands_last[0]
-            pose = Path(cfg["DOCKED_DIR"]) / pdb_id / last_stage / f"{Path(top).stem}_{last_stage}.pdbqt"
+            pose = stage_dir / f"{Path(top).stem}_{last_stage}.pdbqt"
             if pose.exists():
-                out_prefix = Path(cfg["DOCKED_DIR"]) / pdb_id / "top_pose"
+                out_prefix = paths.docked_pdb_root() / "top_pose"
                 out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
                 # -- PyMOL screenshot block (Option A: -r + -d python) --
@@ -2480,17 +2471,24 @@ def final_pose_validation_and_screenshots(
 def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str) -> str:
     """Build the expected pose path for a ligand at a given stage."""
     from pathlib import Path
-    return str(Path(csv_cfg["DOCKED_DIR"]) / pdb_id / stage_name / f"{Path(lig_path).stem}_{stage_name}.pdbqt")
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(csv_cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    stage_dir = paths.docked_stage_dir(None, stage_name)
+    return str(stage_dir / f"{Path(lig_path).stem}_{stage_name}.pdbqt")
+    # >>> DOCKED PATHS PATCH END
 
 
 def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, Dict]]) -> str:
     import csv, math
 
-    dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
-    os.makedirs(dock_dir, exist_ok=True)
+    # >>> DOCKED PATHS PATCH START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    dock_dir = paths.docked_pdb_root()
+    dock_dir.mkdir(parents=True, exist_ok=True)
+    # >>> DOCKED PATHS PATCH END
 
     # --- Wide summary (unchanged shape) ---
-    csv_out_wide = os.path.join(dock_dir, "docking_score_summary.csv")
+    csv_out_wide = str(dock_dir / "docking_score_summary.csv")
     flat = {}
     for stage_name, stage_map in score_history.items():
         flat[stage_name] = {}
@@ -2504,7 +2502,7 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
     write_score_summary_to_csv(flat, output_path=csv_out_wide)
 
     # --- Long format with self_rmsd added ---
-    csv_out_long = os.path.join(dock_dir, "docking_score_long.csv")
+    csv_out_long = str(dock_dir / "docking_score_long.csv")
     with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd", "pains_flag"])
@@ -2638,20 +2636,20 @@ def validate_ligand(
 ) -> bool:
     """
     Validate ligand docking.
-      • If crystal structure available → use redocking RMSD (hard gate).
-      • Otherwise (non-controls) → self-RMSD is *log-only* (never reject).
+      * If crystal structure available ? use redocking RMSD (hard gate).
+      * Otherwise (non-controls) ? self-RMSD is *log-only* (never reject).
     """
     if crystal_path and Path(crystal_path).exists():
         redock_rmsd = compute_rmsd(crystal_path, docked_path)
         if logger:
             sr = f"{self_rmsd:.2f}" if isinstance(self_rmsd, (int, float)) else "n/a"
-            logger.info(f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} Å, self_RMSD={sr}")
+            logger.info(f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} A, self_RMSD={sr}")
         if redock_rmsd <= rmsd_thresh:
             return True
         else:
             if logger:
                 logger.warning(
-                    f"[validate] {ligand_name}: redocking failed (RMSD {redock_rmsd:.2f} Å > {rmsd_thresh:.2f})"
+                    f"[validate] {ligand_name}: redocking failed (RMSD {redock_rmsd:.2f} A > {rmsd_thresh:.2f})"
                 )
             return False
 
@@ -2662,7 +2660,7 @@ def validate_ligand(
         sr_val = None
     if logger:
         sr_txt = f"{sr_val:.2f}" if isinstance(sr_val, (int, float)) else "n/a"
-        logger.info(f"[validate] {ligand_name}: self_RMSD={sr_txt} Å (LOG-ONLY)")
+        logger.info(f"[validate] {ligand_name}: self_RMSD={sr_txt} A (LOG-ONLY)")
     return True
 
 
@@ -2674,12 +2672,14 @@ import subprocess
 def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = base_id.replace("_cleaned", "")
-    logger = make_protein_logger(cfg["DOCKED_DIR"], pdb_id, cfg)
+    # >>> PATHS INIT START
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> PATHS INIT END
+
+    logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
 
-    paths = make_paths(cfg, base_id, pdb_file)
-
-    # 1) Extract ligands → produce nolig PDB
+    # 1) Extract ligands ? produce nolig PDB
     _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
     ctrl_pdbqts: list[Path] = []
     for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
@@ -2731,7 +2731,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     if center is None:
         return
 
-    # Override control-box size from config (keeps existing 24 Å default)
+    # Override control-box size from config (keeps existing 24 A default)
     if center_source == "control":
         side = float(cfg.get("CONTROL_BOX_A", 24.0))
         box_size = (side, side, side)
@@ -2739,7 +2739,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # clamp initial box once to keep Vina happy (detect_pocket already caps P2Rank path)
     box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
     box_size = tuple(min(box_cap, float(s)) for s in box_size)
-    logger.info(f"Initial box clamped to {box_size} (cap={box_cap} Å)")
+    logger.info(f"Initial box clamped to {box_size} (cap={box_cap} A)")
 
     # explicit console breadcrumb so you don't need to open logs
     try:
@@ -2764,9 +2764,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             ha = _count_heavy_atoms_from_pdbqt(hit)
             heavy_atom_counts = {str(hit): ha}
             pains_flags = {}
-            logger.info(f"[single] Active → docking only: {hit.name} (heavy={ha})")
+            logger.info(f"[single] Active ? docking only: {hit.name} (heavy={ha})")
         else:
-            logger.warning(f"[single] No match for selector '{cfg['_EFFECTIVE_SINGLE_LIGAND']}' — proceeding with normal pool")
+            logger.warning(f"[single] No match for selector '{cfg['_EFFECTIVE_SINGLE_LIGAND']}' -- proceeding with normal pool")
 
     # (skipped in single-ligand mode)
     if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
@@ -2844,7 +2844,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     if Path(l).stem.split("_stage")[0].lower() in ctrl_stems_lower]
 
     if not present_ctrls:
-        logger.warning("[Controls] No control ligands present in Stage1 ligand list — "
+        logger.warning("[Controls] No control ligands present in Stage1 ligand list -- "
                        "self-RMSD/locking will not be possible. (Check prep errors above.)")
     if not ligands:
         logger.warning("No valid ligands after filtering; skipping protein.")
@@ -2895,7 +2895,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         if i == 0 and ctrls and non_ctrls:
             logger.info(f"Stage1 two-wave: {len(ctrls)} controls first, then {len(non_ctrls)} others.")
 
-            # Wave A — controls only
+            # Wave A -- controls only
             s1, v1, d1, rd1, inv1 = run_one_stage(
                 cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
                 ctrls, logger, retry_mgr, control_lookup
@@ -2933,13 +2933,13 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 guard.lock()
                 logger.info(
                     "[CONTROL-LOCK] Early lock from controls-only wave "
-                    f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} Å); "
+                    f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} A); "
                     "future center switches disabled."
                 )
 
             # (Optional) reuse your existing qualified-control locking gate here using s1/v1/rd1.
 
-            # Wave B — non-controls, using (possibly) updated/locked center
+            # Wave B -- non-controls, using (possibly) updated/locked center
             s2, v2, d2, rd2, inv2 = run_one_stage(
                 cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
                 non_ctrls, logger, retry_mgr, control_lookup
@@ -2969,12 +2969,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             return stem in {s.lower() for s in control_stems}
 
         control_anchor_hit = any(_is_control(lig) for lig in validated)
-        # === Confidence‑gated lock when a validated control anchors the site ===
+        # === Confidence-gated lock when a validated control anchors the site ===
         # Preconditions already satisfied here:
-        #  - controls in `validated` passed self‑RMSD (run_one_stage demotes failures)
+        #  - controls in `validated` passed self-RMSD (run_one_stage demotes failures)
         # Confidence criteria we add:
-        #  (a) control score ≤ CONTROL_LOCK_SCORE_MAX  (kcal/mol; negative is better)
-        #  (b) centroid of the control's best pose is close to current center (≤ CONTROL_LOCK_CENTER_MAX_DIST Å)
+        #  (a) control score = CONTROL_LOCK_SCORE_MAX  (kcal/mol; negative is better)
+        #  (b) centroid of the control's best pose is close to current center (= CONTROL_LOCK_CENTER_MAX_DIST A)
         #  (c) at least CONTROL_LOCK_MIN_HITS such controls
         lock_score_max = float(cfg.get("CONTROL_LOCK_SCORE_MAX", float("inf")))
         lock_min_hits = int(cfg.get("CONTROL_LOCK_MIN_HITS", 1))
@@ -3053,7 +3053,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         except Exception as e:
             logger.warning(f"CenterSelector failed gracefully: {e}")
 
-        # Stage-1 early recenter / expand box — skip if promoted or control anchored
+        # Stage-1 early recenter / expand box -- skip if promoted or control anchored
         if not promoted_this_stage:
             restart, center, box_size, redo_ligands, recenter_attempts = early_recenter_decision(
                 i, scores, distances, box_size, center, stage1_original, recenter_attempts, params,
@@ -3075,7 +3075,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     min_box = float(cfg.get("ADAPTIVE_SHRINK_MIN_BOX", 14.0))
                     new_box = tuple(max(min_box, s - dec) for s in box_size)
                     if new_box != box_size:
-                        logger.info(f"Adaptive shrink: median dist {med:.2f} Å -> box {box_size} -> {new_box}")
+                        logger.info(f"Adaptive shrink: median dist {med:.2f} A -> box {box_size} -> {new_box}")
                         box_size = new_box
         except Exception as _e:
             logger.warning(f"Adaptive shrink skipped: {_e}")
@@ -3227,14 +3227,14 @@ def main() -> None:
     cfg.setdefault("CENTER_MODE", "control-first")  # ["control-first","hybrid","library-first"]
     cfg.setdefault("CONTROL_BLACKLIST", "GOL,EDO,PG4,MPD,ACT,SO4,PO4,CL,NA,CA")
     cfg.setdefault("CONTROL_MIN_HEAVY_ATOMS", 10)
-    cfg.setdefault("CONTROL_ANCHOR_MIN_VALID_RATE", 0.10)  # if current cluster has control hits + ≥10% valid, anchor
+    cfg.setdefault("CONTROL_ANCHOR_MIN_VALID_RATE", 0.10)  # if current cluster has control hits + =10% valid, anchor
     cfg.setdefault("ALLOW_SWITCH_FROM_CONTROL", True)
     cfg.setdefault("REQUIRE_CONTROL_FAILURE_TO_SWITCH", False)
     cfg.setdefault("SWITCH_AWAY_FROM_CONTROL_MIN_BOOST", 2.5)  # kcal/mol median boost needed to leave control
     # Optional lock score gate (kcal/mol). Use a large positive number (or remove) to lock on RMSD alone.
     cfg.setdefault("CONTROL_LOCK_SCORE_MAX", -6.0)
-    cfg.setdefault("CONTROL_LOCK_MIN_HITS", 1)  # require ≥ this many validated controls
-    cfg.setdefault("CONTROL_LOCK_CENTER_MAX_DIST", 4.0)  # Å; control centroid must be within this of center
+    cfg.setdefault("CONTROL_LOCK_MIN_HITS", 1)  # require = this many validated controls
+    cfg.setdefault("CONTROL_LOCK_CENTER_MAX_DIST", 4.0)  # A; control centroid must be within this of center
 
     # clustering + switching thresholds
     cfg.setdefault("CLUSTER_EPS_ANG", 3.5)
@@ -3304,7 +3304,7 @@ def main() -> None:
         hits = [nid for nid in req if nid in id_index]
         miss = [nid for nid in req if nid not in id_index]
 
-        print(f"[filter.proteins] mode=on requested={len(req)} present={len(hits)} missing={len(miss)} → {hits}")
+        print(f"[filter.proteins] mode=on requested={len(req)} present={len(hits)} missing={len(miss)} ? {hits}")
         for m in miss:
             print(f"WARNING: requested PDB '{m}' not found under INPUT_DIR={cfg['INPUT_DIR']} or was excluded (_nolig).")
 
@@ -3316,7 +3316,7 @@ def main() -> None:
         pdb_files = [id_index[nid] for nid in hits]
         print("Selected proteins (Specified Proteins Mode): " + ", ".join(hits))
     else:
-        print(f"[filter.proteins] mode=off requested=0 present={len(pdb_files)} missing=0 → []")
+        print(f"[filter.proteins] mode=off requested=0 present={len(pdb_files)} missing=0 ? []")
 
 
 
@@ -3348,7 +3348,7 @@ def main() -> None:
                 else:
                     skipped.append(f)
             if skipped:
-                # Print short list of IDs we’re skipping so it’s obvious in logs
+                # Print short list of IDs we're skipping so it's obvious in logs
                 skipped_ids = sorted({(_norm_pdb_id(x) or x) for x in skipped})
                 print(
                     f"[test-mode] Skipping {len(skipped)} protein(s) not in TEST_LIBRARY_MAP: {', '.join(skipped_ids[:20])}" +

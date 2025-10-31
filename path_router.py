@@ -10,14 +10,73 @@ from typing import Dict, Optional
 # ---------------------------
 # Helpers
 # ---------------------------
+from typing import Iterable  # already imported Optional above; Iterable is harmless if unused elsewhere
+
+def _canon(val: Optional[str]) -> str:
+    """
+    Canonicalize a string for loose comparisons:
+    - lowercased
+    - remove spaces, dashes, underscores
+    - keep only alphanumerics
+    """
+    if val is None:
+        return ""
+    s = str(val).lower()
+    s = s.replace(" ", "").replace("-", "").replace("_", "")
+    return "".join(ch for ch in s if ch.isalnum())
+
+def expand_variants(mode: Optional[str]) -> list[Optional[str]]:
+    """
+    Expand a user/config 'mode' into concrete variants to iterate.
+
+    Returns:
+      - [None]          for legacy/no-variant (mode None/"", or strings like "none"/"legacy"/"null")
+      - ["APO"]         for "apo"
+      - ["HOLO"]        for "holo"
+      - ["APO","HOLO"]  for "apo_vs_holo" (any loose spelling like "apo vs holo", "apo-vs-holo", "both")
+
+    Notes:
+      * Single-variant builders (receptor_dir, receptor_cleaned_pdb, receptor_pdbqt, docked_variant_root,
+        docked_stage_dir, configs_stage_dir) should be called with concrete variants only (APO/HOLO/None).
+        If you have a multi-variant mode, call this function and iterate.
+    """
+    key = _canon(mode)
+    if key in {"", "none", "legacy", "null"}:
+        return [None]
+    if key == "apo":
+        return ["APO"]
+    if key == "holo":
+        return ["HOLO"]
+    if key in {"apovsholo", "both", "apoandholo"}:
+        return ["APO", "HOLO"]
+
+    # Fallback: treat odd casing like "Apo" or "Holo"
+    v = _norm_variant(mode)
+    return [v] if v is not None else [None]
+
+
 def _norm_variant(variant: Optional[str]) -> Optional[str]:
-    """Return 'APO'|'HOLO' or None if not provided (back-compat: no-variant mode)."""
-    if not variant:
+    """
+    Normalize a *single* variant:
+      - returns "APO" | "HOLO" | None
+      - strings like "none"/"legacy"/"null" are treated as None
+      - raises on multi-variant modes (e.g., "apo_vs_holo") to avoid ambiguity in single-variant builders
+    """
+    if variant is None:
         return None
-    v = str(variant).strip().upper()
-    if v in {"APO", "HOLO"}:
-        return v
+    key = _canon(variant)
+    if key in {"", "none", "legacy", "null"}:
+        return None
+    if key == "apo":
+        return "APO"
+    if key == "holo":
+        return "HOLO"
+    if key in {"apovsholo", "both", "apoandholo"}:
+        raise ValueError(
+            "variant denotes a multi-variant mode; expand via expand_variants(mode) and iterate APO/HOLO."
+        )
     raise ValueError(f"variant must be APO|HOLO or None, got {variant!r}")
+
 
 # ---------------------------
 # Core dataclass
@@ -209,6 +268,9 @@ class Paths:
         d = (base / v / stage) if v else (base / stage)
         d.mkdir(parents=True, exist_ok=True)
         return d
+    def expand_variants(self, mode: Optional[str]) -> list[Optional[str]]:
+        # Delegate to the module-level function to keep a single source of truth
+        return expand_variants(mode)
 
 
 # ---------------------------
