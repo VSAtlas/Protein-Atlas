@@ -51,6 +51,10 @@ from chemdb.chem_alias_db import alias_list_for_het as _alias_list_for_het
 from pathlib import Path
 _SCRIPT_ROOT = Path(__file__).resolve().parent
 
+# >>> PATHS IMPORT START
+from path_router import make_paths, expand_variants
+# >>> PATHS IMPORT END
+
 DEFAULT_DOCKED_ROOT  = os.environ.get("DOCKED_DIR") \
     or os.environ.get("OUTPUT_DIR") \
     or str(_SCRIPT_ROOT / "docked")
@@ -83,7 +87,19 @@ DEFAULT_SCORE_TOL    = float(_cfg.get("SCORE_TOL_KCAL", DEFAULT_SCORE_TOL))
 DEFAULT_CENTER_TOL   = float(_cfg.get("CENTER_TOL_A",   DEFAULT_CENTER_TOL))
 DEFAULT_RMSD_TOL     = float(_cfg.get("RMSD_TOL_A",     DEFAULT_RMSD_TOL))
 DEFAULT_OUTDIR       = _cfg.get("BENCH_ANALYSIS_OUTDIR") or DEFAULT_OUTDIR
-VARIANT = (os.environ.get("APO_HOLO_MODE") or str(_cfg.get("APO_HOLO_MODE") or "holo")).strip().lower()
+
+VARIANT_MODE = (os.environ.get("APO_HOLO_MODE") or str(_cfg.get("APO_HOLO_MODE") or "holo")).strip()
+CURRENT_VARIANT_LABEL = VARIANT_MODE
+
+
+def _set_current_variant_label(variant: Optional[str]) -> None:
+    global CURRENT_VARIANT_LABEL
+    label = variant if variant not in (None, "") else VARIANT_MODE
+    CURRENT_VARIANT_LABEL = str(label or "")
+
+
+def _current_variant_label() -> str:
+    return str(CURRENT_VARIANT_LABEL or "")
 
 # -----------------------------
 # Filename patterns
@@ -969,7 +985,7 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
         ])
         for r in rows:
             w.writerow([
-                VARIANT,
+                _current_variant_label(),
                 r.pdb_id, r.pocket, r.control_id, r.control_het,
                 str(r.control_file), (str(r.control_prepped) if r.control_prepped else ""),
                 str(r.rdk_file), (str(r.rdk_prepped) if r.rdk_prepped else ""),
@@ -1165,7 +1181,7 @@ def write_details_html(
             ptop = _maybe(r.png_pair_top)
 
             fh.write("<tr>")
-            fh.write(f"<td>{_html_escape(VARIANT.upper())}</td>")
+            fh.write(f"<td>{_html_escape(_current_variant_label().upper())}</td>")
             fh.write(f"<td>{_html_escape(r.pdb_id)}</td>")
             fh.write(f"<td>{_html_escape(r.pocket)}</td>")
             fh.write(f"<td>{_html_escape(r.control_id)}</td>")
@@ -1360,77 +1376,130 @@ def run_analysis(
     since_epoch: Optional[float] = None,
     html_success_only: Optional[bool] = None,
 ) -> Tuple[Optional[Path], Optional[Path]]:
+    docked_root = Path(docked_root)
     if not docked_root.is_dir():
         print(f"[analysis] DOCKED root not found: {docked_root}")
         return None, None
 
     mapping = MappingIndex(mapping_csv if mapping_csv and Path(mapping_csv).is_file() else None)
 
-    all_rows: List[PairEval] = []
-    for pdb_dir in find_pdb_dirs(docked_root, only_pdb):
+    cfg = _cfg or {}
+    variant_mode = cfg.get("APO_HOLO_MODE") or os.environ.get("APO_HOLO_MODE") or VARIANT_MODE
+
+    any_rows = False
+    last_details_path: Optional[Path] = None
+    last_summary_path: Optional[Path] = None
+
+    pdb_dirs = find_pdb_dirs(docked_root, only_pdb)
+    for pdb_dir in pdb_dirs:
         pdb_id = pdb_dir.name.upper()
-        for pocket_dir in find_pocket_dirs(pdb_dir):
-            # Skip pockets explicitly marked as having no RDKs this run
-            sentinel = pocket_dir / ".rdk_skipped"
-            if sentinel.exists():
-                try:
-                    has_rdk = any(RDK_PAT.match(ch.name) for ch in pocket_dir.iterdir() if ch.is_file())
-                except Exception:
-                    has_rdk = False
-                if not has_rdk:
+
+        try:
+            # >>> PATHS INIT START
+            paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+            # >>> PATHS INIT END
+        except Exception as exc:
+            if DEBUG:
+                print(f"[debug] Skipping {pdb_id} due to path router error: {exc}")
+            continue
+
+        for variant_value in expand_variants(variant_mode):
+            variant = variant_value
+            ph_token: Optional[str] = None
+
+            # >>> ANALYSIS PATHS PATCH START
+            variant  = (variant or None)
+            ph_token = (ph_token or None)
+
+            docked_root_variant   = paths.docked_variant_root(variant)
+            stage_dir_s1  = paths.docked_stage_dir(variant, "stage1")
+            stage_dir_s2  = paths.docked_stage_dir(variant, "stage2")  # only if used
+
+            score_csv     = docked_root_variant / "docking_score_summary.csv"
+
+            analysis_dir  = docked_root_variant / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            # >>> ANALYSIS PATHS PATCH END
+
+            _set_current_variant_label(variant)
+
+            pocket_root = docked_root_variant
+            all_rows: List[PairEval] = []
+            for pocket_dir in find_pocket_dirs(pocket_root):
+                # Skip pockets explicitly marked as having no RDKs this run
+                sentinel = pocket_dir / ".rdk_skipped"
+                if sentinel.exists():
+                    try:
+                        has_rdk = any(RDK_PAT.match(ch.name) for ch in pocket_dir.iterdir() if ch.is_file())
+                    except Exception:
+                        has_rdk = False
+                    if not has_rdk:
+                        if DEBUG:
+                            print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} due to .rdk_skipped sentinel")
+                        continue
+                controls, rdks = load_controls_and_rdks(pocket_dir, mapping, since_epoch=since_epoch)
+                if not controls or not rdks:
                     if DEBUG:
-                        print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} due to .rdk_skipped sentinel")
+                        print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} (controls={len(controls)} rdks={len(rdks)})")
                     continue
-            controls, rdks = load_controls_and_rdks(pocket_dir, mapping, since_epoch=since_epoch)
-            if not controls or not rdks:
+                rows = evaluate_pairs(
+                    pdb_id,
+                    pocket_dir.name,
+                    pocket_dir,
+                    controls,
+                    rdks,
+                    score_tol=score_tol,
+                    center_tol=center_tol,
+                    rmsd_tol=rmsd_tol,
+                    include_identity=include_identity,
+                )
+                all_rows.extend(rows)
+
+            if not all_rows:
                 if DEBUG:
-                    print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} (controls={len(controls)} rdks={len(rdks)})")
+                    print(f"[debug] No matches for {pdb_id} variant={variant or 'legacy'}")
                 continue
-            rows = evaluate_pairs(
-                pdb_id,
-                pocket_dir.name,
-                pocket_dir,
-                controls,
-                rdks,
-                score_tol=score_tol,
-                center_tol=center_tol,
-                rmsd_tol=rmsd_tol,
-                include_identity=include_identity,
+
+            any_rows = True
+
+            out_root = out_dir if out_dir else analysis_dir
+            details_path = write_details_csv(out_root, all_rows, include_identity)
+            summary_path = write_summary_csv(out_root, all_rows, include_identity)
+            visual_path = write_details_visual_report(
+                out_root,
+                all_rows,
+                include_identity,
+                html_success_only=html_success_only,
+                since_epoch=since_epoch,
             )
-            all_rows.extend(rows)
 
-    if not all_rows:
+            max_points = 4 if include_identity else 3
+            by_pdb_best: Dict[str, int] = {}
+            for r in all_rows:
+                by_pdb_best[r.pdb_id] = max(by_pdb_best.get(r.pdb_id, 0), r.total_points)
+
+            passed_pdbs = sorted([p for p, v in by_pdb_best.items() if v == max_points])
+            near_pdbs   = sorted([p for p, v in by_pdb_best.items() if 1 < v < max_points])
+            fail0_pdbs  = sorted([p for p, v in by_pdb_best.items() if v == 0])
+
+            global_best = max(by_pdb_best.values()) if by_pdb_best else 0
+            best_pdbs   = sorted([p for p, v in by_pdb_best.items() if v == global_best])
+
+            print(f"[analysis] Wrote details CSV ({pdb_id}, {variant or 'legacy'}): {details_path}")
+            print(f"[analysis] Wrote summary CSV ({pdb_id}, {variant or 'legacy'}): {summary_path}")
+            print(f"[analysis] Wrote visual details ({pdb_id}, {variant or 'legacy'}): {visual_path}")
+            print(f"[analysis] Passed (=={max_points}): {len(passed_pdbs)} -> {', '.join(passed_pdbs) if passed_pdbs else '-'}")
+            print(f"[analysis] Near (2..{max_points-1}): {len(near_pdbs)} -> {', '.join(near_pdbs) if near_pdbs else '-'}")
+            print(f"[analysis] Fail (==0): {len(fail0_pdbs)} -> {', '.join(fail0_pdbs) if fail0_pdbs else '-'}")
+            print(f"[analysis] PDBs with BEST score = {global_best}: {', '.join(best_pdbs) if best_pdbs else '-'}")
+
+            last_details_path = details_path
+            last_summary_path = summary_path
+
+    if not any_rows:
         print("[analysis] No matches found. Are the bench_pocketX_single folders populated?")
-        return None, None
 
-    out_root = out_dir if out_dir else (docked_root / "_analysis")
-    details_path = write_details_csv(out_root, all_rows, include_identity)
-    summary_path = write_summary_csv(out_root, all_rows, include_identity)
-    visual_path = write_details_visual_report(out_root, all_rows, include_identity,
-                                              html_success_only=html_success_only,
-                                              since_epoch=since_epoch)
-
-    max_points = 4 if include_identity else 3
-    by_pdb_best: Dict[str, int] = {}
-    for r in all_rows:
-        by_pdb_best[r.pdb_id] = max(by_pdb_best.get(r.pdb_id, 0), r.total_points)
-
-    passed_pdbs = sorted([p for p, v in by_pdb_best.items() if v == max_points])
-    near_pdbs   = sorted([p for p, v in by_pdb_best.items() if 1 < v < max_points])
-    fail0_pdbs  = sorted([p for p, v in by_pdb_best.items() if v == 0])
-
-    global_best = max(by_pdb_best.values()) if by_pdb_best else 0
-    best_pdbs   = sorted([p for p, v in by_pdb_best.items() if v == global_best])
-
-    print(f"[analysis] Wrote details CSV: {details_path}")
-    print(f"[analysis] Wrote summary CSV: {summary_path}")
-    print(f"[analysis] Wrote visual details: {visual_path}")
-    print(f"[analysis] Passed (=={max_points}): {len(passed_pdbs)} -> {', '.join(passed_pdbs) if passed_pdbs else '-'}")
-    print(f"[analysis] Near (2..{max_points-1}): {len(near_pdbs)} -> {', '.join(near_pdbs) if near_pdbs else '-'}")
-    print(f"[analysis] Fail (==0): {len(fail0_pdbs)} -> {', '.join(fail0_pdbs) if fail0_pdbs else '-'}")
-    print(f"[analysis] PDBs with BEST score = {global_best}: {', '.join(best_pdbs) if best_pdbs else '-'}")
-
-    return details_path, summary_path
+    return last_details_path, last_summary_path
 
 
 def build_argparser() -> argparse.ArgumentParser:
