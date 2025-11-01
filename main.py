@@ -868,12 +868,16 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
     if malformed_log.exists():
         malformed_log.unlink()
 
-    # >>> EXTRACT LIGANDS PATH PATCH START
+    src_pdb = paths.input_pdb_path
+    nolig_dst = paths.nolig_pdb_path
+    ligands_dir = paths.ligand_output_dir
+
+    logger.debug("[extract.debug] in=%s nolig=%s ldir=%s", src_pdb, nolig_dst, ligands_dir)
+
     ligands_dict, _ = extract_and_remove_ligands(
-        str(paths.input_pdb_path), str(paths.nolig_pdb_path), str(paths.ligand_output_dir)
+        str(src_pdb), str(nolig_dst), str(ligands_dir)
     )
-    # >>> EXTRACT LIGANDS PATH PATCH END
-    logger.info(f"Extracted {len(ligands_dict)} ligands -> {paths.ligand_output_dir}")
+    logger.info(f"Extracted {len(ligands_dict)} ligands -> {ligands_dir}")
 
     control_stems = set()
     for ext in (".mol2", ".pdb", ".sdf"):
