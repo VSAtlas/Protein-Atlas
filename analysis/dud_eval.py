@@ -7,16 +7,16 @@ DUD/DUD-E style evaluator for Atlas docking outputs (filename-labeled actives/de
 Assumptions:
 - Input: docked/<PDB_ID>/docking_score_long.csv (per-POSE rows)
 - Lower score = better (Vina-style)
-- Ligand filename contains token 'active' or 'decoy' (case-insensitive), e.g.
+- Ligand filename contains token 'active/actives' or 'decoy/decoys' (case-insensitive)
     ABL1_active_0123.pdbqt  or  ABL1_decoy_0456.pdbqt
 - We derive labels from the filename; no chemdb/actives files are used.
 
 Outputs:
-- atlas/analysis/dud_eval/out/<PDB_ID>/
+- <OVERALL_DIR>/analysis/out/<PDB_ID>/
     - metrics.tsv
     - ef_curve.png, roc.png, pr.png, score_hist.png
-- atlas/analysis/dud_eval/out/summary.tsv (per-target table)
-- atlas/analysis/dud_eval/out/summary_macro.tsv (macro average over targets)
+- <OVERALL_DIR>/analysis/out/summary.tsv (per-target table)
+- <OVERALL_DIR>/analysis/out/summary_macro.tsv (macro average over targets)
 
 Metrics:
 - EF@{1,2,5,10}%
@@ -33,13 +33,24 @@ import argparse
 import math
 import os
 import re
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, roc_curve, precision_recall_curve, auc
+
+# >>> PATHS IMPORT START
+from pathlib import Path
+# --- ensure repo root is importable when running from analysis/ ---
+import sys
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from path_router import make_paths, expand_variants
+# >>> PATHS IMPORT END
+
 
 SCORE_CANDIDATES = [
     "score","docking_score","vina_score","affinity","pose_score",
@@ -87,8 +98,7 @@ def guess_ligfile_col(df: pd.DataFrame, override: Optional[str]) -> str:
     raise ValueError("Could not find ligand filename/path column. Use --lig-col.")
 
 # --- filename parsing: derive ligand_id root + is_active from filename ---
-
-TOKEN_RE = re.compile(r'(?<![A-Za-z0-9])(active|decoy)(?![A-Za-z0-9])', re.IGNORECASE)
+TOKEN_RE = re.compile(r'(?<![A-Za-z0-9])(active|decoy)s?(?![A-Za-z0-9])', re.IGNORECASE)
 POSE_TAIL_RE = re.compile(r'(?:_pose\d+|_mode\d+|_conf\d+|_rank\d+|_cluster\d+|_p\d+)$', re.IGNORECASE)
 EXT_RE = re.compile(r'\.(pdbqt|sdf|mol2)(?:\.gz)?$', re.IGNORECASE)
 
@@ -199,7 +209,7 @@ def evaluate_target(pdb_id: str,
     before = len(df)
     df = df.dropna(subset=["is_active"])
     if len(df) < before:
-        print(f"[INFO] {pdb_id}: dropped {before - len(df)} rows without 'active/decoy' token in filename")
+        print(f"[INFO] {pdb_id}: dropped {before - len(df)} rows without 'active(s)/decoy(s)' token in filename")
 
     # collapse to best score per ligand (min score)
     best = df.groupby("lig_id", as_index=False).agg(
@@ -304,11 +314,25 @@ def evaluate_target(pdb_id: str,
     pd.DataFrame([row]).to_csv(out_dir / "metrics.tsv", sep="\t", index=False)
     return pd.Series(row)
 
+def _load_default_cfg() -> Dict:
+    try:
+        from input_and_export_functions import load_config, validate_config
+    except Exception:
+        return {}
+
+    try:
+        cfg = load_config("config.txt") or {}
+        if cfg:
+            validate_config(cfg)
+        return cfg
+    except Exception:
+        return {}
+
 def main():
     ap = argparse.ArgumentParser(description="Atlas VS benchmark evaluator (filename-labeled actives/decoys).")
     ap.add_argument("--docked-root", type=str, default="docked",
                     help="Root folder (or a single target folder) to scan for docking_score_long.csv.")
-    ap.add_argument("--out-dir", type=str, default="atlas/analysis/dud_eval/out",
+    ap.add_argument("--out-dir", type=str, default="atlas/analysis/out",
                     help="Output root directory.")
     ap.add_argument("--lig-col", type=str, default=None,
                     help="Column containing ligand filename/path (auto-detected if omitted).")
@@ -318,20 +342,74 @@ def main():
     ap.add_argument("--logauc-lambda", type=float, default=1e-3)
     args = ap.parse_args()
 
+    cfg = _load_default_cfg()
     docked_root = Path(args.docked_root)
     out_root = Path(args.out_dir)
 
+    analysis_root = out_root
+    if cfg and "OVERALL_DIR" in cfg:
+        # >>> ANALYSIS OUT ROOT PATCH START
+        analysis_root = Path(cfg["OVERALL_DIR"]) / "analysis" / "out"
+        # >>> ANALYSIS OUT ROOT PATCH END
+    analysis_root.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_docking_csv(pdb_id: str, fallback_dir: Path) -> Optional[Path]:
+        if not cfg:
+            candidate = fallback_dir / "docking_score_long.csv"
+            return candidate if candidate.exists() else None
+
+        try:
+            # >>> PATHS INIT START
+            mode    = str(cfg.get("APO_HOLO_MODE", "")).strip()
+            variants = expand_variants(mode)  # returns [None] | ["APO","HOLO"]
+            paths   = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+            ph_token = cfg.get("PH_TOKEN") or None
+            # >>> PATHS INIT END
+        except Exception:
+            candidate = fallback_dir / "docking_score_long.csv"
+            return candidate if candidate.exists() else None
+
+        # >>> DOCKED INPUT PATHS PATCH START
+        docked_root_cfg = paths.docked_pdb_root()
+        summary_csv = paths.docking_score_summary_csv()
+        long_csv    = paths.docking_score_long_csv()
+        # >>> DOCKED INPUT PATHS PATCH END
+
+        if not docked_root_cfg.exists():
+            return None
+
+        if long_csv.exists():
+            return long_csv
+
+        for variant in variants:
+            variant_root = paths.docked_variant_root(variant)
+            candidate = variant_root / "docking_score_long.csv"
+            if candidate.exists():
+                return candidate
+
+        candidate = fallback_dir / "docking_score_long.csv"
+        if candidate.exists():
+            return candidate
+
+        # Touch summary path to exercise router (no fallback to summary file for eval)
+        summary_csv.exists()
+
+        return None
+
     # discover targets
     targets: List[Tuple[str, Path]] = []
+
     if (docked_root / "docking_score_long.csv").exists():
-        targets.append((docked_root.name, docked_root / "docking_score_long.csv"))
-    else:
+        csv_path = _resolve_docking_csv(docked_root.name, docked_root)
+        if csv_path is not None:
+            targets.append((docked_root.name, csv_path))
+    elif docked_root.is_dir():
         for sub in sorted(docked_root.iterdir()):
             if not sub.is_dir():
                 continue
-            csvp = sub / "docking_score_long.csv"
-            if csvp.exists():
-                targets.append((sub.name, csvp))
+            csv_path = _resolve_docking_csv(sub.name, sub)
+            if csv_path is not None:
+                targets.append((sub.name, csv_path))
 
     if not targets:
         print(f"[ERR] No docking_score_long.csv under {docked_root}")
@@ -342,7 +420,7 @@ def main():
         series = evaluate_target(
             pdb_id=pdb_id,
             csv_path=csvp,
-            out_dir=out_root / pdb_id,
+            out_dir=analysis_root / pdb_id,
             lig_col_cli=args.lig_col,
             score_col_cli=args.score_col,
             bedroc_alpha=args.bedroc_alpha,
@@ -356,16 +434,16 @@ def main():
         raise SystemExit(3)
 
     df = pd.DataFrame(rows).sort_values("pdb_id")
-    out_root.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_root / "summary.tsv", sep="\t", index=False)
+    analysis_root.mkdir(parents=True, exist_ok=True)
+    df.to_csv(analysis_root / "summary.tsv", sep="\t", index=False)
 
     metric_cols = [c for c in df.columns if c not in ("pdb_id","N","n_actives","actives_fraction")]
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
     pd.DataFrame([{"pdb_id":"macro_avg", **{k: macro[k] for k in metric_cols}}]) \
-      .to_csv(out_root / "summary_macro.tsv", sep="\t", index=False)
+      .to_csv(analysis_root / "summary_macro.tsv", sep="\t", index=False)
 
-    print(f"[OK] Wrote per-target results to: {out_root}")
-    print(f"[OK] Summary: {out_root / 'summary.tsv'}")
+    print(f"[OK] Wrote per-target results to: {analysis_root}")
+    print(f"[OK] Summary: {analysis_root / 'summary.tsv'}")
 
 if __name__ == "__main__":
     main()

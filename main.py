@@ -49,6 +49,7 @@ from pose_validation import (
 )
 from run_vina import run_docking_task, validate_all_poses
 # >>> PATHS IMPORT START
+from path_router import expand_variants
 from path_router import make_paths, Paths as RouterPaths
 # >>> PATHS IMPORT END
 def _prepare_run_logfile():
@@ -122,6 +123,79 @@ def _dbg_makedirs(name, *a, **k):
     return _orig_makedirs(name, *a, **k)
 os.makedirs = _dbg_makedirs
 
+# ======================
+# Apo vs Holo mode
+# ======================
+def _clean_mode_token(s: str | None) -> str:
+    s = (s or "").strip().lower()
+    # normalize separators
+    s = s.replace("-", "").replace("_", "")
+    return s
+
+def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
+    """
+    Single source of truth: ENV -> config -> default ('apo_vs_holo').
+    Returns (mode, variants). For legacy/no-variant mode, variants == [None].
+    """
+    env_raw = _clean_mode_token(os.environ.get("APO_HOLO_MODE"))
+    cfg_raw = _clean_mode_token(str(cfg.get("APO_HOLO_MODE", "")))
+    raw = env_raw or cfg_raw or "apovsholo"
+
+    if raw in {"apo"}:
+        return "apo", ["APO"]
+    if raw in {"holo"}:
+        return "holo", ["HOLO"]
+    if raw in {"none", "legacy", "null", "false"}:
+        return "legacy", [None]
+    if raw in {"apovsholo", "apovsholo", "apovsholo"} or raw == "apovsholo":
+        return "apo_vs_holo", ["HOLO", "APO"]  # HOLO-first aligns dedup 'keep' with HOLO
+    return "apo_vs_holo", ["HOLO", "APO"]
+
+
+
+# Put near other helpers
+def _variant_receptor_path(pdb_id: str, variant: str | None, cfg: dict) -> str | None:
+    # Return the cleaned receptor PDB path for a given variant if it exists, else None
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    rec = paths.receptor_cleaned_pdb(variant)
+    return str(rec) if rec.exists() else None
+
+
+def file_sha1(path: str) -> str:
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def delete_variant_trees(pdb_id: str, variant: str, cfg: dict) -> None:
+    # Delete processed receptor and docking trees for a specific variant (idempotent)
+    import shutil
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    proc_variant_root = paths.receptor_dir(variant).parent      # processed_pdbs/<PDB>/<VARIANT>/
+    dock_variant_root = paths.docked_variant_root(variant)      # docked/<PDB>/<VARIANT>/
+    for d in (proc_variant_root, dock_variant_root):
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+
+def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
+    """
+    If HOLO and APO cleaned receptors are byte-identical, delete HOLO and keep APO.
+    """
+    holo = _variant_receptor_path(pdb_id, "HOLO", cfg)
+    apo  = _variant_receptor_path(pdb_id, "APO",  cfg)
+    if not holo or not apo:
+        return
+    try:
+        if file_sha1(holo) == file_sha1(apo):
+            logging.info("[apo-vs-holo] identical receptors for %s; deleting HOLO (keeping APO)", pdb_id)
+            delete_variant_trees(pdb_id, "HOLO", cfg)
+    except Exception as e:
+        logging.warning("[apo-vs-holo] dedup check failed for %s: %s", pdb_id, e)
+
+    
+    
 # ======================
 # Data models & utilities
 # ======================
@@ -627,12 +701,15 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
     Create a logger writing to DOCKED_DIR/<pdb_id>/protein.log and also to console.
     Keeps logs per-protein and avoids duplicate handlers.
     """
+    base = Path(docked_dir)
+    # If caller already passed .../docked/<PDB>, don't append <PDB> again
+    log_dir = base if base.name.upper() == pdb_id.upper() else (base / pdb_id)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file_path = log_dir / "protein.log"
+
     logger = logging.getLogger(pdb_id)
     logger.setLevel(logging.DEBUG)
 
-    log_dir = os.path.join(docked_dir, pdb_id)
-    os.makedirs(log_dir, exist_ok=True)
-    log_file_path = os.path.join(log_dir, "protein.log")
 
     # Reset handlers to avoid duplicates if re-used
     if logger.hasHandlers():
@@ -864,23 +941,52 @@ def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
 # Phase 1 5: Prep steps
 # ======================
 def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int, set]:
+    """
+    Run crystallographic ligand extraction into processed_pdbs/<PDB>/ligands_raw/,
+    create/update nolig/<PDB>_nolig.pdb, and return (n_controls, control_stems).
+    Compatible with multiple legacy signatures of activesite.extract_and_remove_ligands().
+    """
+    from activesite import extract_and_remove_ligands  # authoritative extractor
+
+    # Ensure intermediate dirs exist and clear the malformed log for a fresh run
+    paths.ligand_output_dir.mkdir(parents=True, exist_ok=True)
+    paths.ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
     malformed_log = paths.ligands_mol2_dir / "malformed_ligands.txt"
     if malformed_log.exists():
         malformed_log.unlink()
 
-    # >>> EXTRACT LIGANDS PATH PATCH START
-    ligands_dict, _ = extract_and_remove_ligands(
-        str(paths.input_pdb_path), str(paths.nolig_pdb_path), str(paths.ligand_output_dir)
-    )
-    # >>> EXTRACT LIGANDS PATH PATCH END
-    logger.info(f"Extracted {len(ligands_dict)} ligands -> {paths.ligand_output_dir}")
+    src_pdb = paths.input_pdb_path
+    nolig_dst = paths.nolig_pdb_path
+    ligands_dir = paths.ligand_output_dir
 
-    control_stems = set()
+    logger.debug("[extract.debug] in=%s nolig=%s ldir=%s", src_pdb, nolig_dst, ligands_dir)
+
+    ligands_dict, _ = extract_and_remove_ligands(
+        str(src_pdb), str(nolig_dst), str(ligands_dir)
+    )
+    logger.info(f"Extracted {len(ligands_dict)} ligands -> {ligands_dir}")
+    try:
+        counts = {".pdb": 0, ".mol2": 0, ".sdf": 0}
+        samples = []
+        for ext in (".pdb", ".mol2", ".sdf"):
+            for p in paths.ligand_output_dir.glob(f"*{ext}"):
+                counts[ext] += 1
+                if len(samples) < 6:
+                    samples.append(p.name)
+        logger.info("[extract.audit] counts=%s samples=%s", counts, samples)
+    except Exception as e:
+        logger.debug("[extract.audit] listing failed: %s", e)
+
+    # Build control stems from what was actually written
+    control_stems: set[str] = set()
     for ext in (".mol2", ".pdb", ".sdf"):
         for p in paths.ligand_output_dir.rglob(f"*{ext}"):
             control_stems.add(Path(p).stem)
 
-    return len(ligands_dict), control_stems
+    logger.info(f"Extracted {len(control_stems)} ligands -> {paths.ligand_output_dir}")
+    return len(control_stems), control_stems
+
+
 
 
 def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
@@ -889,7 +995,8 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
     force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
     # >>> RECEPTOR PATHS PATCH START
-    variant = None
+    var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant = var if var else None
     ph_token = None
     cleaned_pdb_path = paths.receptor_cleaned_pdb(variant)
     receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
@@ -910,12 +1017,47 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             logger.warning(f"Receptor sanity check skipped due to error: {_e}")
         return norm(cleaned_pdb_path), norm(receptor_pdbqt_path)
 
-    result = automate_protein_prep.main(str(paths.nolig_pdb_path))
-    if not result or not isinstance(result, tuple) or len(result) != 2:
-        logger.warning("Protein prep failed.")
+    # Fresh prep path: clean PDB then create PDBQT into the variant-aware target
+    try:
+        cleaned_pdb = automate_protein_prep.clean_pdb(
+            pdb_file=str(paths.input_pdb_path),
+            output_root=str(Path(cfg["OUTPUT_DIR"]))  # processed_pdbs root; module lays out subdirs
+        )
+    except Exception as e:
+        logger.warning(f"Protein cleaning failed: {e}")
         return None, None
 
-    cleaned_pdb, receptor_pdbqt = result
+    if not cleaned_pdb or not Path(cleaned_pdb).exists():
+        logger.warning("Protein cleaning did not produce a cleaned PDB.")
+        return None, None
+
+    # Relocate cleaned PDB into the variant receptor dir if needed
+    try:
+        if Path(cleaned_pdb).resolve() != cleaned_pdb_path.resolve():
+            cleaned_pdb_path.parent.mkdir(parents=True, exist_ok=True)
+            from shutil import copy2
+            copy2(str(cleaned_pdb), str(cleaned_pdb_path))
+            cleaned_pdb = str(cleaned_pdb_path)
+        else:
+            cleaned_pdb = str(cleaned_pdb_path)
+    except Exception as e:
+        logger.warning(f"Could not relocate cleaned PDB: {e}")
+
+    # Generate receptor PDBQT directly at the variant-aware path
+    try:
+        ok = automate_protein_prep.run_prepare_receptor(
+            input_pdb=cleaned_pdb,
+            output_pdbqt=str(receptor_pdbqt_path),
+            cfg=cfg
+        )
+        receptor_pdbqt = str(receptor_pdbqt_path) if ok else None
+    except Exception as e:
+        logger.warning(f"Receptor PDBQT prep failed: {e}")
+        receptor_pdbqt = None
+
+    if not receptor_pdbqt or not Path(receptor_pdbqt).exists():
+        logger.warning("Receptor PDBQT was not created.")
+        return None, None
 
     try:
         if Path(receptor_pdbqt).resolve() != receptor_pdbqt_path.resolve():
@@ -970,13 +1112,16 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
 
     # discover crystal controls in preferred locations (current + legacy sibling)
     ctrl_pdbs = _find_control_pdbs(paths.ligand_output_dir)
+    logger.info(f"[control-redock] controls_found={len(ctrl_pdbs)} dir={paths.ligand_output_dir}")
     if not ctrl_pdbs:
         legacy = paths.ligand_output_dir.parent.parent / f"{paths.pdb_id}_NOLIG" / "ligands_raw"
         if legacy.exists():
             ctrl_pdbs = _find_control_pdbs(legacy)
 
     if not ctrl_pdbs:
+        logger.warning("[control-redock] No extracted control PDBs present; skipping redock.")
         return None, None  # let caller go to P2Rank directly
+
 
     policy = str(cfg.get("CONTROL_CENTER_POLICY", "best_redock")).lower().strip()
     thr = float(cfg.get("CONTROL_CENTER_CLOSE_MAX_A", 8.0))
@@ -1029,6 +1174,8 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
     # collect prepped control pdbqts (per-protein dir and global output dir)
     prepped_dirs = [paths.prepped_ligands_dir, _Path(str(cfg.get("OUTPUT_LIGANDS_DIR", ""))) / paths.pdb_id]
     cand_pdbqts = []
+    logger.info(f"[control-redock] search_prepped_dirs={[str(d) for d in prepped_dirs]}")
+
     seen = set()
     for root in prepped_dirs:
         if not root or not _Path(root).exists(): continue
@@ -1038,13 +1185,15 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
                 cand_pdbqts.append(p); seen.add(base)
 
     if not cand_pdbqts:
+        logger.warning("[control-redock] No prepped control PDBQTs found; redock impossible (will fall back).")
         return None, None
 
-    ex = int(cfg.get("CTRL_REDOCK_EXHAUSTIVENESS", 64))
+    ex = int(cfg.get("CTRL_REDOCK_EXHAUSTIVENESS", 24))
     nm = int(cfg.get("CTRL_REDOCK_NMODES", 9))
-    threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
+    threads_per_vina = int(cfg.get("THREADS_PER_VINA_CTRL", 8))  # control redock uses its own threads default=8
     vina_exe = str(cfg.get("VINA_EXE") or cfg.get("VINA_PATH") or "vina")
     obabel = str(cfg.get("OPENBABEL_PATH") or "obabel")
+
 
     best = None  # (rmsd, score, base, center_tuple)
 
@@ -1679,7 +1828,7 @@ def run_one_stage(
                 dynamic_ncols=True,
                 mininterval=0.2,
                 leave=True,
-                file=_stdout
+                file=sys.stdout,
             ) as pbar:
                 for fut in as_completed(futures):
                     lig, out_path = futures[fut]
@@ -2673,7 +2822,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = base_id.replace("_cleaned", "")
     # >>> PATHS INIT START
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=os.path.basename(pdb_file))
     # >>> PATHS INIT END
 
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
@@ -2681,6 +2830,19 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
     # 1) Extract ligands ? produce nolig PDB
     _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
+    # Ensure extracted crystal controls are prepped before control redock
+    try:
+        from prep_ligands import prep_ligands_from_pdb
+        prep_ligands_from_pdb(
+            ligand_output_dir=paths.ligand_output_dir,
+            ligands_mol2_dir=paths.ligands_mol2_dir,
+            prepped_ligands_dir=paths.prepped_ligands_dir,
+        )
+        logger.info("[Controls] Prepped extracted controls ahead of redock.")
+    except Exception as e:
+        logger.warning(f"[Controls] Prepping extracted controls failed: {e}")
+    
+    
     ctrl_pdbqts: list[Path] = []
     for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
         if root.exists():
@@ -2717,6 +2879,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         logger.debug(f"[control-centers] helper errored: {_e}")
     if sel_center is not None:
         center, box_size, center_source = sel_center, sel_box, "control"
+        logger.info(f"[control-redock] Using control-derived center {center} with box {box_size}")
     else:
         # P2Rank last resort (controls absent or all redocks failed)
         c2, b2 = detect_active_site(cleaned_pdb)
@@ -3363,10 +3526,36 @@ def main() -> None:
 
 
     start = time.time()
-    with tqdm(total=len(pdb_files), desc="Processing Proteins", unit="protein") as bar:
-        for pdb_file in pdb_files:
-            process_one_protein(cfg, pdb_file, stages, params)
-            bar.update(1)
+    mode, variants = resolve_apo_holo_mode(cfg)
+    logging.info(f"[apo-holo] resolved mode={mode} variants={variants} "
+                 f"env.APO_HOLO_MODE='{os.environ.get('APO_HOLO_MODE')}'")
+
+    from tqdm import tqdm as _tqdm
+    for variant in variants:
+        # Make variant visible to any module still reading env (legacy compatibility)
+        os.environ["APO_HOLO_VARIANT"] = "" if variant is None else str(variant).upper()
+        label = "legacy" if variant is None else str(variant).lower()
+        with _tqdm(
+                total=len(pdb_files),
+                desc=f"Processing Proteins ({label})",
+                unit="protein",
+                position=0,
+                dynamic_ncols=True,
+                mininterval=0.2,
+                leave=True,
+                file=sys.stdout
+        ) as bar:
+            cfg_v = cfg  # no per-variant mutation; variant is propagated via APO_HOLO_VARIANT env
+            for pdb_file in pdb_files:
+                process_one_protein(cfg_v, pdb_file, stages, params)
+                # Keep APO, delete HOLO if byte-identical (run after both variants exist)
+                if mode == "apo_vs_holo" and (variant == "HOLO"):
+                    pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
+                    try:
+                        dedup_identical_variants(pdb_id, cfg_v)
+                    except Exception as _e:
+                        logging.warning(f"[apo-vs-holo] dedup skipped for {pdb_id}: {_e}")
+                bar.update(1)
 
     elapsed_min = (time.time() - start) / 60.0
     print(f"\nAll proteins processed in {elapsed_min:.2f} minutes.")

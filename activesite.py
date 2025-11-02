@@ -10,6 +10,10 @@ from pathlib import Path
 import hashlib
 from typing import Iterable, Tuple, List
 
+# >>> PATHS IMPORT START
+from path_router import make_paths, expand_variants
+# >>> PATHS IMPORT END
+
 
 # Load config
 config = load_config()
@@ -608,6 +612,8 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
 
 def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     os.makedirs(ligands_dir, exist_ok=True)
+    logging.info("[extract] in=%s out=%s ldir=%s", pdb_path, output_cleaned_pdb, ligands_dir)
+
     ligands = defaultdict(list)
     ligand_coords = []  # collect all ligand atom coords for box calculation
     rules = get_atom_rules()
@@ -783,6 +789,15 @@ def detect_pocket(cleaned_pdb, logger):
         logger.warning("Active-site detection failed.")
     return center, box_size
 
+
+def _default_variant(cfg):
+    """Resolve a single variant preference from config/environment."""
+    mode = os.environ.get("APO_HOLO_MODE") or (cfg.get("APO_HOLO_MODE") if isinstance(cfg, dict) else None)
+    for v in expand_variants(mode):
+        return v
+    return None
+
+
 def prepare_receptor(cfg, paths, logger):
     """
     Run or reuse protein preparation to produce:
@@ -791,16 +806,35 @@ def prepare_receptor(cfg, paths, logger):
     Returns (cleaned_pdb_path_str, receptor_pdbqt_path_str) or (None, None) on failure.
     """
     from distutils.util import strtobool
-    force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
-    logger.info(f"FORCE_REPROCESS={force_reprocess} | "
-                f"exists(cleaned)={paths['cleaned_pdb_path'].exists()} "
-                f"exists(receptor)={paths['receptor_pdbqt_path'].exists()}")
+    variant = _default_variant(cfg)
+    ph_token = None
+    # >>> ACTIVE SITE PATHS PATCH START
+    variant  = (variant or None)
+    ph_token = (ph_token or None) if 'ph_token' in locals() else None
 
-    if paths["cleaned_pdb_path"].exists() and paths["receptor_pdbqt_path"].exists() and not force_reprocess:
+    receptor_cleaned   = paths.receptor_cleaned_pdb(variant)
+    receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
+
+    ligands_raw_dir  = paths.ligand_output_dir
+    p2rank_work_dir  = paths.work_dir / "p2rank"
+    pockets_json_out = p2rank_work_dir / "pockets.json"
+
+    ligands_raw_dir.mkdir(parents=True, exist_ok=True)
+    p2rank_work_dir.mkdir(parents=True, exist_ok=True)
+    # >>> ACTIVE SITE PATHS PATCH END
+
+    force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
+    logger.info(
+        f"FORCE_REPROCESS={force_reprocess} | "
+        f"exists(cleaned)={receptor_cleaned.exists()} "
+        f"exists(receptor)={receptor_pdbqt_path.exists()}"
+    )
+
+    if receptor_cleaned.exists() and receptor_pdbqt_path.exists() and not force_reprocess:
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
-        return norm(paths["cleaned_pdb_path"]), norm(paths["receptor_pdbqt_path"])
+        return norm(receptor_cleaned), norm(receptor_pdbqt_path)
     import automate_protein_prep
-    result = automate_protein_prep.main(str(paths["nolig_pdb_path"]))
+    result = automate_protein_prep.main(str(paths.nolig_pdb_path))
     if not result or not isinstance(result, tuple) or len(result) != 2:
         logger.warning("Protein prep failed.")
         return None, None
@@ -809,11 +843,11 @@ def prepare_receptor(cfg, paths, logger):
 
     # Ensure receptor lives in canonical PDBQT_DIR
     try:
-        if Path(receptor_pdbqt).resolve() != paths["receptor_pdbqt_path"].resolve():
+        if Path(receptor_pdbqt).resolve() != receptor_pdbqt_path.resolve():
             from shutil import copy2
-            paths["receptor_pdbqt_path"].parent.mkdir(parents=True, exist_ok=True)
-            copy2(receptor_pdbqt, paths["receptor_pdbqt_path"])
-            receptor_pdbqt = str(paths["receptor_pdbqt_path"])
+            receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
+            copy2(receptor_pdbqt, receptor_pdbqt_path)
+            receptor_pdbqt = str(receptor_pdbqt_path)
     except Exception as e:
         logger.warning(f"Could not relocate receptor PDBQT: {e}")
 
@@ -827,14 +861,14 @@ def extract_ligands(cfg, paths, logger):
     Extract and strip ligands from input PDB into clean PDB without ligands.
     Returns the ligand count.
     """
-    malformed_log = paths["ligands_mol2_dir"] / "malformed_ligands.txt"
+    malformed_log = paths.ligands_mol2_dir / "malformed_ligands.txt"
     if malformed_log.exists():
         malformed_log.unlink()
 
     ligands_dict, _ = extract_and_remove_ligands(
-        paths["pdb_path"], paths["nolig_pdb_path"], str(paths["ligand_output_dir"])
+        str(paths.input_pdb_path), str(paths.nolig_pdb_path), str(paths.ligand_output_dir)
     )
-    logger.info(f"Extracted {len(ligands_dict)} ligands → {paths['ligand_output_dir']}")
+    logger.info(f"Extracted {len(ligands_dict)} ligands → {paths.ligand_output_dir}")
     return len(ligands_dict)
 
 
@@ -859,20 +893,41 @@ def load_aliases():
     return get_atom_rules()
 
 def main(pdb_file):
-    base = os.path.splitext(pdb_file)[0]
-    if base.endswith("_cleaned"):
-        pdb_cleaned = base + ".pdb"  # already cleaned
-    else:
-        pdb_cleaned = base + "_cleaned.pdb"
-    temp_fixed_pdb = base + "_fixed.pdb"
     pdb_id = os.path.splitext(os.path.basename(pdb_file))[0]
-    ligands_dir = os.path.join("processed_pdbs", f"{pdb_id}_ligands")
-    try:
-        shutil.copyfile(pdb_file, temp_fixed_pdb)
-        logging.info(f"Copied PDB for fixing: {temp_fixed_pdb}")
-        fix_pdb_elements(temp_fixed_pdb)
 
-        ligands, ligand_coords = extract_and_remove_ligands(temp_fixed_pdb, pdb_cleaned, ligands_dir)
+    # >>> PATHS INIT START
+    paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    # >>> PATHS INIT END
+
+    variant = _default_variant(config)
+    ph_token = None
+    # >>> ACTIVE SITE PATHS PATCH START
+    variant  = (variant or None)
+    ph_token = (ph_token or None) if 'ph_token' in locals() else None
+
+    receptor_cleaned   = paths.receptor_cleaned_pdb(variant)
+    receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
+
+    ligands_raw_dir  = paths.ligand_output_dir
+    p2rank_work_dir  = paths.work_dir / "p2rank"
+    pockets_json_out = p2rank_work_dir / "pockets.json"
+    # >>> ACTIVE SITE PATHS PATCH END
+
+    receptor_cleaned.parent.mkdir(parents=True, exist_ok=True)
+    receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
+    ligands_raw_dir.mkdir(parents=True, exist_ok=True)
+    p2rank_work_dir.mkdir(parents=True, exist_ok=True)
+
+    pdb_cleaned = str(receptor_cleaned)
+    temp_fixed_pdb_path = paths.work_dir / f"{pdb_id}_fixed.pdb"
+    ligands_dir = ligands_raw_dir
+    try:
+        temp_fixed_pdb_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pdb_file, temp_fixed_pdb_path)
+        logging.info(f"Copied PDB for fixing: {temp_fixed_pdb_path}")
+        fix_pdb_elements(str(temp_fixed_pdb_path))
+
+        ligands, ligand_coords = extract_and_remove_ligands(str(temp_fixed_pdb_path), pdb_cleaned, str(ligands_dir))
 
         if ligands:
             logging.info(f"Ligands removed for {pdb_file}. Ranking ligands by contacts...")
@@ -885,7 +940,7 @@ def main(pdb_file):
                 logging.info(f"Top ligand by size: {top_ligand_key} with {len(top_lines)} atoms.")
                 top_ligand_lines = top_lines
 
-                ligand_output_dir = os.path.join(os.path.dirname(pdb_cleaned), f"{pdb_id}_ligands")
+                ligand_output_dir = str(ligands_dir)
                 os.makedirs(ligand_output_dir, exist_ok=True)
                 ligand_path = os.path.join(ligand_output_dir, f"{pdb_id}_top_ligand.pdb")
                 with open(ligand_path, 'w') as f:
@@ -926,7 +981,7 @@ def main(pdb_file):
 
     finally:
         try:
-            os.remove(temp_fixed_pdb)
-            logging.info(f"Temporary file removed: {temp_fixed_pdb}")
+            temp_fixed_pdb_path.unlink()
+            logging.info(f"Temporary file removed: {temp_fixed_pdb_path}")
         except OSError:
-            logging.warning(f"Could not delete temp file: {temp_fixed_pdb}")
+            logging.warning(f"Could not delete temp file: {temp_fixed_pdb_path}")

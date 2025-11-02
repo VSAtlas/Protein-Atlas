@@ -156,7 +156,23 @@ _ALLOWED_ENV_OVERRIDES = {
     "LOG_TOPICS", "LOG_LEVEL_FILE", "LOG_LEVEL_CONSOLE",
 
 }
-
+def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}"):
+    """Return the brace-balanced substring starting at the first open_char after start_idx."""
+    i = text.find(open_char, start_idx)
+    if i == -1:
+        return None
+    level = 0
+    j = i
+    while j < len(text):
+        c = text[j]
+        if c == open_char:
+            level += 1
+        elif c == close_char:
+            level -= 1
+            if level == 0:
+                return text[i:j+1]
+        j += 1
+    return None  # unbalanced
 def _parse_kv_config(path: Path) -> Dict[str, str]:
     """
     Lightweight key=value parser; allows comments starting with '#'.
@@ -212,6 +228,25 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
 
     # overlay config file
     file_cfg = _parse_kv_config(Path(config_path))
+    
+    # --- preserve multi-line TEST_LIBRARY_MAP block ---
+    try:
+        raw = file_cfg.get("TEST_LIBRARY_MAP")
+        if isinstance(raw, str):
+            s = raw.strip()
+            # If it looks like a dict but was truncated to one line, re-extract the full brace block
+            if s.startswith("{") and not s.endswith("}"):
+                txt = Path(config_path).read_text(encoding="utf-8", errors="ignore")
+                key_idx = txt.find("TEST_LIBRARY_MAP")
+                if key_idx != -1:
+                    block = _extract_brace_block(txt, key_idx, "{", "}")
+                    if block:
+                        file_cfg["TEST_LIBRARY_MAP"] = block
+
+    except Exception:
+        # Non-fatal: if anything goes wrong, keep the original single-line value
+        pass
+
     cfg.update(file_cfg)
 
     # overlay env vars (uppercased keys only)
@@ -313,17 +348,42 @@ def emit_vina_config(
     cpu_per_job: int,
     logger: logging.Logger | None = None,
 ):
-    run_dir = Path(cfg["CONFIG_RUN_DIR"])
-    conf_dir = run_dir / pdb_id / stage_name
-    conf_dir.mkdir(parents=True, exist_ok=True)
-    # GUARD: only .pdbqt ligands are allowed
-    if not str(ligand_path).lower().endswith(".pdbqt"):
-        raise ValueError(f"Ligand is not a .pdbqt file: {ligand_path}")
+    # Determine active variant from the per-pass env that main.py sets
+    var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
 
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+
+    # ---  define lig_base from ligand_path (fixes NameError) ---
+    from pathlib import Path
     lig_base = Path(ligand_path).stem
-    out_root = Path(cfg.get("DOCKED_DIR", Path(cfg["OVERALL_DIR"]) / "docked"))
-    out_path = out_root / pdb_id / stage_name / f"{lig_base}_{stage_name}.pdbqt"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Variant-aware config dir (prefer path_router helpers; fallback to old layout)
+    run_id = cfg["RUN_ID"]
+    if hasattr(paths, "configs_stage_dir"):
+        conf_dir = paths.configs_stage_dir(run_id, var, stage_name)
+    else:
+        # Fallback: configs/<RUN_ID>/<PDB>/<VARIANT>/<stage> (omit VARIANT if None)
+        conf_dir = Path(cfg["CONFIG_RUN_DIR"]) / pdb_id
+        conf_dir = (conf_dir / var / stage_name) if var else (conf_dir / stage_name)
+    conf_dir.mkdir(parents=True, exist_ok=True)
+
+    # Variant-aware Vina output dir (prefer helper; fallback to old layout)
+    if hasattr(paths, "docked_stage_dir"):
+        out_dir = paths.docked_stage_dir(var, stage_name)
+    else:
+        # Fallback: docked/<PDB>/<VARIANT>/<stage> (omit VARIANT if None)
+        root = paths.docked_pdb_root()  # expected to be a Path-like
+        out_dir = (root / var / stage_name) if var else (root / stage_name)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = out_dir / f"{lig_base}_{stage_name}.pdbqt"
+
+    if logger:
+        logger.debug(
+            "[emit_vina_config] variant=%r stage=%s lig_base=%s conf_dir=%s out_path=%s",
+            var, stage_name, lig_base, str(conf_dir), str(out_path)
+        )
+
 
     lines = [
         f"receptor = {receptor_pdbqt}",
@@ -515,9 +575,11 @@ def score_key(item):
     return s if rec.get("valid", False) else s + 1e-6
 
 def write_scores_csv(cfg, pdb_id, score_history):
-    protein_dock_dir = os.path.join(cfg["DOCKED_DIR"], pdb_id)
-    os.makedirs(protein_dock_dir, exist_ok=True)
-    csv_output_path = os.path.join(protein_dock_dir, "docking_score_summary.csv")
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+    variant_root = paths.docked_variant_root(var)
+    os.makedirs(variant_root, exist_ok=True)
+    csv_output_path = os.path.join(variant_root, "docking_score_summary.csv")
 
     flat_history = {}
     for stage_name, stage_map in score_history.items():
