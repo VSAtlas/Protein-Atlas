@@ -1468,7 +1468,7 @@ pains_catalog = FilterCatalog.FilterCatalog(params)
 def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
     """
     Gathers candidate ligands, keeps existing validation/PAINS logic, and
-    (NEW) filters the *non-control* pool to allowed library roots:
+    filters the *non-control* pool to allowed library roots:
 
       - TEST_MODE_ENABLE & TEST_LIBRARY_MAP (by pdb_id) -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
       - else -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
@@ -1565,15 +1565,33 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     # Build allowed non-control roots
     allowed_noncontrol_roots: list[Path] = []
-    if test_enable and pdb_id in test_map and cfg.get("OUTPUT_LIGANDS_DIR"):
-        allowed = Path(cfg["OUTPUT_LIGANDS_DIR"]) / test_map[pdb_id]
-        allowed_noncontrol_roots.append(allowed)
-        logger.info(f"[test-mode] {pdb_id}: restricting *non-controls* to {allowed}")
-    else:
-        if cfg.get("OUTPUT_LIGANDS_DIR"):
-            allowed = Path(cfg["OUTPUT_LIGANDS_DIR"]) / subdir_default
-            allowed_noncontrol_roots.append(allowed)
-            logger.info(f"[default] restricting *non-controls* to {allowed}")
+    roots: list[Path] = []
+    if cfg.get("OUTPUT_LIGANDS_DIR"):
+        base_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
+        default_root = base_root / subdir_default
+        roots = [default_root]
+        if test_enable and pdb_id in test_map:
+            test_root = base_root / test_map[pdb_id]
+            roots.insert(0, test_root)
+
+    deduped_roots: list[Path] = []
+    seen_keys: set[str] = set()
+    for r in roots:
+        key = str(r.resolve())
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped_roots.append(r)
+
+    allowed_noncontrol_roots.extend(deduped_roots)
+
+    logger.info(
+        "[fuel] pdb_id=%s test_mode=%s roots=%s"
+        % (
+            pdb_id,
+            str(test_enable).lower(),
+            ",".join(str(r.resolve()) for r in deduped_roots),
+        )
+    )
 
     # Always include extras (unchanged)
     for d in (extra_dirs.split(";") if extra_dirs else []):
@@ -1583,7 +1601,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     # Final audits (after list is populated)
     logger.info("[lib-roots] non-control roots = " + ", ".join(map(str, allowed_noncontrol_roots)))
-    logger.info(f"[lib-roots.map] pdb={pdb_id} test_enable={test_enable} hit={test_map.get(pdb_id, 'none')}")
 
 
     # Helper: path under root?
