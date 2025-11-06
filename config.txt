@@ -54,14 +54,22 @@ EARLY_RECENTER_MEDIAN_A=10.0
 ALLOW_BOX_EXPAND=True
 MAX_RECENTER_ATTEMPTS=1
 CONTROL_CENTER_POLICY = first | closest_to_p2rank_top | best_redock | average_when_close
+#NEED TO VERIFY THESE  DIFFERENT MODES WORK
 CONTROL_CENTER_CLOSE_MAX_A = 8.0
 
-REMOVE_WATERS = true
+REMOVE_WATERS = false
+#NOTE REMOVE WATERS = TRUE MEANS REMOVE ALL WATERS REGARDLESS OF POLICY
 KEEP_WATERS_WITHIN_A = 6.0     # only meaningful if REMOVE_WATERS=false or as a prefilter
-WATER_KEEP_POLICY = "near_center"  # near_center | near_controls | none
+WATER_KEEP_POLICY = "near_controls"  # near_center | near_controls | none
+#NOTE near center = center of active site, keep in mind
+# with active site recentering, this may not retain the exact waters you want if the site moves too much!!!!
+#CURRENTLY this value actually does nothing, but it will
 APO_HOLO_MODE = None
 # apo | holo | apo_vs_holo | None 
-
+CTRL_REDOCK_EXHAUSTIVENESS = 24
+#run at  64 for more accuracy
+CTRL_REDOCK_NMODES =9
+THREADS_PER_VINA_CTRL =8
 
 CHAIN_PRUNE=1
 CHAIN_POCKET_RADIUS_ANG=10.0
@@ -71,7 +79,7 @@ CHAIN_KEEP_LIST=
 CHAIN_LOG_DECISIONS=1
 
 # ---- Benchmark & Analysis (paths) ----
-FDA_MAPPING_CSV=
+FDA_MAPPING_CSV=fda_mapping_from_pdbqt.csv
 BENCH_ANALYSIS_OUTDIR=
 BENCH_ONLY_EXTRACTED_CTRL_AND_RDK=true
 
@@ -182,7 +190,25 @@ SINGLE_LIGAND_ALLOW_PREFIX = false
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
 TEST_MODE_ENABLE = true
-TEST_LIBRARY_MAP = {"1T46":"kit","2GQG":"abl1","2HYY":"abl1","2WGJ":"met","3CS9":"abl1","3ERT":"esr1","3G0E":"kit","3OG7":"braf","3OXZ":"abl1","3WZD":"vgfr2","3WZE":"vgfr2","4AG8":"vgfr2","4ASD":"vgfr2","4U5J":"src","4XV2":"braf","5MO4":"abl1","5VA0":"gcr"}
+TEST_LIBRARY_MAP = {
+    "1T46": "kit",
+    "2GQG": "abl1",
+    "2HYY": "abl1",
+    "2WGJ": "met",
+    "3CS9": "abl1",
+    "3ERT": "esr1",
+    "3G0E": "kit",
+    "3OG7": "braf",
+    "3OXZ": "abl1",
+    "3WZD": "vgfr2",
+    "3WZE": "vgfr2",
+    "4AG8": "vgfr2",
+    "4ASD": "vgfr2",
+    "4U5J": "src",
+    "4XV2": "braf",
+    "5MO4": "abl1",
+    "5VA0": "gcr",
+}
 
 #specify which pdb
 SPECIFIED_PROTEINS = 
