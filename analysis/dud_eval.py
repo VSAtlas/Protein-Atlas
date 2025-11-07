@@ -30,10 +30,11 @@ Notes:
 """
 
 import argparse
+import json
 import math
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -49,6 +50,231 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from path_router import make_paths, expand_variants
+
+
+def _dedup(seq: Iterable[str]) -> List[str]:
+    """Preserve order while removing duplicates."""
+    seen: Set[str] = set()
+    out: List[str] = []
+    for item in seq:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def extract_compnd_molecules(pdb_lines: List[str]) -> List[str]:
+    """Pull COMPND.MOLECULE entries from a PDB header."""
+    molecules: List[str] = []
+    pending: Optional[str] = None
+    last_key: Optional[str] = None
+
+    def _flush() -> None:
+        nonlocal pending
+        if pending:
+            molecules.append(pending.strip().rstrip(","))
+            pending = None
+
+    for line in pdb_lines:
+        if not line.startswith("COMPND"):
+            continue
+        payload = line[10:].strip()
+        if not payload:
+            continue
+        segments = [seg.strip() for seg in payload.split(";")]
+        for seg in segments:
+            if not seg:
+                continue
+            if ":" in seg:
+                key, val = seg.split(":", 1)
+                key = key.strip().upper()
+                val = val.strip()
+                if key != last_key and last_key == "MOLECULE":
+                    _flush()
+                last_key = key
+                if key == "MOLECULE":
+                    pending = f"{pending} {val}".strip() if pending else val
+                elif pending and key != "MOLECULE":
+                    _flush()
+            else:
+                if last_key == "MOLECULE":
+                    pending = f"{pending} {seg}".strip() if pending else seg
+    if last_key != "MOLECULE":
+        _flush()
+    _flush()
+    return _dedup(molecules)
+
+
+def extract_uniprot_from_dbref(pdb_lines: List[str]) -> Tuple[List[str], List[str]]:
+    """Return (entry_names, accessions) discovered from DBREF UNP rows."""
+    entry_names: List[str] = []
+    accessions: List[str] = []
+    for line in pdb_lines:
+        if not line.startswith("DBREF"):
+            continue
+        tokens = line.split()
+        if len(tokens) < 7:
+            continue
+        db = tokens[5].upper()
+        if db not in {"UNP", "UNIPROT"}:
+            continue
+        accession = tokens[6].strip()
+        entry = tokens[7].strip() if len(tokens) >= 8 else ""
+        if accession:
+            accessions.append(accession)
+        if entry:
+            entry_names.append(entry)
+    return _dedup(entry_names), _dedup(accessions)
+
+
+def choose_target_name(compnd_mols: List[str],
+                       uniprot_entries: List[str],
+                       uniprot_accessions: List[str],
+                       prefer: str = "auto") -> str:
+    """Pick the best target label respecting preference order."""
+    prefer_key = (prefer or "auto").lower()
+    compnd_choice = ", ".join(compnd_mols) if compnd_mols else ""
+    uniprot_entry = uniprot_entries[0] if uniprot_entries else ""
+    uniprot_acc = uniprot_accessions[0] if uniprot_accessions else ""
+
+    if prefer_key == "compnd":
+        return compnd_choice or uniprot_entry or uniprot_acc
+    if prefer_key == "uniprot":
+        return uniprot_entry or uniprot_acc or compnd_choice
+    # auto
+    return compnd_choice or uniprot_entry or uniprot_acc
+
+
+def _read_pdb_header_lines(pdb_path: Path) -> List[str]:
+    lines: List[str] = []
+    try:
+        with pdb_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if line.startswith(("ATOM", "HETATM")):
+                    break
+                lines.append(line.rstrip("\n"))
+    except Exception:
+        return []
+    return lines
+
+
+def infer_library_name(target_id: str,
+                       ligand_basenames: Set[str],
+                       *,
+                       prepped_root_override: Optional[Path],
+                       cfg: Dict) -> str:
+    """Infer library folder name via manifest or filename overlap."""
+    candidate_roots: List[Path] = []
+    if prepped_root_override:
+        candidate_roots.append(prepped_root_override)
+    if cfg:
+        try:
+            paths = make_paths(cfg, base_id=target_id, pdb_file=f"{target_id}.pdb")
+            candidate_roots.append(paths.prepped_root)
+        except Exception:
+            pass
+
+    seen: Set[Path] = set()
+    roots: List[Path] = []
+    for root in candidate_roots:
+        if root and root not in seen:
+            seen.add(root)
+            roots.append(root)
+
+    def _manifest_label(manifest_path: Path) -> Optional[str]:
+        try:
+            with manifest_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception:
+            return None
+        for key in ("library_name", "name", "library", "label"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return None
+
+    def _collect_basenames(folder: Path) -> Set[str]:
+        allowed_suffixes = {".pdbqt", ".sdf", ".mol2"}
+        names: Set[str] = set()
+        for entry in folder.iterdir():
+            if entry.is_file() and entry.suffix.lower() in allowed_suffixes:
+                names.add(entry.name)
+        return names
+
+    for root in roots:
+        target_dir = root / target_id
+        if not target_dir.exists():
+            continue
+        best_name: Optional[str] = None
+        best_score = -1
+        tied = False
+        for library_dir in sorted(target_dir.iterdir()):
+            if not library_dir.is_dir():
+                continue
+            manifest = library_dir / "manifest.json"
+            if manifest.exists():
+                label = _manifest_label(manifest)
+                if label:
+                    return label
+            basenames = _collect_basenames(library_dir)
+            if not basenames:
+                continue
+            score = len(ligand_basenames & basenames) if ligand_basenames else 0
+            if score > best_score:
+                best_score = score
+                best_name = library_dir.name
+                tied = False
+            elif score == best_score and score >= 0:
+                tied = True
+        if best_name and best_score > 0 and not tied:
+            return best_name
+        if best_name and tied:
+            print(f"[WARN] {target_id}: multiple libraries tied for filename overlap; leaving library_name blank")
+    return ""
+
+
+def derive_target_name(target_id: str,
+                       *,
+                       prefer: str,
+                       pdb_root_override: Optional[Path],
+                       cfg: Dict) -> str:
+    candidates: List[Path] = []
+    seen: Set[Path] = set()
+
+    def _append_candidate(path: Optional[Path]) -> None:
+        if path and path.exists() and path not in seen:
+            seen.add(path)
+            candidates.append(path)
+
+    def _collect_from_dir(base: Path) -> None:
+        if not base.exists():
+            return
+        for pattern in ("*.pdb", "*/*.pdb"):
+            for found in sorted(base.glob(pattern)):
+                _append_candidate(found)
+
+    if pdb_root_override:
+        base = pdb_root_override / target_id
+        _collect_from_dir(base)
+
+    if cfg:
+        try:
+            paths = make_paths(cfg, base_id=target_id, pdb_file=f"{target_id}.pdb")
+        except Exception:
+            paths = None
+        if paths is not None:
+            _collect_from_dir(paths.root_pdb_dir)
+            _append_candidate(paths.input_pdb_path)
+
+    if not candidates:
+        return ""
+
+    header_lines = _read_pdb_header_lines(candidates[0])
+    if not header_lines:
+        return ""
+    compnd = extract_compnd_molecules(header_lines)
+    entries, accessions = extract_uniprot_from_dbref(header_lines)
+    return choose_target_name(compnd, entries, accessions, prefer=prefer)
 # >>> PATHS IMPORT END
 
 
@@ -184,7 +410,7 @@ def evaluate_target(pdb_id: str,
                     score_col_cli: Optional[str],
                     bedroc_alpha: float,
                     logauc_lambda: float,
-                    run_id: Optional[str]) -> Optional[pd.Series]:
+                    run_id: Optional[str]) -> Optional[Tuple[pd.Series, Set[str]]]:
     try:
         df = pd.read_csv(csv_path)
     except Exception as e:
@@ -211,9 +437,11 @@ def evaluate_target(pdb_id: str,
         print(f"[INFO] {pdb_id}: dropped {before_nf - len(df)} rows with non-finite scores")
 
     # derive ligand_id + label from filename
-    parsed = df[lig_col].astype(str).apply(parse_name_and_label)
+    lig_paths = df[lig_col].astype(str)
+    parsed = lig_paths.apply(parse_name_and_label)
     df["lig_id"] = parsed.apply(lambda t: t[0])
     df["is_active"] = parsed.apply(lambda t: t[1])
+    used_ligand_basenames: Set[str] = {os.path.basename(p) for p in lig_paths.tolist() if p}
 
     # drop rows where label couldn't be inferred
     before = len(df)
@@ -341,7 +569,7 @@ def evaluate_target(pdb_id: str,
     if variant_label:
         row["variant"] = variant_label
     pd.DataFrame([row]).to_csv(out_dir / "metrics.tsv", sep="\t", index=False)
-    return pd.Series(row)
+    return pd.Series(row), used_ligand_basenames
 
 def _load_default_cfg() -> Dict:
     try:
@@ -371,11 +599,24 @@ def main():
                     help="Filter docking_score_long.csv rows to a specific run identifier.")
     ap.add_argument("--bedroc-alpha", type=float, default=20.0)
     ap.add_argument("--logauc-lambda", type=float, default=1e-3)
+    ap.add_argument("--target-name-from-pdb", action="store_true",
+                    help="If set, add a target_name column derived from PDB headers.")
+    ap.add_argument("--target-name-prefer", type=str, default="auto",
+                    choices=("auto", "compnd", "uniprot"),
+                    help="Preference order when selecting target_name (default: auto).")
+    ap.add_argument("--pdb-root", type=str, default=None,
+                    help="Optional override root for processed PDB folders (processed_pdbs/<target>/).")
+    ap.add_argument("--report-library", action="store_true",
+                    help="If set, attempt to infer library_name from prepped_ligands.")
+    ap.add_argument("--prepped-root", type=str, default=None,
+                    help="Optional override root for prepped ligands (prepped_ligands/<target>/).")
     args = ap.parse_args()
 
     cfg = _load_default_cfg()
     docked_root = Path(args.docked_root)
     out_root = Path(args.out_dir)
+    pdb_root_override = Path(args.pdb_root) if args.pdb_root else None
+    prepped_root_override = Path(args.prepped_root) if args.prepped_root else None
 
     analysis_root = out_root
     if cfg and "OVERALL_DIR" in cfg:
@@ -446,9 +687,10 @@ def main():
         print(f"[ERR] No docking_score_long.csv under {docked_root}")
         raise SystemExit(2)
 
-    rows = []
+    rows: List[pd.Series] = []
+    ligand_basenames_by_target: Dict[str, Set[str]] = {}
     for pdb_id, csvp in targets:
-        series = evaluate_target(
+        evaluated = evaluate_target(
             pdb_id=pdb_id,
             csv_path=csvp,
             out_dir=analysis_root / pdb_id,
@@ -458,14 +700,42 @@ def main():
             logauc_lambda=args.logauc_lambda,
             run_id=args.run_id,
         )
-        if series is not None:
+        if evaluated is not None:
+            series, ligand_basenames = evaluated
             rows.append(series)
+            ligand_basenames_by_target[pdb_id] = ligand_basenames
 
     if not rows:
         print("[ERR] Nothing evaluated.")
         raise SystemExit(3)
 
     df = pd.DataFrame(rows).sort_values("pdb_id")
+
+    if args.target_name_from_pdb:
+        names: Dict[str, str] = {}
+        for pdb_id in df["pdb_id"].tolist():
+            # Prefer COMPND.MOLECULE -> UniProt entry -> accession, honoring CLI preference.
+            names[pdb_id] = derive_target_name(
+                pdb_id,
+                prefer=args.target_name_prefer,
+                pdb_root_override=pdb_root_override,
+                cfg=cfg,
+            )
+        df["target_name"] = df["pdb_id"].map(names).fillna("")
+
+    if args.report_library:
+        libs: Dict[str, str] = {}
+        for pdb_id in df["pdb_id"].tolist():
+            lig_basenames = ligand_basenames_by_target.get(pdb_id, set())
+            # Match ligands against prepped_ligands/<target>/<library>/ (or manifest.json).
+            libs[pdb_id] = infer_library_name(
+                pdb_id,
+                lig_basenames,
+                prepped_root_override=prepped_root_override,
+                cfg=cfg,
+            )
+        df["library_name"] = df["pdb_id"].map(libs).fillna("")
+
     analysis_root.mkdir(parents=True, exist_ok=True)
 
     summary_name = "summary.tsv"
@@ -507,7 +777,8 @@ def main():
         else:
             df.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
 
-    metric_cols = [c for c in df.columns if c not in ("pdb_id","N","n_actives","actives_fraction","variant")]
+    excluded_cols = {"pdb_id", "N", "n_actives", "actives_fraction", "variant", "target_name", "library_name"}
+    metric_cols = [c for c in df.columns if c not in excluded_cols]
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
     pd.DataFrame([{"pdb_id":"macro_avg", **{k: macro[k] for k in metric_cols}}]) \
       .to_csv(analysis_root / "summary_macro.tsv", sep="\t", index=False)
