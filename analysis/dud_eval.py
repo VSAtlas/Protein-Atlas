@@ -34,12 +34,37 @@ import json
 import math
 import os
 import re
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, roc_curve, precision_recall_curve, auc
+
+LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARN": 30, "ERROR": 40}
+LEVEL_ABBREV = {"DEBUG": "DBG", "INFO": "INF", "WARN": "WRN", "ERROR": "ERR"}
+_current_log_level = LOG_LEVELS["INFO"]
+_BACKEND_LOGGED = False
+
+
+def set_log_level(level_name: Optional[str]) -> None:
+    global _current_log_level
+    key = (level_name or "INFO").strip().upper()
+    if key not in LOG_LEVELS:
+        key = "INFO"
+    _current_log_level = LOG_LEVELS[key]
+
+
+def dbg(level: str, tag: str, message: str) -> None:
+    upper = (level or "INFO").strip().upper()
+    if upper not in LOG_LEVELS:
+        upper = "INFO"
+    if LOG_LEVELS[upper] < _current_log_level:
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    label = LEVEL_ABBREV.get(upper, upper[:3])
+    print(f"[{stamp}][{label}][{tag}] {message}")
 
 # >>> PATHS IMPORT START
 from pathlib import Path
@@ -181,6 +206,11 @@ def infer_library_name(target_id: str,
             seen.add(root)
             roots.append(root)
 
+    if roots:
+        dbg("DEBUG", "library", f"pdb={target_id} search_roots={';'.join(str(r) for r in roots)} basenames={len(ligand_basenames)}")
+    else:
+        dbg("WARN", "library", f"pdb={target_id} no candidate roots for library inference")
+
     def _manifest_label(manifest_path: Path) -> Optional[str]:
         try:
             with manifest_path.open("r", encoding="utf-8") as handle:
@@ -215,6 +245,7 @@ def infer_library_name(target_id: str,
             if manifest.exists():
                 label = _manifest_label(manifest)
                 if label:
+                    dbg("INFO", "library", f"pdb={target_id} picked='{label}' method='manifest' root={library_dir}")
                     return label
             basenames = _collect_basenames(library_dir)
             if not basenames:
@@ -227,9 +258,12 @@ def infer_library_name(target_id: str,
             elif score == best_score and score >= 0:
                 tied = True
         if best_name and best_score > 0 and not tied:
+            dbg("INFO", "library", f"pdb={target_id} picked='{best_name}' method='filename_overlap' score={best_score}")
             return best_name
         if best_name and tied:
-            print(f"[WARN] {target_id}: multiple libraries tied for filename overlap; leaving library_name blank")
+            dbg("WARN", "library", f"pdb={target_id} filename_overlap ties score={best_score}")
+    if roots:
+        dbg("WARN", "library", f"pdb={target_id} no library match found in roots")
     return ""
 
 
@@ -239,23 +273,23 @@ def derive_target_name(target_id: str,
                        pdb_root_override: Optional[Path],
                        cfg: Dict) -> str:
     candidates: List[Path] = []
-    seen: Set[Path] = set()
+    origins: Dict[Path, str] = {}
 
-    def _append_candidate(path: Optional[Path]) -> None:
-        if path and path.exists() and path not in seen:
-            seen.add(path)
+    def _append_candidate(path: Optional[Path], label: str) -> None:
+        if path and path.exists() and path not in origins:
+            origins[path] = label
             candidates.append(path)
 
-    def _collect_from_dir(base: Path) -> None:
+    def _collect_from_dir(base: Path, label: str) -> None:
         if not base.exists():
             return
         for pattern in ("*.pdb", "*/*.pdb"):
             for found in sorted(base.glob(pattern)):
-                _append_candidate(found)
+                _append_candidate(found, label)
 
     if pdb_root_override:
         base = pdb_root_override / target_id
-        _collect_from_dir(base)
+        _collect_from_dir(base, "override")
 
     if cfg:
         try:
@@ -263,18 +297,36 @@ def derive_target_name(target_id: str,
         except Exception:
             paths = None
         if paths is not None:
-            _collect_from_dir(paths.root_pdb_dir)
-            _append_candidate(paths.input_pdb_path)
+            _collect_from_dir(paths.root_pdb_dir, "processed_root")
+            _append_candidate(paths.input_pdb_path, "input_pdbs")
+
+    if candidates:
+        labels = sorted({origins[p] for p in candidates})
+        dbg("DEBUG", "target", f"pdb={target_id} candidate_pdbs={len(candidates)} sources={','.join(labels)} first='{candidates[0]}'")
 
     if not candidates:
+        dbg("WARN", "target", f"pdb={target_id} no candidate PDB files for target_name")
         return ""
 
     header_lines = _read_pdb_header_lines(candidates[0])
     if not header_lines:
+        dbg("WARN", "target", f"pdb={target_id} unable to read PDB header from {candidates[0]}")
         return ""
     compnd = extract_compnd_molecules(header_lines)
     entries, accessions = extract_uniprot_from_dbref(header_lines)
-    return choose_target_name(compnd, entries, accessions, prefer=prefer)
+    choice = choose_target_name(compnd, entries, accessions, prefer=prefer)
+    source = ""
+    compnd_choice = ", ".join(compnd) if compnd else ""
+    if choice:
+        if compnd_choice and choice == compnd_choice:
+            source = "PDB:COMPND"
+        elif entries and choice == entries[0]:
+            source = "PDB:DBREF_ENTRY"
+        elif accessions and choice == accessions[0]:
+            source = "PDB:DBREF_ACCESSION"
+    source_label = source if source else "none"
+    dbg("DEBUG", "target", f"pdb={target_id} name='{choice}' source='{source_label}'")
+    return choice
 # >>> PATHS IMPORT END
 
 
@@ -413,8 +465,9 @@ def evaluate_target(pdb_id: str,
                     run_id: Optional[str]) -> Optional[Tuple[pd.Series, Set[str]]]:
     try:
         df = pd.read_csv(csv_path)
+        dbg("INFO", "csv", f"pdb={pdb_id} path={csv_path} rows={len(df)}")
     except Exception as e:
-        print(f"[WARN] {pdb_id}: failed to read {csv_path}: {e}")
+        dbg("ERROR", "csv", f"pdb={pdb_id} path={csv_path} err={e}")
         return None
 
     if run_id:
@@ -422,22 +475,27 @@ def evaluate_target(pdb_id: str,
         if "run_id" in df.columns:
             mask = df["run_id"].astype(str) == str(run_id)
             df = df.loc[mask].copy()
-            print(f"[eval] Using run_id={run_id} (rows kept: {len(df)}/{total_rows})")
+            dbg("INFO", "filter", f"pdb={pdb_id} run_id={run_id} kept={len(df)}/{total_rows}")
         else:
-            print("[eval] --run-id specified but CSV has no 'run_id'; proceeding unfiltered.")
+            dbg("WARN", "filter", f"pdb={pdb_id} run_id={run_id} column_missing proceeding_unfiltered")
+
+    dbg("DEBUG", "schema", f"pdb={pdb_id} cols={list(df.columns)} has_variant={'variant' in df.columns} has_run_id={'run_id' in df.columns}")
 
     lig_col = guess_ligfile_col(df, lig_col_cli)
     score_col = guess_score_col(df, score_col_cli)
+    dbg("DEBUG", "schema", f"pdb={pdb_id} ligand_col={lig_col} source={'CLI' if lig_col_cli else 'auto'} score_col={score_col} source={'CLI' if score_col_cli else 'auto'}")
     # Coerce scores to numeric; drop NaN/±inf early to avoid NaNs in metrics
     df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
     before_nf = len(df)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df = df.dropna(subset=[score_col])
-    if len(df) < before_nf:
-        print(f"[INFO] {pdb_id}: dropped {before_nf - len(df)} rows with non-finite scores")
+    drop_nonfinite = before_nf - len(df)
 
+    raw_lig = df[lig_col]
+    missing_names = int(raw_lig.isna().sum())
+    empty_names = int(raw_lig.astype(str).str.strip().eq("").sum())
     # derive ligand_id + label from filename
-    lig_paths = df[lig_col].astype(str)
+    lig_paths = raw_lig.astype(str)
     parsed = lig_paths.apply(parse_name_and_label)
     df["lig_id"] = parsed.apply(lambda t: t[0])
     df["is_active"] = parsed.apply(lambda t: t[1])
@@ -446,8 +504,7 @@ def evaluate_target(pdb_id: str,
     # drop rows where label couldn't be inferred
     before = len(df)
     df = df.dropna(subset=["is_active"])
-    if len(df) < before:
-        print(f"[INFO] {pdb_id}: dropped {before - len(df)} rows without 'active(s)/decoy(s)' token in filename")
+    dropped_token = before - len(df)
 
     # collapse to best score per ligand (min score)
     best = df.groupby("lig_id", as_index=False).agg(
@@ -457,29 +514,63 @@ def evaluate_target(pdb_id: str,
     # Some ligands may still have all-NaN scores → best_score=NaN; drop them
     before_best = len(best)
     best = best.dropna(subset=["best_score"])
-    if len(best) < before_best:
-        print(f"[INFO] {pdb_id}: dropped {before_best - len(best)} ligands with NaN best_score")
+    drop_nan_best = before_best - len(best)
 
     y_true = best["is_active"].astype(int).to_numpy()
     y_low = best["best_score"].to_numpy()
     y_high = -y_low
 
     N = len(best); n_act = int(y_true.sum())
+    missing_name_detected = missing_names + empty_names
+    dbg("DEBUG", "screen", f"pdb={pdb_id} missing_name_detected={missing_name_detected} kept_rows={len(df)} ligands={N}")
     if N == 0 or n_act == 0 or n_act == N:
-        print(f"[WARN] {pdb_id}: degenerate set (N={N}, actives={n_act}). Skipping.")
+        dbg("WARN", "metrics", f"pdb={pdb_id} degenerate_set N={N} actives={n_act}")
         return None
 
     # metrics
     ef = ef_at_fractions(y_true, y_low, fractions=(0.01,0.02,0.05,0.10))
-    rocAUC = float(roc_auc_score(y_true, y_high))
-    fpr, tpr, _ = roc_curve(y_true, y_high)
-    prAUC, precision, recall = pr_auc(y_true, y_high)
-    lAUC = log_auc_from_roc(fpr, tpr, lam=logauc_lambda)
+    dbg("DEBUG", "metrics", f"pdb={pdb_id} start N={N} n_actives={n_act}")
+    try:
+        rocAUC = float(roc_auc_score(y_true, y_high))
+    except Exception as exc:
+        dbg("WARN", "metrics", f"pdb={pdb_id} metric=ROC_AUC err={exc}")
+        rocAUC = float("nan")
+    try:
+        fpr, tpr, _ = roc_curve(y_true, y_high)
+    except Exception as exc:
+        dbg("WARN", "metrics", f"pdb={pdb_id} metric=ROC_curve err={exc}")
+        fpr = np.array([0.0, 1.0])
+        tpr = np.array([0.0, 1.0])
+    try:
+        prAUC, precision, recall = pr_auc(y_true, y_high)
+    except Exception as exc:
+        dbg("WARN", "metrics", f"pdb={pdb_id} metric=PR_AUC err={exc}")
+        prAUC = float("nan")
+        precision = np.array([0.0, 1.0])
+        recall = np.array([0.0, 1.0])
+    try:
+        lAUC = log_auc_from_roc(fpr, tpr, lam=logauc_lambda)
+    except Exception as exc:
+        dbg("WARN", "metrics", f"pdb={pdb_id} metric=logAUC err={exc}")
+        lAUC = float("nan")
     lAUC_adj = lAUC - 0.14462
-    bed = bedroc(y_true, y_high, alpha=bedroc_alpha)
+    try:
+        bed = bedroc(y_true, y_high, alpha=bedroc_alpha)
+    except Exception as exc:
+        dbg("WARN", "metrics", f"pdb={pdb_id} metric=BEDROC err={exc}")
+        bed = float("nan")
 
     # plots
     out_dir.mkdir(parents=True, exist_ok=True)
+    global _BACKEND_LOGGED
+    if not _BACKEND_LOGGED:
+        try:
+            backend = plt.get_backend()
+        except Exception as exc:
+            dbg("WARN", "mpl", f"pdb={pdb_id} backend_detect_failed err={exc}")
+        else:
+            dbg("DEBUG", "mpl", f"backend={backend}")
+        _BACKEND_LOGGED = True
 
     # EF curve
     order = np.argsort(y_low)
@@ -513,6 +604,7 @@ def evaluate_target(pdb_id: str,
 
     # PR
     base = n_act / N
+    dbg("INFO", "screen", f"pdb={pdb_id} drop_nonfinite={drop_nonfinite} missing_name_detected={missing_name_detected} drop_missing_token={dropped_token} drop_nan_best_score={drop_nan_best} kept_ligands={N} actives={n_act} active_fraction={base:.3f} token_regex='active|decoy'")
     plt.figure()
     plt.plot(recall, precision, label=f"PR-AUC={prAUC:.3f}")
     plt.hlines(base, 0, 1, colors="k", linestyles="--", linewidth=1, label=f"Baseline={base:.3f}")
@@ -553,6 +645,9 @@ def evaluate_target(pdb_id: str,
                     variant_label = "HOLO"
                 elif has_apo or has_holo:
                     variant_label = "MIXED"
+                unique_vals = sorted(set(upper.tolist()))
+                counts = {val: int((upper == val).sum()) for val in unique_vals}
+                dbg("DEBUG", "variant", f"pdb={pdb_id} unique={unique_vals} counts={counts}")
 
     row = {
         "pdb_id": pdb_id,
@@ -569,20 +664,30 @@ def evaluate_target(pdb_id: str,
     if variant_label:
         row["variant"] = variant_label
     pd.DataFrame([row]).to_csv(out_dir / "metrics.tsv", sep="\t", index=False)
+    dbg("DEBUG", "metrics", f"pdb={pdb_id} ROC_AUC={rocAUC:.3f} PR_AUC={prAUC:.3f} BEDROC={bed:.3f}")
     return pd.Series(row), used_ligand_basenames
 
 def _load_default_cfg() -> Dict:
+    cfg_path = Path("config.txt")
     try:
         from input_and_export_functions import load_config, validate_config
     except Exception:
+        dbg("WARN", "config", "input_and_export_functions unavailable; skipping config.txt")
         return {}
 
     try:
+        if not cfg_path.exists():
+            dbg("DEBUG", "config", "config.txt not found; using CLI defaults")
+            return {}
         cfg = load_config("config.txt") or {}
         if cfg:
             validate_config(cfg)
+            dbg("DEBUG", "config", f"config.txt loaded keys={sorted(cfg.keys())}")
+        else:
+            dbg("DEBUG", "config", "config.txt empty; using CLI defaults")
         return cfg
-    except Exception:
+    except Exception as exc:
+        dbg("WARN", "config", f"failed to load config.txt err={exc}")
         return {}
 
 def main():
@@ -599,6 +704,9 @@ def main():
                     help="Filter docking_score_long.csv rows to a specific run identifier.")
     ap.add_argument("--bedroc-alpha", type=float, default=20.0)
     ap.add_argument("--logauc-lambda", type=float, default=1e-3)
+    ap.add_argument("--log-level", type=str, default="INFO",
+                    choices=("DEBUG", "INFO", "WARN", "ERROR"),
+                    help="Logging verbosity (default: INFO).")
     ap.add_argument("--target-name-from-pdb", action="store_true", default=True,
                     help="If set, add a target_name column derived from PDB headers.")
     ap.add_argument("--target-name-prefer", type=str, default="auto", 
@@ -612,6 +720,9 @@ def main():
                     help="Optional override root for prepped ligands (prepped_ligands/<target>/).")
     args = ap.parse_args()
 
+    set_log_level(args.log_level)
+    dbg("DEBUG", "args", f"log_level={args.log_level} target_name_from_pdb={'ON' if args.target_name_from_pdb else 'OFF'} report_library={'ON' if args.report_library else 'OFF'} run_id={args.run_id or 'none'}")
+
     cfg = _load_default_cfg()
     docked_root = Path(args.docked_root)
     out_root = Path(args.out_dir)
@@ -623,49 +734,71 @@ def main():
         # >>> ANALYSIS OUT ROOT PATCH START
         analysis_root = Path(cfg["OVERALL_DIR"]) / "analysis" / "out"
         # >>> ANALYSIS OUT ROOT PATCH END
+        dbg("DEBUG", "config", f"OVERALL_DIR override applied analysis_root={analysis_root}")
     analysis_root.mkdir(parents=True, exist_ok=True)
+    dbg("DEBUG", "paths", f"docked_root={docked_root} out_root={out_root} analysis_root={analysis_root} pdb_root={pdb_root_override or 'none'} prepped_root={prepped_root_override or 'none'}")
 
     def _resolve_docking_csv(pdb_id: str, fallback_dir: Path) -> Optional[Path]:
+        candidates_tried: List[str] = []
+        picked: Optional[Path] = None
+
+        def _record(path: Path) -> bool:
+            nonlocal picked
+            exists = path.exists()
+            state = "hit" if exists else "miss"
+            candidates_tried.append(f"{path} ({state})")
+            if exists and picked is None:
+                picked = path
+                return True
+            return False
+
         if not cfg:
             candidate = fallback_dir / "docking_score_long.csv"
-            return candidate if candidate.exists() else None
+            _record(candidate)
+        else:
+            try:
+                # >>> PATHS INIT START
+                mode    = str(cfg.get("APO_HOLO_MODE", "")).strip()
+                variants = expand_variants(mode)  # returns [None] | ["APO","HOLO"]
+                paths   = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+                ph_token = cfg.get("PH_TOKEN") or None
+                # >>> PATHS INIT END
+            except Exception as exc:
+                dbg("WARN", "resolve", f"pdb={pdb_id} router_err={exc}")
+                candidate = fallback_dir / "docking_score_long.csv"
+                _record(candidate)
+            else:
+                # >>> DOCKED INPUT PATHS PATCH START
+                docked_root_cfg = paths.docked_pdb_root()
+                summary_csv = paths.docking_score_summary_csv()
+                long_csv    = paths.docking_score_long_csv()
+                # >>> DOCKED INPUT PATHS PATCH END
 
-        try:
-            # >>> PATHS INIT START
-            mode    = str(cfg.get("APO_HOLO_MODE", "")).strip()
-            variants = expand_variants(mode)  # returns [None] | ["APO","HOLO"]
-            paths   = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-            ph_token = cfg.get("PH_TOKEN") or None
-            # >>> PATHS INIT END
-        except Exception:
-            candidate = fallback_dir / "docking_score_long.csv"
-            return candidate if candidate.exists() else None
+                if docked_root_cfg.exists():
+                    if _record(long_csv):
+                        pass
+                    else:
+                        for variant in variants:
+                            variant_root = paths.docked_variant_root(variant)
+                            candidate = variant_root / "docking_score_long.csv"
+                            if _record(candidate):
+                                break
+                    if picked is None:
+                        candidate = fallback_dir / "docking_score_long.csv"
+                        _record(candidate)
+                    # Touch summary path to exercise router (no fallback to summary file for eval)
+                    summary_csv.exists()
+                else:
+                    dbg("WARN", "resolve", f"pdb={pdb_id} docked_root_missing root={docked_root_cfg}")
+                    candidate = fallback_dir / "docking_score_long.csv"
+                    _record(candidate)
 
-        # >>> DOCKED INPUT PATHS PATCH START
-        docked_root_cfg = paths.docked_pdb_root()
-        summary_csv = paths.docking_score_summary_csv()
-        long_csv    = paths.docking_score_long_csv()
-        # >>> DOCKED INPUT PATHS PATCH END
+        if picked is not None:
+            dbg("DEBUG", "resolve", f"pdb={pdb_id} tried={len(candidates_tried)} candidates={candidates_tried}")
+            dbg("INFO", "resolve", f"pdb={pdb_id} picked={picked}")
+            return picked
 
-        if not docked_root_cfg.exists():
-            return None
-
-        if long_csv.exists():
-            return long_csv
-
-        for variant in variants:
-            variant_root = paths.docked_variant_root(variant)
-            candidate = variant_root / "docking_score_long.csv"
-            if candidate.exists():
-                return candidate
-
-        candidate = fallback_dir / "docking_score_long.csv"
-        if candidate.exists():
-            return candidate
-
-        # Touch summary path to exercise router (no fallback to summary file for eval)
-        summary_csv.exists()
-
+        dbg("WARN", "resolve", f"pdb={pdb_id} no_csv_found tried={candidates_tried or ['<none>']} search_root={fallback_dir}")
         return None
 
     # discover targets
@@ -684,8 +817,10 @@ def main():
                 targets.append((sub.name, csv_path))
 
     if not targets:
-        print(f"[ERR] No docking_score_long.csv under {docked_root}")
+        dbg("ERROR", "discover", f"no docking_score_long.csv under {docked_root}")
         raise SystemExit(2)
+
+    dbg("INFO", "discover", f"targets={len(targets)} root={docked_root}")
 
     rows: List[pd.Series] = []
     ligand_basenames_by_target: Dict[str, Set[str]] = {}
@@ -706,7 +841,7 @@ def main():
             ligand_basenames_by_target[pdb_id] = ligand_basenames
 
     if not rows:
-        print("[ERR] Nothing evaluated.")
+        dbg("ERROR", "metrics", "no targets produced evaluable rows")
         raise SystemExit(3)
 
     df = pd.DataFrame(rows).sort_values("pdb_id")
@@ -722,6 +857,8 @@ def main():
                 cfg=cfg,
             )
         df["target_name"] = df["pdb_id"].map(names).fillna("")
+    else:
+        dbg("DEBUG", "target", "target_name_from_pdb=OFF")
 
     if args.report_library:
         libs: Dict[str, str] = {}
@@ -735,6 +872,8 @@ def main():
                 cfg=cfg,
             )
         df["library_name"] = df["pdb_id"].map(libs).fillna("")
+    else:
+        dbg("DEBUG", "library", "report_library=OFF")
 
     analysis_root.mkdir(parents=True, exist_ok=True)
 
@@ -772,8 +911,7 @@ def main():
                 if n_apo or n_holo:
                     fh.write("\n")
                 leftover_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
-
-            print(f"[eval] sections: Apo={n_apo} Holo={n_holo}")
+            dbg("INFO", "summary", f"sections=Apo:{n_apo} Holo:{n_holo} other={len(leftover_rows)}")
         else:
             df.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
 
@@ -782,9 +920,8 @@ def main():
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
     pd.DataFrame([{"pdb_id":"macro_avg", **{k: macro[k] for k in metric_cols}}]) \
       .to_csv(analysis_root / "summary_macro.tsv", sep="\t", index=False)
-
-    print(f"[OK] Wrote per-target results to: {analysis_root}")
-    print(f"[eval] summary_out={summary_path}")
+    dbg("INFO", "summary", f"out={summary_path} columns={metric_cols}")
+    dbg("DEBUG", "summary", f"targets_written={len(df)} macro_path={analysis_root / 'summary_macro.tsv'}")
 
 if __name__ == "__main__":
     main()
