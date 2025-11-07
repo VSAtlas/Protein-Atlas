@@ -272,48 +272,18 @@ def derive_target_name(target_id: str,
                        prefer: str,
                        pdb_root_override: Optional[Path],
                        cfg: Dict) -> str:
-    candidates: List[Path] = []
-    origins: Dict[Path, str] = {}
-
-    def _append_candidate(path: Optional[Path], label: str) -> None:
-        if path and path.exists() and path not in origins:
-            origins[path] = label
-            candidates.append(path)
-
-    def _collect_from_dir(base: Path, label: str) -> None:
-        if not base.exists():
-            return
-        for pattern in ("*.pdb", "*/*.pdb"):
-            for found in sorted(base.glob(pattern)):
-                _append_candidate(found, label)
-
-    if pdb_root_override:
-        base = pdb_root_override / target_id
-        _collect_from_dir(base, "override")
-
-    if cfg:
-        try:
-            paths = make_paths(cfg, base_id=target_id, pdb_file=f"{target_id}.pdb")
-        except Exception:
-            paths = None
-        if paths is not None:
-            _collect_from_dir(paths.root_pdb_dir, "processed_root")
-            _append_candidate(paths.input_pdb_path, "input_pdbs")
-
-    if candidates:
-        labels = sorted({origins[p] for p in candidates})
-        dbg("DEBUG", "target", f"pdb={target_id} candidate_pdbs={len(candidates)} sources={','.join(labels)} first='{candidates[0]}'")
-
-    if not candidates:
-        dbg("WARN", "target", f"pdb={target_id} no candidate PDB files for target_name")
+    pdb_path = Path("input_pdbs") / f"{target_id}.pdb"
+    exists = pdb_path.exists()
+    print(f"[dbg.target.source] pdb={target_id} path=input_pdbs/{target_id}.pdb exists={str(exists)}")
+    if not exists:
         return ""
 
-    header_lines = _read_pdb_header_lines(candidates[0])
-    if not header_lines:
-        dbg("WARN", "target", f"pdb={target_id} unable to read PDB header from {candidates[0]}")
-        return ""
+    header_lines = _read_pdb_header_lines(pdb_path)
     compnd = extract_compnd_molecules(header_lines)
     entries, accessions = extract_uniprot_from_dbref(header_lines)
+    compnd_label = compnd[0] if compnd else ""
+    uniprot_label = accessions[0] if accessions else (entries[0] if entries else "")
+    print(f"[dbg.target.extract] pdb={target_id} compnd='{compnd_label}' uniprot='{uniprot_label}' prefer={prefer}")
     choice = choose_target_name(compnd, entries, accessions, prefer=prefer)
     source = ""
     compnd_choice = ", ".join(compnd) if compnd else ""
