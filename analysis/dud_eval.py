@@ -34,6 +34,7 @@ import json
 import math
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
@@ -65,6 +66,16 @@ def dbg(level: str, tag: str, message: str) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     label = LEVEL_ABBREV.get(upper, upper[:3])
     print(f"[{stamp}][{label}][{tag}] {message}")
+
+
+CONTROL_CENTERS_RE = re.compile(
+    r"\[control-centers\]\s+n=(\d+)\s+max\?=([0-9.]+)\s+A\s+policy=([A-Za-z0-9_]+)",
+    re.IGNORECASE,
+)
+CONTROL_REDOCK_RE = re.compile(
+    r"\[control-redock\]\s+lig=([^\s]+)\s+rmsd=([0-9.]+)\s+A\s+score=([0-9.\-]+)",
+    re.IGNORECASE,
+)
 
 # >>> PATHS IMPORT START
 from pathlib import Path
@@ -371,6 +382,12 @@ def infer_library_name(target_id: str,
     return ""
 
 
+@dataclass
+class TargetEvaluation:
+    metrics: Optional[pd.Series]
+    ligand_basenames: Set[str]
+    has_run_id_column: bool
+    run_ids: Set[str]
 
 
 def derive_target_name(target_id: str,
@@ -538,7 +555,7 @@ def evaluate_target(pdb_id: str,
                     score_col_cli: Optional[str],
                     bedroc_alpha: float,
                     logauc_lambda: float,
-                    run_id: Optional[str]) -> Optional[Tuple[pd.Series, Set[str]]]:
+                    run_id: Optional[str]) -> Optional[TargetEvaluation]:
     try:
         df = pd.read_csv(csv_path)
         dbg("INFO", "csv", f"pdb={pdb_id} path={csv_path} rows={len(df)}")
@@ -546,9 +563,10 @@ def evaluate_target(pdb_id: str,
         dbg("ERROR", "csv", f"pdb={pdb_id} path={csv_path} err={e}")
         return None
 
+    has_run_id_col = "run_id" in df.columns
     if run_id:
         total_rows = len(df)
-        if "run_id" in df.columns:
+        if has_run_id_col:
             mask = df["run_id"].astype(str) == str(run_id)
             df = df.loc[mask].copy()
             dbg("INFO", "filter", f"pdb={pdb_id} run_id={run_id} kept={len(df)}/{total_rows}")
@@ -577,6 +595,13 @@ def evaluate_target(pdb_id: str,
     df["is_active"] = parsed.apply(lambda t: t[1])
     used_ligand_basenames: Set[str] = {os.path.basename(p) for p in lig_paths.tolist() if p}
 
+    run_ids_present: Set[str] = set()
+    if has_run_id_col and "run_id" in df.columns:
+        try:
+            run_ids_present = set(df["run_id"].dropna().astype(str).unique().tolist())
+        except Exception:
+            run_ids_present = set()
+
     # drop rows where label couldn't be inferred
     before = len(df)
     df = df.dropna(subset=["is_active"])
@@ -601,7 +626,10 @@ def evaluate_target(pdb_id: str,
     dbg("DEBUG", "screen", f"pdb={pdb_id} missing_name_detected={missing_name_detected} kept_rows={len(df)} ligands={N}")
     if N == 0 or n_act == 0 or n_act == N:
         dbg("WARN", "metrics", f"pdb={pdb_id} degenerate_set N={N} actives={n_act}")
-        return None
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=used_ligand_basenames,
+                                has_run_id_column=has_run_id_col,
+                                run_ids=run_ids_present)
 
     # metrics
     ef = ef_at_fractions(y_true, y_low, fractions=(0.01,0.02,0.05,0.10))
@@ -741,7 +769,10 @@ def evaluate_target(pdb_id: str,
         row["variant"] = variant_label
     pd.DataFrame([row]).to_csv(out_dir / "metrics.tsv", sep="\t", index=False)
     dbg("DEBUG", "metrics", f"pdb={pdb_id} ROC_AUC={rocAUC:.3f} PR_AUC={prAUC:.3f} BEDROC={bed:.3f}")
-    return pd.Series(row), used_ligand_basenames
+    return TargetEvaluation(metrics=pd.Series(row),
+                            ligand_basenames=used_ligand_basenames,
+                            has_run_id_column=has_run_id_col,
+                            run_ids=run_ids_present)
 
 def _load_default_cfg() -> Dict:
     cfg_path = Path("config.txt")
@@ -765,6 +796,205 @@ def _load_default_cfg() -> Dict:
     except Exception as exc:
         dbg("WARN", "config", f"failed to load config.txt err={exc}")
         return {}
+
+
+def _resolve_run_label(pdb_id: str,
+                       meta: Optional[TargetEvaluation],
+                       cli_run_id: Optional[str]) -> str:
+    if cli_run_id:
+        if meta and meta.has_run_id_column:
+            return str(cli_run_id)
+        return "(none)"
+    if meta and meta.has_run_id_column:
+        if meta.run_ids:
+            ordered = sorted(str(x) for x in meta.run_ids if x)
+            if not ordered:
+                return ""
+            return ordered[0] if len(ordered) == 1 else ",".join(ordered)
+        return ""
+    return "(none)"
+
+
+def _candidate_protein_logs(pdb_id: str,
+                            csv_path: Path,
+                            docked_root: Path,
+                            log_root_override: Optional[Path],
+                            cfg: Dict) -> Tuple[Optional[Path], List[Path]]:
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    def _add(path: Path) -> None:
+        try:
+            key = str(path.resolve())
+        except Exception:
+            key = str(path)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(path)
+
+    if log_root_override:
+        _add(log_root_override / pdb_id / "protein.log")
+    else:
+        _add(Path("docked") / pdb_id / "protein.log")
+
+    if docked_root.is_dir():
+        if docked_root.name.upper() == pdb_id.upper():
+            _add(docked_root / "protein.log")
+        _add(docked_root / pdb_id / "protein.log")
+    else:
+        _add(docked_root / pdb_id / "protein.log")
+
+    csv_parent = csv_path.parent
+    _add(csv_parent / "protein.log")
+    if csv_parent.name.upper() != pdb_id.upper():
+        _add(csv_parent.parent / "protein.log")
+
+    if cfg:
+        try:
+            paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        except Exception as exc:
+            dbg("WARN", "control", f"pdb={pdb_id} router_err={exc}")
+        else:
+            _add(paths.docked_root / paths.pdb_id / "protein.log")
+
+    selected: Optional[Path] = None
+    for cand in candidates:
+        if cand.exists():
+            selected = cand
+            break
+    return selected, candidates
+
+
+def _build_control_records(pdb_id: str,
+                           run_id_label: str,
+                           target_name: str,
+                           library_name: str,
+                           log_path: Optional[Path]) -> Tuple[List[Dict], Dict]:
+    long_rows: List[Dict] = []
+    controls_found = 0
+    max_spread: Optional[float] = None
+    policy = ""
+
+    if not log_path or not log_path.exists():
+        summary_row = {
+            "pdb_id": pdb_id,
+            "run_id": run_id_label,
+            "target_name": target_name,
+            "library_name": library_name,
+            "controls_found": 0,
+            "control_id": "",
+            "rmsd_to_crystal_A": None,
+            "redock_best_energy_kcal_mol": None,
+            "chosen": 0,
+            "max_spread_A": None,
+            "policy": "",
+        }
+        return long_rows, summary_row
+
+    try:
+        with log_path.open("r", encoding="utf-8", errors="ignore") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                m_centers = CONTROL_CENTERS_RE.search(line)
+                if m_centers:
+                    try:
+                        controls_found = int(m_centers.group(1))
+                    except Exception:
+                        controls_found = 0
+                    try:
+                        max_spread = float(m_centers.group(2))
+                    except Exception:
+                        max_spread = None
+                    policy = m_centers.group(3)
+                    continue
+                m_control = CONTROL_REDOCK_RE.search(line)
+                if not m_control:
+                    continue
+                control_id = m_control.group(1)
+                try:
+                    rmsd = float(m_control.group(2))
+                except Exception:
+                    rmsd = float("nan")
+                try:
+                    score = float(m_control.group(3))
+                except Exception:
+                    score = float("nan")
+                long_rows.append({
+                    "pdb_id": pdb_id,
+                    "run_id": run_id_label,
+                    "target_name": target_name,
+                    "library_name": library_name,
+                    "controls_found": 0,  # fill later
+                    "control_id": control_id,
+                    "rmsd_to_crystal_A": rmsd,
+                    "redock_best_energy_kcal_mol": score,
+                    "chosen": 0,
+                    "max_spread_A": None,
+                    "policy": "",
+                })
+    except Exception as exc:
+        dbg("WARN", "control", f"pdb={pdb_id} log_read_err={exc}")
+        long_rows.clear()
+        controls_found = 0
+        max_spread = None
+        policy = ""
+
+    if controls_found == 0 and long_rows:
+        controls_found = len(long_rows)
+
+    chosen_index: Optional[int] = None
+    if long_rows:
+        # Fill common fields first
+        for row in long_rows:
+            row["controls_found"] = controls_found
+            row["max_spread_A"] = max_spread
+            row["policy"] = policy
+
+        def _rmsd_key(val: Optional[float]) -> float:
+            if val is None:
+                return float("inf")
+            try:
+                return float(val) if not math.isnan(float(val)) else float("inf")
+            except Exception:
+                return float("inf")
+
+        ordered = sorted(
+            enumerate(long_rows),
+            key=lambda pair: (
+                _rmsd_key(pair[1]["rmsd_to_crystal_A"]),
+                str(pair[1]["control_id"]),
+            ),
+        )
+        if ordered:
+            chosen_index = ordered[0][0]
+            long_rows[chosen_index]["chosen"] = 1
+
+    summary_row = {
+        "pdb_id": pdb_id,
+        "run_id": run_id_label,
+        "target_name": target_name,
+        "library_name": library_name,
+        "controls_found": controls_found,
+        "control_id": "",
+        "rmsd_to_crystal_A": None,
+        "redock_best_energy_kcal_mol": None,
+        "chosen": 0,
+        "max_spread_A": max_spread,
+        "policy": policy,
+    }
+
+    if chosen_index is not None:
+        chosen = long_rows[chosen_index]
+        summary_row.update({
+            "control_id": chosen["control_id"],
+            "rmsd_to_crystal_A": chosen["rmsd_to_crystal_A"],
+            "redock_best_energy_kcal_mol": chosen["redock_best_energy_kcal_mol"],
+            "chosen": 1,
+        })
+
+    return long_rows, summary_row
 
 def main():
     ap = argparse.ArgumentParser(description="Atlas VS benchmark evaluator (filename-labeled actives/decoys).")
@@ -794,6 +1024,10 @@ def main():
                     help="If set, attempt to infer library_name from prepped_ligands.")
     ap.add_argument("--prepped-root", type=str, default=None,
                     help="Optional override root for prepped ligands (prepped_ligands/<target>/).")
+    ap.add_argument("--emit-control-report", action="store_true", default=False,
+                    help="If set, parse protein.log control entries and emit control_redock TSVs.")
+    ap.add_argument("--log-root", type=str, default=None,
+                    help="Optional override root containing <PDB>/protein.log (default: docked/).")
     try:
         ap.add_argument("--pretty-summary", action=argparse.BooleanOptionalAction, default=True,
                         help="Also write a human-readable aligned text summary (default: on).")
@@ -806,13 +1040,14 @@ def main():
     args = ap.parse_args()
 
     set_log_level(args.log_level)
-    dbg("DEBUG", "args", f"log_level={args.log_level} target_name_from_pdb={'ON' if args.target_name_from_pdb else 'OFF'} report_library={'ON' if args.report_library else 'OFF'} run_id={args.run_id or 'none'}")
+    dbg("DEBUG", "args", f"log_level={args.log_level} target_name_from_pdb={'ON' if args.target_name_from_pdb else 'OFF'} report_library={'ON' if args.report_library else 'OFF'} control_report={'ON' if args.emit_control_report else 'OFF'} run_id={args.run_id or 'none'}")
 
     cfg = _load_default_cfg()
     docked_root = Path(args.docked_root)
     out_root = Path(args.out_dir)
     pdb_root_override = Path(args.pdb_root) if args.pdb_root else None
     prepped_root_override = Path(args.prepped_root) if args.prepped_root else None
+    log_root_override = Path(args.log_root) if getattr(args, "log_root", None) else None
 
     analysis_root = out_root
     if cfg and "OVERALL_DIR" in cfg:
@@ -909,7 +1144,10 @@ def main():
 
     rows: List[pd.Series] = []
     ligand_basenames_by_target: Dict[str, Set[str]] = {}
+    target_eval_results: Dict[str, TargetEvaluation] = {}
+    csv_paths_by_target: Dict[str, Path] = {}
     for pdb_id, csvp in targets:
+        csv_paths_by_target[pdb_id] = csvp
         evaluated = evaluate_target(
             pdb_id=pdb_id,
             csv_path=csvp,
@@ -921,47 +1159,56 @@ def main():
             run_id=args.run_id,
         )
         if evaluated is not None:
-            series, ligand_basenames = evaluated
-            rows.append(series)
-            ligand_basenames_by_target[pdb_id] = ligand_basenames
+            target_eval_results[pdb_id] = evaluated
+            ligand_basenames_by_target[pdb_id] = evaluated.ligand_basenames
+            if evaluated.metrics is not None:
+                rows.append(evaluated.metrics)
 
     if not rows:
         dbg("ERROR", "metrics", "no targets produced evaluable rows")
         raise SystemExit(3)
 
-    df = pd.DataFrame(rows).sort_values("pdb_id")
+    df_all = pd.DataFrame(rows).sort_values("pdb_id")
 
+    control_targets = [pdb for pdb, _ in targets if pdb in target_eval_results]
+
+    names: Dict[str, str] = {p: "" for p in control_targets}
     if args.target_name_from_pdb:
-        names: Dict[str, str] = {}
-        for pdb_id in df["pdb_id"].tolist():
-            # Prefer COMPND.MOLECULE -> UniProt entry -> accession, honoring CLI preference.
+        for pdb_id in control_targets:
             names[pdb_id] = derive_target_name(
                 pdb_id,
                 prefer=args.target_name_prefer,
                 pdb_root_override=pdb_root_override,
                 cfg=cfg,
             )
-        df["target_name"] = df["pdb_id"].map(names).fillna("")
+        if not df_all.empty:
+            df_all["target_name"] = df_all["pdb_id"].map(names).fillna("")
     else:
         dbg("DEBUG", "target", "target_name_from_pdb=OFF")
 
+    libs: Dict[str, str] = {p: "" for p in control_targets}
     if args.report_library:
-        libs: Dict[str, str] = {}
-        for pdb_id in df["pdb_id"].tolist():
+        for pdb_id in control_targets:
             lig_basenames = ligand_basenames_by_target.get(pdb_id, set())
-            # Match ligands against prepped_ligands/<target>/<library>/ (or manifest.json).
             libs[pdb_id] = infer_library_name(
                 pdb_id,
                 lig_basenames,
                 prepped_root_override=prepped_root_override,
                 cfg=cfg,
             )
-        df["library_name"] = df["pdb_id"].map(libs).fillna("")
+        if not df_all.empty:
+            df_all["library_name"] = df_all["pdb_id"].map(libs).fillna("")
     else:
         dbg("DEBUG", "library", "report_library=OFF")
 
+    df = df_all.copy()
+    if not df.empty and "target_name" not in df.columns:
+        df["target_name"] = df["pdb_id"].map(names).fillna("")
+    if not df.empty and "library_name" not in df.columns:
+        df["library_name"] = df["pdb_id"].map(libs).fillna("")
+
     analysis_root.mkdir(parents=True, exist_ok=True)
-    
+
     # --- Exclude rows where the inferred library is FDA or the PDB-specific library ---
     # Normalize library names and PDB IDs for robust comparison
     lib_norm = df["library_name"].astype(str).str.strip()
@@ -991,6 +1238,41 @@ def main():
 
     # Keep only the non-excluded rows for downstream metrics/summary
     df = df.loc[~exclude_mask].copy()
+
+    control_long_records: List[Dict] = []
+    control_summary_records: List[Dict] = []
+    if getattr(args, "emit_control_report", False):
+        for pdb_id in control_targets:
+            eval_meta = target_eval_results.get(pdb_id)
+            run_label = _resolve_run_label(pdb_id, eval_meta, args.run_id)
+            target_label = names.get(pdb_id, "")
+            library_label = libs.get(pdb_id, "")
+            csv_path = csv_paths_by_target.get(pdb_id)
+            if csv_path is None:
+                continue
+            selected_log, candidates = _candidate_protein_logs(
+                pdb_id,
+                csv_path,
+                docked_root,
+                log_root_override,
+                cfg,
+            )
+            dbg("DEBUG", "control", f"pdb={pdb_id} log_candidates={[str(c) for c in candidates]}")
+            if selected_log:
+                dbg("INFO", "control", f"pdb={pdb_id} protein_log={selected_log}")
+            else:
+                dbg("WARN", "control", f"pdb={pdb_id} protein_log_missing")
+
+            long_rows, summary_row = _build_control_records(
+                pdb_id,
+                run_label,
+                target_label,
+                library_label,
+                selected_log,
+            )
+            if long_rows:
+                control_long_records.extend(long_rows)
+            control_summary_records.append(summary_row)
 
     summary_name = "summary.tsv"
     if args.run_id:
@@ -1064,11 +1346,38 @@ def main():
             excluded_cols = {"target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant"}
     metric_cols = [c for c in df.columns if c not in excluded_cols]
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
-    pd.DataFrame([{"pdb_id":"macro_avg", **{k: macro[k] for k in metric_cols}}]) \
-      .to_csv(analysis_root / "summary_macro.tsv", sep="\t", index=False)
+    macro_df = pd.DataFrame([{"pdb_id": "macro_avg", **{k: macro[k] for k in metric_cols}}])
+    macro_path = analysis_root / "summary_macro.tsv"
+    macro_df.to_csv(macro_path, sep="\t", index=False)
+
+    if getattr(args, "emit_control_report", False):
+        long_columns = [
+            "pdb_id",
+            "run_id",
+            "target_name",
+            "library_name",
+            "controls_found",
+            "control_id",
+            "rmsd_to_crystal_A",
+            "redock_best_energy_kcal_mol",
+            "chosen",
+            "max_spread_A",
+            "policy",
+        ]
+        report_df = pd.DataFrame(control_long_records, columns=long_columns)
+        control_report_path = analysis_root / "control_redock_report.tsv"
+        report_df.to_csv(control_report_path, sep="\t", index=False)
+
+        control_summary_df = pd.DataFrame(control_summary_records, columns=long_columns)
+        control_summary_path = analysis_root / "control_redock_summary.tsv"
+        control_summary_df.to_csv(control_summary_path, sep="\t", index=False)
+
+        dbg("INFO", "control", f"report_rows={len(report_df)} out={control_report_path}")
+        dbg("INFO", "control", f"summary_rows={len(control_summary_df)} out={control_summary_path}")
+
     print(f"[dbg.summary] header={list(_df[cols].columns)}")
     dbg("INFO", "summary", f"out={summary_path} columns={metric_cols}")
-    dbg("DEBUG", "summary", f"targets_written={len(df)} macro_path={analysis_root / 'summary_macro.tsv'}")
+    dbg("DEBUG", "summary", f"targets_written={len(df)} macro_path={macro_path}")
 
 if __name__ == "__main__":
     main()
