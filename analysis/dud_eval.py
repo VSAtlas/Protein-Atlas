@@ -183,12 +183,22 @@ def evaluate_target(pdb_id: str,
                     lig_col_cli: Optional[str],
                     score_col_cli: Optional[str],
                     bedroc_alpha: float,
-                    logauc_lambda: float) -> Optional[pd.Series]:
+                    logauc_lambda: float,
+                    run_id: Optional[str]) -> Optional[pd.Series]:
     try:
         df = pd.read_csv(csv_path)
     except Exception as e:
         print(f"[WARN] {pdb_id}: failed to read {csv_path}: {e}")
         return None
+
+    if run_id:
+        total_rows = len(df)
+        if "run_id" in df.columns:
+            mask = df["run_id"].astype(str) == str(run_id)
+            df = df.loc[mask].copy()
+            print(f"[eval] Using run_id={run_id} (rows kept: {len(df)}/{total_rows})")
+        else:
+            print("[eval] --run-id specified but CSV has no 'run_id'; proceeding unfiltered.")
 
     lig_col = guess_ligfile_col(df, lig_col_cli)
     score_col = guess_score_col(df, score_col_cli)
@@ -299,6 +309,23 @@ def evaluate_target(pdb_id: str,
     plt.savefig(out_dir / "score_hist.png", dpi=200)
     plt.close()
 
+    variant_label: Optional[str] = None
+    if "variant" in df.columns:
+        variant_series = df["variant"].dropna()
+        if not variant_series.empty:
+            normalized = variant_series.astype(str).str.strip()
+            normalized = normalized[normalized != ""]
+            if not normalized.empty:
+                upper = normalized.str.upper()
+                has_apo = bool((upper == "APO").any())
+                has_holo = bool((upper == "HOLO").any())
+                if has_apo and not has_holo:
+                    variant_label = "APO"
+                elif has_holo and not has_apo:
+                    variant_label = "HOLO"
+                elif has_apo or has_holo:
+                    variant_label = "MIXED"
+
     row = {
         "pdb_id": pdb_id,
         "N": N,
@@ -311,6 +338,8 @@ def evaluate_target(pdb_id: str,
         f"BEDROC_alpha_{bedroc_alpha:g}": bed,
         **ef,
     }
+    if variant_label:
+        row["variant"] = variant_label
     pd.DataFrame([row]).to_csv(out_dir / "metrics.tsv", sep="\t", index=False)
     return pd.Series(row)
 
@@ -338,6 +367,8 @@ def main():
                     help="Column containing ligand filename/path (auto-detected if omitted).")
     ap.add_argument("--score-col", type=str, default=None,
                     help="Score column (lower is better). Auto-detected if omitted.")
+    ap.add_argument("--run-id", type=str, default=None,
+                    help="Filter docking_score_long.csv rows to a specific run identifier.")
     ap.add_argument("--bedroc-alpha", type=float, default=20.0)
     ap.add_argument("--logauc-lambda", type=float, default=1e-3)
     args = ap.parse_args()
@@ -425,6 +456,7 @@ def main():
             score_col_cli=args.score_col,
             bedroc_alpha=args.bedroc_alpha,
             logauc_lambda=args.logauc_lambda,
+            run_id=args.run_id,
         )
         if series is not None:
             rows.append(series)
@@ -435,15 +467,53 @@ def main():
 
     df = pd.DataFrame(rows).sort_values("pdb_id")
     analysis_root.mkdir(parents=True, exist_ok=True)
-    df.to_csv(analysis_root / "summary.tsv", sep="\t", index=False)
 
-    metric_cols = [c for c in df.columns if c not in ("pdb_id","N","n_actives","actives_fraction")]
+    summary_name = "summary.tsv"
+    if args.run_id:
+        run_suffix = str(args.run_id).replace(" ", "")
+        summary_name = f"summary{run_suffix}.tsv"
+    summary_path = analysis_root / summary_name
+
+    variant_col_present = "variant" in df.columns
+    variant_upper = df["variant"].astype(str).str.upper() if variant_col_present else None
+    apo_mask = (variant_upper == "APO") if variant_col_present else None
+    holo_mask = (variant_upper == "HOLO") if variant_col_present else None
+    has_sections = bool(variant_col_present and ((apo_mask is not None and apo_mask.any()) or (holo_mask is not None and holo_mask.any())))
+
+    with open(summary_path, "w", newline="") as fh:
+        if has_sections:
+            apo_rows = df.loc[apo_mask].sort_values("pdb_id") if apo_mask is not None else pd.DataFrame()
+            holo_rows = df.loc[holo_mask].sort_values("pdb_id") if holo_mask is not None else pd.DataFrame()
+            n_apo = len(apo_rows)
+            n_holo = len(holo_rows)
+
+            if n_apo:
+                fh.write("Apo\n")
+                apo_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+            if n_holo:
+                if n_apo:
+                    fh.write("\n")
+                fh.write("Holo\n")
+                holo_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+
+            leftover_mask = ~(apo_mask | holo_mask) if (apo_mask is not None and holo_mask is not None) else pd.Series(False, index=df.index)
+            leftover_rows = df.loc[leftover_mask].sort_values("pdb_id") if not df.empty else pd.DataFrame()
+            if not leftover_rows.empty:
+                if n_apo or n_holo:
+                    fh.write("\n")
+                leftover_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+
+            print(f"[eval] sections: Apo={n_apo} Holo={n_holo}")
+        else:
+            df.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+
+    metric_cols = [c for c in df.columns if c not in ("pdb_id","N","n_actives","actives_fraction","variant")]
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
     pd.DataFrame([{"pdb_id":"macro_avg", **{k: macro[k] for k in metric_cols}}]) \
       .to_csv(analysis_root / "summary_macro.tsv", sep="\t", index=False)
 
     print(f"[OK] Wrote per-target results to: {analysis_root}")
-    print(f"[OK] Summary: {analysis_root / 'summary.tsv'}")
+    print(f"[eval] summary_out={summary_path}")
 
 if __name__ == "__main__":
     main()
