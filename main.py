@@ -52,11 +52,20 @@ from run_vina import run_docking_task, validate_all_poses
 from path_router import expand_variants
 from path_router import make_paths, Paths as RouterPaths
 # >>> PATHS IMPORT END
-def _prepare_run_logfile():
+def _resolve_run_id(argv: list[str]) -> str:
+    cli_run_id = _cli_val(argv, "--run-id")
+    env_run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
+    if cli_run_id:
+        return cli_run_id
+    if env_run_id:
+        return env_run_id
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _prepare_run_logfile(run_id: str) -> str:
     logs_dir = Path.cwd() / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return str(logs_dir / f"main_{ts}.log")
+    return str(logs_dir / f"main_{run_id}.log")
 
 class _Tee:
     def __init__(self, stream, file_path):
@@ -2653,6 +2662,10 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
     dock_dir.mkdir(parents=True, exist_ok=True)
     # >>> DOCKED PATHS PATCH END
 
+    run_id_value = str(cfg.get("RUN_ID") or "")
+    variant_value = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    include_variant = bool(variant_value)
+
     # --- Wide summary (unchanged shape) ---
     csv_out_wide = str(dock_dir / "docking_score_summary.csv")
     flat = {}
@@ -2665,13 +2678,22 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
                 flat[stage_name][lig_key] = s if s is not None else ""
             else:
                 flat[stage_name][lig_key] = f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)"
-    write_score_summary_to_csv(flat, output_path=csv_out_wide)
+    write_score_summary_to_csv(
+        flat,
+        output_path=csv_out_wide,
+        run_id=run_id_value,
+        variant=variant_value if include_variant else None,
+    )
 
     # --- Long format with self_rmsd added ---
     csv_out_long = str(dock_dir / "docking_score_long.csv")
     with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd", "pains_flag"])
+        header = ["run_id"]
+        if include_variant:
+            header.append("variant")
+        header.extend(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd", "pains_flag"])
+        writer.writerow(header)
 
         for stage_name, stage_map in score_history.items():
             for lig, rec in stage_map.items():
@@ -2700,7 +2722,11 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
                 le_str = f"{le:.4f}" if isinstance(le, (int, float)) else ""
                 reason_str = str(reason) if reason is not None else ""
 
-                writer.writerow([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str, sr_str, int(pains_hit)])
+                row = [run_id_value]
+                if include_variant:
+                    row.append(variant_value)
+                row.extend([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str, sr_str, int(pains_hit)])
+                writer.writerow(row)
 
     return csv_out_wide
 
@@ -3351,9 +3377,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 # ======================
 def main() -> None:
     print("MODELLER is working with license.")
-    log_path = os.environ.get("ATLAS_LOG_FILE") or _prepare_run_logfile()
+    run_id = _resolve_run_id(sys.argv)
+    os.environ["ATLAS_RUN_ID"] = run_id
+    log_path = _prepare_run_logfile(run_id)
     os.environ["ATLAS_LOG_FILE"] = log_path
     _tee_stdio_to(log_path)
+    print(f"[run] log_file={log_path} run_id={run_id}")
     cfg = load_inputs()
     validate_config(cfg)
 
@@ -3363,11 +3392,10 @@ def main() -> None:
 
     # CLI > ENV > CFG
     cli_cfg_dir = _cli_val(sys.argv, "--configs-dir")
-    cli_run_id = _cli_val(sys.argv, "--run-id")
     cli_no_reset = _cli_has(sys.argv, "--no-reset-configs")
 
     if cli_cfg_dir:  cfg["CONFIGS_DIR"] = cli_cfg_dir
-    if cli_run_id:   cfg["RUN_ID"] = cli_run_id
+    cfg["RUN_ID"] = run_id
     if cli_no_reset: cfg["RESET_CONFIGS"] = False
 
     init_config_run_dir(cfg, run_id=cfg.get("RUN_ID"), reset=cfg.get("RESET_CONFIGS"),
