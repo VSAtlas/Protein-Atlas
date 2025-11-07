@@ -104,7 +104,7 @@ def _fmt_counts_and_round(df: pd.DataFrame) -> pd.DataFrame:
 
 def _df_to_pretty_text(df: pd.DataFrame, title: str | None = None) -> str:
     """
-    Produce an aligned, human-readable table using pandas' to_string.
+    Produce an aligned, readable table using pandas' to_string.
     Assumes df is already ordered and formatted for display.
     """
     # Choose widths implicitly; pandas to_string aligns numbers right by default
@@ -125,6 +125,20 @@ def _write_pretty_summary(sections: list[tuple[str | None, pd.DataFrame]], out_p
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n\n".join(parts) + ("\n" if parts else ""))
+
+
+def _write_pretty_table_noformat(df: pd.DataFrame, out_path: Path, title: str | None = None) -> None:
+    """
+    Write a readable, aligned text table without changing any values.
+    This preserves rows, columns, order, and raw numeric formatting.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        if title:
+            f.write(f"{title}\n")
+        f.write(df.to_string(index=False))
+        f.write("\n")
+
 
 
 
@@ -1374,6 +1388,11 @@ def main():
 
         dbg("INFO", "control", f"report_rows={len(report_df)} out={control_report_path}")
         dbg("INFO", "control", f"summary_rows={len(control_summary_df)} out={control_summary_path}")
+        # Pretty control summary (no schema/value changes)
+        if getattr(args, "pretty_summary", True):
+            control_pretty_path = control_summary_path.with_name(control_summary_path.stem + "_pretty.txt")
+            _write_pretty_table_noformat(control_summary_df, control_pretty_path, title="Control Redock Summary")
+            print(f"[control] pretty_summary_out={control_pretty_path}")
 
     print(f"[dbg.summary] header={list(_df[cols].columns)}")
     dbg("INFO", "summary", f"out={summary_path} columns={metric_cols}")
