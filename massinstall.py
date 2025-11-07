@@ -18,7 +18,8 @@ if pdb_list_path:
 
 # Fallback to the baked-in list if no file provided or read failed
 if not pdb_ids:
-    pdb_ids = [ "6JQR", "4RT7", "5I96", "6ADQ", "6U4J", "6O0K", "5L7I", "1T46", "6WTN", "1IEP", "1OPJ", "3OG7", "5L2I", "4U5J", "2XP2", "4XV2", "1M17", "4AG8", "2GQG", "3CS9", "3OXZ", "5L7D", "3LXK", "4XUF", "2HYY", "4I4E", "3QX3", "2RGC", "4ASD", "3DZY", "5VY4", "3WZE", "3WZD", "4AGC", "4TWP", "5MO4", "4R7H", "6GQO", "5C7X", "2ITN", "3ZOS", "2ZGQ", "2WGJ", "3G0E", "4U2P", "6O0L", "5VA0", "3ZBF", "2E2B", "5TQH" ]
+    pdb_ids = [ "4XUF", "1T46", "3JYX", "3C4F", "3DKF", "3CQW", "3D0E", "1Q5K", "3PY3", "3M2W", "2SRC", "1QCF", "2J0J", "2AEV", "3VO3", "4GRL", "3D4Q", "3KMR", "3ADX", "4LXZ", "3SFF", "1UY6", "4UND", "5IKR", "2AM9", "3ERT", "1A28", "3G6U", "2AA2", "2ITY","2HZI", "2OF2", "1AQ1", "6JON", "5TQY", "4JBV", "6GQ7", "4WAF", "4YHJ", "3DWW","4JVG", "6I83", "6I84", "6G76", "4L00", "3KDP", "4N9Y", "6GQ9", "6GQ6", "3LVP","5I35", "5NTS", "4ZDU", "3O96", "6I82", "6XBX", "3E9X", "4PYP", "3PP0", "5W8L","6EG8", "6EKF", "5N2R", "3SMQ", "5LS6", "6FZH", "4PAX", "6C1X", "4MCH", "6NNU","5ZLU", "6VQN", "5X03", "4FNY", "3TYL", "5W3J", "6KKN", "6IGK", "5I35", "6C6Y","6E6E", "6F6T", "6KRM", "6LFE", "6G2H", "5WRT", "6M99", "5N21", "5VC9", "4UMW"
+ ]
 
 for pdb_id in pdb_ids:
     url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
