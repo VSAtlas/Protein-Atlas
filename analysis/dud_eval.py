@@ -76,6 +76,7 @@ CONTROL_REDOCK_RE = re.compile(
     r"\[control-redock\]\s+lig=([^\s]+)\s+rmsd=([0-9.]+)\s+A\s+score=([0-9.\-]+)",
     re.IGNORECASE,
 )
+_CONTROL_PATTERNS_LOGGED = False
 
 # >>> PATHS IMPORT START
 from pathlib import Path
@@ -883,11 +884,12 @@ def _build_control_records(pdb_id: str,
                            run_id_label: str,
                            target_name: str,
                            library_name: str,
-                           log_path: Optional[Path]) -> Tuple[List[Dict], Dict]:
+                           log_path: Optional[Path]) -> Tuple[List[Dict], Dict, Dict[str, int]]:
     long_rows: List[Dict] = []
     controls_found = 0
     max_spread: Optional[float] = None
     policy = ""
+    centers_detected = False
 
     if not log_path or not log_path.exists():
         summary_row = {
@@ -903,7 +905,8 @@ def _build_control_records(pdb_id: str,
             "max_spread_A": None,
             "policy": "",
         }
-        return long_rows, summary_row
+        meta = {"centers_found": 0, "redock_lines": 0, "report_rows": 0}
+        return long_rows, summary_row, meta
 
     try:
         with log_path.open("r", encoding="utf-8", errors="ignore") as fh:
@@ -913,6 +916,7 @@ def _build_control_records(pdb_id: str,
                     continue
                 m_centers = CONTROL_CENTERS_RE.search(line)
                 if m_centers:
+                    centers_detected = True
                     try:
                         controls_found = int(m_centers.group(1))
                     except Exception:
@@ -984,6 +988,16 @@ def _build_control_records(pdb_id: str,
         if ordered:
             chosen_index = ordered[0][0]
             long_rows[chosen_index]["chosen"] = 1
+            chosen_row = long_rows[chosen_index]
+            dbg(
+                "DEBUG",
+                "control",
+                (
+                    f"pdb={pdb_id} chosen_control={chosen_row['control_id']} "
+                    f"best_rmsd_A={chosen_row['rmsd_to_crystal_A']} "
+                    f"best_score_kcal={chosen_row['redock_best_energy_kcal_mol']}"
+                ),
+            )
 
     summary_row = {
         "pdb_id": pdb_id,
@@ -1008,7 +1022,13 @@ def _build_control_records(pdb_id: str,
             "chosen": 1,
         })
 
-    return long_rows, summary_row
+    meta = {
+        "centers_found": 1 if centers_detected else 0,
+        "redock_lines": len(long_rows),
+        "report_rows": len(long_rows),
+    }
+
+    return long_rows, summary_row, meta
 
 def main():
     ap = argparse.ArgumentParser(description="Atlas VS benchmark evaluator (filename-labeled actives/decoys).")
@@ -1255,7 +1275,23 @@ def main():
 
     control_long_records: List[Dict] = []
     control_summary_records: List[Dict] = []
+    scanned_ok: List[str] = []
+    missing_logs: List[str] = []
+    parsed_counts: Dict[str, Dict[str, int]] = {}
     if getattr(args, "emit_control_report", False):
+        global _CONTROL_PATTERNS_LOGGED
+        if not _CONTROL_PATTERNS_LOGGED:
+            dbg(
+                "DEBUG",
+                "control",
+                f"searching_pattern.control_centers=\"{CONTROL_CENTERS_RE.pattern}\"",
+            )
+            dbg(
+                "DEBUG",
+                "control",
+                f"searching_pattern.control_redock=\"{CONTROL_REDOCK_RE.pattern}\"",
+            )
+            _CONTROL_PATTERNS_LOGGED = True
         for pdb_id in control_targets:
             eval_meta = target_eval_results.get(pdb_id)
             run_label = _resolve_run_label(pdb_id, eval_meta, args.run_id)
@@ -1264,6 +1300,7 @@ def main():
             csv_path = csv_paths_by_target.get(pdb_id)
             if csv_path is None:
                 continue
+            parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
             selected_log, candidates = _candidate_protein_logs(
                 pdb_id,
                 csv_path,
@@ -1274,19 +1311,45 @@ def main():
             dbg("DEBUG", "control", f"pdb={pdb_id} log_candidates={[str(c) for c in candidates]}")
             if selected_log:
                 dbg("INFO", "control", f"pdb={pdb_id} protein_log={selected_log}")
+                scanned_ok.append(pdb_id)
             else:
-                dbg("WARN", "control", f"pdb={pdb_id} protein_log_missing")
+                missing_logs.append(pdb_id)
+                missing_hint = str(candidates[0]) if candidates else str(Path("docked") / pdb_id / "protein.log")
+                dbg(
+                    "WARN",
+                    "control",
+                    f"pdb={pdb_id} protein_log_missing={missing_hint} action=skip_control_parse",
+                )
 
-            long_rows, summary_row = _build_control_records(
+            long_rows, summary_row, meta = _build_control_records(
                 pdb_id,
                 run_label,
                 target_label,
                 library_label,
                 selected_log,
             )
+            if pdb_id not in parsed_counts:
+                parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
+            parsed_counts[pdb_id]["centers"] = meta.get("centers_found", 0)
+            parsed_counts[pdb_id]["redock_lines"] = meta.get("redock_lines", 0)
+            parsed_counts[pdb_id]["report_rows"] = meta.get("report_rows", 0)
+            dbg(
+                "INFO",
+                "control",
+                (
+                    f"pdb={pdb_id} centers_found={parsed_counts[pdb_id]['centers']} "
+                    f"redock_lines={parsed_counts[pdb_id]['redock_lines']} "
+                    f"report_rows={parsed_counts[pdb_id]['report_rows']}"
+                ),
+            )
             if long_rows:
                 control_long_records.extend(long_rows)
             control_summary_records.append(summary_row)
+        for pdb_id in control_targets:
+            if pdb_id not in parsed_counts:
+                parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
+                if pdb_id not in missing_logs and pdb_id not in scanned_ok:
+                    missing_logs.append(pdb_id)
 
     summary_name = "summary.tsv"
     if args.run_id:
@@ -1393,6 +1456,76 @@ def main():
             control_pretty_path = control_summary_path.with_name(control_summary_path.stem + "_pretty.txt")
             _write_pretty_table_noformat(control_summary_df, control_pretty_path, title="Control Redock Summary")
             print(f"[control] pretty_summary_out={control_pretty_path}")
+
+    total_targets = len(control_targets)
+    total_scanned = len(scanned_ok)
+    total_missing = len(missing_logs)
+    scanned_label = ",".join(scanned_ok) if scanned_ok else "(none)"
+    missing_label = ",".join(missing_logs) if missing_logs else "(none)"
+    total_redock = sum(stats.get("redock_lines", 0) for stats in parsed_counts.values())
+    total_centers = sum(stats.get("centers", 0) for stats in parsed_counts.values())
+    total_reports = sum(stats.get("report_rows", 0) for stats in parsed_counts.values())
+
+    dbg("INFO", "summary", f"n_targets_total={total_targets}")
+    dbg(
+        "INFO",
+        "summary",
+        f"n_logs_scanned={total_scanned} n_logs_missing={total_missing}",
+    )
+    dbg("INFO", "summary", f"scanned_ok={scanned_label}")
+    dbg("INFO", "summary", f"missing_logs={missing_label}")
+    dbg(
+        "INFO",
+        "summary",
+        (
+            "totals: "
+            f"redock_lines={total_redock} "
+            f"control_centers_found={total_centers} "
+            f"report_rows={total_reports}"
+        ),
+    )
+
+    scan_summary_path = analysis_root / "control_redock_scan_summary.txt"
+    per_target_rows: List[Dict[str, int | str]] = []
+    for pdb_id in control_targets:
+        stats = parsed_counts.get(pdb_id, {"centers": 0, "redock_lines": 0, "report_rows": 0})
+        per_target_rows.append(
+            {
+                "pdb_id": pdb_id,
+                "centers_found": stats.get("centers", 0),
+                "redock_lines": stats.get("redock_lines", 0),
+                "report_rows": stats.get("report_rows", 0),
+            }
+        )
+    with open(scan_summary_path, "w", encoding="utf-8") as fh:
+        fh.write("Control Log Scan Summary\n")
+        fh.write(f"n_targets_total: {total_targets}\n")
+        fh.write(f"n_logs_scanned: {total_scanned}\n")
+        fh.write(f"n_logs_missing: {total_missing}\n")
+        fh.write(f"scanned_ok: {scanned_label}\n")
+        fh.write(f"missing_logs: {missing_label}\n")
+        fh.write(
+            (
+                "totals: "
+                f"redock_lines={total_redock} "
+                f"control_centers_found={total_centers} "
+                f"report_rows={total_reports}\n"
+            )
+        )
+        fh.write("\nPer-target counts\n")
+        if per_target_rows:
+            counts_df = pd.DataFrame(per_target_rows, columns=[
+                "pdb_id",
+                "centers_found",
+                "redock_lines",
+                "report_rows",
+            ])
+            fh.write(counts_df.to_string(index=False))
+            fh.write("\n")
+        else:
+            fh.write("(none)\n")
+
+    dbg("INFO", "summary", f"scan_summary_pretty={scan_summary_path}")
 
     print(f"[dbg.summary] header={list(_df[cols].columns)}")
     dbg("INFO", "summary", f"out={summary_path} columns={metric_cols}")
