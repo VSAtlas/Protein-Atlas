@@ -77,6 +77,47 @@ if str(_REPO_ROOT) not in sys.path:
 from path_router import make_paths, expand_variants
 
 
+
+def _fmt_counts_and_round(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with big counts comma-formatted and floats rounded to 3 dp (for display only)."""
+    out = df.copy()
+    # Comma-format counts if present
+    for c in ("N", "n_actives"):
+        if c in out.columns:
+            out[c] = out[c].map(lambda v: f"{int(v):,}" if pd.notna(v) else "")
+    # Round floats to 3 decimals (display only)
+    for c in out.select_dtypes(include=["float", "float64"]).columns:
+        if c not in ("actives_fraction",):  # optional: keep full precision here if you prefer
+            out[c] = out[c].map(lambda v: f"{v:.3f}" if pd.notna(v) else "")
+    return out
+
+def _df_to_pretty_text(df: pd.DataFrame, title: str | None = None) -> str:
+    """
+    Produce an aligned, human-readable table using pandas' to_string.
+    Assumes df is already ordered and formatted for display.
+    """
+    # Choose widths implicitly; pandas to_string aligns numbers right by default
+    body = df.to_string(index=False)
+    return (title + "\n" + body) if title else body
+
+def _write_pretty_summary(sections: list[tuple[str | None, pd.DataFrame]], out_path: Path) -> None:
+    """
+    sections: list of (title, df) pairs. title can be None for single-table case.
+    Writes a single text file with optional section headers separated by blank lines.
+    """
+    parts = []
+    for title, df in sections:
+        if df is None or df.empty:
+            continue
+        df_disp = _fmt_counts_and_round(df)
+        parts.append(_df_to_pretty_text(df_disp, title=title))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n\n".join(parts) + ("\n" if parts else ""))
+
+
+
+
 def _dedup(seq: Iterable[str]) -> List[str]:
     """Preserve order while removing duplicates."""
     seen: Set[str] = set()
@@ -188,7 +229,17 @@ def infer_library_name(target_id: str,
                        *,
                        prepped_root_override: Optional[Path],
                        cfg: Dict) -> str:
-    """Infer library folder name via manifest or filename overlap."""
+    """
+    Infer library folder name when libraries live at:
+        <prepped_root>/<library>/*files*
+    No per-PDB subdirectory is expected.
+
+    Preference:
+      1) (currently no json but might make one in the future) manifest.json at library root with "library_name"/"name"/"library"/"label"
+      2) filename-overlap between docked basenames and files in <library> (non-recursive; optional shallow)
+    """
+
+    # --- gather candidate roots from CLI override + config
     candidate_roots: List[Path] = []
     if prepped_root_override:
         candidate_roots.append(prepped_root_override)
@@ -199,22 +250,30 @@ def infer_library_name(target_id: str,
         except Exception:
             pass
 
-    seen: Set[Path] = set()
     roots: List[Path] = []
-    for root in candidate_roots:
-        if root and root not in seen:
-            seen.add(root)
-            roots.append(root)
+    seen: Set[Path] = set()
+    for r in candidate_roots:
+        if r and r not in seen:
+            seen.add(r)
+            roots.append(r)
 
+    # DEBUG: show roots + docked basename sample
     if roots:
-        dbg("DEBUG", "library", f"pdb={target_id} search_roots={';'.join(str(r) for r in roots)} basenames={len(ligand_basenames)}")
+        dbg("DEBUG", "library", f"pdb={target_id} search_roots={';'.join(str(r) for r in roots)}")
     else:
         dbg("WARN", "library", f"pdb={target_id} no candidate roots for library inference")
 
+    if ligand_basenames:
+        dbg("DEBUG", "library",
+            f"pdb={target_id} docked_basenames_n={len(ligand_basenames)} "
+            f"sample={list(sorted(ligand_basenames))[:3]}")
+    else:
+        dbg("DEBUG", "library", f"pdb={target_id} docked_basenames_n=0")
+
     def _manifest_label(manifest_path: Path) -> Optional[str]:
         try:
-            with manifest_path.open("r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            with manifest_path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
         except Exception:
             return None
         for key in ("library_name", "name", "library", "label"):
@@ -223,48 +282,95 @@ def infer_library_name(target_id: str,
                 return val.strip()
         return None
 
-    def _collect_basenames(folder: Path) -> Set[str]:
-        allowed_suffixes = {".pdbqt", ".sdf", ".mol2"}
-        names: Set[str] = set()
-        for entry in folder.iterdir():
-            if entry.is_file() and entry.suffix.lower() in allowed_suffixes:
-                names.add(entry.name)
-        return names
+    def _collect_basenames_top(folder: Path) -> Set[str]:
+        """Non-recursive: only files directly under <library>."""
+        allowed = {".pdbqt", ".sdf", ".mol2"}
+        out: Set[str] = set()
+        try:
+            for e in folder.iterdir():
+                if e.is_file() and e.suffix.lower() in allowed:
+                    out.add(e.name)
+        except FileNotFoundError:
+            pass
+        return out
+
+    # (Optional) shallow peek—uncomment if you want actives/decoys support without full recursion
+    def _collect_basenames_shallow(folder: Path) -> Set[str]:
+        allowed = {".pdbqt", ".sdf", ".mol2"}
+        out: Set[str] = set()
+        # top level
+        out |= _collect_basenames_top(folder)
+        # shallow subdirs commonly used
+        for sub in ("actives", "decoys"):
+            subdir = folder / sub
+            if subdir.is_dir():
+                try:
+                    for e in subdir.iterdir():
+                        if e.is_file() and e.suffix.lower() in allowed:
+                            out.add(e.name)
+                except FileNotFoundError:
+                    pass
+        return out
+
+    best_name: Optional[str] = None
+    best_score = -1
+    have_tie = False
 
     for root in roots:
-        target_dir = root / target_id
-        if not target_dir.exists():
+        dbg("DEBUG", "library", f"pdb={target_id} scanning_root={root}")
+        if not root.exists():
+            dbg("WARN", "library", f"pdb={target_id} root_missing={root}")
             continue
-        best_name: Optional[str] = None
-        best_score = -1
-        tied = False
-        for library_dir in sorted(target_dir.iterdir()):
+
+        # iterate each <library> folder at the root
+        for library_dir in sorted(root.iterdir()):
             if not library_dir.is_dir():
                 continue
+
+            dbg("DEBUG", "library", f"pdb={target_id} candidate_library={library_dir.name}")
+
+            # 1) manifest preference
             manifest = library_dir / "manifest.json"
             if manifest.exists():
                 label = _manifest_label(manifest)
+                dbg("DEBUG", "library", f"pdb={target_id} manifest_found={manifest} label={label or '<none>'}")
                 if label:
-                    dbg("INFO", "library", f"pdb={target_id} picked='{label}' method='manifest' root={library_dir}")
+                    dbg("INFO", "library",
+                        f"pdb={target_id} picked='{label}' method='manifest' root={library_dir}")
                     return label
-            basenames = _collect_basenames(library_dir)
+
+            # 2) filename-overlap (non-recursive; flip to _collect_basenames_shallow if needed)
+            basenames = _collect_basenames_top(library_dir)
+            dbg("DEBUG", "library",
+                f"pdb={target_id} library={library_dir.name} files_seen={len(basenames)} "
+                f"sample={list(sorted(basenames))[:3] if basenames else []}")
+
             if not basenames:
-                continue
+                # Uncomment next two lines to consider shallow subdirs if top-level empty
+                # basenames = _collect_basenames_shallow(library_dir)
+                # dbg("DEBUG", "library", f"pdb={target_id} library={library_dir.name} shallow_files_seen={len(basenames)}")
+                if not basenames:
+                    continue
+
             score = len(ligand_basenames & basenames) if ligand_basenames else 0
+            dbg("DEBUG", "library", f"pdb={target_id} library={library_dir.name} overlap_score={score}")
             if score > best_score:
                 best_score = score
                 best_name = library_dir.name
-                tied = False
+                have_tie = False
             elif score == best_score and score >= 0:
-                tied = True
-        if best_name and best_score > 0 and not tied:
-            dbg("INFO", "library", f"pdb={target_id} picked='{best_name}' method='filename_overlap' score={best_score}")
-            return best_name
-        if best_name and tied:
-            dbg("WARN", "library", f"pdb={target_id} filename_overlap ties score={best_score}")
-    if roots:
-        dbg("WARN", "library", f"pdb={target_id} no library match found in roots")
+                have_tie = True
+
+    if best_name and best_score > 0 and not have_tie:
+        dbg("INFO", "library",
+            f"pdb={target_id} picked='{best_name}' method='filename_overlap' score={best_score}")
+        return best_name
+    if best_name and have_tie:
+        dbg("WARN", "library", f"pdb={target_id} filename_overlap ties score={best_score}")
+    dbg("WARN", "library", f"pdb={target_id} no library match found in roots")
     return ""
+
+
 
 
 def derive_target_name(target_id: str,
@@ -272,48 +378,18 @@ def derive_target_name(target_id: str,
                        prefer: str,
                        pdb_root_override: Optional[Path],
                        cfg: Dict) -> str:
-    candidates: List[Path] = []
-    origins: Dict[Path, str] = {}
-
-    def _append_candidate(path: Optional[Path], label: str) -> None:
-        if path and path.exists() and path not in origins:
-            origins[path] = label
-            candidates.append(path)
-
-    def _collect_from_dir(base: Path, label: str) -> None:
-        if not base.exists():
-            return
-        for pattern in ("*.pdb", "*/*.pdb"):
-            for found in sorted(base.glob(pattern)):
-                _append_candidate(found, label)
-
-    if pdb_root_override:
-        base = pdb_root_override / target_id
-        _collect_from_dir(base, "override")
-
-    if cfg:
-        try:
-            paths = make_paths(cfg, base_id=target_id, pdb_file=f"{target_id}.pdb")
-        except Exception:
-            paths = None
-        if paths is not None:
-            _collect_from_dir(paths.root_pdb_dir, "processed_root")
-            _append_candidate(paths.input_pdb_path, "input_pdbs")
-
-    if candidates:
-        labels = sorted({origins[p] for p in candidates})
-        dbg("DEBUG", "target", f"pdb={target_id} candidate_pdbs={len(candidates)} sources={','.join(labels)} first='{candidates[0]}'")
-
-    if not candidates:
-        dbg("WARN", "target", f"pdb={target_id} no candidate PDB files for target_name")
+    pdb_path = Path("input_pdbs") / f"{target_id}.pdb"
+    exists = pdb_path.exists()
+    print(f"[dbg.target.source] pdb={target_id} path=input_pdbs/{target_id}.pdb exists={str(exists)}")
+    if not exists:
         return ""
 
-    header_lines = _read_pdb_header_lines(candidates[0])
-    if not header_lines:
-        dbg("WARN", "target", f"pdb={target_id} unable to read PDB header from {candidates[0]}")
-        return ""
+    header_lines = _read_pdb_header_lines(pdb_path)
     compnd = extract_compnd_molecules(header_lines)
     entries, accessions = extract_uniprot_from_dbref(header_lines)
+    compnd_label = compnd[0] if compnd else ""
+    uniprot_label = accessions[0] if accessions else (entries[0] if entries else "")
+    print(f"[dbg.target.extract] pdb={target_id} compnd='{compnd_label}' uniprot='{uniprot_label}' prefer={prefer}")
     choice = choose_target_name(compnd, entries, accessions, prefer=prefer)
     source = ""
     compnd_choice = ", ".join(compnd) if compnd else ""
@@ -718,6 +794,15 @@ def main():
                     help="If set, attempt to infer library_name from prepped_ligands.")
     ap.add_argument("--prepped-root", type=str, default=None,
                     help="Optional override root for prepped ligands (prepped_ligands/<target>/).")
+    try:
+        ap.add_argument("--pretty-summary", action=argparse.BooleanOptionalAction, default=True,
+                        help="Also write a human-readable aligned text summary (default: on).")
+    except Exception:
+        ap.add_argument("--pretty-summary", dest="pretty_summary", action="store_true",
+                        help="Write a human-readable aligned text summary.")
+        ap.add_argument("--no-pretty-summary", dest="pretty_summary", action="store_false")
+        ap.set_defaults(pretty_summary=True)
+
     args = ap.parse_args()
 
     set_log_level(args.log_level)
@@ -876,6 +961,36 @@ def main():
         dbg("DEBUG", "library", "report_library=OFF")
 
     analysis_root.mkdir(parents=True, exist_ok=True)
+    
+    # --- Exclude rows where the inferred library is FDA or the PDB-specific library ---
+    # Normalize library names and PDB IDs for robust comparison
+    lib_norm = df["library_name"].astype(str).str.strip()
+    pdb_norm = df["pdb_id"].astype(str).str.strip()
+    # FDA library (accept both "fda_library" and "fda")
+    mask_fda = lib_norm.str.lower().isin({"fda_library", "fda"})
+    # Per-PDB library: library name equals the PDB code (case-insensitive)
+    mask_pdb = lib_norm.str.upper() == pdb_norm.str.upper()
+    exclude_mask = mask_fda | mask_pdb
+    # Emit a visible exclusions report with reasons
+    if exclude_mask.any():
+        excluded = df.loc[exclude_mask, ["pdb_id", "library_name"]].copy()
+        # Reason per row
+        excluded["reason"] = np.where(
+            mask_fda.loc[exclude_mask],
+            "library name = fda library",
+            "library name = pdb",
+        )
+        excl_path = analysis_root / "excluded.tsv"
+        excluded.to_csv(excl_path, sep="\t", index=False)
+        dbg("INFO", "exclude", f"excluded={len(excluded)} out={excl_path}")
+        # Also print each line for quick visibility
+        for _, r in excluded.iterrows():
+            print(f"[exclude] pdb={r['pdb_id']} library={r['library_name']} reason={r['reason']}")
+    else:
+        dbg("DEBUG", "exclude", "excluded=0")
+
+    # Keep only the non-excluded rows for downstream metrics/summary
+    df = df.loc[~exclude_mask].copy()
 
     summary_name = "summary.tsv"
     if args.run_id:
@@ -896,14 +1011,37 @@ def main():
             n_apo = len(apo_rows)
             n_holo = len(holo_rows)
 
+            sections = []
             if n_apo:
-                fh.write("Apo\n")
-                apo_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+                apo_out = apo_rows.drop(columns=["variant"], errors="ignore")
+                a_cols = [c for c in ("target_name", "library_name", "pdb_id") if c in apo_out.columns] \
+                         + [c for c in apo_out.columns if c not in ("target_name", "library_name", "pdb_id")]
+                fh.write("Apo\n");
+                apo_out[a_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
+                sections.append(("Apo", apo_out[a_cols]))
+
             if n_holo:
-                if n_apo:
-                    fh.write("\n")
-                fh.write("Holo\n")
-                holo_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+                if n_apo: fh.write("\n")
+                holo_out = holo_rows.drop(columns=["variant"], errors="ignore")
+                h_cols = [c for c in ("target_name", "library_name", "pdb_id") if c in holo_out.columns] \
+                         + [c for c in holo_out.columns if c not in ("target_name", "library_name", "pdb_id")]
+                fh.write("Holo\n");
+                holo_out[h_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
+                sections.append(("Holo", holo_out[h_cols]))
+
+            if not leftover_rows.empty:
+                if n_apo or n_holo: fh.write("\n")
+                lo_out = leftover_rows.drop(columns=["variant"], errors="ignore")
+                l_cols = [c for c in ("target_name", "library_name", "pdb_id") if c in lo_out.columns] \
+                         + [c for c in lo_out.columns if c not in ("target_name", "library_name", "pdb_id")]
+                lo_out[l_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
+                sections.append(("Unlabeled", lo_out[l_cols]))
+
+            # Pretty summary file (same run-id naming as TSV)
+            if args.pretty_summary and sections:
+                pretty_name = summary_path.with_name(summary_path.stem + "_pretty.txt")
+                _write_pretty_summary(sections, pretty_name)
+                print(f"[eval] pretty_summary_out={pretty_name}")
 
             leftover_mask = ~(apo_mask | holo_mask) if (apo_mask is not None and holo_mask is not None) else pd.Series(False, index=df.index)
             leftover_rows = df.loc[leftover_mask].sort_values("pdb_id") if not df.empty else pd.DataFrame()
@@ -913,13 +1051,22 @@ def main():
                 leftover_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
             dbg("INFO", "summary", f"sections=Apo:{n_apo} Holo:{n_holo} other={len(leftover_rows)}")
         else:
-            df.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+            _df = df.drop(columns=["variant"], errors="ignore")
+            cols = [c for c in ("target_name", "library_name", "pdb_id") if c in _df.columns] \
+                   + [c for c in _df.columns if c not in ("target_name", "library_name", "pdb_id")]
+            _df[cols].to_csv(fh, sep="\t", index=False)
+            # Pretty summary alongside TSV
+            if args.pretty_summary:  # if you added the flag; otherwise remove the 'if'
+                pretty_name = summary_path.with_name(summary_path.stem + "_pretty.txt")
+            _write_pretty_summary([(None, _df[cols])], pretty_name)
+            print(f"[eval] pretty_summary_out={pretty_name}")
 
-    excluded_cols = {"pdb_id", "N", "n_actives", "actives_fraction", "variant", "target_name", "library_name"}
+            excluded_cols = {"target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant"}
     metric_cols = [c for c in df.columns if c not in excluded_cols]
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
     pd.DataFrame([{"pdb_id":"macro_avg", **{k: macro[k] for k in metric_cols}}]) \
       .to_csv(analysis_root / "summary_macro.tsv", sep="\t", index=False)
+    print(f"[dbg.summary] header={list(_df[cols].columns)}")
     dbg("INFO", "summary", f"out={summary_path} columns={metric_cols}")
     dbg("DEBUG", "summary", f"targets_written={len(df)} macro_path={analysis_root / 'summary_macro.tsv'}")
 
