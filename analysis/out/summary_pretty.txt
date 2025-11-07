@@ -4,7 +4,7 @@ PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   2HYY 11,212       296
           HEPATOCYTE GROWTH FACTOR RECEPTOR          met   2WGJ  2,812       247          0.087838   0.773  0.267  0.319      0.174           0.367  6.505  5.082 3.633  2.998
 PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   3CS9 11,212       296          0.026400   0.677  0.199  0.351      0.206           0.358 17.248 12.852 6.617  3.717
           PROTEIN (ESTROGEN RECEPTOR ALPHA)         esr1   3ERT 12,544       627          0.049984   0.762  0.171  0.312      0.167           0.284  9.123  6.217 3.861  2.920
-      MAST/STEM CELL GROWTH FACTOR RECEPTOR          kit   3G0E 10,863       253          0.023290   0.767  0.068  0.293      0.149           0.201  6.303  4.353 3.084  3.123
+      MAST/STEM CELL GROWTH FACTOR RECEPTOR          kit   3G0E 10,863       253          0.023290   0.769  0.078  0.300      0.155           0.210  6.697  4.353 3.400  3.163
                   AKAP9-BRAF FUSION PROTEIN         braf   3OG7  9,469       251          0.026508   0.833  0.207  0.422      0.277           0.404 19.061 12.176 7.019  4.900
                TYROSINE-PROTEIN KINASE ABL1         abl1   3OXZ 11,180       295          0.026386   0.700  0.210  0.348      0.204           0.330 15.904 10.321 5.627  3.729
  PROTO-ONCOGENE TYROSINE-PROTEIN KINASE SRC          src   4U5J 26,889       831          0.030905   0.517  0.031  0.146      0.001           0.068  0.842  0.962 1.156  0.951
