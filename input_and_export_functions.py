@@ -470,7 +470,7 @@ def define_docking_stages(mode="discovery"):
 # -------------------------
 # Score I/O
 # -------------------------
-def write_score_summary_to_csv(score_history, output_path="docking_score_summary.csv"):
+def write_score_summary_to_csv(score_history, output_path="docking_score_summary.csv", run_id=None, variant=None):
     ligand_stage_pattern = re.compile(r"^(.*?)(_stage\d+)?\.pdbqt$", re.IGNORECASE)
     ligand_scores = defaultdict(dict)
 
@@ -485,10 +485,21 @@ def write_score_summary_to_csv(score_history, output_path="docking_score_summary
     all_ligands = sorted(ligand_scores.keys())
     all_stages = sorted(score_history.keys())
 
-    header = ["Ligand"] + all_stages
+    run_id_value = "" if run_id is None else str(run_id)
+    variant_value = (variant or "").strip()
+    include_variant = bool(variant is not None and variant_value)
+
+    header = ["run_id"]
+    if include_variant:
+        header.append("variant")
+    header.append("Ligand")
+    header.extend(all_stages)
     rows = []
     for ligand in all_ligands:
-        row = [ligand]
+        row = [run_id_value]
+        if include_variant:
+            row.append(variant_value)
+        row.append(ligand)
         for stage in all_stages:
             score = ligand_scores[ligand].get(stage, "")
             if isinstance(score, (float, int)):
@@ -581,6 +592,8 @@ def write_scores_csv(cfg, pdb_id, score_history):
     os.makedirs(variant_root, exist_ok=True)
     csv_output_path = os.path.join(variant_root, "docking_score_summary.csv")
 
+    run_id_value = str(cfg.get("RUN_ID") or "")
+
     flat_history = {}
     for stage_name, stage_map in score_history.items():
         flat_history[stage_name] = {}
@@ -591,7 +604,12 @@ def write_scores_csv(cfg, pdb_id, score_history):
             else:
                 flat_history[stage_name][lig] = (f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)")
 
-    write_score_summary_to_csv(flat_history, output_path=csv_output_path)
+    write_score_summary_to_csv(
+        flat_history,
+        output_path=csv_output_path,
+        run_id=run_id_value,
+        variant=var,
+    )
     return csv_output_path
 
 
