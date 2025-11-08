@@ -13,33 +13,22 @@
 
 from __future__ import annotations
 
-import sys
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-import os
-import time
-import json
-import logging
-import hashlib
+import sys, hashlib, re, logging, json, time, os, shutil, re
 from dataclasses import dataclass, field
 import atexit, datetime
 from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any
-import shutil
-
 import numpy as np
 from tqdm import tqdm
-
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from input_and_export_functions import (
     load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
     extract_best_score, emit_vina_config, record_score, score_key, _to_bool, init_config_run_dir
 )
-
 from protein_functions import detect_active_site
 from activesite import extract_and_remove_ligands
 from prep_ligands import prep_ligands_from_pdb, is_valid_ligand
@@ -48,10 +37,10 @@ from pose_validation import (
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
 )
 from run_vina import run_docking_task, validate_all_poses
-# >>> PATHS IMPORT START
 from path_router import expand_variants
 from path_router import make_paths, Paths as RouterPaths
-# >>> PATHS IMPORT END
+
+
 def _resolve_run_id(argv: list[str]) -> str:
     cli_run_id = _cli_val(argv, "--run-id")
     env_run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
@@ -118,17 +107,32 @@ def _tee_stdio_to(log_path):
 
 
 
+# --- Debug wrappers to locate legacy/incorrect folder creation ---
+import re, traceback
+
 _orig_mkdir = Path.mkdir
 def _dbg_mkdir(self, *a, **k):
-    if str(self).lower().endswith("_cleaned_ligands"):
-        logging.error("[DBG] mkdir for legacy path: %s", self)
+    path_str = str(self)
+    # Log legacy cleaned_ligands creations
+    if path_str.lower().endswith("_cleaned_ligands"):
+        logging.error("[DBG] Path.mkdir for legacy path: %s\n%s",
+                      path_str, "".join(traceback.format_stack(limit=6)))
+    # Log unwanted processed_pdbs/<PDB>_CLEANED creations (case-insensitive)
+    if "/processed_pdbs/" in path_str and re.search(r"(?i)_cleaned/?$", path_str):
+        logging.error("[DBG] Path.mkdir for processed_pdbs CLEANED dir: %s\n%s",
+                      path_str, "".join(traceback.format_stack(limit=6)))
     return _orig_mkdir(self, *a, **k)
 Path.mkdir = _dbg_mkdir
 
 _orig_makedirs = os.makedirs
 def _dbg_makedirs(name, *a, **k):
-    if str(name).lower().endswith("_cleaned_ligands"):
-        logging.error("[DBG] makedirs for legacy path: %s", name)
+    p = str(name)
+    if p.lower().endswith("_cleaned_ligands"):
+        logging.error("[DBG] os.makedirs for legacy path: %s\n%s",
+                      p, "".join(traceback.format_stack(limit=6)))
+    if "/processed_pdbs/" in p and re.search(r"(?i)_cleaned/?$", p):
+        logging.error("[DBG] os.makedirs for processed_pdbs CLEANED dir: %s\n%s",
+                      p, "".join(traceback.format_stack(limit=6)))
     return _orig_makedirs(name, *a, **k)
 os.makedirs = _dbg_makedirs
 
@@ -1151,10 +1155,14 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
             d = _dist(coords[i], coords[j])
             if d > max_delta: max_delta = d
 
-    logger.info(f"[control-centers] n={len(coords)} max?={max_delta:.2f}A policy={policy}")
+    if not coords:
+        raise RuntimeError("[control-centers] No control centroids available; cannot select center.")
+    logger.info(f"[control-centers] n={len(coords)} max?={max_delta:.2f}A policy={policy} thr={thr:.2f}A")
+    for b, c in zip(bases, coords):
+        logger.debug(f"[control-centers] {b}: ({c[0]:.3f},{c[1]:.3f},{c[2]:.3f})")
 
     # single-control or simple policies
-    if len(coords) == 1:
+    if len(coords) == 1 and policy != "best_redock":
         center = coords[0]
         logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
         return center, (24.0,24.0,24.0)
@@ -1163,8 +1171,11 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
         center = coords[0]
         logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
         return center, (24.0,24.0,24.0)
+    # if best_redock, skip consensus short-circuit:
+    if policy == "best_redock":
+        pass  # fall through to redock block below
 
-    if max_delta <= thr:
+    elif max_delta <= thr:
         # consensus average when controls are close
         c = (float(_np.mean([x for x,_,_ in coords])),
              float(_np.mean([y for _,y,_ in coords])),
@@ -1172,7 +1183,7 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
         logger.info(f"[Control-center] chosen=consensus center=({c[0]:.3f},{c[1]:.3f},{c[2]:.3f}) box=(24,24,24)")
         return c, (24.0,24.0,24.0)
 
-    if policy == "average_when_close":
+    elif policy == "average_when_close":
         # far apart ? fall back to first per spec
         center = coords[0]
         logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
@@ -1192,13 +1203,14 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
             base = p.stem.split("_stage")[0].split(".sanitized")[0]
             if base in centroids and base in control_lookup and base not in seen:
                 cand_pdbqts.append(p); seen.add(base)
+    logger.info(f"[control-redock] candidates={len(cand_pdbqts)}")
 
     if not cand_pdbqts:
         logger.warning("[control-redock] No prepped control PDBQTs found; redock impossible (will fall back).")
         return None, None
 
-    ex = int(cfg.get("CTRL_REDOCK_EXHAUSTIVENESS", 24))
-    nm = int(cfg.get("CTRL_REDOCK_NMODES", 9))
+    ex = int(cfg.get("CTRL_REDOCK_EXHAUSTIVENESS", 24)) #AAA CHANGE FOR test RUNS
+    nm = int(cfg.get("CTRL_REDOCK_NMODES", 9)) # AAA CHANGE FOR test RUNS
     threads_per_vina = int(cfg.get("THREADS_PER_VINA_CTRL", 8))  # control redock uses its own threads default=8
     vina_exe = str(cfg.get("VINA_EXE") or cfg.get("VINA_PATH") or "vina")
     obabel = str(cfg.get("OPENBABEL_PATH") or "obabel")
@@ -1279,11 +1291,37 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
         best_pdb, best_e = _best_model_to_pdb(_Path(out_path))
         ref_path = control_lookup.get(base)
         rmsd = float("inf")
+
+        def _quick_file_sig(pth: str) -> str:
+            try:
+                p = Path(pth)
+                sz = p.stat().st_size if p.exists() else -1
+                # quick coordinate hash for PDB-like files (robust-ish, not crypto)
+                h = hashlib.sha1()
+                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                    for ln in fh:
+                        if ln.startswith(("ATOM", "HETATM")):
+                            h.update(ln[12:54].encode("utf-8", "ignore"))  # atom name + coords
+                return f"exists={p.exists()} size={sz} sha={h.hexdigest()[:10]}"
+            except Exception:
+                return "sig=unavailable"
+
         if best_pdb and ref_path:
+            logger.info(f"[rmsd.debug] ref={ref_path} | {_quick_file_sig(str(ref_path))}")
+            logger.info(f"[rmsd.debug] dock={best_pdb} | {_quick_file_sig(str(best_pdb))}")
+            same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
+            if same_file:
+                logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
             try:
                 rmsd = compute_rmsd(str(ref_path), str(best_pdb))
-            except Exception:
+            except Exception as e:
                 rmsd = float("inf")
+                logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
+
+
+
+
+
         e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
         logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
 
@@ -1295,7 +1333,8 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
         return None, None
 
     chosen_center = best[3]
-    logger.info(f"[Control-center] chosen={best[2]} center=({chosen_center[0]:.3f},{chosen_center[1]:.3f},{chosen_center[2]:.3f}) box=(24,24,24)")
+    logger.info(f"[Control-center] chosen={best[2]} center=({chosen_center[0]:.3f},{chosen_center[1]:.3f},{chosen_center[2]:.3f})")
+    #BOX SIZE SPECIFIED HERE, NEED TO EDIT THIS TO CALCULATE BOX SIZE, LARGE BOX  SIZES DECREASE VINA  ACCURACY 
     return chosen_center, (24.0,24.0,24.0)
 
 def detect_pocket(cleaned_pdb: str,
@@ -1747,15 +1786,74 @@ def run_one_stage(
             logger.warning(f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}")
             return None
 
-    def _compute_rmsd_quick(crystal_pdb: str, docked_pdb: str) -> float | None:
+    def compute_rmsd(ref_path: str, docked_path: str) -> float:
+        """
+        Heavy-atom RMSD using RDKit's BestRMS *only*.
+        Debug: logs paths, atom counts, conformer presence; returns +inf on failure.
+        """
+        _rlog = logging.getLogger("rmsd")
+
+        ref = _read_any_lig(ref_path)
+        dock = _read_any_lig(docked_path)
+
+        # ──  quick identical-file sanity trap ───────────────────────────────────
         try:
-            m1 = Chem.MolFromPDBFile(crystal_pdb, removeHs=False, sanitize=False)
-            m2 = Chem.MolFromPDBFile(docked_pdb, removeHs=False, sanitize=False)
-            if not m1 or not m2: return None
-            if m1.GetNumAtoms() != m2.GetNumAtoms(): return None
-            return float(AllChem.GetBestRMS(m1, m2))
+            import os
+            if os.path.exists(ref_path) and os.path.exists(docked_path) and os.path.samefile(ref_path, docked_path):
+                if _rlog:
+                    _rlog.warning(f"[rmsd.core] ref and dock resolve to the SAME file "
+                                  f"(ref='{ref_path}', dock='{docked_path}')")
         except Exception:
-            return None
+            pass
+        # ───────────────────────────────────────────────────────────────────────────
+
+        if not ref or not dock:
+            if _rlog:
+                _rlog.warning(f"[rmsd.core] load-fail ref_ok={bool(ref)} dock_ok={bool(dock)} "
+                              f"ref='{ref_path}' dock='{docked_path}'")
+            return float("inf")
+
+        try:
+            n_ref = ref.GetNumAtoms()
+            n_dock = dock.GetNumAtoms()
+        except Exception:
+            n_ref = n_dock = -1
+
+        has_conf_ref = (ref.GetNumConformers() > 0)
+        has_conf_dock = (dock.GetNumConformers() > 0)
+
+        # ── heavy-atom counts (useful when you get inf) ──────────────────
+        try:
+            ha_ref = ref.GetNumHeavyAtoms()
+            ha_dock = dock.GetNumHeavyAtoms()
+        except Exception:
+            ha_ref = ha_dock = -1
+        if _rlog:
+            _rlog.info(f"[rmsd.core] inputs ref='{ref_path}' dock='{docked_path}' "
+                       f"n_ref={n_ref} n_dock={n_dock} heavy_ref={ha_ref} heavy_dock={ha_dock} "
+                       f"conf_ref={has_conf_ref} conf_dock={has_conf_dock}")
+        # ───────────────────────────────────────────────────────────────────────────
+
+        if not has_conf_ref or not has_conf_dock:
+            if _rlog:
+                _rlog.warning("[rmsd.core] missing 3D conformers; returning inf")
+            return float("inf")
+
+        if n_ref != n_dock:
+            if _rlog:
+                _rlog.info(f"[rmsd.core] atom_count_mismatch ({n_ref} vs {n_dock}); "
+                           f"bestRMS will not be used; returning inf (no MCS fallback)")
+            return float("inf")
+
+        try:
+            val = float(rdMolAlign.GetBestRMS(ref, dock))
+            if _rlog:
+                _rlog.info(f"[rmsd.core] method=bestRMS rmsd={val:.3f}")
+            return val
+        except Exception as e:
+            if _rlog:
+                _rlog.info(f"[rmsd.core] method=bestRMS failed: {e}; returning inf (no MCS fallback)")
+            return float("inf")
 
     def _validate_with_rmsd_gate(
         lig_path: str,
@@ -1777,7 +1875,7 @@ def run_one_stage(
                 return False, "no_best_pose_for_rmsd"
 
             # --- AUDIT: control redock (compute RMSD just for logging) ---
-            rmsd_val = _compute_rmsd_quick(str(crystal_ref), best_pdb)
+            rmsd_val = compute_rmsd(str(crystal_ref), best_pdb)
 
             ok = validate_ligand(
                 ligand_name=lig_name,
@@ -2758,26 +2856,56 @@ from rdkit.Chem import rdMolAlign, rdFMCS,  AllChem
 
 
 def _read_any_lig(path: str):
-    p = Path(path)
-    ext = p.suffix.lower()
-    m = None
+    """
+    Load ligand from SDF/MOL2/PDB with consistent settings.
+    Returns an RDKit Mol or None.
+    """
+    mol = None
+    loader = "unknown"
+    ext = os.path.splitext(path)[1].lower()
+
     try:
-        if ext in (".pdb", ".ent"):
-            m = Chem.MolFromPDBFile(str(p), sanitize=False, removeHs=False)
-        elif ext == ".sdf":
-            # tolerant read: don't die on weird SDF headers
-            sup = Chem.SDMolSupplier(str(p), sanitize=False, removeHs=False, strictParsing=False)
-            m = next((x for x in sup if x is not None), None)
-        elif ext == ".mol2":
-            m = Chem.MolFromMol2File(str(p), sanitize=False, removeHs=False)
+        if ext in (".sdf", ".sd"):
+            loader = "SDMolSupplier"
+            suppl = Chem.SDMolSupplier(path, removeHs=False, sanitize=True)
+            mol = next((m for m in suppl if m is not None), None)
+        elif ext in (".mol2",):
+            loader = "MolFromMol2File"
+            mol = Chem.MolFromMol2File(path, sanitize=True, removeHs=False)
+        elif ext in (".pdb",):
+            loader = "MolFromPDBFile"
+            # If you use proximityBonding or flavor flags elsewhere, keep them consistent here.
+            mol = Chem.MolFromPDBFile(path, sanitize=True, removeHs=False, proximityBonding=True)
         else:
-            m = Chem.MolFromPDBFile(str(p), sanitize=False, removeHs=False)
-        if m is None:
-            return None
-        Chem.SanitizeMol(m, sanitizeOps=Chem.SanitizeFlags.SANITIZE_NONE)
-        return Chem.RemoveHs(m)
+            loader = "auto"
+            mol = Chem.MolFromMolFile(path, sanitize=True, removeHs=False)  # last-ditch; or return None
+    except Exception as e:
+        logging.getLogger("rmsd").info(f"[read_any] loader={loader} path='{path}' load_failed={e}")
+        mol = None
+
+    # ──  single debug line about what we actually loaded ───────────────────
+    try:
+        _rlog = logging.getLogger("rmsd")
+        if _rlog and mol is not None:
+            from rdkit.Chem import rdMolDescriptors
+            # formula = e.g., "C20H25N3O"
+            formula = rdMolDescriptors.CalcMolFormula(mol)
+            # InChIKey may be unavailable if RDKit was built without InChI; guard it.
+            try:
+                from rdkit.Chem import inchi
+                inchikey = inchi.MolToInchiKey(mol)
+            except Exception:
+                inchikey = "NA"
+            _rlog.info(f"[read_any] loader={loader} path='{path}' atoms={mol.GetNumAtoms()} "
+                       f"heavy={mol.GetNumHeavyAtoms()} formula={formula} inchikey={inchikey}")
+        elif _rlog:
+            _rlog.info(f"[read_any] loader={loader} path='{path}' mol=None")
     except Exception:
-        return None
+        pass
+    # ───────────────────────────────────────────────────────────────────────────
+
+    return mol
+
 
 def _is_readable_ref(pth: Path) -> bool:
     try:
@@ -2860,15 +2988,13 @@ def validate_ligand(
 # ======================
 # Per-protein driver
 # ======================
-import subprocess
 def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
     base_id = os.path.splitext(pdb_file)[0]
-    pdb_id = base_id.replace("_cleaned", "")
-    # >>> PATHS INIT START
+    pdb_id = re.sub(r'(?i)_cleaned$', '', base_id)
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=os.path.basename(pdb_file))
-    # >>> PATHS INIT END
 
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
+    logger.info(f"[paths] base_id={base_id} -> pdb_id={pdb_id}")
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
 
     # 1) Extract ligands ? produce nolig PDB

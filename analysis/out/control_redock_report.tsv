@@ -1,1 +1,24 @@
 pdb_id	run_id	target_name	library_name	controls_found	control_id	rmsd_to_crystal_A	redock_best_energy_kcal_mol	chosen	max_spread_A	policy
+1Q5K	20251108_014316	GLYCOGEN SYNTHASE KINASE-3 BETA	fda_library	18	TMU_B902.pdbqt	1.01	-7.913	1	40.23	best_redock thr=8.00A
+1Q5K	20251108_014316	GLYCOGEN SYNTHASE KINASE-3 BETA	fda_library	18	TMU_A901.sanitized.sanitized.pdbqt	1.4	-7.793	0	40.23	best_redock thr=8.00A
+1T46	20251106_195933	HOMO SAPIENS V-KIT HARDY-ZUCKERMAN 4 FELINE SARCOMA VIRAL ONCOGENE HOMOLOG	fda_library	13	STI_A3.sanitized.sanitized.sanitized.sanitized.sanitized.sanitized.sanitized.sanitized.pdbqt	0.11	-13.327	1	21.19	first | closest_to_p2rank_top | best_redock | average_when_close
+2GQG	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	9	1N1_A501.pdbqt	0.78	-10.656	0	55.65	first | closest_to_p2rank_top | best_redock | average_when_close
+2GQG	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	9	1N1_B502.sanitized.pdbqt	0.04	-10.407	1	55.65	first | closest_to_p2rank_top | best_redock | average_when_close
+2HYY	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	STI_A600.sanitized.sanitized.pdbqt	0.44	-12.001	0	61.61	first | closest_to_p2rank_top | best_redock | average_when_close
+2HYY	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	STI_D600.sanitized.pdbqt	0.11	-12.369	1	61.61	first | closest_to_p2rank_top | best_redock | average_when_close
+2HYY	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	STI_B600.pdbqt	1.15	-12.574	0	61.61	first | closest_to_p2rank_top | best_redock | average_when_close
+2HYY	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	STI_C600.sanitized.pdbqt	1.12	-12.703	0	61.61	first | closest_to_p2rank_top | best_redock | average_when_close
+2WGJ	(none)	HEPATOCYTE GROWTH FACTOR RECEPTOR	met	6	VGH_A2346.sanitized.sanitized.sanitized.sanitized.pdbqt	0.09	-10.058	1	0.0	best_redock thr=8.00A
+3CS9	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	NIL_C600.sanitized.pdbqt	1.65	0.0	0	89.53	first | closest_to_p2rank_top | best_redock | average_when_close
+3CS9	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	NIL_A600.sanitized.sanitized.pdbqt	0.62	-15.253	1	89.53	first | closest_to_p2rank_top | best_redock | average_when_close
+3CS9	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	NIL_D600.sanitized.pdbqt	1.73	-0.983	0	89.53	first | closest_to_p2rank_top | best_redock | average_when_close
+3CS9	(none)	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	16	NIL_B600.sanitized.sanitized.pdbqt	0.85	-13.344	0	89.53	first | closest_to_p2rank_top | best_redock | average_when_close
+3ERT	20251108_014316	PROTEIN (ESTROGEN RECEPTOR ALPHA)	esr1	8	OHT_A600.sanitized.sanitized.sanitized.sanitized.sanitized.pdbqt	1.41	-9.289	1	0.0	best_redock thr=8.00A
+3SFF	20251108_014316	HISTONE DEACETYLASE 8	fda_library	4	0DI_A378.sanitized.pdbqt	1.01	-10.045	1	0.0	best_redock thr=8.00A
+3WZD	(none)	VASCULAR ENDOTHELIAL GROWTH FACTOR RECEPTOR 2	3WZD	14	LEV_A1201.pdbqt	0.55	-10.155	1	49.48	first | closest_to_p2rank_top | best_redock | average_when_close
+3WZE	20251108_014316	VASCULAR ENDOTHELIAL GROWTH FACTOR RECEPTOR 2	fda_library	10	BAX_A1201.sanitized.sanitized.pdbqt	0.55	-12.893	1	30.2	best_redock thr=8.00A
+4MCH	20251108_014316	URIDINE PHOSPHORYLASE	fda_library	17	61N_A501.pdbqt	0.08	-5.557	1	55.48	best_redock thr=8.00A
+4XV2	(none)	SERINE/THREONINE-PROTEIN KINASE B-RAF	braf	8	P06_A801.sanitized.sanitized.pdbqt	0.14	-13.256	1	27.11	first | closest_to_p2rank_top | best_redock | average_when_close
+4XV2	(none)	SERINE/THREONINE-PROTEIN KINASE B-RAF	braf	8	P06_B801.pdbqt	0.92	-13.048	0	27.11	first | closest_to_p2rank_top | best_redock | average_when_close
+5MO4	(none)	TYROSINE-PROTEIN KINASE ABL1	abl1	8	AY7_A602.sanitized.pdbqt	1.18	-10.086	0	27.78	first | closest_to_p2rank_top | best_redock | average_when_close
+5MO4	(none)	TYROSINE-PROTEIN KINASE ABL1	abl1	8	NIL_A601.sanitized.sanitized.pdbqt	0.67	-13.236	1	27.78	first | closest_to_p2rank_top | best_redock | average_when_close

@@ -1,8 +1,4 @@
-import os
-import csv
-import subprocess
-import shutil
-import logging
+import os, csv, subprocess, shutil, logging, re
 from installation import load_config
 from collections import defaultdict
 from logger_setup import setup_logger
@@ -676,35 +672,64 @@ def get_box_from_p2rank_csv(pdb_file):
     
     logging.info(f"Running P2Rank for: {pdb_file}")
 
-    # Resolve P2Rank execution: accept either a dir, a jar path, or rely on PATH ("prank")
-    pr_cfg = P2RANK_DIR or ""
-    pr_base = None
-    pr_exe = None
-    pr_jar = None
-
-    # If config points to a file and ends with .jar, treat it as the jar
-    if pr_cfg and os.path.isfile(pr_cfg) and pr_cfg.lower().endswith(".jar"):
-        pr_jar = pr_cfg
-        pr_base = os.path.dirname(os.path.dirname(pr_cfg))  # .../bin/p2rank.jar -> parent of bin
-    elif pr_cfg and os.path.isdir(pr_cfg):
-        # config is an install root (directory)
-        jar_candidate = os.path.join(pr_cfg, "bin", "p2rank.jar")
-        if os.path.isfile(jar_candidate):
-            pr_jar = jar_candidate
-        pr_base = pr_cfg
-
-    # If prank is on PATH, prefer it (simplest + portable)
+    # --- Choose P2Rank launcher deterministically (avoid PRANK-MSA on PATH) ---
     from shutil import which
-    pr_on_path = which("prank")
 
-    # Pick command: (1) prank on PATH, else (2) java -jar p2rank.jar, else error
-    if pr_on_path:
-        run_cmd = ["prank", "predict"]
-    elif pr_jar and os.path.isfile(pr_jar):
+    pr_base = None
+    pr_exe  = None
+    pr_jar  = None
+
+    # Note: P2RANK_DIR is loaded from config (same value you call P2RANK_PATH in cfg)
+    if P2RANK_DIR:
+        cfg = P2RANK_DIR
+        if os.path.isfile(cfg) and cfg.lower().endswith(".jar"):
+            pr_jar = cfg
+            pr_base = os.path.dirname(os.path.dirname(cfg))  # .../bin/p2rank.jar -> install root
+            exe_candidate = os.path.join(pr_base, "bin", "prank")
+            if os.path.isfile(exe_candidate):
+                pr_exe = exe_candidate
+        elif os.path.isdir(cfg):
+            pr_base = cfg
+            exe_candidate = os.path.join(cfg, "bin", "prank")
+            jar_candidate = os.path.join(cfg, "bin", "p2rank.jar")
+            if os.path.isfile(exe_candidate):
+                pr_exe = exe_candidate
+            if os.path.isfile(jar_candidate):
+                pr_jar = jar_candidate
+
+    # Preference:
+    # 1) Configured bin/prank (best: sets classpath)
+    # 2) Configured jar (java -jar)
+    # 3) PATH 'prank' *only if* it looks like P2Rank (not PRANK-MSA)
+    run_cmd = None
+
+    if pr_exe:
+        run_cmd = [pr_exe, "predict"]
+        logging.info("P2Rank launcher: bin/prank (configured)")
+    elif pr_jar:
         run_cmd = ["java", "-Xmx4G", "-jar", pr_jar, "predict"]
+        logging.info("P2Rank launcher: java -jar (configured)")
     else:
-        logging.error("P2Rank not found. Set P2RANK_PATH to either the install directory or the p2rank.jar.")
-        return None, None
+        pr_path = which("prank")
+        if pr_path:
+            # Heuristic guard: PRANK-MSA prints 'prank v.' and lacks 'predict' help
+            try:
+                out = subprocess.run([pr_path, "-version"], capture_output=True, text=True)
+                banner = (out.stdout + out.stderr).lower()
+                if "p2rank" in banner or "predict" in banner:
+                    run_cmd = [pr_path, "predict"]
+                    logging.info("P2Rank launcher: PATH prank (guarded OK)")
+                else:
+                    logging.error("Found '%s' on PATH, but it is PRANK (MSA), not P2Rank. "
+                                  "Set P2RANK_PATH to your P2Rank install dir.", pr_path)
+                    return None, None
+            except Exception as e:
+                logging.error("Unable to validate PATH prank (%s). Set P2RANK_PATH to the P2Rank install.", e)
+                return None, None
+        else:
+            logging.error("P2Rank not found. Set P2RANK_PATH to the install dir (with bin/prank) or bin/p2rank.jar.")
+            return None, None
+
 
     # Always write to a known output folder next to the input PDB
     out_dir = os.path.join(os.path.dirname(os.path.abspath(pdb_file)), "_p2rank")
@@ -892,12 +917,35 @@ def load_aliases():
     # back-compat shim
     return get_atom_rules()
 
-def main(pdb_file):
-    pdb_id = os.path.splitext(os.path.basename(pdb_file))[0]
 
-    # >>> PATHS INIT START
+
+
+def _sanitize_pdb_id(stem: str) -> str:
+    """
+    Strip legacy trailing tags from a filename stem, repeatedly, case-insensitively.
+    Examples:
+      4GRL_CLEANED_cleaned -> 4GRL
+      2SRC_nolig_cleaned   -> 2SRC
+      3ERT_withH_fixed     -> 3ERT
+    """
+    import re
+    s = stem
+    # remove multiple trailing tags if present
+    while True:
+        s2 = re.sub(r'(?i)(?:_(?:cleaned|nolig|withh|fixed))$', '', s)
+        if s2 == s:
+            return s
+        s = s2
+def _canon_pdb_id_from_path(pdb_path: str) -> str:
+    stem = os.path.splitext(os.path.basename(pdb_path))[0]
+    # Drop legacy suffixes like _nolig, _nolig_cleaned, _cleaned
+    return re.sub(r'(?i)(_nolig(_cleaned)?|_cleaned)$', '', stem).upper()
+def main(pdb_file):
+    stem   = os.path.splitext(os.path.basename(pdb_file))[0]
+    pdb_id = _canon_pdb_id_from_path(pdb_file)
+
     paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    # >>> PATHS INIT END
+
 
     variant = _default_variant(config)
     ph_token = None

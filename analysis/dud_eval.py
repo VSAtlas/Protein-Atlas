@@ -69,13 +69,21 @@ def dbg(level: str, tag: str, message: str) -> None:
 
 
 CONTROL_CENTERS_RE = re.compile(
-    r"\[control-centers\]\s+n=(\d+)\s+max\?=([0-9.]+)\s+A\s+policy=([A-Za-z0-9_]+)",
+    r"\[control-centers\]\s+"
+    r"n=(\d+)\s+"
+    r"max\?=([0-9]+(?:\.[0-9]+)?)\s*A?\b\s+"
+    r"policy=(.+)$",
     re.IGNORECASE,
 )
+
 CONTROL_REDOCK_RE = re.compile(
-    r"\[control-redock\]\s+lig=([^\s]+)\s+rmsd=([0-9.]+)\s+A\s+score=([0-9.\-]+)",
+    r"\[control-redock\]\s+"
+    r"lig=([^\s]+)\s+"
+    r"rmsd=([0-9]+(?:\.[0-9]+)?)\s*A?\b\s+"
+    r"score=([0-9.\-]+)",
     re.IGNORECASE,
 )
+
 _CONTROL_PATTERNS_LOGGED = False
 
 # >>> PATHS IMPORT START

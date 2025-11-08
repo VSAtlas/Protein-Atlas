@@ -31,7 +31,8 @@ REDUCE_EXE=/stor/home/mpg2352/atlas2/tools/reduce/reduce_src/reduce
 REDUCE_LOCAL_CANDIDATE=/stor/home/mpg2352/atlas2/tools/reduce/reduce_src/reduce
 REDUCE_HET_DICT=/stor/home/mpg2352/atlas2/tools/reduce/reduce_wwPDB_het_dict.txt
 
-VINA_EXE=/stor/home/mpg2352/atlas2/tools/vina1.sh
+VINA_EXE=/stor/home/mpg2352/atlas2/code/protein_automation/vina1.sh
+
 
 OPENBABEL_PATH=/stor/home/mpg2352/micromamba/envs/docking-env/bin/obabel
 BABEL_LIBDIR=/stor/home/mpg2352/micromamba/envs/docking-env/lib/openbabel/3.1.0
@@ -53,14 +54,17 @@ EARLY_RECENTER_FAR_A=15.0
 EARLY_RECENTER_MEDIAN_A=10.0
 ALLOW_BOX_EXPAND=True
 MAX_RECENTER_ATTEMPTS=1
-CONTROL_CENTER_POLICY = first | closest_to_p2rank_top | best_redock | average_when_close
+CONTROL_CENTER_POLICY = best_redock
+#first | closest_to_p2rank_top | best_redock | average_when_close
 #NEED TO VERIFY THESE  DIFFERENT MODES WORK
 CONTROL_CENTER_CLOSE_MAX_A = 8.0
 
 REMOVE_WATERS = false
 #NOTE REMOVE WATERS = TRUE MEANS REMOVE ALL WATERS REGARDLESS OF POLICY
-KEEP_WATERS_WITHIN_A = 6.0     # only meaningful if REMOVE_WATERS=false or as a prefilter
-WATER_KEEP_POLICY = "near_controls"  # near_center | near_controls | none
+KEEP_WATERS_WITHIN_A = 6.0     
+# only meaningful if REMOVE_WATERS=false or as a prefilter
+WATER_KEEP_POLICY = "near_controls"  
+# near_center | near_controls | none
 #NOTE near center = center of active site, keep in mind
 # with active site recentering, this may not retain the exact waters you want if the site moves too much!!!!
 #CURRENTLY this value actually does nothing, but it will

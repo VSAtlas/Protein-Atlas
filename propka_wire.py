@@ -3,6 +3,13 @@ import os, re, json, subprocess, shutil, math, tempfile, hashlib
 from pathlib import Path
 from typing import Dict, Tuple, Optional, Set
 import logging
+import warnings
+from Bio.PDB.PDBExceptions import PDBConstructionWarning
+from Bio import BiopythonWarning
+
+#this filters out the occupancy messages, not  really relevant to us. occupancy from my understanding
+# is not used by reduce, vina or anything else here 
+warnings.filterwarnings("ignore", category=BiopythonWarning, module="Bio.PDB.PDBIO")
 
 try:
     # Prefer the newer loader/validator if present

@@ -2,7 +2,7 @@
 # path_router.py
 from __future__ import annotations
 
-import os
+import os, re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -285,6 +285,9 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
       (variant receptor dirs are created lazily upon first access)
     """
     pdb_id = str(base_id).upper()
+    # Normalize here too (idempotent if already clean)
+    raw_id = str(base_id)
+    pdb_id = re.sub(r'(?i)(_nolig(_cleaned)?|_cleaned)$', '', raw_id).upper()
 
     # Required roots
     over_root = Path(cfg["OVERALL_DIR"])
