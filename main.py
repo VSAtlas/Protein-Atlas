@@ -615,14 +615,15 @@ from typing import Iterable
 def _norm_pdb_id(token: str) -> Optional[str]:
     """
     Normalize a user token to a 4-char PDB ID (uppercase).
-    Accepts bare IDs (2HYY), QoL flags (--2HYY), and filenames (2HYY.pdb).
+    Accepts bare IDs (2HYY), QoL flags (--2HYY or -2HYY), and filenames (2HYY.pdb).
     Returns None if it cannot produce a 4-char alnum ID.
     """
     if not token:
         return None
     t = str(token).strip()
-    if t.startswith("--"):
-        t = t[2:]
+    # Strip any leading dashes (one or two)
+    while t.startswith("-"):
+        t = t[1:]
     t = os.path.basename(t)
     if t.lower().endswith(".pdb"):
         t = t[:-4]
@@ -632,6 +633,7 @@ def _norm_pdb_id(token: str) -> Optional[str]:
         cand = t[:4]
         return cand if cand.isalnum() else None
     return None
+
 
 def _split_ids(s: str) -> list[str]:
     """Split a comma/whitespace separated string into normalized 4-char IDs."""
@@ -689,12 +691,13 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
     except Exception:
         pass
 
-    # QoL: --2HYY style (exactly 6 chars, starts with "--", next 4 alnum)
+    # QoL: --2HYY / -2HYY style (exact length, starts with '-' or '--', next 4 alnum)
     for tok in argv:
-        if tok.startswith("--") and len(tok) == 6:
+        if (tok.startswith("--") and len(tok) == 6) or (tok.startswith("-") and len(tok) == 5):
             nid = _norm_pdb_id(tok)
             if nid:
                 cli_ids.append(nid)
+
 
     if cli_ids:
         return _dedupe_order(cli_ids), "CLI"
