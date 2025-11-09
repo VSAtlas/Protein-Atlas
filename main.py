@@ -445,7 +445,7 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
     per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")  # injected at runtime in process_one_protein
     global_root     = Path(cfg.get("OUTPUT_LIGANDS_DIR", "")) if cfg.get("OUTPUT_LIGANDS_DIR") else None
 
-    def _match_one_dir(root: Path) -> Optional[Path]:
+    def _match_one_dir(root: Optional[Path]) -> Optional[Path]:
         if not root or not Path(root).exists():
             return None
         candidates = list(Path(root).glob("*.pdbqt"))
@@ -467,21 +467,30 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
             if hit:
                 logger.info(f"[single] matched in per-protein dir: {hit.name}")
                 return hit
+
         elif where == "global":
             if global_root and global_root.exists():
-                # Search all subfolders (keep current semantics)
-                for p in global_root.rglob("*.pdbqt"):
+                # MINIMAL CHANGE: restrict global scan to default library subdir (e.g., fda_library)
+                lib_sub = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "")).strip()
+                scan_root = (global_root / lib_sub) if lib_sub else global_root
+                if not scan_root.exists():  # graceful fallback
+                    scan_root = global_root
+                logger.debug(f"[single] global scan_root={scan_root}")
+
+                # Exact then prefix match within scan_root
+                for p in scan_root.rglob("*.pdbqt"):
                     base = p.stem.split("_stage")[0]
                     if base.lower() == selector.lower():
                         logger.info(f"[single] matched in global dir: {p}")
                         return p
                 if allow_prefix:
-                    for p in global_root.rglob("*.pdbqt"):
+                    for p in scan_root.rglob("*.pdbqt"):
                         base = p.stem.split("_stage")[0]
                         if base.lower().startswith(selector.lower()):
                             logger.info(f"[single] prefix-matched in global dir: {p}")
                             return p
-                # --- Name-based mapping via FDA CSV (generic/brand/synonym) ---
+
+                # Name-based mapping via FDA CSV (generic/brand/synonym)
                 try:
                     name_map = _load_fda_name_map(cfg, logger)
                     key = _norm_name_key(selector)
@@ -495,9 +504,9 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
                                 basenames.extend(list(v))
 
                     if basenames:
-                        # Search by basename(s) anywhere under the global library root
+                        # Search by basename(s) within scan_root only
                         for bn in basenames:
-                            for p in global_root.rglob(bn):
+                            for p in scan_root.rglob(bn):
                                 logger.info(f"[single:name] '{selector}' ? {bn} ? {p}")
                                 return p
                 except Exception as _e:
@@ -506,6 +515,7 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         else:
             logger.debug(f"[single] unknown search scope: {where}")
     return None
+
 
 
 # --- FDA name mapping (CSV) ---------------------------------------------------
