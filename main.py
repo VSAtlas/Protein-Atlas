@@ -1564,7 +1564,16 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
 # ---- Multi-control center selection via crystallographic controls ----
-def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
+def select_center_via_control_redock(
+    cfg,
+    paths,
+    receptor_pdbqt,
+    logger,
+    *,
+    variant: Optional[str] = None,
+    ph_token: Optional[str] = None,
+    legacy: bool = False,
+):
     """
     Returns (center_tuple, (24.0,24.0,24.0)) or (None, None).
     - If multiple controls and max pairwise centroid distance <= CONTROL_CENTER_CLOSE_MAX_A -> average (consensus).
@@ -1608,6 +1617,10 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
 
 
     policy = str(cfg.get("CONTROL_CENTER_POLICY", "best_redock")).lower().strip()
+    variant_env = variant if variant is not None else (os.environ.get("APO_HOLO_VARIANT", "") or "")
+    variant_token = (str(variant_env).strip().upper() or None)
+    ph_label = str(ph_token).strip() if ph_token is not None else None
+    legacy_mode = bool(legacy)
     thr = float(cfg.get("CONTROL_CENTER_CLOSE_MAX_A", 8.0))
 
     # compute centroids + pairwise spread
@@ -1753,8 +1766,19 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
         if cfg.get("FAST_MODE"):
             stage_info["exhaustiveness"] = 1
         conf_path, out_path = emit_vina_config(
-            cfg, paths.pdb_id, receptor_pdbqt, center, (24.0,24.0,24.0),
-            str(lig_pdbqt), "ctrl_redock", stage_info, threads_per_vina, logger=None
+            cfg,
+            paths.pdb_id,
+            receptor_pdbqt,
+            center,
+            (24.0, 24.0, 24.0),
+            str(lig_pdbqt),
+            "ctrl_redock",
+            stage_info,
+            threads_per_vina,
+            logger=None,
+            variant=variant_token,
+            ph_token=ph_label,
+            legacy=legacy_mode,
         )
         try:
             _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
@@ -2416,8 +2440,19 @@ def run_one_stage(
                     stage_for_cfg["exhaustiveness"] = 1
 
                 conf_path, out_path = emit_vina_config(
-                    cfg, pdb_id, receptor_pdbqt, center, box_size, lig, stage["name"], stage_for_cfg, threads_per_vina,
-                    logger
+                    cfg,
+                    pdb_id,
+                    receptor_pdbqt,
+                    center,
+                    box_size,
+                    lig,
+                    stage["name"],
+                    stage_for_cfg,
+                    threads_per_vina,
+                    logger,
+                    variant=variant_token,
+                    ph_token=ph_label,
+                    legacy=legacy_mode,
                 )
 
                 # Guard: config must live under current RUN_DIR
@@ -2548,8 +2583,19 @@ def run_one_stage(
                                 retry_center = center
                                 retry_box = box_size
                                 conf_path2, out_path2 = emit_vina_config(
-                                    cfg, pdb_id, receptor_pdbqt, retry_center, retry_box, lig,
-                                    stage_retry["name"], stage_retry, threads_per_vina, logger
+                                    cfg,
+                                    pdb_id,
+                                    receptor_pdbqt,
+                                    retry_center,
+                                    retry_box,
+                                    lig,
+                                    stage_retry["name"],
+                                    stage_retry,
+                                    threads_per_vina,
+                                    logger,
+                                    variant=variant_token,
+                                    ph_token=ph_label,
+                                    legacy=legacy_mode,
                                 )
                                 try:
                                     Path(conf_path2).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
@@ -2665,8 +2711,19 @@ def run_one_stage(
                             logger.warning(f"Retry recenter/box tweak failed: {_e}")
 
                         conf_path3, out_path3 = emit_vina_config(
-                            cfg, pdb_id, receptor_pdbqt, retry_center, retry_box, lig,
-                            stage_retry2["name"], stage_retry2, threads_per_vina, logger
+                            cfg,
+                            pdb_id,
+                            receptor_pdbqt,
+                            retry_center,
+                            retry_box,
+                            lig,
+                            stage_retry2["name"],
+                            stage_retry2,
+                            threads_per_vina,
+                            logger,
+                            variant=variant_token,
+                            ph_token=ph_label,
+                            legacy=legacy_mode,
                         )
                         try:
                             Path(conf_path3).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
@@ -3529,6 +3586,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # build crystal-ligand lookup (prefer PDB)
     control_lookup = build_control_lookup(paths)
 
+    variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_token = variant_env or None
+    variant_label = variant_env or "legacy"
+    legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
+    active_ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
+
     # 2) Protein prep (re-use if cached)
     logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
     cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
@@ -3548,7 +3611,15 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # 3) Pocket detection
     center, box_size, center_source = None, None, "none"
     try:
-        sel_center, sel_box = select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger)
+        sel_center, sel_box = select_center_via_control_redock(
+            cfg,
+            paths,
+            receptor_pdbqt,
+            logger,
+            variant=variant_token,
+            ph_token=active_ph_label,
+            legacy=legacy_mode,
+        )
     except Exception as _e:
         sel_center, sel_box = (None, None)
         logger.debug(f"[control-centers] helper errored: {_e}")
@@ -3706,11 +3777,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     base_center = tuple(center)
     base_box = tuple(box_size)
 
-    variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
-    variant_token = variant_env or None
-    variant_label = variant_env or "legacy"
     ph_log = logging.getLogger("ph_ensemble")
-    legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
 

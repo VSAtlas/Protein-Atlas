@@ -22,7 +22,11 @@ except Exception:
 import io
 
 # >>> PATHS IMPORT START
-from path_router import make_paths
+from path_router import (
+    make_paths,
+    config_dir as router_config_dir,
+    docked_dir as router_docked_dir,
+)
 # >>> PATHS IMPORT END
 
 _SCORE_LINE = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
@@ -309,6 +313,7 @@ def resolve_stage_and_config_dirs(
     stage: str,
     variant: Optional[str] = None,
     ph_token: Optional[str] = None,
+    legacy: bool = False,
 ) -> Tuple[Path, Path]:
     """Return (stage_dir, config_dir) using the centralized path router."""
 
@@ -316,16 +321,23 @@ def resolve_stage_and_config_dirs(
         raise ValueError("pdb_id must be provided")
 
     # >>> PATHS INIT START
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     # >>> PATHS INIT END
 
     # >>> DOCKED PATHS PATCH START
-    stage_dir = paths.docked_stage_dir(variant, stage, ph_token)
+    stage_root = router_docked_dir(pdb_id, variant=variant, ph_tag=ph_token, legacy=legacy)
+    stage_dir = stage_root / stage
     # >>> DOCKED PATHS PATCH END
 
-    cfg_dir_call = paths.configs_stage_dir
     # >>> CONFIG PATHS PATCH START
-    cfg_dir = cfg_dir_call(run_id, variant, stage, ph_token)
+    cfg_dir = router_config_dir(
+        run_id,
+        pdb_id,
+        stage,
+        variant=variant,
+        ph_tag=ph_token,
+        legacy=legacy,
+    )
     # >>> CONFIG PATHS PATCH END
 
     return stage_dir, cfg_dir

@@ -109,6 +109,7 @@ class RouterRoots:
     overall: Path
     processed: Path
     docked: Path
+    configs: Path
 
 
 _ROUTER_ROOTS: Optional[RouterRoots] = None
@@ -179,15 +180,19 @@ def _load_router_roots() -> RouterRoots:
     dock_raw = expanded.get("DOCKED_DIR")
     docked = Path(dock_raw).expanduser() if dock_raw else overall / "docked"
 
-    return RouterRoots(overall=overall, processed=processed, docked=docked)
+    cfg_raw = expanded.get("CONFIGS_DIR")
+    configs = Path(cfg_raw).expanduser() if cfg_raw else overall / "configs"
+
+    return RouterRoots(overall=overall, processed=processed, docked=docked, configs=configs)
 
 
-def _set_router_roots(overall: Path, processed: Path, docked: Path) -> None:
+def _set_router_roots(overall: Path, processed: Path, docked: Path, configs: Optional[Path] = None) -> None:
     global _ROUTER_ROOTS
     _ROUTER_ROOTS = RouterRoots(
         overall=Path(overall).expanduser(),
         processed=Path(processed).expanduser(),
         docked=Path(docked).expanduser(),
+        configs=Path(configs).expanduser() if configs else Path(overall).expanduser() / "configs",
     )
 
 
@@ -241,12 +246,61 @@ def docked_dir(
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.docked / token
+    if legacy:
+        return base
     v = _norm_variant(variant)
     if v:
         base = base / v
     if ph_tag:
         base = base / str(ph_tag)
     return base
+
+
+# ---------------------------
+# Config helpers (stateless)
+# ---------------------------
+def _norm_stage(stage: str) -> str:
+    return str(stage).strip() or "stage"
+
+
+def config_dir(
+    run_id: str,
+    pdb_id: str,
+    stage: str,
+    variant: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+    legacy: bool = False,
+) -> Path:
+    roots = _ensure_router_roots()
+    token = _norm_pdb_id(pdb_id)
+    base = roots.configs / str(run_id) / token
+    if legacy:
+        return base / _norm_stage(stage)
+    v = _norm_variant(variant)
+    if v:
+        base = base / v
+    if ph_tag:
+        base = base / str(ph_tag)
+    return base / _norm_stage(stage)
+
+
+def config_file(
+    run_id: str,
+    pdb_id: str,
+    stage: str,
+    variant: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+    suffix: str = "vina.json",
+    legacy: bool = False,
+) -> Path:
+    return config_dir(
+        run_id,
+        pdb_id,
+        stage,
+        variant=variant,
+        ph_tag=ph_tag,
+        legacy=legacy,
+    ) / suffix
 
 
 # --- full replacement for load_ph_tags() ---
@@ -581,7 +635,7 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
     input_pdb_path = input_root / pdb_file                     # input_pdbs/<pdb_file>
     nolig_pdb_path = nolig_dir / f"{pdb_id}_nolig.pdb"         # processed_pdbs/<PDB>/nolig/<PDB>_nolig.pdb
 
-    _set_router_roots(over_root, processed_root, docked_root)
+    _set_router_roots(over_root, processed_root, docked_root, configs_root)
 
     return Paths(
         pdb_id=pdb_id,
