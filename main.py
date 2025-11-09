@@ -107,6 +107,18 @@ def _tee_stdio_to(log_path):
 
 
 
+class ConfigDict(dict):
+    __slots__ = ()
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError as exc:
+            raise AttributeError(key) from exc
+    def __setattr__(self, key, value):
+        self[key] = value
+    def copy(self):
+        return ConfigDict(super().copy())
+
 # --- Debug wrappers to locate legacy/incorrect folder creation ---
 import re, traceback
 
@@ -1002,11 +1014,85 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
 
 
 
+def _ph_control_centroid(paths: Paths) -> Optional[Tuple[float, float, float]]:
+    try:
+        primary = paths.ligand_output_dir
+    except Exception:
+        primary = None
+    roots = []
+    if primary is not None:
+        roots.append(primary)
+        legacy = primary.parent.parent / f"{paths.pdb_id}_NOLIG" / 'ligands_raw'
+        roots.append(legacy)
+    else:
+        roots.append(paths.root_pdb_dir / 'ligands_raw')
+        roots.append(paths.root_pdb_dir.parent / f"{paths.pdb_id}_NOLIG" / 'ligands_raw')
+    centroids = []
+    seen = set()
+    for root in roots:
+        if not root:
+            continue
+        root = Path(root)
+        key = str(root)
+        if key in seen or not root.exists():
+            continue
+        seen.add(key)
+        for pdb_path in sorted(root.glob('*.pdb')):
+            xs = ys = zs = count = 0.0
+            try:
+                with open(pdb_path, 'r', encoding='utf-8', errors='ignore') as fh:
+                    for line in fh:
+                        if not line.startswith(('ATOM  ', 'HETATM')):
+                            continue
+                        try:
+                            xs += float(line[30:38])
+                            ys += float(line[38:46])
+                            zs += float(line[46:54])
+                            count += 1.0
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+            if count:
+                centroids.append((xs / count, ys / count, zs / count))
+    if centroids:
+        n = float(len(centroids))
+        return (sum(x for x, _, _ in centroids) / n,
+                sum(y for _, y, _ in centroids) / n,
+                sum(z for _, _, z in centroids) / n)
+    return None
+
+def _resolve_ph_scope(scope_cfg: str, radius_nominal: float, paths: Paths, cleaned_pdb: str, log: logging.Logger) -> Tuple[str, Tuple[float, float, float], float]:
+    scope = (scope_cfg or '').strip().lower()
+    try:
+        radius = float(radius_nominal)
+    except Exception:
+        radius = 10.0
+    if radius <= 0:
+        radius = 10.0
+    if scope == 'pocket':
+        center = _ph_control_centroid(paths)
+        if center is None:
+            try:
+                detect_res = detect_active_site(cleaned_pdb)
+            except Exception as exc:
+                log.debug('[ph_ensemble.scope] detect_active_site failed: %s', exc)
+                detect_res = None
+            if detect_res and detect_res[0]:
+                center = tuple(float(x) for x in detect_res[0])
+        if center is None:
+            log.warning('[ph_ensemble.scope] pocket requested but no center found; fallback=global')
+            return 'global', (0.0, 0.0, 0.0), 1_000_000.0
+        cx, cy, cz = (float(center[0]), float(center[1]), float(center[2]))
+        return 'pocket', (cx, cy, cz), radius
+    return 'global', (0.0, 0.0, 0.0), 1_000_000.0
+
 def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
     import automate_protein_prep
     from distutils.util import strtobool
 
     force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
+    log = logging.getLogger("ph_ensemble")
     # >>> RECEPTOR PATHS PATCH START
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant = var if var else None
@@ -1020,6 +1106,83 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
         f"receptor_exists={receptor_pdbqt_path.exists()}"
     )
 
+    def _build_ph_ensemble(cleaned_path: str) -> Optional[str]:
+        if not bool(cfg.get("PH_ENSEMBLE")):
+            return None
+        cleaned_path = str(cleaned_path)
+        log.info("[ph_ensemble.anchor] cleaned_receptor_pdb=%s", cleaned_path)
+        log.info("[ph_ensemble.begin] pdb_id=%s path=%s", paths.pdb_id, cleaned_path)
+        try:
+            from context_ph import select_ph_from_pdb
+            ctx_result = select_ph_from_pdb(cleaned_path)
+        except Exception as exc:
+            log.warning("[ph_ensemble.ctx.error] %s", exc)
+            ctx_result = {"target_pH": 7.0, "ensemble": None}
+        target_pH = float(ctx_result.get("target_pH", 7.0) or 7.0)
+        ensemble_from_context = ctx_result.get("ensemble")
+        log.info("[ph_ensemble.ctx] target_pH=%.2f raw_ensemble=%s", target_pH, repr(ensemble_from_context))
+        raw_values = list(ensemble_from_context or [target_pH])
+        ph_values: list[float] = []
+        for value in raw_values:
+            try:
+                ph = float(value)
+            except Exception:
+                continue
+            ph = round(ph, 1)
+            if ph < 3.0:
+                ph = 3.0
+            if ph > 10.5:
+                ph = 10.5
+            ph_values.append(ph)
+        if not ph_values:
+            fallback = round(target_pH, 1)
+            if fallback < 3.0:
+                fallback = 3.0
+            if fallback > 10.5:
+                fallback = 10.5
+            ph_values = [fallback]
+        ph_values = sorted({round(p, 1) for p in ph_values})
+        log.info("[ph_ensemble.list] canonical=%s", ",".join(f"{p:.1f}" for p in ph_values))
+        radius_nominal = getattr(cfg, "PH_RADIUS", 10.0)
+        try:
+            radius_nominal = float(radius_nominal)
+        except Exception:
+            radius_nominal = 10.0
+        scope_cfg = getattr(cfg, "PH_SCOPE", "")
+        scope, center, eff_radius = _resolve_ph_scope(scope_cfg, radius_nominal, paths, cleaned_path, log)
+        log.info("[ph_ensemble.pick.scope] scope=%s", scope)
+        if scope == "pocket":
+            log.info("[ph_ensemble.pick.center] center=(%.3f,%.3f,%.3f) radius=%.1f", center[0], center[1], center[2], radius_nominal)
+        else:
+            log.info("[ph_ensemble.pick.center] center=GLOBAL radius=ALL")
+        builder_id = paths.pdb_id if variant is None else f"{paths.pdb_id}_{variant}"
+        log.info("[ph_ensemble.call] building pH ensemble for %s", paths.pdb_id)
+        prev_cfg = getattr(automate_protein_prep, "config", None)
+        try:
+            automate_protein_prep.config = cfg
+        except Exception:
+            prev_cfg = None
+        try:
+            import ph_ensemble
+            manifest_path = ph_ensemble.build_ph_ensemble(
+                pdb_id=builder_id,
+                cleaned_receptor_pdb=cleaned_path,
+                out_dir=str(Path(cfg["OUTPUT_DIR"])),
+                center=center,
+                radius=eff_radius,
+                ph_values=ph_values,
+            )
+            log.info("[ph_ensemble.manifest] path=%s", manifest_path)
+            log.info("[ph_ensemble.done] ok=True")
+            return manifest_path
+        except Exception as exc:
+            log.error("[ph_ensemble.error] %s", exc)
+            log.info("[ph_ensemble.done] ok=False")
+            return None
+        finally:
+            if prev_cfg is not None:
+                automate_protein_prep.config = prev_cfg
+
     if cleaned_pdb_path.exists() and receptor_pdbqt_path.exists() and not force_reprocess:
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
         try:
@@ -1028,7 +1191,10 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
                 return None, None
         except Exception as _e:
             logger.warning(f"Receptor sanity check skipped due to error: {_e}")
-        return norm(cleaned_pdb_path), norm(receptor_pdbqt_path)
+        cleaned_norm = norm(cleaned_pdb_path)
+        receptor_norm = norm(receptor_pdbqt_path)
+        _build_ph_ensemble(cleaned_norm)
+        return cleaned_norm, receptor_norm
 
     # Fresh prep path: clean PDB then create PDBQT into the variant-aware target
     try:
@@ -1055,6 +1221,8 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             cleaned_pdb = str(cleaned_pdb_path)
     except Exception as e:
         logger.warning(f"Could not relocate cleaned PDB: {e}")
+
+    _build_ph_ensemble(cleaned_pdb)
 
     # Generate receptor PDBQT directly at the variant-aware path
     try:
@@ -3509,8 +3677,40 @@ def main() -> None:
     os.environ["ATLAS_LOG_FILE"] = log_path
     _tee_stdio_to(log_path)
     print(f"[run] log_file={log_path} run_id={run_id}")
-    cfg = load_inputs()
+    cfg = ConfigDict(load_inputs())
     validate_config(cfg)
+
+    cfg.setdefault("PH_ENSEMBLE", False)
+    cfg.setdefault("PH_RADIUS", 10.0)
+
+    env_ph_flag = os.environ.get("PH_ENSEMBLE")
+    if env_ph_flag is not None:
+        cfg.PH_ENSEMBLE = _to_bool(env_ph_flag)
+    else:
+        cfg.PH_ENSEMBLE = _to_bool(cfg.PH_ENSEMBLE)
+
+    scope_env = os.environ.get("PH_SCOPE")
+    if scope_env is not None:
+        cfg.PH_SCOPE = scope_env.strip()
+    elif "PH_SCOPE" in cfg:
+        cfg.PH_SCOPE = cfg["PH_SCOPE"]
+
+    radius_env = os.environ.get("PH_RADIUS")
+    if radius_env is not None:
+        try:
+            cfg.PH_RADIUS = float(radius_env)
+        except Exception:
+            cfg.PH_RADIUS = 10.0
+    else:
+        try:
+            cfg.PH_RADIUS = float(cfg.PH_RADIUS)
+        except Exception:
+            cfg.PH_RADIUS = 10.0
+    if cfg.PH_RADIUS <= 0:
+        cfg.PH_RADIUS = 10.0
+
+    log = logging.getLogger("ph_ensemble")
+    log.info("[ph_ensemble.mode] enabled=%s scope=%s radius=%s", cfg.PH_ENSEMBLE, getattr(cfg, "PH_SCOPE", "auto"), getattr(cfg, "PH_RADIUS", 10.0))
 
     # --- Per-run configs (RUN_DIR) ---
     cfg.setdefault("CONFIGS_DIR", str(Path(cfg["OVERALL_DIR"]) / "configs"))
