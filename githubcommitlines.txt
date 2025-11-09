@@ -1,1 +1,8 @@
+this makes a new branch and commits changes, update v0.916 to whatever it needs to be updated to 
 ( git switch brcf-path-router-update-v0.916 || git switch -c brcf-path-router-update-v0.916 ) && git add -A && git commit -m "brcf-path-router-update-v0.916" && git push -u origin brcf-path-router-update-v0.916 
+
+
+
+
+PULL from most recent codex 
+git fetch origin --prune && latest=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' 'refs/remotes/origin/codex/*' | head -n1) && [ -n "$latest" ] && local=${latest#origin/} && (git show-ref --verify --quiet "refs/heads/$local" && git switch "$local" || git switch -c "$local" --track "$latest") && git pull --ff-only || echo "No origin/codex/* branches found."

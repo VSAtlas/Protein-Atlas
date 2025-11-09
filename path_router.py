@@ -2,7 +2,7 @@
 # path_router.py
 from __future__ import annotations
 
-import os, re, json
+import os, re, json, logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -77,6 +77,28 @@ def _norm_variant(variant: Optional[str]) -> Optional[str]:
         )
     raise ValueError(f"variant must be APO|HOLO or None, got {variant!r}")
 
+
+
+# ---------------------------
+# pH  Helpers
+# ---------------------------
+
+def _ph_manifest_candidates(pdb_id: str, variant: Optional[str]) -> list[Path]:
+    """
+    Return the only two allowed search locations for ensemble.json, in order:
+      1) processed_pdbs/<PDB>/<VARIANT>/receptor/ph_ensemble/ensemble.json (when variant given)
+      2) processed_pdbs/<PDB>/receptor/ph_ensemble/ensemble.json
+    """
+    roots = _ensure_router_roots()
+    token = _norm_pdb_id(pdb_id)
+    v = _norm_variant(variant)  # returns "APO"|"HOLO"|None
+
+    base = roots.processed / token
+    out: list[Path] = []
+    if v:
+        out.append(base / v / "receptor" / "ph_ensemble" / "ensemble.json")
+    out.append(base / "receptor" / "ph_ensemble" / "ensemble.json")
+    return out
 
 # ---------------------------
 # Router roots & stateless helpers
@@ -227,49 +249,63 @@ def docked_dir(
     return base
 
 
+# --- full replacement for load_ph_tags() ---
 def load_ph_tags(pdb_id: str, variant: Optional[str] = None) -> list[str]:
     """
     Read ensemble.json and return ordered pH tags for the given protein/variant.
+
+    Search order:
+      1) processed_pdbs/<PDB>/<VARIANT>/receptor/ph_ensemble/ensemble.json  (if variant set)
+      2) processed_pdbs/<PDB>/receptor/ph_ensemble/ensemble.json
     """
-    base_dir = receptor_dir(pdb_id, variant=variant)
-    manifest = base_dir / "ph_ensemble" / "ensemble.json"
-    if not manifest.exists():
-        return []
-    try:
-        payload = json.loads(manifest.read_text(encoding="utf-8", errors="ignore"))
-    except Exception:
-        return []
+    logger = logging.getLogger("path_router")
 
     tags: list[str] = []
     seen: set[str] = set()
-    members = payload.get("members") if isinstance(payload, dict) else None
-    if not isinstance(members, list):
-        return []
-
     prefix = f"{_norm_pdb_id(pdb_id)}_"
-    for entry in members:
-        if not isinstance(entry, dict):
-            continue
-        raw = entry.get("label") or entry.get("ph_label")
-        if raw is not None:
-            label = str(raw)
-        else:
-            receptor_path = (
-                entry.get("pdbqt")
-                or entry.get("receptor_pdbqt")
-                or entry.get("output_pdbqt")
-                or entry.get("path")
-                or entry.get("receptor")
-            )
-            if not receptor_path:
+
+    for manifest in _ph_manifest_candidates(pdb_id, variant):
+        try:
+            if not manifest.exists():
                 continue
-            stem = Path(str(receptor_path)).stem
-            label = stem[len(prefix):] if stem.startswith(prefix) else stem
-        if label in seen:
+            payload = json.loads(manifest.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
             continue
-        seen.add(label)
-        tags.append(label)
+
+        members = payload.get("members") if isinstance(payload, dict) else None
+        if not isinstance(members, list):
+            continue
+
+        for entry in members:
+            if not isinstance(entry, dict):
+                continue
+            raw = entry.get("label") or entry.get("ph_label")
+            if raw is not None:
+                label = str(raw)
+            else:
+                receptor_path = (
+                    entry.get("pdbqt")
+                    or entry.get("receptor_pdbqt")
+                    or entry.get("output_pdbqt")
+                    or entry.get("path")
+                    or entry.get("receptor")
+                )
+                if not receptor_path:
+                    continue
+                stem = Path(str(receptor_path)).stem
+                label = stem[len(prefix):] if stem.startswith(prefix) else stem
+
+            if label in seen:
+                continue
+            seen.add(label)
+            tags.append(label)
+
+        if tags:
+            logger.info("[router.ph] using manifest=%s tags=%s", manifest, ",".join(tags))
+            break
+
     return tags
+
 
 
 def print_pathmap(

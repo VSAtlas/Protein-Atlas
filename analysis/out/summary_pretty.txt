@@ -1,11 +1,10 @@
-                                target_name library_name pdb_id      N n_actives  actives_fraction ROC_AUC PR_AUC logAUC logAUC_adj BEDROC_alpha_20  EF@1%  EF@2% EF@5% EF@10%
-PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   2GQG 11,212       296          0.026400   0.749  0.082  0.301      0.156           0.259  4.058  5.242 4.659  3.987
-PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   2HYY 11,212       296          0.026400   0.702  0.248  0.391      0.247           0.402 21.983 14.712 7.022  4.325
-          HEPATOCYTE GROWTH FACTOR RECEPTOR          met   2WGJ  2,812       247          0.087838   0.773  0.267  0.319      0.174           0.367  6.505  5.082 3.633  2.998
-PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   3CS9 11,212       296          0.026400   0.677  0.199  0.351      0.206           0.358 17.248 12.852 6.617  3.717
-          PROTEIN (ESTROGEN RECEPTOR ALPHA)         esr1   3ERT 12,580       630          0.050079   0.758  0.168  0.309      0.164           0.279  9.033  6.260 3.714  2.794
-      MAST/STEM CELL GROWTH FACTOR RECEPTOR          kit   3G0E 10,863       253          0.023290   0.769  0.078  0.300      0.155           0.210  6.697  4.353 3.400  3.163
-                  AKAP9-BRAF FUSION PROTEIN         braf   3OG7  9,469       251          0.026508   0.833  0.207  0.422      0.277           0.404 19.061 12.176 7.019  4.900
-               TYROSINE-PROTEIN KINASE ABL1         abl1   3OXZ 11,180       295          0.026386   0.700  0.210  0.348      0.204           0.330 15.904 10.321 5.627  3.729
-      SERINE/THREONINE-PROTEIN KINASE B-RAF         braf   4XV2  9,506       254          0.026720   0.820  0.149  0.380      0.236           0.358 14.576  9.652 5.988  4.880
-               TYROSINE-PROTEIN KINASE ABL1         abl1   5MO4 11,180       295          0.026386   0.673  0.125  0.296      0.152           0.265 11.843  6.598 4.339  3.322
+         run_id                                 target_name library_name pdb_id      N n_actives  actives_fraction ROC_AUC PR_AUC logAUC logAUC_adj BEDROC_alpha_20  EF@1%  EF@2% EF@5% EF@10%
+20251108_174003 PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   2GQG 11,212       296          0.026400   0.749  0.082  0.301      0.156           0.259  4.058  5.242 4.659  3.987
+20251108_174003 PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   2HYY 11,212       296          0.026400   0.702  0.248  0.391      0.247           0.402 21.983 14.712 7.022  4.325
+20251108_174003           HEPATOCYTE GROWTH FACTOR RECEPTOR          met   2WGJ  2,812       247          0.087838   0.773  0.267  0.319      0.174           0.367  6.505  5.082 3.633  2.998
+20251108_174003 PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   3CS9 11,212       296          0.026400   0.677  0.199  0.351      0.206           0.358 17.248 12.852 6.617  3.717
+20251108_174003       MAST/STEM CELL GROWTH FACTOR RECEPTOR          kit   3G0E 10,863       253          0.023290   0.761  0.081  0.299      0.154           0.210  7.484  4.155 3.400  3.202
+20251108_174003                   AKAP9-BRAF FUSION PROTEIN         braf   3OG7  9,469       251          0.026508   0.833  0.207  0.422      0.277           0.404 19.061 12.176 7.019  4.900
+20251108_174003                TYROSINE-PROTEIN KINASE ABL1         abl1   3OXZ 11,180       295          0.026386   0.700  0.210  0.348      0.204           0.330 15.904 10.321 5.627  3.729
+20251108_174003       SERINE/THREONINE-PROTEIN KINASE B-RAF         braf   4XV2  9,506       254          0.026720   0.820  0.149  0.380      0.236           0.358 14.576  9.652 5.988  4.880
+20251108_174003                TYROSINE-PROTEIN KINASE ABL1         abl1   5MO4 11,180       295          0.026386   0.673  0.125  0.296      0.152           0.265 11.843  6.598 4.339  3.322
