@@ -148,6 +148,87 @@ def _dbg_makedirs(name, *a, **k):
     return _orig_makedirs(name, *a, **k)
 os.makedirs = _dbg_makedirs
 
+
+
+
+
+import os, re, hashlib
+from pathlib import Path
+from typing import Iterable, Set
+
+_SANITIZED_RUN = re.compile(r'(?:\.sanitized){2,}')
+
+def _collapse_sanitized_token(fn: str) -> str:
+    """Collapse any repeated '.sanitized' tokens anywhere in the stem."""
+    stem, ext = os.path.splitext(fn)
+    new_stem = _SANITIZED_RUN.sub('.sanitized', stem)
+    return new_stem + ext
+
+def _sha1(path: str, bufsize: int = 1 << 20) -> str:
+    h = hashlib.sha1()
+    with open(path, 'rb') as f:
+        while True:
+            b = f.read(bufsize)
+            if not b: break
+            h.update(b)
+    return h.hexdigest()
+
+def _files_identical(a: str, b: str) -> bool:
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        return _sha1(a) == _sha1(b)
+    except Exception:
+        return False
+
+def collapse_sanitized_names(root_dirs: Iterable[str],
+                             exts: Set[str] = {'.pdb', '.sdf', '.mol2', '.pdbqt'},
+                             logger=None) -> None:
+    """
+    Walk given roots and collapse repeated '.sanitized' in filenames.
+    If the canonical name exists:
+      - if byte-identical, delete the redundant file
+      - if different, keep the canonical (shortest run) and delete the longer-run file; warn.
+    """
+    for root in root_dirs:
+        if not root or not os.path.isdir(root):
+            continue
+        for dirpath, _, files in os.walk(root):
+            for fn in files:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in exts:
+                    continue
+                new_fn = _collapse_sanitized_token(fn)
+                if new_fn == fn:
+                    continue
+                src = os.path.join(dirpath, fn)
+                dst = os.path.join(dirpath, new_fn)
+                rel_src = os.path.relpath(src, root)
+                rel_dst = os.path.relpath(dst, root)
+                try:
+                    if os.path.exists(dst):
+                        if _files_identical(src, dst):
+                            os.remove(src)
+                            if logger:
+                                logger.info(f"[sanitize-collapse] dedup: removed duplicate '{rel_src}' (kept '{rel_dst}')")
+                        else:
+                            # Prefer the shorter '.sanitized' run (i.e., dst). Remove the longer one.
+                            os.remove(src)
+                            if logger:
+                                logger.warning(f"[sanitize-collapse] conflict: kept '{rel_dst}', removed longer-run '{rel_src}'")
+                    else:
+                        os.rename(src, dst)
+                        if logger:
+                            logger.info(f"[sanitize-collapse] rename: '{rel_src}' -> '{rel_dst}'")
+                except Exception as e:
+                    if logger:
+                        logger.error(f"[sanitize-collapse] failed on '{rel_src}' -> '{rel_dst}': {e}")
+
+
+
+
+
+
 # ======================
 # Apo vs Holo mode
 # ======================
@@ -428,10 +509,43 @@ def _parse_single_from_cli(argv) -> str:
     except Exception:
         pass
     return ""
+def _parse_fast_flag(argv) -> bool:
+    """Return True if argv includes fast/-fast/--fast (case-insensitive)."""
+    try:
+        return any(tok.lower().lstrip("-") == "fast" for tok in argv)
+    except Exception:
+        return False
+def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None):
+    """
+    Yield .pdbqt files with a directory-first strategy:
+      - list files directly under `root`
+      - then list files under first-level subdirs, optionally restricted by `allowed_subdirs`
+    Falls back to rglob if listing fails (robustness over speed).
+    """
+    try:
+        if not root or not root.exists():
+            return
+        # files at root
+        for p in root.glob("*.pdbqt"):
+            yield p
+        # first-level subdirs (dir-name filter first, then files)
+        for d in root.iterdir():
+            if not d.is_dir():
+                continue
+            if allowed_subdirs is not None and d.name not in allowed_subdirs:
+                continue
+            for p in d.glob("*.pdbqt"):
+                yield p
+    except Exception:
+        # robust fallback
+        for p in root.rglob("*.pdbqt"):
+            yield p
 
 def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
     """
-    Apply SINGLE_LIGAND_SEARCH_ORDER: 'per_protein,global' (default).
+    Apply SINGLE_LIGAND_SEARCH_ORDER with a minimal optimization:
+    When SINGLE_LIGAND_SKIP_GLOBAL=True (default), ignore the 'global' scope entirely.
+
     Match semantics: exact or prefix match depending on SINGLE_LIGAND_ALLOW_PREFIX.
     Returns a Path to the first hit, or None.
     """
@@ -439,7 +553,13 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         return None
 
     allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
+    # Default order unchanged, but we may filter it below:
     order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")).replace(" ", "").split(",")
+
+    # NEW: default to skip 'global' traversal in single-ligand mode (cheap win)
+    skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
+    if skip_global:
+        order = [w for w in order if w != "global"]
 
     # Where to look
     per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")  # injected at runtime in process_one_protein
@@ -469,52 +589,43 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
                 return hit
 
         elif where == "global":
+            # Retained for optional use if SINGLE_LIGAND_SKIP_GLOBAL=False
             if global_root and global_root.exists():
-                # MINIMAL CHANGE: restrict global scan to default library subdir (e.g., fda_library)
-                lib_sub = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "")).strip()
-                scan_root = (global_root / lib_sub) if lib_sub else global_root
-                if not scan_root.exists():  # graceful fallback
-                    scan_root = global_root
-                logger.debug(f"[single] global scan_root={scan_root}")
-
-                # Exact then prefix match within scan_root
-                for p in scan_root.rglob("*.pdbqt"):
-                    base = p.stem.split("_stage")[0]
-                    if base.lower() == selector.lower():
-                        logger.info(f"[single] matched in global dir: {p}")
-                        return p
-                if allow_prefix:
-                    for p in scan_root.rglob("*.pdbqt"):
-                        base = p.stem.split("_stage")[0]
-                        if base.lower().startswith(selector.lower()):
-                            logger.info(f"[single] prefix-matched in global dir: {p}")
-                            return p
-
-                # Name-based mapping via FDA CSV (generic/brand/synonym)
+                # First, try direct basename hits without walking subfolders:
+                # If you keep an FDA name map, use it here; otherwise comment this out.
                 try:
                     name_map = _load_fda_name_map(cfg, logger)
                     key = _norm_name_key(selector)
                     basenames = list(name_map.get(key, []))
-
-                    # Optional prefix over names if allowed
                     if not basenames and allow_prefix and key:
                         pref = key
                         for k, v in name_map.items():
                             if k.startswith(pref):
                                 basenames.extend(list(v))
-
-                    if basenames:
-                        # Search by basename(s) within scan_root only
-                        for bn in basenames:
-                            for p in scan_root.rglob(bn):
-                                logger.info(f"[single:name] '{selector}' ? {bn} ? {p}")
-                                return p
+                    # If we have basenames, try them right under the root first
+                    for bn in basenames:
+                        p = global_root / "fda_library" / bn
+                        if p.exists():
+                            logger.info(f"[single:name] '{selector}' ? {bn} ? {p}")
+                            return p
                 except Exception as _e:
                     logger.debug(f"[single:name] mapping search skipped: {_e}")
-
+                # Fallback rglob only if you explicitly re-enable global (skip_global=False)
+                for p in global_root.rglob("*.pdbqt"):
+                    base = p.stem.split("_stage")[0]
+                    if base.lower() == selector.lower():
+                        logger.info(f"[single] matched in global dir: {p}")
+                        return p
+                if allow_prefix:
+                    for p in global_root.rglob("*.pdbqt"):
+                        base = p.stem.split("_stage")[0]
+                        if base.lower().startswith(selector.lower()):
+                            logger.info(f"[single] prefix-matched in global dir: {p}")
+                            return p
         else:
             logger.debug(f"[single] unknown search scope: {where}")
     return None
+
 
 
 
@@ -693,10 +804,15 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
 
     # QoL: --2HYY / -2HYY style (exact length, starts with '-' or '--', next 4 alnum)
     for tok in argv:
+        low = tok.lower()
+        # don't treat fast/-fast/--fast as a PDB short-form token
+        if low in ("fast", "-fast", "--fast"):
+            continue
         if (tok.startswith("--") and len(tok) == 6) or (tok.startswith("-") and len(tok) == 5):
             nid = _norm_pdb_id(tok)
             if nid:
                 cli_ids.append(nid)
+
 
 
     if cli_ids:
@@ -1080,6 +1196,8 @@ def _ph_control_centroid(paths: Paths) -> Optional[Tuple[float, float, float]]:
                 sum(z for _, _, z in centroids) / n)
     return None
 
+
+# pH helpers  ----------------------
 def _resolve_ph_scope(scope_cfg: str, radius_nominal: float, paths: Paths, cleaned_pdb: str, log: logging.Logger) -> Tuple[str, Tuple[float, float, float], float]:
     scope = (scope_cfg or '').strip().lower()
     try:
@@ -1104,6 +1222,33 @@ def _resolve_ph_scope(scope_cfg: str, radius_nominal: float, paths: Paths, clean
         cx, cy, cz = (float(center[0]), float(center[1]), float(center[2]))
         return 'pocket', (cx, cy, cz), radius
     return 'global', (0.0, 0.0, 0.0), 1_000_000.0
+
+
+def _ph_values_from_context(pdb_path: str) -> list[float]:
+    """
+    Ask context_ph for the full pH list (ensemble if present, else [target]),
+    then round to 0.1 and clamp to [3.0, 10.5].
+    """
+    vals = []
+    try:
+        from context_ph import select_ph_values_for_protonation
+        raw = select_ph_values_for_protonation(pdb_path)  # returns ensemble or [target]
+        for x in (raw or []):
+            # round & clamp
+            v = max(3.0, min(10.5, round(float(x), 1)))
+            vals.append(v)
+        # dedupe + sort for stability
+        vals = sorted({v for v in vals})
+    except Exception as e:
+        logging.warning(f"[ph.context] failed to resolve; falling back to [7.0]: {e}")
+        vals = [7.0]
+    logging.info(f"[ph.list] n={len(vals)} values={vals}")
+    return vals
+
+
+# ----------------------
+
+
 
 def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
     import automate_protein_prep
@@ -1275,9 +1420,18 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             logger.warning(f"Receptor sanity check skipped due to error: {_e}")
         cleaned_norm = norm(cleaned_pdb_path)
         receptor_norm = norm(receptor_pdbqt_path)
-        _build_ph_ensemble(cleaned_norm)
+        if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
+            _build_ph_ensemble(cleaned_norm)
         return cleaned_norm, receptor_norm
-
+    
+    # --- PH_ENSEMBLE gating of legacy protonation ---
+    if bool(cfg.get("PH_ENSEMBLE", False)):
+        os.environ["A2_SKIP_PDB2PQR"] = "1"
+        logger.info("[ph_ensemble] enabling ensemble mode: A2_SKIP_PDB2PQR=1 for cleaning stage")
+    else:
+        os.environ.pop("A2_SKIP_PDB2PQR", None)
+        logger.info("[ph_ensemble] disabled; legacy cleaning path unchanged")
+    # ------------------------------------------------
     # Fresh prep path: clean PDB then create PDBQT into the variant-aware target
     try:
         cleaned_pdb = automate_protein_prep.clean_pdb(
@@ -1304,7 +1458,8 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     except Exception as e:
         logger.warning(f"Could not relocate cleaned PDB: {e}")
 
-    _build_ph_ensemble(cleaned_pdb)
+    if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
+        _build_ph_ensemble(cleaned_pdb)
 
     # Generate receptor PDBQT directly at the variant-aware path
     try:
@@ -1529,6 +1684,8 @@ def select_center_via_control_redock(cfg, paths, receptor_pdbqt, logger):
             continue
 
         stage_info = {"exhaustiveness": ex, "num_modes": nm}
+        if cfg.get("FAST_MODE"):
+            stage_info["exhaustiveness"] = 1
         conf_path, out_path = emit_vina_config(
             cfg, paths.pdb_id, receptor_pdbqt, center, (24.0,24.0,24.0),
             str(lig_pdbqt), "ctrl_redock", stage_info, threads_per_vina, logger=None
@@ -1801,11 +1958,19 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
 
-    # --- collect all .pdbqt (dedup by normalized path) ---
+    # --- collect all .pdbqt (dedup by normalized path), directory-first ---
     seen: set[str] = set()
     all_pdbqt_paths: list[Path] = []
+
+    # Allowlist only control/reference in the per-protein tree; everything
+    # else (non-controls) comes from explicitly allowed library roots.
+    per_protein_allow = {"controls", "reference"}
+
     for r in roots:
-        for p in r.rglob("*.pdbqt"):
+        allowed = None
+        if r == paths.prepped_ligands_dir:
+            allowed = per_protein_allow
+        for p in _iter_pdbqt_dirfirst(r, allowed_subdirs=allowed):
             pn = norm(p)
             if pn not in seen:
                 seen.add(pn)
@@ -2174,6 +2339,8 @@ def run_one_stage(
             for lig in submit_queue:
                 stage_for_cfg = dict(stage)
                 stage_for_cfg["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
+                if cfg.get("FAST_MODE"):
+                    stage_for_cfg["exhaustiveness"] = 1
 
                 conf_path, out_path = emit_vina_config(
                     cfg, pdb_id, receptor_pdbqt, center, box_size, lig, stage["name"], stage_for_cfg, threads_per_vina,
@@ -2302,7 +2469,9 @@ def run_one_stage(
                                     ex0 = 8
                                 ex_mult = int(cfg.get("RETRY_EXHAUST_MULT", 2))
                                 stage_retry["exhaustiveness"] = max(8, ex0 * ex_mult)
-
+                                if cfg.get("FAST_MODE"):
+                                    stage_retry["exhaustiveness"] = 1
+                                    
                                 retry_center = center
                                 retry_box = box_size
                                 conf_path2, out_path2 = emit_vina_config(
@@ -2391,6 +2560,8 @@ def run_one_stage(
                             stage_retry2["exhaustiveness"] = recipe["exhaustiveness"]
                         if "num_modes" in recipe:
                             stage_retry2["num_modes"] = recipe["num_modes"]
+                        if cfg.get("FAST_MODE"):
+                            stage_retry2["exhaustiveness"] = 1
                         if recipe.get("seed_jitter", False):
                             try:
                                 base_seed = int(stage_retry2.get("seed", 0)) if "seed" in stage_retry2 else 0
@@ -3253,6 +3424,10 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
     logger.info(f"[paths] base_id={base_id} -> pdb_id={pdb_id}")
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
+    # --- Canonicalize any runaway '.sanitized' filenames before we touch them ---
+    lig_raw_dir  = os.path.join(cfg['OUTPUT_DIR'], pdb_id, 'ligands_raw')
+    prepped_dir  = os.path.join(cfg['PREPPED_LIGANDS_DIR'], pdb_id)
+    collapse_sanitized_names([lig_raw_dir, prepped_dir], logger=logger)
 
     # 1) Extract ligands ? produce nolig PDB
     _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
@@ -3282,6 +3457,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     control_lookup = build_control_lookup(paths)
 
     # 2) Protein prep (re-use if cached)
+    logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
     cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
     if not cleaned_pdb or not receptor_pdbqt:
         logger.warning("Skipping protein due to prep failure.")
@@ -3337,6 +3513,42 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         print(f"[CENTER] source={center_source} center={c_print} box={b_print}")
     except Exception:
         pass
+    # >>> PH ENSEMBLE (GLOBAL) START
+    if bool(cfg.get("PH_ENSEMBLE", False)):
+        try:
+            from context_ph import select_ph_values_for_protonation
+            from ph_ensemble import build_ph_ensemble
+
+            # Pull raw list from context_ph on the **raw input PDB** (header intact)
+            raw_vals = select_ph_values_for_protonation(str(paths.input_pdb_path))
+            logger.info("[ph.ctx.raw] path=%s values=%s", str(paths.input_pdb_path),
+                        ",".join(f"{v:.2f}" for v in (raw_vals or [])))
+
+            # Round to 0.1 and clamp to [3.0, 10.5]; dedupe + sort
+            ph_values = sorted({max(3.0, min(10.5, round(float(x), 1))) for x in (raw_vals or [])})
+            if not ph_values:
+                logger.warning("[ph.ctx.fallback] context list empty -> using [7.0]")
+                ph_values = [7.0]
+
+            logger.info("[ph.list] n=%d values=%s", len(ph_values),
+                        ",".join(f"{v:.1f}" for v in ph_values))
+
+            # GLOBAL scope: use the propka_wire sentinel (radius >= 1e6)
+            manifest_path = build_ph_ensemble(
+                pdb_id=paths.pdb_id,
+                cleaned_receptor_pdb=str(Path(cleaned_pdb)),
+                out_dir=str(Path(cfg["OUTPUT_DIR"])),
+                center=(0.0, 0.0, 0.0),
+                radius=1_000_000.0,
+                ph_values=ph_values,
+                member_index_start=0
+            )
+            logger.info("[ph_ensemble.manifest] path=%s", manifest_path)
+
+        except Exception as e:
+            logger.warning("[ph_ensemble.skip] error=%s", e)
+    # >>> PH ENSEMBLE (GLOBAL) END
+
 
     # 4) Ligand prep & filtering
     ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
@@ -3882,6 +4094,7 @@ def main() -> None:
     init_config_run_dir(cfg, run_id=cfg.get("RUN_ID"), reset=cfg.get("RESET_CONFIGS"),
                         logger=logging.getLogger("run"))
     print(f"[cfg.run] run_id={cfg['RUN_ID']} run_dir={cfg['CONFIG_RUN_DIR']}")
+    print(f"[ph.mode] PH_ENSEMBLE={cfg.get('PH_ENSEMBLE', False)}")
 
     # --- Single-ligand config (ported) ---------------------------------------
     cfg.setdefault("SINGLE_LIGAND", "")
@@ -3911,6 +4124,10 @@ def main() -> None:
     requested_ids, _sel_src = _parse_specified_proteins(sys.argv, cfg)
     cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = requested_ids
     print(f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)")
+    # --- Fast mode: force exhaustiveness=1 everywhere ---
+    cfg["FAST_MODE"] = _parse_fast_flag(sys.argv) or bool(cfg.get("FAST_MODE", False))
+    if cfg["FAST_MODE"]:
+        print("[config] FAST_MODE effective=True (exhaustiveness=1)")
 
     # --- Center selection knobs (safe defaults) ---
     cfg.setdefault("CENTER_MODE", "control-first")  # ["control-first","hybrid","library-first"]
