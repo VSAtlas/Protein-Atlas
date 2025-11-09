@@ -320,15 +320,12 @@ def resolve_stage_and_config_dirs(
     # >>> PATHS INIT END
 
     # >>> DOCKED PATHS PATCH START
-    stage_dir = paths.docked_stage_dir(variant, stage)
+    stage_dir = paths.docked_stage_dir(variant, stage, ph_token)
     # >>> DOCKED PATHS PATCH END
 
     cfg_dir_call = paths.configs_stage_dir
     # >>> CONFIG PATHS PATCH START
-    try:
-        cfg_dir = cfg_dir_call(run_id, variant, stage, ph_token)
-    except TypeError:
-        cfg_dir = cfg_dir_call(run_id, variant, stage)
+    cfg_dir = cfg_dir_call(run_id, variant, stage, ph_token)
     # >>> CONFIG PATHS PATCH END
 
     return stage_dir, cfg_dir
