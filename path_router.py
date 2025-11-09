@@ -5,7 +5,7 @@ from __future__ import annotations
 import os, re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 # ---------------------------
 # Helpers
@@ -197,26 +197,30 @@ class Paths:
     # ---------------------------
     # Docking outputs
     # ---------------------------
-    def docked_pdb_root(self) -> Path:
+    def docked_pdb_root(self, ph_label: Optional[str] = None) -> Path:
         """
-        Dir: docked/<PDB>/
-        Expected (top-level analysis):
-          - docking_score_long.csv
-          - docking_score_summary.csv
-          - bench_pocketX_single/ (optional benchmark folders; X is an index)
-          - <VARIANT>/          (subdirs when variant-aware outputs are used)
+        Dir (legacy):        docked/<PDB>/
+        Dir (with pH):      docked/<PDB>/<PH>/
+
+        ``ph_label`` should be a filesystem-safe token (e.g., "pH6_0"). When
+        omitted, the historical directory layout is preserved.
         """
-        d = self.docked_root / self.pdb_id
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        base = self.docked_root / self.pdb_id
+        base.mkdir(parents=True, exist_ok=True)
+        if ph_label is None:
+            return base
 
-    def docking_score_long_csv(self) -> Path:
-        """File: docked/<PDB>/docking_score_long.csv"""
-        return self.docked_pdb_root() / "docking_score_long.csv"
+        ph_dir = base / str(ph_label)
+        ph_dir.mkdir(parents=True, exist_ok=True)
+        return ph_dir
 
-    def docking_score_summary_csv(self) -> Path:
-        """File: docked/<PDB>/docking_score_summary.csv"""
-        return self.docked_pdb_root() / "docking_score_summary.csv"
+    def docking_score_long_csv(self, ph_label: Optional[str] = None) -> Path:
+        """File: docked/<PDB>/<PH?>/docking_score_long.csv"""
+        return self.docked_pdb_root(ph_label=ph_label) / "docking_score_long.csv"
+
+    def docking_score_summary_csv(self, ph_label: Optional[str] = None) -> Path:
+        """File: docked/<PDB>/<PH?>/docking_score_summary.csv"""
+        return self.docked_pdb_root(ph_label=ph_label) / "docking_score_summary.csv"
 
     def bench_pocket_dir(self, pocket_index: int) -> Path:
         """
@@ -227,28 +231,38 @@ class Paths:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def docked_variant_root(self, variant: Optional[str]) -> Path:
+    def docked_variant_root(self, variant: Optional[str], ph_label: Optional[str] = None) -> Path:
         """
         If variant in {APO,HOLO}:
-          Dir: docked/<PDB>/<VARIANT>/
-          Expected: stage1/, stage2/, stage3/ ... (poses, logs, scores)
+          Dir: docked/<PDB>/<VARIANT>/              (legacy)
+               docked/<PDB>/<PH>/<VARIANT>/        (with pH)
         If variant is None (legacy):
-          Dir: docked/<PDB>/         (stages under top-level; back-compat)
+          Dir: docked/<PDB>/                     (legacy)
+               docked/<PDB>/<PH>/                (with pH)
         """
         v = _norm_variant(variant)
-        d = self.docked_pdb_root() / v if v else self.docked_pdb_root()
+        base = self.docked_pdb_root(ph_label=ph_label)
+        d = base / v if v else base
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def docked_stage_dir(self, variant: Optional[str], stage: str) -> Path:
+    def docked_stage_dir(
+        self,
+        variant: Optional[str],
+        stage: Union[str, int],
+        ph_label: Optional[str] = None,
+    ) -> Path:
         """
         If variant in {APO,HOLO}:
-          Dir: docked/<PDB>/<VARIANT>/<stage>/
+          Dir: docked/<PDB>/<VARIANT>/<stage>/                 (legacy)
+               docked/<PDB>/<PH>/<VARIANT>/<stage>/           (with pH)
         If variant is None:
-          Dir: docked/<PDB>/<stage>/
+          Dir: docked/<PDB>/<stage>/                          (legacy)
+               docked/<PDB>/<PH>/<stage>/                    (with pH)
         Expected files: <ligand>_<stage>.pdbqt (poses), vina logs, per-stage CSVs
         """
-        d = self.docked_variant_root(variant) / stage
+        stage_token = stage if isinstance(stage, str) else f"stage{int(stage)}"
+        d = self.docked_variant_root(variant, ph_label=ph_label) / str(stage_token)
         d.mkdir(parents=True, exist_ok=True)
         return d
 
