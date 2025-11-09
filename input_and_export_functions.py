@@ -352,6 +352,7 @@ def emit_vina_config(
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
 
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
 
     # ---  define lig_base from ligand_path (fixes NameError) ---
     from pathlib import Path
@@ -360,7 +361,7 @@ def emit_vina_config(
     # Variant-aware config dir (prefer path_router helpers; fallback to old layout)
     run_id = cfg["RUN_ID"]
     if hasattr(paths, "configs_stage_dir"):
-        conf_dir = paths.configs_stage_dir(run_id, var, stage_name)
+        conf_dir = paths.configs_stage_dir(run_id, var, stage_name, ph_label)
     else:
         # Fallback: configs/<RUN_ID>/<PDB>/<VARIANT>/<stage> (omit VARIANT if None)
         conf_dir = Path(cfg["CONFIG_RUN_DIR"]) / pdb_id
@@ -369,7 +370,7 @@ def emit_vina_config(
 
     # Variant-aware Vina output dir (prefer helper; fallback to old layout)
     if hasattr(paths, "docked_stage_dir"):
-        out_dir = paths.docked_stage_dir(var, stage_name)
+        out_dir = paths.docked_stage_dir(var, stage_name, ph_label)
     else:
         # Fallback: docked/<PDB>/<VARIANT>/<stage> (omit VARIANT if None)
         root = paths.docked_pdb_root()  # expected to be a Path-like

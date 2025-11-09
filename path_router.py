@@ -227,7 +227,7 @@ class Paths:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def docked_variant_root(self, variant: Optional[str]) -> Path:
+    def docked_variant_root(self, variant: Optional[str], ph_label: Optional[str] = None) -> Path:
         """
         If variant in {APO,HOLO}:
           Dir: docked/<PDB>/<VARIANT>/
@@ -236,11 +236,18 @@ class Paths:
           Dir: docked/<PDB>/         (stages under top-level; back-compat)
         """
         v = _norm_variant(variant)
-        d = self.docked_pdb_root() / v if v else self.docked_pdb_root()
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        base = self.docked_pdb_root() / v if v else self.docked_pdb_root()
+        if ph_label:
+            base = base / str(ph_label)
+        base.mkdir(parents=True, exist_ok=True)
+        return base
 
-    def docked_stage_dir(self, variant: Optional[str], stage: str) -> Path:
+    def docked_stage_dir(
+        self,
+        variant: Optional[str],
+        stage: str,
+        ph_label: Optional[str] = None,
+    ) -> Path:
         """
         If variant in {APO,HOLO}:
           Dir: docked/<PDB>/<VARIANT>/<stage>/
@@ -248,14 +255,20 @@ class Paths:
           Dir: docked/<PDB>/<stage>/
         Expected files: <ligand>_<stage>.pdbqt (poses), vina logs, per-stage CSVs
         """
-        d = self.docked_variant_root(variant) / stage
+        d = self.docked_variant_root(variant, ph_label) / stage
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     # ---------------------------
     # Config emission
     # ---------------------------
-    def configs_stage_dir(self, run_id: str, variant: Optional[str], stage: str) -> Path:
+    def configs_stage_dir(
+        self,
+        run_id: str,
+        variant: Optional[str],
+        stage: str,
+        ph_label: Optional[str] = None,
+    ) -> Path:
         """
         If variant in {APO,HOLO}:
           Dir: configs/<RUN>/<PDB>/<VARIANT>/<stage>/
@@ -265,7 +278,10 @@ class Paths:
         """
         v = _norm_variant(variant)
         base = self.configs_root / run_id / self.pdb_id
-        d = (base / v / stage) if v else (base / stage)
+        d = (base / v) if v else base
+        if ph_label:
+            d = d / str(ph_label)
+        d = d / stage
         d.mkdir(parents=True, exist_ok=True)
         return d
     def expand_variants(self, mode: Optional[str]) -> list[Optional[str]]:
