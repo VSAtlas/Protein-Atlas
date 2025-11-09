@@ -246,6 +246,8 @@ def docked_dir(
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.docked / token
+    if legacy:
+        return base
     v = _norm_variant(variant)
     if v:
         base = base / v
@@ -267,10 +269,13 @@ def config_dir(
     stage: str,
     variant: Optional[str] = None,
     ph_tag: Optional[str] = None,
+    legacy: bool = False,
 ) -> Path:
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.configs / str(run_id) / token
+    if legacy:
+        return base / _norm_stage(stage)
     v = _norm_variant(variant)
     if v:
         base = base / v
@@ -286,8 +291,16 @@ def config_file(
     variant: Optional[str] = None,
     ph_tag: Optional[str] = None,
     suffix: str = "vina.json",
+    legacy: bool = False,
 ) -> Path:
-    return config_dir(run_id, pdb_id, stage, variant=variant, ph_tag=ph_tag) / suffix
+    return config_dir(
+        run_id,
+        pdb_id,
+        stage,
+        variant=variant,
+        ph_tag=ph_tag,
+        legacy=legacy,
+    ) / suffix
 
 
 # --- full replacement for load_ph_tags() ---

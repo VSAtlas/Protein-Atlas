@@ -313,6 +313,7 @@ def resolve_stage_and_config_dirs(
     stage: str,
     variant: Optional[str] = None,
     ph_token: Optional[str] = None,
+    legacy: bool = False,
 ) -> Tuple[Path, Path]:
     """Return (stage_dir, config_dir) using the centralized path router."""
 
@@ -324,12 +325,19 @@ def resolve_stage_and_config_dirs(
     # >>> PATHS INIT END
 
     # >>> DOCKED PATHS PATCH START
-    stage_root = router_docked_dir(pdb_id, variant=variant, ph_tag=ph_token)
+    stage_root = router_docked_dir(pdb_id, variant=variant, ph_tag=ph_token, legacy=legacy)
     stage_dir = stage_root / stage
     # >>> DOCKED PATHS PATCH END
 
     # >>> CONFIG PATHS PATCH START
-    cfg_dir = router_config_dir(run_id, pdb_id, stage, variant=variant, ph_tag=ph_token)
+    cfg_dir = router_config_dir(
+        run_id,
+        pdb_id,
+        stage,
+        variant=variant,
+        ph_tag=ph_token,
+        legacy=legacy,
+    )
     # >>> CONFIG PATHS PATCH END
 
     return stage_dir, cfg_dir
