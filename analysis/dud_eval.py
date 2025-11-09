@@ -48,6 +48,8 @@ LEVEL_ABBREV = {"DEBUG": "DBG", "INFO": "INF", "WARN": "WRN", "ERROR": "ERR"}
 _current_log_level = LOG_LEVELS["INFO"]
 _BACKEND_LOGGED = False
 
+FULL_RUN_MIN_LIGANDS = int(os.environ.get("FULL_RUN_MIN_LIGANDS", 10))
+
 
 def set_log_level(level_name: Optional[str]) -> None:
     global _current_log_level
@@ -491,6 +493,122 @@ def guess_ligfile_col(df: pd.DataFrame, override: Optional[str]) -> str:
             return c
     raise ValueError("Could not find ligand filename/path column. Use --lig-col.")
 
+# >>> RUN-SELECTION START
+def select_default_run_id(targets: List[Tuple[str, Path]],
+                          csv_paths_by_target: Dict[str, Path],
+                          lig_col_cli: Optional[str],
+                          score_col_cli: Optional[str]) -> Optional[str]:
+    run_full_map: Dict[str, Set[str]] = {}
+    run_mtimes: Dict[str, float] = {}
+
+    digit_re = re.compile(r"^\d{8,}$")
+    iso_re = re.compile(r"^\d{4}-\d{2}-\d{2}([Tt _].*)?$")
+
+    def _parse_isoish(token: str) -> Optional[float]:
+        text = token.strip()
+        if not text:
+            return None
+        cleaned = text.rstrip("Z").rstrip("z")
+        candidates = [cleaned]
+        if "T" in cleaned:
+            candidates.append(cleaned.replace("T", " "))
+        if "_" in cleaned:
+            candidates.append(cleaned.replace("_", " "))
+        if cleaned.endswith("T"):
+            candidates.append(cleaned.rstrip("T"))
+        for cand in candidates:
+            cand = cand.strip()
+            if not cand:
+                continue
+            try:
+                dt = datetime.fromisoformat(cand)
+            except Exception:
+                continue
+            try:
+                return dt.replace(tzinfo=dt.tzinfo or timezone.utc).timestamp()
+            except Exception:
+                try:
+                    return dt.timestamp()
+                except Exception:
+                    continue
+        return None
+
+    for pdb_id, _ in targets:
+        csv_path = csv_paths_by_target.get(pdb_id)
+        if not csv_path or not csv_path.exists():
+            continue
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception as exc:
+            dbg("WARN", "run", f"pdb={pdb_id} auto_select_read_err={exc}")
+            continue
+
+        if "run_id" not in df.columns:
+            continue
+
+        try:
+            lig_col = guess_ligfile_col(df, lig_col_cli)
+        except Exception as exc:
+            dbg("WARN", "run", f"pdb={pdb_id} auto_select_ligcol_err={exc}")
+            continue
+
+        lig_series = df[lig_col].astype(str)
+        parsed = lig_series.apply(parse_name_and_label)
+        lig_ids = parsed.apply(lambda t: t[0])
+
+        run_series = df["run_id"].dropna()
+        if run_series.empty:
+            continue
+        run_ids = run_series.index
+        df_subset = df.loc[run_ids].copy()
+        df_subset["__run_id"] = run_series.astype(str).str.strip()
+        df_subset["__lig_id"] = lig_ids.loc[run_ids]
+        df_subset = df_subset[df_subset["__run_id"] != ""]
+        if df_subset.empty:
+            continue
+
+        lig_counts = df_subset.groupby("__run_id")["__lig_id"].nunique()
+        for run_label, count in lig_counts.items():
+            if count >= FULL_RUN_MIN_LIGANDS:
+                run_full_map.setdefault(run_label, set()).add(pdb_id)
+            try:
+                stat = csv_path.stat()
+            except Exception:
+                continue
+            run_mtimes[run_label] = max(run_mtimes.get(run_label, 0.0), getattr(stat, "st_mtime", 0.0))
+
+    if not run_full_map:
+        return None
+
+    scored = {run_id: len(pdbs) for run_id, pdbs in run_full_map.items()}
+    best_score = max(scored.values())
+    candidates = [run_id for run_id, score in scored.items() if score == best_score]
+    if not candidates:
+        return None
+
+    parsed_values: Dict[str, float] = {}
+    all_parseable = True
+    for run_id in candidates:
+        token = run_id.strip()
+        parsed_val: Optional[float] = None
+        if digit_re.match(token):
+            try:
+                parsed_val = float(int(token))
+            except Exception:
+                parsed_val = None
+        elif iso_re.match(token):
+            parsed_val = _parse_isoish(token)
+        if parsed_val is None:
+            all_parseable = False
+            break
+        parsed_values[run_id] = parsed_val
+
+    if all_parseable and parsed_values:
+        return max(parsed_values, key=lambda k: (parsed_values[k], k))
+
+    return max(candidates, key=lambda k: (run_mtimes.get(k, 0.0), k))
+# >>> RUN-SELECTION END
+
 # --- filename parsing: derive ligand_id root + is_active from filename ---
 TOKEN_RE = re.compile(r'(?<![A-Za-z0-9])(active|decoy)s?(?![A-Za-z0-9])', re.IGNORECASE)
 POSE_TAIL_RE = re.compile(r'(?:_pose\d+|_mode\d+|_conf\d+|_rank\d+|_cluster\d+|_p\d+)$', re.IGNORECASE)
@@ -777,6 +895,7 @@ def evaluate_target(pdb_id: str,
                 dbg("DEBUG", "variant", f"pdb={pdb_id} unique={unique_vals} counts={counts}")
 
     row = {
+        "run_id": str(run_id) if run_id else "(none)",
         "pdb_id": pdb_id,
         "N": N,
         "n_actives": n_act,
@@ -823,7 +942,8 @@ def _load_default_cfg() -> Dict:
 
 def _resolve_run_label(pdb_id: str,
                        meta: Optional[TargetEvaluation],
-                       cli_run_id: Optional[str]) -> str:
+                       cli_run_id: Optional[str],
+                       active_run_id: Optional[str]) -> str:
     if cli_run_id:
         if meta and meta.has_run_id_column:
             return str(cli_run_id)
@@ -835,6 +955,8 @@ def _resolve_run_label(pdb_id: str,
                 return ""
             return ordered[0] if len(ordered) == 1 else ",".join(ordered)
         return ""
+    if active_run_id:
+        return str(active_run_id)
     return "(none)"
 
 
@@ -1190,6 +1312,19 @@ def main():
     csv_paths_by_target: Dict[str, Path] = {}
     for pdb_id, csvp in targets:
         csv_paths_by_target[pdb_id] = csvp
+
+    # >>> ACTIVE-RUN PICK START
+    active_run_id = args.run_id
+    if not active_run_id:
+        try:
+            active_run_id = select_default_run_id(targets, csv_paths_by_target, args.lig_col, args.score_col)
+        except Exception as _exc:
+            active_run_id = None
+            dbg("WARN", "run", f"auto_select_failed err={_exc}")
+    dbg("INFO", "run", f"active={active_run_id or '(none)'} source={'CLI' if args.run_id else 'auto'}")
+    # >>> ACTIVE-RUN PICK END
+
+    for pdb_id, csvp in targets:
         evaluated = evaluate_target(
             pdb_id=pdb_id,
             csv_path=csvp,
@@ -1198,7 +1333,7 @@ def main():
             score_col_cli=args.score_col,
             bedroc_alpha=args.bedroc_alpha,
             logauc_lambda=args.logauc_lambda,
-            run_id=args.run_id,
+            run_id=active_run_id,
         )
         if evaluated is not None:
             target_eval_results[pdb_id] = evaluated
@@ -1302,7 +1437,7 @@ def main():
             _CONTROL_PATTERNS_LOGGED = True
         for pdb_id in control_targets:
             eval_meta = target_eval_results.get(pdb_id)
-            run_label = _resolve_run_label(pdb_id, eval_meta, args.run_id)
+            run_label = _resolve_run_label(pdb_id, eval_meta, args.run_id, active_run_id)
             target_label = names.get(pdb_id, "")
             library_label = libs.get(pdb_id, "")
             csv_path = csv_paths_by_target.get(pdb_id)
@@ -1371,18 +1506,25 @@ def main():
     holo_mask = (variant_upper == "HOLO") if variant_col_present else None
     has_sections = bool(variant_col_present and ((apo_mask is not None and apo_mask.any()) or (holo_mask is not None and holo_mask.any())))
 
+    preferred_cols = ("run_id", "target_name", "library_name", "pdb_id")
+    excluded_cols = {"run_id", "target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant"}
+
     with open(summary_path, "w", newline="") as fh:
         if has_sections:
+            _df = df.drop(columns=["variant"], errors="ignore")
+            cols = [c for c in preferred_cols if c in _df.columns] \
+                   + [c for c in _df.columns if c not in preferred_cols]
             apo_rows = df.loc[apo_mask].sort_values("pdb_id") if apo_mask is not None else pd.DataFrame()
             holo_rows = df.loc[holo_mask].sort_values("pdb_id") if holo_mask is not None else pd.DataFrame()
             n_apo = len(apo_rows)
             n_holo = len(holo_rows)
 
             sections = []
+            leftover_rows = pd.DataFrame()
             if n_apo:
                 apo_out = apo_rows.drop(columns=["variant"], errors="ignore")
-                a_cols = [c for c in ("target_name", "library_name", "pdb_id") if c in apo_out.columns] \
-                         + [c for c in apo_out.columns if c not in ("target_name", "library_name", "pdb_id")]
+                a_cols = [c for c in preferred_cols if c in apo_out.columns] \
+                         + [c for c in apo_out.columns if c not in preferred_cols]
                 fh.write("Apo\n");
                 apo_out[a_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
                 sections.append(("Apo", apo_out[a_cols]))
@@ -1390,45 +1532,39 @@ def main():
             if n_holo:
                 if n_apo: fh.write("\n")
                 holo_out = holo_rows.drop(columns=["variant"], errors="ignore")
-                h_cols = [c for c in ("target_name", "library_name", "pdb_id") if c in holo_out.columns] \
-                         + [c for c in holo_out.columns if c not in ("target_name", "library_name", "pdb_id")]
+                h_cols = [c for c in preferred_cols if c in holo_out.columns] \
+                         + [c for c in holo_out.columns if c not in preferred_cols]
                 fh.write("Holo\n");
                 holo_out[h_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
                 sections.append(("Holo", holo_out[h_cols]))
-
-            if not leftover_rows.empty:
-                if n_apo or n_holo: fh.write("\n")
-                lo_out = leftover_rows.drop(columns=["variant"], errors="ignore")
-                l_cols = [c for c in ("target_name", "library_name", "pdb_id") if c in lo_out.columns] \
-                         + [c for c in lo_out.columns if c not in ("target_name", "library_name", "pdb_id")]
-                lo_out[l_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
-                sections.append(("Unlabeled", lo_out[l_cols]))
-
-            # Pretty summary file (same run-id naming as TSV)
-            if args.pretty_summary and sections:
-                pretty_name = summary_path.with_name(summary_path.stem + "_pretty.txt")
-                _write_pretty_summary(sections, pretty_name)
-                print(f"[eval] pretty_summary_out={pretty_name}")
 
             leftover_mask = ~(apo_mask | holo_mask) if (apo_mask is not None and holo_mask is not None) else pd.Series(False, index=df.index)
             leftover_rows = df.loc[leftover_mask].sort_values("pdb_id") if not df.empty else pd.DataFrame()
             if not leftover_rows.empty:
                 if n_apo or n_holo:
                     fh.write("\n")
-                leftover_rows.drop(columns=["variant"], errors="ignore").to_csv(fh, sep="\t", index=False)
+                lo_base = leftover_rows.drop(columns=["variant"], errors="ignore")
+                l_cols = [c for c in preferred_cols if c in lo_base.columns] \
+                         + [c for c in lo_base.columns if c not in preferred_cols]
+                lo_base[l_cols].to_csv(fh, sep="\t", index=False)
+                sections.append(("Unlabeled", lo_base[l_cols]))
             dbg("INFO", "summary", f"sections=Apo:{n_apo} Holo:{n_holo} other={len(leftover_rows)}")
+
+            # Pretty summary file (same run-id naming as TSV)
+            if args.pretty_summary and sections:
+                pretty_name = summary_path.with_name(summary_path.stem + "_pretty.txt")
+                _write_pretty_summary(sections, pretty_name)
+                print(f"[eval] pretty_summary_out={pretty_name}")
         else:
             _df = df.drop(columns=["variant"], errors="ignore")
-            cols = [c for c in ("target_name", "library_name", "pdb_id") if c in _df.columns] \
-                   + [c for c in _df.columns if c not in ("target_name", "library_name", "pdb_id")]
+            cols = [c for c in preferred_cols if c in _df.columns] \
+                   + [c for c in _df.columns if c not in preferred_cols]
             _df[cols].to_csv(fh, sep="\t", index=False)
             # Pretty summary alongside TSV
             if args.pretty_summary:  # if you added the flag; otherwise remove the 'if'
                 pretty_name = summary_path.with_name(summary_path.stem + "_pretty.txt")
             _write_pretty_summary([(None, _df[cols])], pretty_name)
             print(f"[eval] pretty_summary_out={pretty_name}")
-
-            excluded_cols = {"target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant"}
     metric_cols = [c for c in df.columns if c not in excluded_cols]
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
     macro_df = pd.DataFrame([{"pdb_id": "macro_avg", **{k: macro[k] for k in metric_cols}}])
