@@ -37,8 +37,14 @@ from pose_validation import (
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
 )
 from run_vina import run_docking_task, validate_all_poses
-from path_router import expand_variants
-from path_router import make_paths, Paths as RouterPaths
+from path_router import (
+    expand_variants,
+    make_paths,
+    Paths as RouterPaths,
+    receptor_file,
+    docked_dir,
+    load_ph_tags,
+)
 
 
 def _resolve_run_id(argv: list[str]) -> str:
@@ -1021,13 +1027,11 @@ def _fingerprint_stage(cfg: Dict,
 
 
 def _checkpoint_path(cfg: Dict, pdb_id: str, stage_name: str) -> Path:
-    # >>> DOCKED PATHS PATCH START
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
     variant = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-    root = paths.docked_variant_root(variant, ph_label)
+    legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
+    root = docked_dir(pdb_id, variant=variant, ph_tag=ph_label, legacy=legacy_mode)
     return root / f".ckpt_{stage_name}.json"
-    # >>> DOCKED PATHS PATCH END
 
 
 def checkpoint_should_skip(cfg: Dict,
@@ -1068,12 +1072,10 @@ def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
     try:
         if not cfg.get("AUDIT_JSON", True):
             return
-        # >>> DOCKED PATHS PATCH START
-        paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
         ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
         variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-        out = paths.docked_variant_root(variant_env, ph_label) / "audit.json"
-        # >>> DOCKED PATHS PATCH END
+        legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
+        out = docked_dir(pdb_id, variant=variant_env, ph_tag=ph_label, legacy=legacy_mode) / "audit.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, indent=2))
     except Exception:
@@ -1360,9 +1362,9 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
                     variant_label,
                 )
                 return
-            dock_root = paths.docked_variant_root(variant)
+            legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
             for ph_label, _ in targets:
-                ph_root = dock_root / ph_label
+                ph_root = docked_dir(paths.pdb_id, variant=variant, ph_tag=ph_label, legacy=legacy_mode)
                 log.info(
                     "[ph_ensemble.dock.root] pdb_id=%s variant=%s ph=%s dock_root=%s",
                     paths.pdb_id,
@@ -3705,13 +3707,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     base_box = tuple(box_size)
 
     variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_token = variant_env or None
     variant_label = variant_env or "legacy"
     ph_log = logging.getLogger("ph_ensemble")
-    manifest_map = cfg.get("_PH_ENSEMBLE_CANONICAL") or {}
-    ph_runs: list[tuple[Optional[str], str]] = []
+    legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
+    ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
+    plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
 
-    if bool(cfg.get("PH_ENSEMBLE")):
-        # --- DEBUG: what do we have right now?
+    if ph_enabled:
         try:
             _keys = sorted(list((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).keys()))
             _len_here = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, []))
@@ -3719,59 +3722,51 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         except Exception:
             pass
 
-        ph_runs = [(lbl, str(path)) for lbl, path in manifest_map.get(paths.pdb_id, []) if path]
+        ph_tags = load_ph_tags(paths.pdb_id, variant=variant_token)
+        if not ph_tags:
+            ph_log.warning(
+                "[router.warn] ensemble.json had no members; skipping pdb=%s variant=%s",
+                paths.pdb_id,
+                variant_label,
+            )
+            return
+        canonical: list[tuple[str, str]] = []
+        for tag in ph_tags:
+            rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=tag, legacy=legacy_mode)
+            canonical.append((tag, str(rec_path)))
+        if canonical:
+            cfg.setdefault("_PH_ENSEMBLE_CANONICAL", {})[paths.pdb_id] = canonical
+    else:
+        ph_tags = [None]
 
-        # If empty, try a direct manifest read as a last-resort bridge.
-        if not ph_runs:
-            try:
-                guess = Path(cfg["OUTPUT_DIR"]) / paths.pdb_id / "receptor" / "ph_ensemble" / "ensemble.json"
-                ph_log.info("[ph_ensemble.debug] fallback_manifest=%s exists=%s", str(guess), guess.exists())
-                if guess.exists():
-                    data = json.loads(guess.read_text())
-                    members = data.get("members") or []
-                    canonical = [m for m in members if bool(m.get("canonical", False))]
-                    if canonical:
-                        members = canonical
-                    prefix = f"{paths.pdb_id}_"
-                    targets = []
-                    for entry in members:
-                        receptor_path = entry.get("pdbqt")
-                        if not receptor_path:
-                            continue
-                        stem = Path(receptor_path).stem
-                        ph_label = stem[len(prefix):] if stem.startswith(prefix) else stem
-                        targets.append((ph_label, receptor_path))
-                    if targets:
-                        cfg.setdefault("_PH_ENSEMBLE_CANONICAL", {})[paths.pdb_id] = targets
-                        ph_runs = [(lbl, str(p)) for (lbl, p) in targets if p]
-                        ph_log.info("[ph_ensemble.debug] fallback_bridge n=%d labels=%s",
-                                    len(targets), ",".join(lbl for lbl, _ in targets))
-            except Exception as _e:
-                ph_log.warning("[ph_ensemble.debug] fallback_bridge.error %s", _e)
+    for ph_label in ph_tags:
+        rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
+        out_root = docked_dir(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
+        ph_print = ph_label or "(none)"
+        logger.info(
+            "[router] pdb=%s variant=%s ph=%s\n         receptor_file=%s\n         docked_dir=%s",
+            paths.pdb_id,
+            variant_label,
+            ph_print,
+            str(rec_path),
+            str(out_root),
+        )
 
-        if not ph_runs:
-            ph_log.error("[ph_ensemble.abort] PH_ENSEMBLE=True but no canonical targets for %s; refusing legacy fallback.", paths.pdb_id)
-            return  # disallow legacy fallback when ensemble is enabled
-
-    if not ph_runs:
-        ph_runs = [(None, str(receptor_pdbqt))]
-
-
-    for ph_label, receptor_override in ph_runs:
-        receptor_current = str(receptor_override or receptor_pdbqt)
-        if not receptor_current:
+        if plan_only:
+            print(
+                f"pdb={paths.pdb_id} variant={variant_label} ph={ph_print} "
+                f"receptor_file={rec_path} docked_dir={out_root}"
+            )
             continue
-        try:
-            if ph_label and not Path(receptor_current).exists():
-                ph_log.warning(
-                    "[ph_ensemble.dock.stage] pdb_id=%s variant=%s ph=%s receptor_missing=%s",
-                    paths.pdb_id,
-                    variant_label,
-                    ph_label,
-                    receptor_current,
-                )
-                continue
-        except Exception:
+
+        if ph_label and not rec_path.exists():
+            ph_log.warning(
+                "[ph_ensemble.dock.stage] pdb_id=%s variant=%s ph=%s receptor_missing=%s",
+                paths.pdb_id,
+                variant_label,
+                ph_label,
+                str(rec_path),
+            )
             continue
 
         if ph_label:
@@ -3784,7 +3779,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         pains_flags = dict(base_pains_flags)
         center = tuple(base_center)
         box_size = tuple(base_box)
-        receptor_pdbqt = receptor_current
+        receptor_pdbqt = str(rec_path)
 
         ctrl_stems_lower = {s.lower() for s in control_stems}
         ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
@@ -4390,7 +4385,9 @@ def main() -> None:
 
 
     start = time.time()
+    plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
     mode, variants = resolve_apo_holo_mode(cfg)
+    cfg["_ROUTER_LEGACY"] = (mode == "legacy")
     logging.info(f"[apo-holo] resolved mode={mode} variants={variants} "
                  f"env.APO_HOLO_MODE='{os.environ.get('APO_HOLO_MODE')}'")
 
@@ -4413,7 +4410,7 @@ def main() -> None:
             for pdb_file in pdb_files:
                 process_one_protein(cfg_v, pdb_file, stages, params)
                 # Keep APO, delete HOLO if byte-identical (run after both variants exist)
-                if mode == "apo_vs_holo" and (variant == "HOLO"):
+                if (not plan_only) and mode == "apo_vs_holo" and (variant == "HOLO"):
                     pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
                     try:
                         dedup_identical_variants(pdb_id, cfg_v)
@@ -4423,6 +4420,9 @@ def main() -> None:
 
     elapsed_min = (time.time() - start) / 60.0
     print(f"\nAll proteins processed in {elapsed_min:.2f} minutes.")
+
+    if plan_only:
+        sys.exit(0)
 
 
 if __name__ == "__main__":
