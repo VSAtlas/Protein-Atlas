@@ -110,6 +110,7 @@ def build_ph_ensemble(
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     ensemble_dir = out_dir / pdb_id / "receptor" / "ph_ensemble"
     ensemble_dir.mkdir(parents=True, exist_ok=True)
+    tag_root = str(pdb_id).replace('/', '_').replace('\\', '_')
 
     # [ADD] optional file logging toggle: env pHlogs -> config.txt pHlogs -> default False
     def _truthy(x):
@@ -150,7 +151,7 @@ def build_ph_ensemble(
     _prev_with_sha = None
     _prev_pdbqt_size = None
     for ph in ph_values:
-        tag = f"{pdb_id}_pH{str(ph).replace('.', '_')}"
+        tag = f"{tag_root}_pH{str(ph).replace('.', '_')}"
         elog.info("[ph.member.start] ph=%.2f tag=%s", ph, tag)
         elog.info("[ph.propka.call] ph=%.2f center=(%.3f,%.3f,%.3f) r=%.2f", ph, center[0], center[1], center[2],
                   radius)
@@ -247,7 +248,7 @@ def build_ph_ensemble(
         tokens = [_ph_token(p) for p in phs]
 
         # target collapsed filename (multi-pH) for canonical
-        collapsed_name = f"{pdb_id}_pH{'+'.join(tokens)}.pdbqt"
+        collapsed_name = f"{tag_root}_pH{'+'.join(tokens)}.pdbqt"
         collapsed_path = (Path(canonical["pdbqt"]).parent / collapsed_name)
 
         # rename only if there is more than one in the equivalence class
