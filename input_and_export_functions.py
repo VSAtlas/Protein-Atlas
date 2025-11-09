@@ -5,7 +5,13 @@ from typing import Any, Dict
 import re, csv, math
 from collections import defaultdict
 # >>> PATHS IMPORT START
-from path_router import make_paths
+from path_router import (
+    make_paths,
+    config_dir as router_config_dir,
+    config_file as router_config_file,
+    docked_dir as router_docked_dir,
+    receptor_file as router_receptor_file,
+)
 # >>> PATHS IMPORT END
 
 # -------------------------
@@ -351,33 +357,64 @@ def emit_vina_config(
     # Determine active variant from the per-pass env that main.py sets
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
 
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
 
     # ---  define lig_base from ligand_path (fixes NameError) ---
     from pathlib import Path
     lig_base = Path(ligand_path).stem
 
-    # Variant-aware config dir (prefer path_router helpers; fallback to old layout)
     run_id = cfg["RUN_ID"]
-    if hasattr(paths, "configs_stage_dir"):
-        conf_dir = paths.configs_stage_dir(run_id, var, stage_name, ph_label)
-    else:
-        # Fallback: configs/<RUN_ID>/<PDB>/<VARIANT>/<stage> (omit VARIANT if None)
-        conf_dir = Path(cfg["CONFIG_RUN_DIR"]) / pdb_id
-        conf_dir = (conf_dir / var / stage_name) if var else (conf_dir / stage_name)
+    conf_dir = router_config_dir(run_id, pdb_id, stage_name, variant=var, ph_tag=ph_label)
     conf_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path = router_config_file(
+        run_id,
+        pdb_id,
+        stage_name,
+        variant=var,
+        ph_tag=ph_label,
+        suffix=f"{lig_base}_{stage_name}.txt",
+    )
 
-    # Variant-aware Vina output dir (prefer helper; fallback to old layout)
-    if hasattr(paths, "docked_stage_dir"):
-        out_dir = paths.docked_stage_dir(var, stage_name, ph_label)
-    else:
-        # Fallback: docked/<PDB>/<VARIANT>/<stage> (omit VARIANT if None)
-        root = paths.docked_pdb_root()  # expected to be a Path-like
-        out_dir = (root / var / stage_name) if var else (root / stage_name)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    stage_root = router_docked_dir(pdb_id, variant=var, ph_tag=ph_label)
+    out_dir = stage_root / stage_name
     out_path = out_dir / f"{lig_base}_{stage_name}.pdbqt"
+
+    expected_receptor = router_receptor_file(pdb_id, variant=var, ph_tag=ph_label)
+    receptor_exists = expected_receptor.exists()
+
+    variant_tag = var or "None"
+    ph_tag_display = ph_label or "None"
+    log_payload = (
+        "[cfg.router] run=%s pdb=%s stage=%s variant=%s ph=%s\n"
+        "             receptor=%s\n"
+        "             outdir=%s\n"
+        "             cfgdir=%s"
+    )
+    log_args = (
+        run_id,
+        pdb_id,
+        stage_name,
+        variant_tag,
+        ph_tag_display,
+        str(expected_receptor),
+        str(out_dir),
+        str(conf_dir),
+    )
+    if logger:
+        logger.info(log_payload, *log_args)
+    else:
+        print(log_payload % log_args)
+
+    if not receptor_exists:
+        msg = (
+            f"[router.error] missing receptor for pdb={pdb_id} variant={variant_tag} "
+            f"ph={ph_tag_display} -> {expected_receptor}"
+        )
+        if logger:
+            logger.error(msg)
+        else:
+            print(msg)
 
     if logger:
         logger.debug(
@@ -412,7 +449,6 @@ def emit_vina_config(
         lig_name = os.path.basename(str(ligand_path))
         logger.info("[vina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
                     lig_name, cx, cy, cz, sx, sy, sz)
-    cfg_path = conf_dir / f"{lig_base}_{stage_name}.txt"
     payload = ("\n".join(lines)).encode("utf-8")
     overwrite = cfg_path.exists()
 
