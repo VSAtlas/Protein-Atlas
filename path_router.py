@@ -2,7 +2,7 @@
 # path_router.py
 from __future__ import annotations
 
-import os, re
+import os, re, json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -79,6 +79,214 @@ def _norm_variant(variant: Optional[str]) -> Optional[str]:
 
 
 # ---------------------------
+# Router roots & stateless helpers
+# ---------------------------
+
+@dataclass(frozen=True)
+class RouterRoots:
+    overall: Path
+    processed: Path
+    docked: Path
+
+
+_ROUTER_ROOTS: Optional[RouterRoots] = None
+
+
+def _norm_pdb_id(pdb_id: str) -> str:
+    return str(pdb_id).strip().upper()
+
+
+def _default_config_path() -> Path:
+    cfg_env = os.environ.get("ATLAS_CONFIG")
+    if cfg_env:
+        return Path(cfg_env).expanduser()
+    return Path(__file__).resolve().parent / "config.txt"
+
+
+def _read_basic_config(path: Path) -> Dict[str, str]:
+    data: Dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except FileNotFoundError:
+        return data
+    except Exception:
+        return data
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        if "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        data[k.strip().upper()] = v.strip()
+    return data
+
+
+def _expand_tokens(values: Dict[str, str]) -> Dict[str, str]:
+    if not values:
+        return {}
+
+    def expand(val: str) -> str:
+        result = val
+        for token in ("OVERALL_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
+            token_val = values.get(token)
+            if not token_val:
+                continue
+            result = result.replace(f"${{{token}}}", token_val)
+            result = result.replace(f"${token}", token_val)
+            result = result.replace(f"{{{token}}}", token_val)
+        return result
+
+    return {k: expand(v) for k, v in values.items()}
+
+
+def _load_router_roots() -> RouterRoots:
+    cfg = _read_basic_config(_default_config_path())
+    for key in ("OVERALL_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
+        env_val = os.environ.get(key)
+        if env_val:
+            cfg[key] = env_val
+    expanded = _expand_tokens(cfg)
+
+    over_raw = expanded.get("OVERALL_DIR")
+    overall = Path(over_raw).expanduser() if over_raw else Path(__file__).resolve().parent
+
+    out_raw = expanded.get("OUTPUT_DIR")
+    processed = Path(out_raw).expanduser() if out_raw else overall / "processed_pdbs"
+
+    dock_raw = expanded.get("DOCKED_DIR")
+    docked = Path(dock_raw).expanduser() if dock_raw else overall / "docked"
+
+    return RouterRoots(overall=overall, processed=processed, docked=docked)
+
+
+def _set_router_roots(overall: Path, processed: Path, docked: Path) -> None:
+    global _ROUTER_ROOTS
+    _ROUTER_ROOTS = RouterRoots(
+        overall=Path(overall).expanduser(),
+        processed=Path(processed).expanduser(),
+        docked=Path(docked).expanduser(),
+    )
+
+
+def _ensure_router_roots() -> RouterRoots:
+    global _ROUTER_ROOTS
+    if _ROUTER_ROOTS is None:
+        _ROUTER_ROOTS = _load_router_roots()
+    return _ROUTER_ROOTS
+
+
+# ---------------------------
+# Public stateless path helpers
+# ---------------------------
+
+def receptor_dir(
+    pdb_id: str,
+    variant: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+    legacy: bool = False,
+) -> Path:
+    roots = _ensure_router_roots()
+    token = _norm_pdb_id(pdb_id)
+    base = roots.processed / token
+    v = _norm_variant(variant)
+    if v:
+        base = base / v
+    dir_path = base / "receptor"
+    if not legacy and ph_tag:
+        dir_path = dir_path / "ph_ensemble"
+    return dir_path
+
+
+def receptor_file(
+    pdb_id: str,
+    variant: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+    legacy: bool = False,
+) -> Path:
+    dir_path = receptor_dir(pdb_id, variant=variant, ph_tag=ph_tag if not legacy else None, legacy=legacy)
+    stem = _norm_pdb_id(pdb_id)
+    suffix = f"_{ph_tag}" if ph_tag else ""
+    return dir_path / f"{stem}{suffix}.pdbqt"
+
+
+def docked_dir(
+    pdb_id: str,
+    variant: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+    legacy: bool = False,
+) -> Path:
+    roots = _ensure_router_roots()
+    token = _norm_pdb_id(pdb_id)
+    base = roots.docked / token
+    v = _norm_variant(variant)
+    if v:
+        base = base / v
+    if ph_tag:
+        base = base / str(ph_tag)
+    return base
+
+
+def load_ph_tags(pdb_id: str, variant: Optional[str] = None) -> list[str]:
+    """
+    Read ensemble.json and return ordered pH tags for the given protein/variant.
+    """
+    base_dir = receptor_dir(pdb_id, variant=variant)
+    manifest = base_dir / "ph_ensemble" / "ensemble.json"
+    if not manifest.exists():
+        return []
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return []
+
+    tags: list[str] = []
+    seen: set[str] = set()
+    members = payload.get("members") if isinstance(payload, dict) else None
+    if not isinstance(members, list):
+        return []
+
+    prefix = f"{_norm_pdb_id(pdb_id)}_"
+    for entry in members:
+        if not isinstance(entry, dict):
+            continue
+        raw = entry.get("label") or entry.get("ph_label")
+        if raw is not None:
+            label = str(raw)
+        else:
+            receptor_path = (
+                entry.get("pdbqt")
+                or entry.get("receptor_pdbqt")
+                or entry.get("output_pdbqt")
+                or entry.get("path")
+                or entry.get("receptor")
+            )
+            if not receptor_path:
+                continue
+            stem = Path(str(receptor_path)).stem
+            label = stem[len(prefix):] if stem.startswith(prefix) else stem
+        if label in seen:
+            continue
+        seen.add(label)
+        tags.append(label)
+    return tags
+
+
+def print_pathmap(
+    *,
+    pdb_id: str,
+    variant: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+    legacy: bool = False,
+) -> None:
+    rec_dir = receptor_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
+    print(f"receptor_dir={rec_dir}")
+    rec_file = receptor_file(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
+    print(f"receptor_file={rec_file}")
+    dock_dir = docked_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
+    print(f"docked_dir={dock_dir}")
+
+# ---------------------------
 # Core dataclass
 # ---------------------------
 @dataclass(frozen=True)
@@ -129,8 +337,7 @@ class Paths:
           Dir: processed_pdbs/<PDB>/receptor/
           Files: <PDB>_cleaned.pdb, <PDB>.pdbqt, optional pH-tokenized PDBQTs.
         """
-        v = _norm_variant(variant)
-        p = (self.root_pdb_dir / v / "receptor") if v else (self.root_pdb_dir / "receptor")
+        p = receptor_dir(self.pdb_id, variant=variant)
         p.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -145,13 +352,14 @@ class Paths:
     def receptor_pdbqt(self, variant: Optional[str], ph_token: Optional[str] = None) -> Path:
         """
         File (no pH):            <receptor_dir>/<PDB>.pdbqt
-        File (with pH token):    <receptor_dir>/<PDB>_<ph_token>.pdbqt
+        File (with pH token):    <receptor_dir>/ph_ensemble/<PDB>_<ph_token>.pdbqt
         Examples of ph_token you may pass:
           "pH8_0+8_1+8_2"   -> 6LYZ_pH8_0+8_1+8_2.pdbqt
           "pH8_0"           -> 6LYZ_pH8_0.pdbqt
         """
-        base = self.pdb_id if not ph_token else f"{self.pdb_id}_{ph_token}"
-        return self.receptor_dir(variant) / f"{base}.pdbqt"
+        path = receptor_file(self.pdb_id, variant=variant, ph_tag=ph_token)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     # ---------------------------
     # Ligand prep / libraries
@@ -236,9 +444,7 @@ class Paths:
           Dir: docked/<PDB>/         (stages under top-level; back-compat)
         """
         v = _norm_variant(variant)
-        base = self.docked_pdb_root() / v if v else self.docked_pdb_root()
-        if ph_label:
-            base = base / str(ph_label)
+        base = docked_dir(self.pdb_id, variant=variant, ph_tag=ph_label)
         base.mkdir(parents=True, exist_ok=True)
         return base
 
@@ -339,6 +545,8 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
     input_pdb_path = input_root / pdb_file                     # input_pdbs/<pdb_file>
     nolig_pdb_path = nolig_dir / f"{pdb_id}_nolig.pdb"         # processed_pdbs/<PDB>/nolig/<PDB>_nolig.pdb
 
+    _set_router_roots(over_root, processed_root, docked_root)
+
     return Paths(
         pdb_id=pdb_id,
         pdb_file=pdb_file,
@@ -357,3 +565,16 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
         input_pdb_path=input_pdb_path,
         nolig_pdb_path=nolig_pdb_path,
     )
+
+
+if __name__ == "__main__":
+    scenarios = [
+        ("pH ON, apo/HOLO OFF", dict(pdb_id="3CS9", variant=None, ph_tag="pH6_0", legacy=False)),
+        ("apo/HOLO ON, pH ON", dict(pdb_id="3CS9", variant="APO", ph_tag="pH6_0+8_0", legacy=False)),
+        ("apo/HOLO ON, pH OFF", dict(pdb_id="3CS9", variant="HOLO", ph_tag=None, legacy=False)),
+        ("legacy", dict(pdb_id="3CS9", variant=None, ph_tag=None, legacy=True)),
+    ]
+    for label, params in scenarios:
+        print(f"scenario={label}")
+        print_pathmap(**params)
+        print()
