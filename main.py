@@ -1286,19 +1286,49 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             except Exception as exc:
                 log.error("[ph_ensemble.manifest.read.error] path=%s err=%s", manifest_path, exc)
                 return None
+
             members = payload.get("members") or []
-            canonical = [m for m in members if bool(m.get("canonical", False))]
+            # Diagnostics: enumerate keys and canonical counts.
+            try:
+                key_universe = sorted({k for m in members for k in (m.keys() if isinstance(m, dict) else [])})
+            except Exception:
+                key_universe = []
+            log.info(
+                "[ph_ensemble.manifest.stats] members=%d canonical=%d keys=%s",
+                len(members),
+                sum(1 for m in members if isinstance(m, dict) and bool(m.get("canonical", False))),
+                ",".join(key_universe),
+            )
+
+            canonical = [m for m in members if isinstance(m, dict) and bool(m.get("canonical", False))]
             if canonical:
                 members = canonical
+
             prefix = f"{paths.pdb_id}_"
             targets: list[tuple[str, str]] = []
             for entry in members:
-                receptor_path = entry.get("pdbqt")
-                if not receptor_path:
+                if not isinstance(entry, dict):
                     continue
-                stem = Path(receptor_path).stem
-                ph_label = stem[len(prefix):] if stem.startswith(prefix) else stem
-                targets.append((ph_label, receptor_path))
+                receptor_path = (
+                    entry.get("pdbqt")
+                    or entry.get("receptor_pdbqt")
+                    or entry.get("output_pdbqt")
+                    or entry.get("path")
+                    or entry.get("receptor")
+                )
+                if not receptor_path:
+                    log.warning("[ph_ensemble.manifest.entry.missing_pdbqt] keys=%s", list(entry.keys()))
+                    continue
+
+                ph_label = entry.get("label") or entry.get("ph_label")
+                if not ph_label:
+                    stem = Path(receptor_path).stem
+                    ph_label = stem[len(prefix):] if stem.startswith(prefix) else stem
+
+                targets.append((str(ph_label), str(receptor_path)))
+
+            if not targets:
+                log.error("[ph_ensemble.manifest.no_targets] path=%s members=%d", manifest_path, len(members))
             return targets
 
         def _bridge_manifest_targets(manifest_path: str) -> None:
