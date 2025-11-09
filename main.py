@@ -1236,6 +1236,8 @@ def _ph_values_from_context(pdb_path: str) -> list[float]:
     try:
         from context_ph import select_ph_values_for_protonation
         raw = select_ph_values_for_protonation(pdb_path)  # returns ensemble or [target]
+        logging.info(f"[ph.ctx.list] taken_from_context={raw}")
+
         for x in (raw or []):
             # round & clamp
             v = max(3.0, min(10.5, round(float(x), 1)))
@@ -1336,6 +1338,12 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             if targets is None:
                 return
             cfg.setdefault("_PH_ENSEMBLE_CANONICAL", {})[paths.pdb_id] = targets
+            # --- mapping debug (anchor: [ph_ensemble.map]) ---
+            log.info(
+                "[ph_ensemble.map] pdb_id=%s canonical=%s",
+                paths.pdb_id,
+                ";".join(f"{lbl}:{Path(p).name}" for lbl, p in targets) if targets else ""
+            )
             variant_label = variant or "legacy"
             log.info(
                 "[ph_ensemble.dock.begin] pdb_id=%s variant=%s n=%d labels=%s",
@@ -1344,6 +1352,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
                 len(targets),
                 ",".join(lbl for lbl, _ in targets) or "",
             )
+
             if not targets:
                 log.info(
                     "[ph_ensemble.dock.done] pdb_id=%s variant=%s n=0 targets=",
@@ -1430,11 +1439,33 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
                 radius=eff_radius,
                 ph_values=ph_values,
             )
+
             log.info("[ph_ensemble.manifest] path=%s", manifest_path)
+            log.info("[ph.manifest.json] written=%s", manifest_path)
+
+            # --- DEBUG: measure map size before/after bridge ---
+            try:
+                _pre = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, []))
+            except Exception:
+                _pre = -1
+            log.info("[ph_ensemble.debug] before-bridge map_len[%s]=%d", paths.pdb_id, _pre)
+
             if manifest_path:
                 _bridge_manifest_targets(str(manifest_path))
+
+            try:
+                _post = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, []))
+            except Exception:
+                _post = -1
+            log.info("[ph_ensemble.debug] after-bridge map_len[%s]=%d", paths.pdb_id, _post)
+            # ---------------------------------------------------
+
             log.info("[ph_ensemble.done] ok=True")
             return manifest_path
+
+
+
+
         except Exception as exc:
             log.error("[ph_ensemble.error] %s", exc)
             log.info("[ph_ensemble.done] ok=False")
@@ -3678,10 +3709,53 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     ph_log = logging.getLogger("ph_ensemble")
     manifest_map = cfg.get("_PH_ENSEMBLE_CANONICAL") or {}
     ph_runs: list[tuple[Optional[str], str]] = []
+
     if bool(cfg.get("PH_ENSEMBLE")):
+        # --- DEBUG: what do we have right now?
+        try:
+            _keys = sorted(list((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).keys()))
+            _len_here = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, []))
+            ph_log.info("[ph_ensemble.debug] map_keys=%s map_len[%s]=%d", ",".join(_keys), paths.pdb_id, _len_here)
+        except Exception:
+            pass
+
         ph_runs = [(lbl, str(path)) for lbl, path in manifest_map.get(paths.pdb_id, []) if path]
+
+        # If empty, try a direct manifest read as a last-resort bridge.
+        if not ph_runs:
+            try:
+                guess = Path(cfg["OUTPUT_DIR"]) / paths.pdb_id / "receptor" / "ph_ensemble" / "ensemble.json"
+                ph_log.info("[ph_ensemble.debug] fallback_manifest=%s exists=%s", str(guess), guess.exists())
+                if guess.exists():
+                    data = json.loads(guess.read_text())
+                    members = data.get("members") or []
+                    canonical = [m for m in members if bool(m.get("canonical", False))]
+                    if canonical:
+                        members = canonical
+                    prefix = f"{paths.pdb_id}_"
+                    targets = []
+                    for entry in members:
+                        receptor_path = entry.get("pdbqt")
+                        if not receptor_path:
+                            continue
+                        stem = Path(receptor_path).stem
+                        ph_label = stem[len(prefix):] if stem.startswith(prefix) else stem
+                        targets.append((ph_label, receptor_path))
+                    if targets:
+                        cfg.setdefault("_PH_ENSEMBLE_CANONICAL", {})[paths.pdb_id] = targets
+                        ph_runs = [(lbl, str(p)) for (lbl, p) in targets if p]
+                        ph_log.info("[ph_ensemble.debug] fallback_bridge n=%d labels=%s",
+                                    len(targets), ",".join(lbl for lbl, _ in targets))
+            except Exception as _e:
+                ph_log.warning("[ph_ensemble.debug] fallback_bridge.error %s", _e)
+
+        if not ph_runs:
+            ph_log.error("[ph_ensemble.abort] PH_ENSEMBLE=True but no canonical targets for %s; refusing legacy fallback.", paths.pdb_id)
+            return  # disallow legacy fallback when ensemble is enabled
+
     if not ph_runs:
         ph_runs = [(None, str(receptor_pdbqt))]
+
 
     for ph_label, receptor_override in ph_runs:
         receptor_current = str(receptor_override or receptor_pdbqt)
