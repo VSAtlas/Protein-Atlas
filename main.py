@@ -565,6 +565,27 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
     per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")  # injected at runtime in process_one_protein
     global_root     = Path(cfg.get("OUTPUT_LIGANDS_DIR", "")) if cfg.get("OUTPUT_LIGANDS_DIR") else None
 
+    logger.info("[single.debug] selector=%s order=%s skip_global=%s", selector, order, skip_global)
+    logger.info("[single.debug.paths] per_protein_dir=%s global_root=%s", per_protein_dir, global_root)
+
+    try:
+        name_map = _load_fda_name_map(cfg, logger)
+        key = _norm_name_key(selector)
+        basenames = list(name_map.get(key, []))
+        if not basenames and allow_prefix and key:
+            pref = key
+            for k, v in name_map.items():
+                if k.startswith(pref):
+                    basenames.extend(list(v))
+        if global_root:
+            for bn in basenames:
+                p = Path(global_root) / "fda_library" / bn
+                if p.exists():
+                    logger.info("[single.name] key=%s basenames=%s probe=%s", _norm_name_key(selector), list(basenames), str(p))
+                    return p
+    except Exception as _e:
+        logger.debug("[single.name] mapping search skipped: %s", _e)
+
     def _match_one_dir(root: Optional[Path]) -> Optional[Path]:
         if not root or not Path(root).exists():
             return None
@@ -591,25 +612,6 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         elif where == "global":
             # Retained for optional use if SINGLE_LIGAND_SKIP_GLOBAL=False
             if global_root and global_root.exists():
-                # First, try direct basename hits without walking subfolders:
-                # If you keep an FDA name map, use it here; otherwise comment this out.
-                try:
-                    name_map = _load_fda_name_map(cfg, logger)
-                    key = _norm_name_key(selector)
-                    basenames = list(name_map.get(key, []))
-                    if not basenames and allow_prefix and key:
-                        pref = key
-                        for k, v in name_map.items():
-                            if k.startswith(pref):
-                                basenames.extend(list(v))
-                    # If we have basenames, try them right under the root first
-                    for bn in basenames:
-                        p = global_root / "fda_library" / bn
-                        if p.exists():
-                            logger.info(f"[single:name] '{selector}' ? {bn} ? {p}")
-                            return p
-                except Exception as _e:
-                    logger.debug(f"[single:name] mapping search skipped: {_e}")
                 # Fallback rglob only if you explicitly re-enable global (skip_global=False)
                 for p in global_root.rglob("*.pdbqt"):
                     base = p.stem.split("_stage")[0]
@@ -624,6 +626,7 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
                             return p
         else:
             logger.debug(f"[single] unknown search scope: {where}")
+    logger.warning("[single.miss] selector=%s (no FDA map hit / file absent)", selector)
     return None
 
 
@@ -2095,7 +2098,13 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
             filtered_noncontrols.append(p)
 
     # Merge back: controls (unaltered) + filtered non-controls
-    final_paths: list[Path] = controls + filtered_noncontrols
+    if cfg.get("_EFFECTIVE_SINGLE_LIGAND") and cfg.get("_SINGLE_RESOLVED_PATH"):
+        resolved_path = Path(cfg["_SINGLE_RESOLVED_PATH"])
+        final_paths = controls + [resolved_path]
+        filtered_noncontrols = [resolved_path]
+        logger.info("[single.fuel] resolved=%s controls=%d (blocking non-control pool)", cfg["_SINGLE_RESOLVED_PATH"], len(controls))
+    else:
+        final_paths = controls + filtered_noncontrols
 
     # --- PAINS flags (keep as before; default to {}) ---
     pains_flags: Dict[str, bool] = {}
@@ -2132,7 +2141,8 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     # Final return (stringify paths)
     ligands = [str(p) for p in final_paths]
-    logger.info(f"Selected ligands -> controls={len(controls)} + non-controls={len(filtered_noncontrols)} = total={len(ligands)}")
+    non_control_count = max(0, len(final_paths) - len(controls))
+    logger.info(f"Selected ligands -> controls={len(controls)} + non-controls={non_control_count} = total={len(ligands)}")
     # GUARD: enforce .pdbqt-only pool
     bad = [p for p in ligands if not str(p).lower().endswith(".pdbqt")]
     if bad:
@@ -3551,9 +3561,10 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
 
     # 4) Ligand prep & filtering
-    ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
-    # --- Single-ligand mode (if active) --------------------------------------
     cfg.setdefault("_EFFECTIVE_SINGLE_LIGAND", "")
+    single_ligand_hit: Optional[Path] = None
+    cfg.pop("_SINGLE_RESOLVED_PATH", None)
+    # --- Single-ligand mode (if active) --------------------------------------
     if cfg["_EFFECTIVE_SINGLE_LIGAND"]:
         # Provide per-protein paths to resolver
         cfg.setdefault("paths", {})
@@ -3561,13 +3572,19 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
         hit = _resolve_single_ligand(cfg["_EFFECTIVE_SINGLE_LIGAND"], pdb_id, cfg, logger)
         if hit:
-            ligands = [str(hit)]
-            ha = _count_heavy_atoms_from_pdbqt(hit)
-            heavy_atom_counts = {str(hit): ha}
-            pains_flags = {}
-            logger.info(f"[single] Active ? docking only: {hit.name} (heavy={ha})")
+            cfg["_SINGLE_RESOLVED_PATH"] = str(hit)
+            single_ligand_hit = hit
         else:
-            logger.warning(f"[single] No match for selector '{cfg['_EFFECTIVE_SINGLE_LIGAND']}' -- proceeding with normal pool")
+            logger.error("[single.block] selector '%s' not found in fda_library via FDA_MAPPING_CSV; aborting instead of fallback.", cfg["_EFFECTIVE_SINGLE_LIGAND"])
+            raise SystemExit(2)
+
+    ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
+    if single_ligand_hit:
+        ligands = [str(single_ligand_hit)]
+        ha = _count_heavy_atoms_from_pdbqt(single_ligand_hit)
+        heavy_atom_counts = {str(single_ligand_hit): ha}
+        pains_flags = {}
+        logger.info(f"[single] Active ? docking only: {single_ligand_hit.name} (heavy={ha})")
 
     # (skipped in single-ligand mode)
     if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
