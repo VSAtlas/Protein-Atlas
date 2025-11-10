@@ -1837,6 +1837,14 @@ def select_center_via_control_redock(
         stage_info = {"exhaustiveness": ex, "num_modes": nm}
         if cfg.get("FAST_MODE"):
             stage_info["exhaustiveness"] = 1
+        stage_name = "ctrl_redock"
+        logger.info(
+            "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+            paths.pdb_id,
+            stage_name,
+            variant_token or "None",
+            ph_label or "None",
+        )
         conf_path, out_path = emit_vina_config(
             cfg,
             paths.pdb_id,
@@ -1844,10 +1852,13 @@ def select_center_via_control_redock(
             center,
             (24.0, 24.0, 24.0),
             str(lig_pdbqt),
-            "ctrl_redock",
+            stage_name,
             stage_info,
             threads_per_vina,
             logger=None,
+            variant=variant_token,
+            ph_token=ph_label,
+            legacy=legacy_mode,
         )
         try:
             _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
@@ -2378,10 +2389,11 @@ def run_one_stage(
 
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     max_workers = int(cfg["MAX_PARALLEL_JOBS"])
-    # >>> DOCKED PATHS PATCH START
-    variant = None
+    variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_token = variant_env or None
+    legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
+    ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    # >>> DOCKED PATHS PATCH END
 
     scores: Dict[str, float] = {}
     validated_ligands: List[str] = []
@@ -2551,6 +2563,14 @@ def run_one_stage(
                 if cfg.get("FAST_MODE"):
                     stage_for_cfg["exhaustiveness"] = 1
 
+                stage_name = stage["name"]
+                logger.info(
+                    "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                    pdb_id,
+                    stage_name,
+                    variant_token or "None",
+                    ph_label or "None",
+                )
                 conf_path, out_path = emit_vina_config(
                     cfg,
                     pdb_id,
@@ -2558,10 +2578,13 @@ def run_one_stage(
                     center,
                     box_size,
                     lig,
-                    stage["name"],
+                    stage_name,
                     stage_for_cfg,
                     threads_per_vina,
                     logger,
+                    variant=variant_token,
+                    ph_token=ph_label,
+                    legacy=legacy_mode,
                 )
 
                 # anchor: emit_vina_config resolves variant/pH from cfg/env
@@ -2694,6 +2717,14 @@ def run_one_stage(
                                     
                                 retry_center = center
                                 retry_box = box_size
+                                stage_retry_name = stage_retry["name"]
+                                logger.info(
+                                    "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                                    pdb_id,
+                                    stage_retry_name,
+                                    variant_token or "None",
+                                    ph_label or "None",
+                                )
                                 conf_path2, out_path2 = emit_vina_config(
                                     cfg,
                                     pdb_id,
@@ -2701,10 +2732,13 @@ def run_one_stage(
                                     retry_center,
                                     retry_box,
                                     lig,
-                                    stage_retry["name"],
+                                    stage_retry_name,
                                     stage_retry,
                                     threads_per_vina,
                                     logger,
+                                    variant=variant_token,
+                                    ph_token=ph_label,
+                                    legacy=legacy_mode,
                                 )
                                 # anchor: retry config uses same variant/pH resolution
                                 logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path2)
@@ -2821,6 +2855,14 @@ def run_one_stage(
                         except Exception as _e:
                             logger.warning(f"Retry recenter/box tweak failed: {_e}")
 
+                        stage_retry2_name = stage_retry2["name"]
+                        logger.info(
+                            "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                            pdb_id,
+                            stage_retry2_name,
+                            variant_token or "None",
+                            ph_label or "None",
+                        )
                         conf_path3, out_path3 = emit_vina_config(
                             cfg,
                             pdb_id,
@@ -2828,10 +2870,13 @@ def run_one_stage(
                             retry_center,
                             retry_box,
                             lig,
-                            stage_retry2["name"],
+                            stage_retry2_name,
                             stage_retry2,
                             threads_per_vina,
                             logger,
+                            variant=variant_token,
+                            ph_token=ph_label,
+                            legacy=legacy_mode,
                         )
                         # anchor: fallback config mirrors initial variant/pH discovery
                         logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path3)
@@ -3819,8 +3864,36 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             cfg["_SINGLE_RESOLVED_PATH"] = str(hit)
             single_ligand_hit = hit
         else:
-            logger.error("[single.block] selector '%s' not found in fda_library via FDA_MAPPING_CSV; aborting instead of fallback.", cfg["_EFFECTIVE_SINGLE_LIGAND"])
-            raise SystemExit(2)
+            selector_token = cfg["_EFFECTIVE_SINGLE_LIGAND"]
+            suggestions: list[str] = []
+            try:
+                import difflib
+
+                fda_map = _load_fda_name_map(cfg, logger)
+                suggestions = difflib.get_close_matches(
+                    selector_token,
+                    list(fda_map.keys()),
+                    n=5,
+                    cutoff=0.7,
+                )
+            except Exception:
+                suggestions = []
+            if suggestions:
+                logger.error("[single.miss.suggest] did_you_mean=%s", ", ".join(suggestions))
+
+            allow_flag = os.environ.get("ALLOW_FDA_FALLBACK")
+            if allow_flag is None:
+                allow_flag = cfg.get("ALLOW_FDA_FALLBACK", False)
+            if not _to_bool(allow_flag):
+                logger.error(
+                    "[single.block] selector '%s' not found in fda_library via FDA_MAPPING_CSV; aborting instead of fallback.",
+                    selector_token,
+                )
+                raise SystemExit(2)
+            logger.warning(
+                "[single.block] selector '%s' not found; ALLOW_FDA_FALLBACK enabled, continuing with fallback flow.",
+                selector_token,
+            )
 
     ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
     if single_ligand_hit:
@@ -4326,6 +4399,85 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     cfg.pop("_ACTIVE_PH_LABEL", None)
 
 
+def _smoke_emit_config_demo() -> None:
+    """Emit a small config to exercise router paths in isolation."""
+    smoke_log = logging.getLogger("smoke")
+    old_variant = os.environ.get("APO_HOLO_VARIANT")
+    try:
+        base_cfg = ConfigDict(load_inputs())
+    except Exception as exc:
+        smoke_log.warning("[smoke.emit.skip] reason=%s", exc)
+        return
+
+    try:
+        cfg = ConfigDict(base_cfg.copy())
+        repo_root = Path(__file__).resolve().parent
+        smoke_root = repo_root / "analysis" / "_smoke"
+        overrides = {
+            "OVERALL_DIR": smoke_root,
+            "INPUT_DIR": smoke_root / "input_pdbs",
+            "OUTPUT_DIR": smoke_root / "processed_pdbs",
+            "DOCKED_DIR": smoke_root / "docked",
+            "PREPPED_LIGANDS_DIR": smoke_root / "prepped_ligands",
+            "OUTPUT_LIGANDS_DIR": smoke_root / "prepped_ligands",
+            "PREPPED_LIGANDS_ROOT": smoke_root / "prepped_ligands",
+            "LIGANDS_MOL2_DIR": smoke_root / "ligands_mol2",
+            "CONFIGS_DIR": smoke_root / "configs",
+        }
+        for key, path_value in overrides.items():
+            cfg[key] = str(path_value)
+            Path(path_value).mkdir(parents=True, exist_ok=True)
+
+        cfg["RUN_ID"] = "smoke_demo"
+        cfg["RESET_CONFIGS"] = False
+        init_config_run_dir(cfg, run_id=cfg["RUN_ID"], reset=False, logger=smoke_log)
+
+        mode, variants = resolve_apo_holo_mode(cfg)
+        smoke_log.info("[smoke.emit] mode=%s variants=%s", mode, variants)
+
+        pdb_id = "3CS9"
+        paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        lig_dir = paths.prepped_ligands_dir
+        lig_dir.mkdir(parents=True, exist_ok=True)
+        lig_path = lig_dir / "smoke_ligand.pdbqt"
+        if not lig_path.exists():
+            lig_path.write_text("SMOKE", encoding="utf-8")
+
+        ph_label = "pH6_7"
+        cfg["_ACTIVE_PH_LABEL"] = ph_label
+        os.environ["APO_HOLO_VARIANT"] = "APO"
+
+        receptor_path = receptor_file(paths.pdb_id, variant="APO", ph_tag=ph_label, legacy=False)
+        receptor_path.parent.mkdir(parents=True, exist_ok=True)
+        if not receptor_path.exists():
+            receptor_path.write_text("RECEPTOR", encoding="utf-8")
+
+        stage_info = {"name": "smoke_stage", "exhaustiveness": 8, "num_modes": 9, "verbosity": 0}
+        conf_path, out_path = emit_vina_config(
+            cfg,
+            paths.pdb_id,
+            str(receptor_path),
+            (0.0, 0.0, 0.0),
+            (20.0, 20.0, 20.0),
+            str(lig_path),
+            stage_info["name"],
+            stage_info,
+            1,
+            smoke_log,
+            variant="APO",
+            ph_token=ph_label,
+            legacy=False,
+        )
+        smoke_log.info("[smoke.emit.done] config=%s out=%s", conf_path, out_path)
+    except Exception as exc:
+        smoke_log.warning("[smoke.emit.skip] reason=%s", exc)
+    finally:
+        if old_variant is None:
+            os.environ.pop("APO_HOLO_VARIANT", None)
+        else:
+            os.environ["APO_HOLO_VARIANT"] = old_variant
+
+
 # ======================
 # Program entry point
 # ======================
@@ -4395,6 +4547,7 @@ def main() -> None:
     cfg.setdefault("SINGLE_LIGAND_ALLOW_PREFIX", False)
     cfg.setdefault("SINGLE_LIGAND_MANIFEST_ONLY", True)
     cfg.setdefault("SINGLE_LIGAND_SUGGESTIONS", 5)
+    cfg.setdefault("ALLOW_FDA_FALLBACK", False)
     cfg.setdefault("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
     cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
 
@@ -4628,4 +4781,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    _smoke_emit_config_demo()
     main()
