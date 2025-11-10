@@ -2390,41 +2390,158 @@ def _rewrite_his_default(pdb_in: Union[str, Path], pdb_out: Union[str, Path], de
 # =============================
 # External Tools (Meeko/ADT, Phenix, OpenBabel, Reduce)
 # =============================
-def _drop_free_ions_for_meeko(pdb_in: str | Path, pdb_out: str | Path,
-                              banlist: set[str] | None = None) -> int:
+def _drop_free_ions_for_meeko(
+    pdb_in: str | Path,
+    pdb_out: str | Path,
+    banlist: set[str] | None = None,
+    *,
+    cfg: Optional[dict] = None,
+    variant: Optional[str] = None,
+    pocket_center: Optional[tuple[float, float, float]] = None,
+) -> int:
     """
     Remove HETATM entries for simple ions that Meeko chokes on (e.g., Na, K, Li).
     Writes to pdb_out. Returns #atoms dropped.
     Never drops ions explicitly retained by YAML (retain_in_receptor_resnames) that are elemental tokens.
     Set MEEKO_DROP_VERBOSE=1 to log each dropped residue position.
     """
-    # Compute retain_ions once: YAML retain list ∩ element tokens
+    cfg_obj: Optional[dict] = None
+    if isinstance(cfg, dict):
+        cfg_obj = cfg
+    elif isinstance(config, dict):
+        cfg_obj = config
+
+    allow_tokens, _ = _load_retain_allowlist(cfg_obj)
+    allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
     retain_ions = {r for r in _RETAIN if _is_element_token(r)}
     base_ban = set(banlist) if banlist else _MEEKO_DROP_IONS
-    # Do not drop any YAML-retained elemental ions
-    ban = base_ban - retain_ions
+
+    policy = _normalize_ion_policy(cfg_obj)
+    variant_token = _resolve_variant_token(cfg_obj, variant)
+    variant_label = variant_token or "legacy"
+
+    radius_cfg = 0.0
+    if cfg_obj is not None:
+        try:
+            radius_cfg = float(cfg_obj.get("HOLO_SALT_STRIP_RADIUS", 0.0) or 0.0)
+        except Exception:
+            radius_cfg = 0.0
+    radius_cfg = max(0.0, radius_cfg)
+    radius = radius_cfg if (policy == "by_variant" and variant_token == "HOLO") else 0.0
+    radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
+
+    drop_metals = False
+    drop_salts = False
+    if policy == "always_strip":
+        drop_metals = True
+        drop_salts = True
+    elif policy == "by_variant":
+        if variant_token == "HOLO":
+            drop_metals = False
+            drop_salts = radius > 0.0
+        else:
+            drop_metals = True
+            drop_salts = True
+    elif policy == "never_strip":
+        drop_metals = False
+        drop_salts = False
+
+    if drop_salts and radius > 0.0 and pocket_center is None and variant_token == "HOLO":
+        logging.warning(
+            "[ions] holo_salt_radius_set_but_no_center stage=meeko action=keep_salts radius=%.2f",
+            radius,
+        )
+        drop_salts = False
+
+    logging.info(
+        "[ions.policy] stage=meeko variant=%s drop_metals=%s drop_salts=%s radius=%s allowlist=%d",
+        variant_label,
+        drop_metals,
+        drop_salts,
+        radius_term,
+        len(allow_set),
+    )
 
     verbose = (os.environ.get("MEEKO_DROP_VERBOSE", "0") not in ("0", "false", "False"))
 
     dropped = 0
-    kept = []
-    with open(pdb_in, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if ln.startswith("HETATM"):
-                res = ln[17:20].strip().upper()
-                if res in ban:
-                    dropped += 1
-                    if verbose:
-                        resi = ln[22:26].strip()
-                        chain = ln[21]
-                        el = (ln[76:78].strip() or res)
-                        logging.info("[meeko drop] res=%s chain=%s resi=%s el=%s", res, chain, resi, el)
-                    continue
-            kept.append(ln)
-    Path(pdb_out).write_text("".join(kept), encoding="utf-8")
+    kept_lines: list[str] = []
+    warn_missing_center = False
+    with open(pdb_in, "r", encoding="utf-8", errors="ignore") as fh:
+        for ln in fh:
+            if not ln.startswith("HETATM"):
+                kept_lines.append(ln)
+                continue
+            res = ln[17:20].strip().upper()
+            elem = (ln[76:78].strip() or res).upper()
+            token = res or elem
+            if token in allow_set or elem in allow_set:
+                kept_lines.append(ln)
+                continue
+
+            is_metal = res in _METAL_RESNAMES or elem in _METAL_RESNAMES
+            is_salt = res in _SALT_RESNAMES or elem in _SALT_RESNAMES or res in base_ban or elem in base_ban
+
+            remove = False
+            reason = ""
+            if policy == "never_strip":
+                remove = False
+            elif is_metal and drop_metals and (token not in retain_ions):
+                remove = True
+                reason = "meeko_strip_metal"
+            elif is_salt and drop_salts:
+                if radius > 0.0:
+                    dist = _distance_from_center(ln, pocket_center)
+                    if dist is None:
+                        warn_missing_center = True
+                        remove = False
+                    elif dist >= radius:
+                        remove = True
+                        reason = "meeko_salt_far"
+                elif (res in base_ban or elem in base_ban) and policy != "never_strip":
+                    remove = True
+                    reason = "meeko_salt_policy"
+            elif (res in base_ban or elem in base_ban) and policy == "always_strip":
+                remove = True
+                reason = "meeko_policy"
+
+            if remove:
+                dropped += 1
+                if verbose:
+                    resi = ln[22:26].strip()
+                    chain = ln[21]
+                    logging.info(
+                        "[meeko drop] res=%s chain=%s resi=%s elem=%s reason=%s",
+                        res,
+                        chain,
+                        resi,
+                        elem or res,
+                        reason or "policy",
+                    )
+                continue
+
+            kept_lines.append(ln)
+
+    if warn_missing_center and radius > 0.0 and variant_token == "HOLO":
+        logging.warning(
+            "[ions] holo_salt_radius_set_but_no_center stage=meeko action=keep_salts radius=%.2f",
+            radius,
+        )
+
+    Path(pdb_out).write_text("".join(kept_lines), encoding="utf-8")
+    logging.info(
+        "[ions.touch] stage=meeko variant=%s dropped=%d kept=%d file=%s",
+        variant_label,
+        dropped,
+        len(kept_lines),
+        pdb_out,
+    )
     if dropped:
-        logging.warning("Meeko pre-sanitize: dropped %d free ions (%s).",
-                        dropped, ",".join(sorted(ban)))
+        logging.warning(
+            "Meeko pre-sanitize: dropped %d monoatomics (ban=%s).",
+            dropped,
+            ",".join(sorted(base_ban - retain_ions)),
+        )
     return dropped
 
 
@@ -2443,6 +2560,8 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
 
     input_pdb = str(input_pdb)
     output_pdbqt = str(output_pdbqt)
+    variant_token = _resolve_variant_token(cfg, cfg.get("_CURRENT_VARIANT"))
+    variant_label = variant_token or "legacy"
     # Persist all attempt logs here (processed_pdbs/<PDB>/work) NOTE DIFF FROM _WORK_DIR
     work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
     # --- Helium preflight on the EXACT file we’re about to feed into Meeko pipeline
@@ -2600,8 +2719,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         tmp1_path = input_pdb
 
     if _cfg_bool("MEEKO_DROP_FREE_IONS", True):
+        logging.info(
+            "[ions.touch] stage=meeko-pre variant=%s action=pre_sanitize file=%s",
+            variant_label,
+            tmp1_path,
+        )
         # Never drop YAML-retained elemental ions (banlist computed inside)
-        _drop_free_ions_for_meeko(tmp1_path, tmp1_path)
+        _drop_free_ions_for_meeko(
+            tmp1_path,
+            tmp1_path,
+            cfg=cfg,
+            variant=variant_token,
+            pocket_center=None,
+        )
 
     # Preflight again on the HIS-classified file we’re actually handing to Meeko now
     if not skip_meeko:
@@ -2643,6 +2773,14 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
     prepare_script = PREPARE_RECEPTOR_SCRIPT
     if (mgltools_python and Path(mgltools_python).is_file() and os.access(mgltools_python, os.X_OK)
             and prepare_script and Path(prepare_script).is_file()):
+        allow_tokens, _ = _load_retain_allowlist(cfg)
+        logging.info(
+            "[ions.policy] stage=adt variant=%s drop_metals=%s drop_salts=%s radius=none allowlist=%d",
+            variant_label,
+            False,
+            False,
+            len({str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}),
+        )
         adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt,
                    "-A", "none", "-U", "nphs_lps_nonstdres"]
         cp = subprocess.run(adt_cmd, capture_output=True, text=True)

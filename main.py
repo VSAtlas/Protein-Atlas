@@ -17,7 +17,7 @@ import sys, hashlib, re, logging, json, time, os, shutil, re
 from dataclasses import dataclass, field
 import atexit, datetime
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
@@ -4453,6 +4453,73 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         logger.warning("Skipping protein due to prep failure.")
         return
 
+    ion_histogram = "none"
+    if cleaned_pdb:
+        try:
+            counts = Counter()
+            with open(cleaned_pdb, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if not ln.startswith("HETATM"):
+                        continue
+                    res = ln[17:20].strip().upper()
+                    elem = (ln[76:78].strip() or res).upper()
+                    token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
+                    if token and token.isalpha() and len(token) <= 3:
+                        counts[token] += 1
+            ion_histogram = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
+            logger.info(
+                "[ions.clean.counts] pdb=%s variant=%s file=%s present_pdb=%s",
+                paths.pdb_id,
+                variant_label,
+                cleaned_pdb,
+                ion_histogram,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[ions.clean.counts] pdb=%s variant=%s action=skip err=%s",
+                paths.pdb_id,
+                variant_label,
+                exc,
+            )
+
+    try:
+        import automate_protein_prep as _auto_prep_mod
+    except Exception as import_err:
+        logger.warning(
+            "[ions.prep-early] pdb=%s variant=%s action=skip reason=import err=%s",
+            paths.pdb_id,
+            variant_label,
+            import_err,
+        )
+    else:
+        if cleaned_pdb and (variant_env in ("", "APO")):
+            logger.info(
+                "[ions.prep-early] pdb=%s variant=%s action=strip_inplace file=%s",
+                paths.pdb_id,
+                variant_label,
+                cleaned_pdb,
+            )
+            try:
+                _auto_prep_mod._maybe_strip_ions(
+                    Path(cleaned_pdb),
+                    cfg=cfg,
+                    variant=variant_token,
+                    pocket_center=None,
+                )
+            except Exception as early_err:
+                logger.warning(
+                    "[ions.prep-early] pdb=%s variant=%s action=error err=%s",
+                    paths.pdb_id,
+                    variant_label,
+                    early_err,
+                )
+        elif cleaned_pdb:
+            logger.info(
+                "[ions.prep-early] pdb=%s variant=%s action=skip reason=variant",
+                paths.pdb_id,
+                variant_label,
+            )
+
     # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
     resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
     if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
@@ -4546,22 +4613,28 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
     try:
         import automate_protein_prep as _auto_prep_mod
-        if cleaned_pdb:
-            _auto_prep_mod._maybe_strip_ions(
-                Path(cleaned_pdb),
-                cfg=cfg,
-                variant=variant_token,
-                pocket_center=center,
-            )
-        if receptor_pdbqt:
-            _auto_prep_mod._maybe_strip_ions(
-                Path(receptor_pdbqt),
-                cfg=cfg,
-                variant=variant_token,
-                pocket_center=center,
-            )
     except Exception as ions_err:
         logger.warning("[ions] pocket_refine_skip err=%s", ions_err)
+    else:
+        if cleaned_pdb and variant_env == "HOLO":
+            logger.info(
+                "[ions.pocket-pass] pdb=%s variant=%s action=refine_with_center file=%s",
+                paths.pdb_id,
+                variant_label,
+                cleaned_pdb,
+            )
+            try:
+                _auto_prep_mod._maybe_strip_ions(
+                    Path(cleaned_pdb),
+                    cfg=cfg,
+                    variant=variant_token,
+                    pocket_center=center,
+                )
+            except Exception as pocket_err:
+                logger.warning(
+                    "[ions] pocket_refine_skip err=%s",
+                    pocket_err,
+                )
 
     # Override control-box size from config (keeps existing 24 A default)
     if center_source == "control":
