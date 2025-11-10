@@ -72,6 +72,9 @@ _ION_AUDIT_SALTS = {
 }
 
 
+_CLEAN_PROVENANCE_LOGGED = False
+
+
 def _resolve_run_id(argv: list[str]) -> str:
     cli_run_id = _cli_val(argv, "--run-id")
     env_run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
@@ -4528,6 +4531,13 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     cfg["_CURRENT_VARIANT"] = variant_env
     cleaned_target = paths.receptor_cleaned_pdb(variant_token)
     receptor_target = paths.receptor_pdbqt(variant_token, None)
+    global _CLEAN_PROVENANCE_LOGGED
+    if not _CLEAN_PROVENANCE_LOGGED:
+        logging.info(
+            "[receptor.clean.provenance] cleaned_pdb_created_by=unknown source=%s",
+            cleaned_target,
+        )
+        _CLEAN_PROVENANCE_LOGGED = True
     logger.info(
         "[receptor.path] pdb=%s variant=%s cleaned_pdb=%s exists=%s",
         paths.pdb_id,

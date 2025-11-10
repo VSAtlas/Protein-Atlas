@@ -215,6 +215,61 @@ def _format_counts(counter: Counter) -> str:
     return " ".join(parts)
 
 
+# [ions] monoatomic audit helpers
+def _collect_monoatomic_records(pdb_path: Union[str, Path]) -> tuple[Counter, Counter]:
+    path = Path(pdb_path)
+    counts: Counter[str] = Counter()
+    detail: Counter[tuple[str, str, str]] = Counter()
+    if not path.exists():
+        return counts, detail
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith("HETATM"):
+                    continue
+                resname = line[17:20].strip().upper()
+                elem = (line[76:78].strip() or resname).upper()
+                if not resname and not elem:
+                    continue
+                token = resname or elem
+                if (
+                    token in _METAL_RESNAMES
+                    or elem in _METAL_RESNAMES
+                    or token in _SALT_RESNAMES
+                    or elem in _SALT_RESNAMES
+                ):
+                    chain = (line[21] or "-").strip() or "-"
+                    resseq = (line[22:26] or "0").strip() or "0"
+                    counts[token] += 1
+                    detail[(token, chain, resseq)] += 1
+    except Exception as exc:  # logging-only helper
+        logging.warning("[ions.probe] file=%s err=%s", path, exc)
+    return counts, detail
+
+
+def _format_ion_hist(counter: Counter) -> str:
+    if not counter:
+        return "none"
+    parts = [f"{token}:{counter[token]}" for token in sorted(counter)]
+    return ",".join(parts)
+
+
+def _diff_detail_records(before: Counter, after: Counter) -> list[str]:
+    missing = before - after
+    out: list[str] = []
+    for (token, chain, resseq), count in sorted(missing.items()):
+        for _ in range(count):
+            out.append(f"{token}:{chain}:{resseq}")
+    return out
+
+
+def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
+    sorted_pairs = sorted(pairs)
+    if not sorted_pairs:
+        return "none"
+    return ",".join(f"{res}:{loc}" for res, loc in sorted_pairs)
+
+
 def _distance_from_center(line: str, center: Optional[tuple[float, float, float]]) -> float | None:
     if center is None:
         return None
@@ -2309,8 +2364,42 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     assert_no_metal_in_peptidic(reduced_pdb)
 
     # (10) Move to receptor and re-fix (post-step edits)
+    # [ions] receptor_write audit
+    variant_env = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
+    variant_label = variant_env if variant_env else "legacy"
+    before_counts, before_detail = _collect_monoatomic_records(reduced_pdb)
+    logging.info(
+        "[ions.policy] stage=receptor_write variant=%s source=%s target=%s reason=copy_reduced_to_cleaned",
+        variant_label,
+        reduced_pdb,
+        receptor_pdb,
+    )
+    logging.info(
+        "[ions.counts.before] stage=receptor_write file=%s metals=%s",
+        reduced_pdb,
+        _format_ion_hist(before_counts),
+    )
+
     shutil.copyfile(reduced_pdb, receptor_pdb)
     _helium_postwrite_counter("promote_receptor_copy", receptor_pdb)
+
+    after_counts, after_detail = _collect_monoatomic_records(receptor_pdb)
+    logging.info(
+        "[ions.counts.after] stage=receptor_write file=%s metals=%s",
+        receptor_pdb,
+        _format_ion_hist(after_counts),
+    )
+    diff_list = _diff_detail_records(before_detail, after_detail)
+    kept_total = sum(after_counts.values())
+    stripped_total = max(0, sum(before_counts.values()) - kept_total)
+    logging.info(
+        "[ions.summary] action=write_cleaned kept=%d stripped=%d changed=%d",
+        kept_total,
+        stripped_total,
+        len(diff_list),
+    )
+    if diff_list:
+        logging.info("[ions.diff.reduced→cleaned] lost=%s", ",".join(diff_list))
 
     fix_pdb_elements(receptor_pdb)
     _helium_postwrite_counter("elemfix_final_receptor", receptor_pdb)
@@ -2846,9 +2935,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             _pdb_ions = _ions_in_pdb(input_pdb)
             _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
             _missing = _pdb_ions - _pdbqt_ions
+            kept_pairs = _pdb_ions & _pdbqt_ions
+            logging.info(
+                "[ions.diff.pdb↔pdbqt.meeko] kept=%d stripped=%d detail=%s",
+                len(kept_pairs),
+                len(_missing),
+                _format_ion_pairs(_pdb_ions),
+            )
             if _pdb_ions or _missing:
-                logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                sorted(_pdb_ions), sorted(_missing))
+                logging.warning(
+                    "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                    sorted(_pdb_ions),
+                    sorted(_missing),
+                )
             # If any missing ion is YAML-retained, emit a targeted warning
             _retained = {r for r in _RETAIN if _is_element_token(r)}
             _lost_retained = sorted([x for x in _missing if x[0] in _retained])
@@ -2908,9 +3007,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _pdb_ions = _ions_in_pdb(input_pdb)
                 _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
                 _missing = _pdb_ions - _pdbqt_ions
+                kept_pairs = _pdb_ions & _pdbqt_ions
+                logging.info(
+                    "[ions.diff.pdb↔pdbqt.meeko_retry] kept=%d stripped=%d detail=%s",
+                    len(kept_pairs),
+                    len(_missing),
+                    _format_ion_pairs(_pdb_ions),
+                )
                 if _pdb_ions or _missing:
-                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                    sorted(_pdb_ions), sorted(_missing))
+                    logging.warning(
+                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                        sorted(_pdb_ions),
+                        sorted(_missing),
+                    )
                 _retained = {r for r in _RETAIN if _is_element_token(r)}
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
@@ -2968,9 +3077,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _pdb_ions = _ions_in_pdb(input_pdb)
                 _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
                 _missing = _pdb_ions - _pdbqt_ions
+                kept_pairs = _pdb_ions & _pdbqt_ions
+                logging.info(
+                    "[ions.diff.pdb↔pdbqt.meeko_allow_bad_res] kept=%d stripped=%d detail=%s",
+                    len(kept_pairs),
+                    len(_missing),
+                    _format_ion_pairs(_pdb_ions),
+                )
                 if _pdb_ions or _missing:
-                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                    sorted(_pdb_ions), sorted(_missing))
+                    logging.warning(
+                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                        sorted(_pdb_ions),
+                        sorted(_missing),
+                    )
                 _retained = {r for r in _RETAIN if _is_element_token(r)}
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
@@ -3016,9 +3135,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _pdb_ions = _ions_in_pdb(input_pdb)
                 _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
                 _missing = _pdb_ions - _pdbqt_ions
+                kept_pairs = _pdb_ions & _pdbqt_ions
+                logging.info(
+                    "[ions.diff.pdb↔pdbqt.meeko_legacy] kept=%d stripped=%d detail=%s",
+                    len(kept_pairs),
+                    len(_missing),
+                    _format_ion_pairs(_pdb_ions),
+                )
                 if _pdb_ions or _missing:
-                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                    sorted(_pdb_ions), sorted(_missing))
+                    logging.warning(
+                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                        sorted(_pdb_ions),
+                        sorted(_missing),
+                    )
                 _retained = {r for r in _RETAIN if _is_element_token(r)}
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
@@ -3064,9 +3193,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             _pdb_ions = _ions_in_pdb(input_pdb)
             _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
             _missing = _pdb_ions - _pdbqt_ions
+            kept_pairs = _pdb_ions & _pdbqt_ions
+            logging.info(
+                "[ions.diff.pdb↔pdbqt.adt] kept=%d stripped=%d detail=%s",
+                len(kept_pairs),
+                len(_missing),
+                _format_ion_pairs(_pdb_ions),
+            )
             if _pdb_ions or _missing:
-                logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                sorted(_pdb_ions), sorted(_missing))
+                logging.warning(
+                    "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                    sorted(_pdb_ions),
+                    sorted(_missing),
+                )
             _retained = {r for r in _RETAIN if _is_element_token(r)}
             _lost_retained = sorted([x for x in _missing if x[0] in _retained])
             if _lost_retained:
