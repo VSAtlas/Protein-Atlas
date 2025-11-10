@@ -220,7 +220,7 @@ def receptor_dir(
     if v:
         base = base / v
     dir_path = base / "receptor"
-    if not legacy and ph_tag:
+    if ph_tag:
         dir_path = dir_path / "ph_ensemble"
     return dir_path
 
@@ -231,7 +231,7 @@ def receptor_file(
     ph_tag: Optional[str] = None,
     legacy: bool = False,
 ) -> Path:
-    dir_path = receptor_dir(pdb_id, variant=variant, ph_tag=ph_tag if not legacy else None, legacy=legacy)
+    dir_path = receptor_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
     stem = _norm_pdb_id(pdb_id)
     suffix = f"_{ph_tag}" if ph_tag else ""
     return dir_path / f"{stem}{suffix}.pdbqt"
@@ -246,7 +246,7 @@ def docked_dir(
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.docked / token
-    if legacy:
+    if legacy and not ph_tag:
         return base
     v = _norm_variant(variant)
     if v:
