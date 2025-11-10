@@ -7,10 +7,11 @@ import logging
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Optional
 import hashlib
 from propka_wire import apply_propka_states
 import automate_protein_prep
+from path_router import ph_ensemble_dir
 
 elog = logging.getLogger("ph_ensemble")
 if not elog.handlers:
@@ -170,19 +171,45 @@ def build_ph_ensemble(
     pdb_id: str,
     cleaned_receptor_pdb: str,
     out_dir: str,
-    center: Tuple[float,float,float],
+    center: Tuple[float, float, float],
     radius: float,
     ph_values: Iterable[float],
-    member_index_start: int = 0
+    member_index_start: int = 0,
+    variant: Optional[str] = None,
+    legacy: bool = False,
 ) -> str:
     """
     For each pH value: A) PROPKA-local renames -> prestate
                        B) single hydrogenation via automate_protein_prep.assign_protonation_states
                        C) app.run_prepare_receptor -> pdbqt
     Writes ensemble.json and returns its path.
+
+    When `variant` is APO/HOLO (and legacy=False), artifacts are written under
+    processed_pdbs/<PDB>/<VARIANT>/receptor/ph_ensemble/.
+    Legacy mode (variant=None or legacy=True) keeps processed_pdbs/<PDB>/receptor/ph_ensemble/.
     """
-    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    ensemble_dir = out_dir / pdb_id / "receptor" / "ph_ensemble"
+    out_root = Path(out_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    variant_token = (variant or "").strip().upper() or None
+    if legacy:
+        variant_token = None
+
+    ensemble_dir = None
+    try:
+        candidate = ph_ensemble_dir(pdb_id, variant=variant_token, legacy=legacy)
+        candidate.relative_to(out_root)
+    except Exception:
+        ensemble_dir = None
+    else:
+        ensemble_dir = candidate
+
+    if ensemble_dir is None:
+        ensemble_dir = out_root / pdb_id
+        if variant_token:
+            ensemble_dir = ensemble_dir / variant_token
+        ensemble_dir = ensemble_dir / "receptor" / "ph_ensemble"
+
     ensemble_dir.mkdir(parents=True, exist_ok=True)
     tag_root = str(pdb_id).replace('/', '_').replace('\\', '_')
 

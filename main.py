@@ -1762,7 +1762,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             log.info("[ph_ensemble.pick.center] center=(%.3f,%.3f,%.3f) radius=%.1f", center[0], center[1], center[2], radius_nominal)
         else:
             log.info("[ph_ensemble.pick.center] center=GLOBAL radius=ALL")
-        builder_id = paths.pdb_id if variant is None else f"{paths.pdb_id}_{variant}"
         log.info("[ph_ensemble.call] building pH ensemble for %s", paths.pdb_id)
         prev_cfg = getattr(automate_protein_prep, "config", None)
         try:
@@ -1772,12 +1771,14 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
         try:
             import ph_ensemble
             manifest_path = ph_ensemble.build_ph_ensemble(
-                pdb_id=builder_id,
+                pdb_id=paths.pdb_id,
                 cleaned_receptor_pdb=cleaned_path,
                 out_dir=str(Path(cfg["OUTPUT_DIR"])),
                 center=center,
                 radius=eff_radius,
                 ph_values=ph_values,
+                variant=variant,
+                legacy=bool(cfg.get("_ROUTER_LEGACY", False)),
             )
 
             log.info("[ph_ensemble.manifest] path=%s", manifest_path)
@@ -4384,7 +4385,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 center=(0.0, 0.0, 0.0),
                 radius=1_000_000.0,
                 ph_values=ph_values,
-                member_index_start=0
+                member_index_start=0,
+                variant=variant_token,
+                legacy=legacy_mode,
             )
             logger.info("[ph_ensemble.manifest] path=%s", manifest_path)
 
