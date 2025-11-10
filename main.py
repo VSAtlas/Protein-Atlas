@@ -128,6 +128,25 @@ class ConfigDict(dict):
         return ConfigDict(super().copy())
 
 
+def _log_cfg_emit_path_check(pdb_id, receptor_path, variant, legacy):
+    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_label = variant_token or "legacy"
+    contains_variant = bool(variant_token and variant_token in str(receptor_path))
+    logging.info(
+        "[cfg.emit.check] pdb=%s variant=%s receptor_path=%s path_contains_variant=%s",
+        pdb_id,
+        variant_label,
+        receptor_path,
+        contains_variant,
+    )
+    if variant_token and not contains_variant and not legacy:
+        logging.warning(
+            "[variant.mismatch] expected_variant=%s wrote_legacy_path=%s action=fail_ci",
+            variant_token,
+            receptor_path,
+        )
+
+
 def emit_vina_config(
     cfg,
     pdb_id,
@@ -146,7 +165,7 @@ def emit_vina_config(
     skip_manifest_if_exists=False,
 ):
     if not skip_manifest_if_exists:
-        return _emit_vina_config_impl(
+        result = _emit_vina_config_impl(
             cfg,
             pdb_id,
             receptor_pdbqt,
@@ -161,21 +180,24 @@ def emit_vina_config(
             ph_token=ph_token,
             legacy=legacy,
         )
-    return _emit_vina_config_skip_manifest(
-        cfg,
-        pdb_id,
-        receptor_pdbqt,
-        center,
-        box_size,
-        ligand_path,
-        stage_name,
-        stage_info,
-        cpu_per_job,
-        logger,
-        variant=variant,
-        ph_token=ph_token,
-        legacy=legacy,
-    )
+    else:
+        result = _emit_vina_config_skip_manifest(
+            cfg,
+            pdb_id,
+            receptor_pdbqt,
+            center,
+            box_size,
+            ligand_path,
+            stage_name,
+            stage_info,
+            cpu_per_job,
+            logger,
+            variant=variant,
+            ph_token=ph_token,
+            legacy=legacy,
+        )
+    _log_cfg_emit_path_check(pdb_id, receptor_pdbqt, variant, legacy)
+    return result
 
 
 def _emit_vina_config_skip_manifest(
@@ -477,18 +499,21 @@ def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
     token = _clean_mode_token(str(raw_value) if raw_value is not None else "")
 
     if token in {"", "none", "legacy", "null", "false", "0"}:
-        return "legacy", [None]
-    if token == "apo":
-        return "apo", ["APO"]
-    if token == "holo":
-        return "holo", ["HOLO"]
-    if token in {"apovsholo", "apoandholo", "both"}:
-        return "apo_vs_holo", ["APO", "HOLO"]
+        mode, variants = "legacy", [None]
+    elif token == "apo":
+        mode, variants = "apo", ["APO"]
+    elif token == "holo":
+        mode, variants = "holo", ["HOLO"]
+    elif token in {"apovsholo", "apoandholo", "both"}:
+        mode, variants = "apo_vs_holo", ["APO", "HOLO"]
+    else:
+        logging.warning(
+            "[apo-holo.debug] unknown_mode=%r defaulting=apo_vs_holo", raw_value
+        )
+        mode, variants = "apo_vs_holo", ["APO", "HOLO"]
 
-    logging.warning(
-        "[apo-holo.debug] unknown_mode=%r defaulting=apo_vs_holo", raw_value
-    )
-    return "apo_vs_holo", ["APO", "HOLO"]
+    logging.info("[apo-holo] mode=%s expanded=%s", mode, variants)
+    return mode, variants
 
 
 
@@ -1976,6 +2001,16 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
     if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
         _build_ph_ensemble(cleaned_pdb)
+
+    try:
+        automate_protein_prep._maybe_strip_ions(
+            Path(cleaned_pdb),
+            cfg=cfg,
+            variant=variant,
+            pocket_center=None,
+        )
+    except Exception as ions_err:
+        logger.warning("[ions] pre_meeko_skip err=%s", ions_err)
 
     # Generate receptor PDBQT directly at the variant-aware path
     try:
@@ -4403,6 +4438,24 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     active_ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
 
+    cfg["_CURRENT_VARIANT"] = variant_env
+    cleaned_target = paths.receptor_cleaned_pdb(variant_token)
+    receptor_target = paths.receptor_pdbqt(variant_token, None)
+    logger.info(
+        "[receptor.path] pdb=%s variant=%s cleaned_pdb=%s exists=%s",
+        paths.pdb_id,
+        variant_label,
+        cleaned_target,
+        cleaned_target.exists(),
+    )
+    logger.info(
+        "[receptor.path] pdb=%s variant=%s receptor_pdbqt=%s exists=%s",
+        paths.pdb_id,
+        variant_label,
+        receptor_target,
+        receptor_target.exists(),
+    )
+
     # 2) Protein prep (re-use if cached)
     logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
     cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
@@ -4469,14 +4522,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
 
 
-    # insert: strip monoatomic ions (Na+, K+, Cl-, etc.) before Meeko uses the PDB
-    try:
-        from automate_protein_prep import _strip_monoatomic_ions_inplace
-        _strip_monoatomic_ions_inplace(Path(cleaned_pdb))
-        logger.info("Stripped monoatomic ions from cleaned PDB before pocket detection/Meeko.")
-    except Exception as e:
-        logger.warning(f"Strip monoatomic ions skipped: {e}")
-
     # 3) Pocket detection
     center, box_size, center_source = None, None, "none"
     try:
@@ -4508,6 +4553,25 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             return
     if center is None:
         return
+
+    try:
+        import automate_protein_prep as _auto_prep_mod
+        if cleaned_pdb:
+            _auto_prep_mod._maybe_strip_ions(
+                Path(cleaned_pdb),
+                cfg=cfg,
+                variant=variant_token,
+                pocket_center=center,
+            )
+        if receptor_pdbqt:
+            _auto_prep_mod._maybe_strip_ions(
+                Path(receptor_pdbqt),
+                cfg=cfg,
+                variant=variant_token,
+                pocket_center=center,
+            )
+    except Exception as ions_err:
+        logger.warning("[ions] pocket_refine_skip err=%s", ions_err)
 
     # Override control-box size from config (keeps existing 24 A default)
     if center_source == "control":

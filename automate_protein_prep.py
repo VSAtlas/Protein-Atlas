@@ -47,6 +47,7 @@ from propka_wire import pdb2pqr_protonate
 
 from installation import load_config
 from logger_setup import setup_logger
+import activesite as _activesite_mod
 from activesite import (
     fix_element_columns_in_file,
     scan_helium_counts,
@@ -90,6 +91,281 @@ _TWO     = _canonize_two_letter(_TWORAW)
 # All allowed element tokens
 _ELEM_CANON = _ONE | _TWO
 _MEEKO_DROP_IONS = set(_flatten_semicolons(RULES.get("meeko_drop_free_ions", []))) or {"NA", "K", "LI"}
+
+_SALT_RESNAMES = {"NA", "K", "CL"}
+_IONS_CFG_CACHE: tuple[set[str], str] | None = None
+_IONS_CFG_LOGGED = False
+
+
+def _resolve_variant_token(cfg: Optional[dict] = None, override: Optional[str] = None) -> Optional[str]:
+    token = (override or "").strip().upper() if override else ""
+    if token in {"APO", "HOLO"}:
+        return token
+    env_token = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
+    if env_token in {"APO", "HOLO"}:
+        return env_token
+    if cfg is not None:
+        cfg_token = str(cfg.get("_CURRENT_VARIANT", "")).strip().upper()
+        if cfg_token in {"APO", "HOLO"}:
+            return cfg_token
+    return None
+
+
+def _normalize_ion_policy(cfg: Optional[dict]) -> str:
+    raw = "by_variant"
+    if cfg is not None:
+        raw = str(cfg.get("ION_STRIP_POLICY", "by_variant")).strip().lower() or "by_variant"
+    if raw not in {"by_variant", "always_strip", "never_strip"}:
+        logging.warning("[ions.cfg] unsupported_policy=%s fallback=by_variant", raw)
+        return "by_variant"
+    return raw
+
+
+def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
+    global _IONS_CFG_CACHE, _IONS_CFG_LOGGED
+    if _IONS_CFG_CACHE is not None:
+        allow, source = _IONS_CFG_CACHE
+        if not _IONS_CFG_LOGGED:
+            logging.info("[ions.cfg] retain_in_receptor_resnames=%s source=%s", ",".join(sorted(allow)), source)
+            _IONS_CFG_LOGGED = True
+        return allow, source
+
+    candidate = None
+    if cfg and "retain_in_receptor_resnames" in cfg:
+        candidate = cfg.get("retain_in_receptor_resnames")
+    elif "retain_in_receptor_resnames" in config:
+        candidate = config.get("retain_in_receptor_resnames")
+
+    allow_items: Iterable[str] | None = None
+    source = "default"
+
+    if isinstance(candidate, (list, tuple, set)):
+        allow_items = list(candidate)
+        source = "inline"
+    elif isinstance(candidate, str) and candidate.strip():
+        text = candidate.strip()
+        parsed: Iterable[str] | None = None
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                loaded = json.loads(text)
+                if isinstance(loaded, list):
+                    parsed = loaded
+                    source = "inline"
+            except Exception as exc:
+                logging.warning("[ions.cfg] inline_json_parse_failed=%s err=%s", text[:40], exc)
+        if parsed is None:
+            yaml_path = Path(text).expanduser()
+            if yaml_path.is_file():
+                try:
+                    with open(yaml_path, "r", encoding="utf-8") as fh:
+                        data = _activesite_mod.yaml.safe_load(fh) or []
+                    if isinstance(data, dict):
+                        payload = data.get("retain_in_receptor_resnames")
+                        if isinstance(payload, list):
+                            data = payload
+                    if isinstance(data, list):
+                        parsed = data
+                        source = str(yaml_path)
+                    else:
+                        raise TypeError("yaml_payload_not_list")
+                except Exception as exc:
+                    logging.warning("[ions.cfg] yaml_load_failed path=%s err=%s", yaml_path, exc)
+            if parsed is None:
+                tokens = [tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()]
+                if tokens:
+                    parsed = tokens
+                    source = "inline"
+        allow_items = parsed
+
+    if allow_items is None:
+        allow_items = RULES.get("retain_in_receptor_resnames", [])
+        source = "default"
+
+    allow_set = {tok.upper() for tok in _flatten_semicolons(allow_items)}
+    _IONS_CFG_CACHE = (allow_set, source)
+    if not _IONS_CFG_LOGGED:
+        logging.info(
+            "[ions.cfg] retain_in_receptor_resnames=%s source=%s",
+            ",".join(sorted(allow_set)),
+            source,
+        )
+        _IONS_CFG_LOGGED = True
+    return allow_set, source
+
+
+def _bucket_counts(counter: Counter) -> dict[str, int]:
+    keys = ["ZN", "MG", "NA", "K", "CA", "MN", "FE", "CL"]
+    out = {k: 0 for k in keys}
+    other = 0
+    for resn, count in counter.items():
+        token = resn.upper()
+        if token in out:
+            out[token] += count
+        else:
+            other += count
+    out["OTHER"] = other
+    return out
+
+
+def _format_counts(counter: Counter) -> str:
+    bucketed = _bucket_counts(counter)
+    keys = ["ZN", "MG", "NA", "K", "CA", "MN", "FE", "CL", "OTHER"]
+    parts = [f"{k}={bucketed.get(k, 0)}" for k in keys]
+    return " ".join(parts)
+
+
+def _distance_from_center(line: str, center: Optional[tuple[float, float, float]]) -> float | None:
+    if center is None:
+        return None
+    try:
+        x = float(line[30:38])
+        y = float(line[38:46])
+        z = float(line[46:54])
+    except Exception:
+        return None
+    dx = x - center[0]
+    dy = y - center[1]
+    dz = z - center[2]
+    return sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def _maybe_strip_ions(
+    pdb_path: Union[str, Path],
+    cfg: Optional[dict] = None,
+    *,
+    variant: Optional[str] = None,
+    pocket_center: Optional[tuple[float, float, float]] = None,
+) -> None:
+    path = Path(pdb_path)
+    if not path.exists():
+        logging.warning("[ions] skip_missing file=%s", path)
+        return
+
+    allow_set, _ = _load_retain_allowlist(cfg)
+    policy = _normalize_ion_policy(cfg)
+    variant_token = _resolve_variant_token(cfg, variant)
+    variant_label = variant_token or "legacy"
+
+    logging.info(
+        "[ions] variant=%s policy=%s file=%s",
+        variant_label,
+        policy,
+        path,
+    )
+
+    if policy == "never_strip":
+        logging.debug("[ions.skip] policy=never_strip")
+        return
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception as exc:
+        logging.warning("[ions] read_failed file=%s err=%s", path, exc)
+        return
+
+    residues: dict[tuple[str, str, str, str], list[tuple[int, str]]] = {}
+    for idx, line in enumerate(text):
+        if not line.startswith("HETATM"):
+            continue
+        resname = line[17:20].strip().upper()
+        key = (line[21], line[22:26], line[26], resname)
+        residues.setdefault(key, []).append((idx, line))
+
+    before = Counter()
+    stripped = Counter()
+
+    radius = 0.0
+    if cfg is not None:
+        try:
+            radius = max(0.0, float(cfg.get("HOLO_SALT_STRIP_RADIUS", 0.0) or 0.0))
+        except Exception:
+            radius = 0.0
+
+    warn_missing_center = False
+    remove_indices: set[int] = set()
+
+    for key, atoms in residues.items():
+        if len(atoms) != 1:
+            continue
+        chain, resi, icode, resname = key
+        res_token = resname.upper()
+        line_idx, line = atoms[0]
+        before[res_token] += 1
+
+        remove = False
+        reason = ""
+        elem = (line[76:78].strip() or res_token).upper()
+
+        if policy == "always_strip":
+            remove = True
+            reason = "always_strip"
+        else:  # by_variant
+            if variant_token == "HOLO":
+                if res_token in allow_set:
+                    remove = False
+                elif res_token in _SALT_RESNAMES:
+                    if radius > 0.0:
+                        dist = _distance_from_center(line, pocket_center)
+                        if dist is None:
+                            warn_missing_center = True
+                            remove = False
+                        elif dist >= radius:
+                            remove = True
+                            reason = "holo_salt_far"
+                        else:
+                            remove = False
+                    else:
+                        remove = False
+                else:
+                    remove = True
+                    reason = "apo_policy"
+            else:
+                remove = True
+                reason = "apo_policy"
+
+        if remove:
+            stripped[res_token] += 1
+            remove_indices.add(line_idx)
+            logging.debug(
+                "[ions.remove] elem=%s resname=%s serial=%s chain=%s resi=%s reason=%s",
+                elem,
+                res_token,
+                line[6:11].strip(),
+                chain.strip() or "-",
+                (resi or "0").strip() or "0",
+                reason,
+            )
+
+    logging.debug("[ions.counts.before] %s", _format_counts(before))
+    kept = before - stripped
+    logging.debug("[ions.counts.after] %s", _format_counts(kept))
+    kept_fmt = _bucket_counts(kept)
+    stripped_fmt = _bucket_counts(stripped)
+    order = ["ZN", "MG", "NA", "K", "CA", "MN", "FE", "CL", "OTHER"]
+    kept_str = "{" + ",".join(f"{k}:{kept_fmt.get(k, 0)}" for k in order) + "}"
+    stripped_str = "{" + ",".join(f"{k}:{stripped_fmt.get(k, 0)}" for k in order) + "}"
+    logging.info("[ions.summary] kept=%s stripped=%s", kept_str, stripped_str)
+
+    if warn_missing_center and radius > 0.0 and variant_token == "HOLO":
+        logging.warning(
+            "[ions] holo_salt_radius_set_but_no_center action=keep_salts radius=%.2f",
+            radius,
+        )
+
+    if not remove_indices:
+        logging.debug("[ions] no_monoatomic_hits remove=0")
+        return
+
+    for idx in sorted(remove_indices):
+        text[idx] = None  # type: ignore
+
+    rewritten = [ln for ln in text if ln is not None]
+    try:
+        path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    except Exception as exc:
+        logging.warning("[ions] write_failed file=%s err=%s", path, exc)
+        return
+
 
 def _is_element_token(sym):
     s = str(sym).strip().upper()
