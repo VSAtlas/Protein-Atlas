@@ -45,6 +45,7 @@ from path_router import (
     docked_dir,
     load_ph_tags,
 )
+from library_index import LibraryIndex
 
 
 def _resolve_run_id(argv: list[str]) -> str:
@@ -567,56 +568,116 @@ def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None)
         for p in root.rglob("*.pdbqt"):
             yield p
 
-def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
-    """
-    Apply SINGLE_LIGAND_SEARCH_ORDER with a minimal optimization:
-    When SINGLE_LIGAND_SKIP_GLOBAL=True (default), ignore the 'global' scope entirely.
 
-    Match semantics: exact or prefix match depending on SINGLE_LIGAND_ALLOW_PREFIX.
-    Returns a Path to the first hit, or None.
-    """
+def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
+    """Resolve SINGLE_LIGAND selector using manifest-backed lookups (if enabled)."""
     if not selector:
         return None
 
     allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
-    # Default order unchanged, but we may filter it below:
     order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")).replace(" ", "").split(",")
-
-    # NEW: default to skip 'global' traversal in single-ligand mode (cheap win)
     skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
     if skip_global:
         order = [w for w in order if w != "global"]
 
-    # Where to look
-    per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")  # injected at runtime in process_one_protein
-    global_root     = Path(cfg.get("OUTPUT_LIGANDS_DIR", "")) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+    manifest_only = _to_bool(str(cfg.get("SINGLE_LIGAND_MANIFEST_ONLY", True)))
+    suggestions_cap = int(cfg.get("SINGLE_LIGAND_SUGGESTIONS", 5) or 5)
+    lib_index = cfg.get("_LIB_INDEX")
+    per_roots = [Path(p) for p in cfg.get("_LIB_INDEX_PER_ROOTS", []) if p]
+    library_roots = [Path(p) for p in cfg.get("_LIB_INDEX_LIBRARY_ROOTS", []) if p]
+    per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")
+    use_manifest = manifest_only and isinstance(lib_index, LibraryIndex)
 
-    logger.info("[single.debug] selector=%s order=%s skip_global=%s", selector, order, skip_global)
-    logger.info("[single.debug.paths] per_protein_dir=%s global_root=%s", per_protein_dir, global_root)
+    logger.info(
+        "[single.debug] selector=%s order=%s manifest_only=%s allow_prefix=%s",
+        selector,
+        order,
+        str(use_manifest).lower(),
+        allow_prefix,
+    )
+    logger.info(
+        "[single.debug.paths] per_roots=%s lib_roots=%s",
+        [str(p) for p in per_roots],
+        [str(p) for p in library_roots],
+    )
 
-    try:
-        name_map = _load_fda_name_map(cfg, logger)
-        key = _norm_name_key(selector)
-        basenames = list(name_map.get(key, []))
-        if not basenames and allow_prefix and key:
-            pref = key
-            for k, v in name_map.items():
-                if k.startswith(pref):
-                    basenames.extend(list(v))
-        if global_root:
-            for bn in basenames:
-                p = Path(global_root) / "fda_library" / bn
-                if p.exists():
-                    logger.info("[single.name] key=%s basenames=%s probe=%s", _norm_name_key(selector), list(basenames), str(p))
-                    return p
-    except Exception as _e:
-        logger.debug("[single.name] mapping search skipped: %s", _e)
-
-    def _match_one_dir(root: Optional[Path]) -> Optional[Path]:
-        if not root or not Path(root).exists():
+    def _lookup_via_index(scopes: list[str]) -> Optional[Path]:
+        if not isinstance(lib_index, LibraryIndex):
             return None
-        candidates = list(Path(root).glob("*.pdbqt"))
-        # Try exact stem (without _stage suffix), then prefix
+        try:
+            name_map = _load_fda_name_map(cfg, logger)
+            key = _norm_name_key(selector)
+            basenames = list(name_map.get(key, []))
+            if not basenames and allow_prefix and key:
+                for map_key, values in name_map.items():
+                    if map_key.startswith(key):
+                        basenames.extend(list(values))
+            for basename in basenames:
+                hit = lib_index.lookup_filename(basename, library_roots)
+                if hit:
+                    logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
+                    return hit
+        except Exception as exc:
+            logger.debug("[single.name] mapping search skipped: %s", exc)
+
+        for where in scopes:
+            if where == "per_protein":
+                if per_roots:
+                    hit = lib_index.lookup(selector, per_roots, allow_prefix=allow_prefix)
+                    if hit:
+                        logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
+                        return hit
+            elif where == "global":
+                if library_roots:
+                    hit = lib_index.lookup(selector, library_roots, allow_prefix=allow_prefix)
+                    if hit:
+                        logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
+                        return hit
+            else:
+                logger.debug("[single.debug.scope] selector=%s scope=%s", selector, where)
+        return None
+
+    def _suggest_from_index() -> list[str]:
+        if isinstance(lib_index, LibraryIndex):
+            ordered: list[Path] = []
+            seen: set[str] = set()
+            for candidate in [*per_roots, *library_roots]:
+                try:
+                    key = str(candidate.resolve())
+                except Exception:
+                    key = str(candidate)
+                if key not in seen:
+                    seen.add(key)
+                    ordered.append(candidate)
+            return lib_index.suggest(selector, ordered, suggestions_cap)
+        return []
+
+    def _log_miss(suggestions: list[str]) -> None:
+        logger.error(
+            "[single.lookup.miss] selector=%s suggestions=[%s]",
+            selector,
+            ",".join(suggestions),
+        )
+
+    if use_manifest:
+        hit = _lookup_via_index(order)
+        if hit:
+            return hit
+        _log_miss(_suggest_from_index())
+        return None
+
+    hit = _lookup_via_index(order)
+    if hit:
+        return hit
+
+    def _match_one_dir(root: Optional[Path], recursive: bool = False) -> Optional[Path]:
+        if not root:
+            return None
+        root_path = Path(root)
+        if not root_path.exists():
+            return None
+        iterator = root_path.rglob("*.pdbqt") if recursive else root_path.glob("*.pdbqt")
+        candidates = list(iterator)
         for p in candidates:
             base = p.stem.split("_stage")[0]
             if base.lower() == selector.lower():
@@ -630,34 +691,25 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
 
     for where in order:
         if where == "per_protein":
-            hit = _match_one_dir(Path(per_protein_dir) if per_protein_dir else None)
-            if hit:
-                logger.info(f"[single] matched in per-protein dir: {hit.name}")
-                return hit
-
+            search_roots = per_roots
+            if not search_roots and per_protein_dir:
+                search_roots = [Path(per_protein_dir)]
+            for root in search_roots:
+                hit = _match_one_dir(root, recursive=False)
+                if hit:
+                    logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
+                    return hit
         elif where == "global":
-            # Retained for optional use if SINGLE_LIGAND_SKIP_GLOBAL=False
-            if global_root and global_root.exists():
-                # Fallback rglob only if you explicitly re-enable global (skip_global=False)
-                for p in global_root.rglob("*.pdbqt"):
-                    base = p.stem.split("_stage")[0]
-                    if base.lower() == selector.lower():
-                        logger.info(f"[single] matched in global dir: {p}")
-                        return p
-                if allow_prefix:
-                    for p in global_root.rglob("*.pdbqt"):
-                        base = p.stem.split("_stage")[0]
-                        if base.lower().startswith(selector.lower()):
-                            logger.info(f"[single] prefix-matched in global dir: {p}")
-                            return p
+            for root in library_roots:
+                hit = _match_one_dir(root, recursive=True)
+                if hit:
+                    logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
+                    return hit
         else:
-            logger.debug(f"[single] unknown search scope: {where}")
-    logger.warning("[single.miss] selector=%s (no FDA map hit / file absent)", selector)
+            logger.debug("[single.debug.scope] selector=%s scope=%s", selector, where)
+
+    _log_miss(_suggest_from_index())
     return None
-
-
-
-
 # --- FDA name mapping (CSV) ---------------------------------------------------
 # Lets SINGLE_LIGAND resolve by generic/brand/synonym (e.g., "imatinib", "Gleevec").
 _FDA_NAME_MAP_CACHE = None
@@ -2054,6 +2106,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         roots.append(paths.prepped_ligands_dir)
 
     extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
+    extra_paths: list[Path] = []
     if extra_dirs:
         for d in extra_dirs.split(";"):
             d = d.strip()
@@ -2062,6 +2115,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
             p = Path(d)
             if p.exists():
                 roots.append(p)
+                extra_paths.append(p)
 
     logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
 
@@ -2171,6 +2225,47 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     # Final audits (after list is populated)
     logger.info("[lib-roots] non-control roots = " + ", ".join(map(str, allowed_noncontrol_roots)))
+
+    def _dedup_index_roots(seq: list[Path]) -> list[Path]:
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for candidate in seq:
+            if not candidate:
+                continue
+            path_obj = Path(candidate)
+            try:
+                key = str(path_obj.resolve())
+            except Exception:
+                key = str(path_obj)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(path_obj)
+        return deduped
+
+    per_index_roots: list[Path] = []
+    if paths.prepped_ligands_dir:
+        per_index_roots.append(paths.prepped_ligands_dir)
+
+    index_library_roots: list[Path] = []
+    mapped_value = test_map.get(pdb_id) if test_enable else None
+    if test_enable and mapped_value is not None and cfg.get("OUTPUT_LIGANDS_DIR"):
+        base_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
+        tokens = [tok.strip() for tok in str(mapped_value).split(",") if tok.strip()]
+        index_library_roots.extend(base_root / tok for tok in tokens)
+    else:
+        index_library_roots.extend(deduped_roots)
+        index_library_roots.extend(extra_paths)
+
+    per_index_roots = _dedup_index_roots(per_index_roots)
+    index_library_roots = _dedup_index_roots(index_library_roots)
+    index_roots = _dedup_index_roots(per_index_roots + index_library_roots)
+
+    manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+    lib_index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
+    lib_index.load(index_roots)
+    cfg["_LIB_INDEX"] = lib_index
+    cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_index_roots]
+    cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in index_library_roots]
 
 
     # Helper: path under root?
@@ -4298,6 +4393,9 @@ def main() -> None:
     cfg.setdefault("SINGLE_LIGAND", "")
     cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")
     cfg.setdefault("SINGLE_LIGAND_ALLOW_PREFIX", False)
+    cfg.setdefault("SINGLE_LIGAND_MANIFEST_ONLY", True)
+    cfg.setdefault("SINGLE_LIGAND_SUGGESTIONS", 5)
+    cfg.setdefault("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
     cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
 
     # CLI > ENV > CFG precedence
