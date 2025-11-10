@@ -27,7 +27,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from input_and_export_functions import (
     load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, emit_vina_config, record_score, score_key, _to_bool, init_config_run_dir
+    extract_best_score, emit_vina_config as _emit_vina_config_impl, record_score, score_key, _to_bool, init_config_run_dir
 )
 from protein_functions import detect_active_site
 from activesite import extract_and_remove_ligands
@@ -44,6 +44,7 @@ from path_router import (
     receptor_file,
     docked_dir,
     load_ph_tags,
+    config_dir as router_config_dir,
 )
 from library_index import LibraryIndex
 
@@ -125,6 +126,211 @@ class ConfigDict(dict):
         self[key] = value
     def copy(self):
         return ConfigDict(super().copy())
+
+
+def emit_vina_config(
+    cfg,
+    pdb_id,
+    receptor_pdbqt,
+    center,
+    box_size,
+    ligand_path,
+    stage_name,
+    stage_info,
+    cpu_per_job,
+    logger=None,
+    *,
+    variant=None,
+    ph_token=None,
+    legacy=False,
+    skip_manifest_if_exists=False,
+):
+    if not skip_manifest_if_exists:
+        return _emit_vina_config_impl(
+            cfg,
+            pdb_id,
+            receptor_pdbqt,
+            center,
+            box_size,
+            ligand_path,
+            stage_name,
+            stage_info,
+            cpu_per_job,
+            logger,
+            variant=variant,
+            ph_token=ph_token,
+            legacy=legacy,
+        )
+    return _emit_vina_config_skip_manifest(
+        cfg,
+        pdb_id,
+        receptor_pdbqt,
+        center,
+        box_size,
+        ligand_path,
+        stage_name,
+        stage_info,
+        cpu_per_job,
+        logger,
+        variant=variant,
+        ph_token=ph_token,
+        legacy=legacy,
+    )
+
+
+def _emit_vina_config_skip_manifest(
+    cfg,
+    pdb_id,
+    receptor_pdbqt,
+    center,
+    box_size,
+    ligand_path,
+    stage_name,
+    stage_info,
+    cpu_per_job,
+    logger,
+    *,
+    variant=None,
+    ph_token=None,
+    legacy=False,
+):
+    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+
+    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
+    legacy_mode = bool(legacy)
+
+    lig_base = Path(ligand_path).stem
+    run_id = cfg["RUN_ID"]
+
+    cfg_dir = router_config_dir(
+        run_id,
+        pdb_id,
+        stage_name,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_path = cfg_dir / f"{lig_base}_{stage_name}.txt"
+
+    stage_root = docked_dir(
+        pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    stage_root.mkdir(parents=True, exist_ok=True)
+    out_dir = stage_root / stage_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{lig_base}_{stage_name}.pdbqt"
+
+    expected_receptor = receptor_file(
+        pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    receptor_exists = expected_receptor.exists()
+    receptor_for_config = str(expected_receptor)
+
+    variant_display = variant_token or "None"
+    ph_display = ph_label or "None"
+    breadcrumb = (
+        "[cfg.emit] run=%s pdb=%s stage=%s variant=%s ph=%s\n"
+        "           cfg_dir=%s receptor=%s out_root=%s"
+    )
+    breadcrumb_args = (
+        run_id,
+        pdb_id,
+        stage_name,
+        variant_display,
+        ph_display,
+        str(cfg_dir),
+        receptor_for_config,
+        str(stage_root),
+    )
+    if logger:
+        logger.info(breadcrumb, *breadcrumb_args)
+    else:
+        print(breadcrumb % breadcrumb_args)
+
+    if not receptor_exists:
+        msg = (
+            f"[router.error] missing receptor for pdb={pdb_id} variant={variant_display} "
+            f"ph={ph_display} -> {expected_receptor}"
+        )
+        if logger:
+            logger.error(msg)
+        else:
+            print(msg)
+
+    lines = [
+        f"receptor = {receptor_for_config}",
+        f"ligand   = {ligand_path}",
+        f"center_x = {center[0]:.3f}",
+        f"center_y = {center[1]:.3f}",
+        f"center_z = {center[2]:.3f}",
+        f"size_x   = {box_size[0]:.3f}",
+        f"size_y   = {box_size[1]:.3f}",
+        f"size_z   = {box_size[2]:.3f}",
+        f"cpu      = {int(cpu_per_job)}",
+        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
+        f"energy_range   = {int(stage_info.get('energy_range', 4))}",
+        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
+        f"verbosity      = {int(stage_info.get('verbosity', 0))}",
+        f"out = {out_path}",
+    ]
+
+    if logger:
+        cx, cy, cz = center
+        sx, sy, sz = box_size
+        lig_name = os.path.basename(str(ligand_path))
+        logger.info(
+            "[vina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
+            lig_name,
+            cx,
+            cy,
+            cz,
+            sx,
+            sy,
+            sz,
+        )
+
+    payload = ("\n".join(lines)).encode("utf-8")
+    overwrite = cfg_path.exists()
+
+    tmp = cfg_path.with_suffix(".part")
+    with open(tmp, "wb") as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, cfg_path)
+
+    emit_msg = (
+        "[cfg.emit] run=%s pdb=%s variant=%s ph=%s stage=%s ligand=%s "
+        "cfg_dir=%s docked_root=%s path=%s overwrite=%s bytes=%d"
+    )
+    emit_args = (
+        run_id,
+        pdb_id,
+        variant_display,
+        ph_display,
+        stage_name,
+        lig_base,
+        str(cfg_dir),
+        str(stage_root),
+        str(cfg_path),
+        str(overwrite).lower(),
+        len(payload),
+    )
+    if logger:
+        logger.info(emit_msg, *emit_args)
+    else:
+        print(emit_msg % emit_args)
+
+    return str(cfg_path), str(out_path)
 
 # --- Debug wrappers to locate legacy/incorrect folder creation ---
 import re, traceback
@@ -1667,6 +1873,94 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 # ---- Multi-control center selection via crystallographic controls ----
 
 
+def _ensure_ctrl_vina_manifest(cfg, paths, stage_name, variant_token, ph_label, legacy_mode, logger):
+    run_id = cfg["RUN_ID"]
+    stage_dir = paths.configs_stage_dir(run_id, variant_token, stage_name, ph_label)
+    manifest_path = stage_dir / "vina.json"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    precreated = 0
+    if not manifest_path.exists():
+        payload = {
+            "run_id": run_id,
+            "pdb_id": paths.pdb_id,
+            "stage": stage_name,
+            "variant": variant_token,
+            "ph": ph_label,
+            "legacy": bool(legacy_mode),
+            "entries": [],
+        }
+        tmp = manifest_path.with_suffix(".part")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, manifest_path)
+        precreated = 1
+    logger.info("[ctrl.vina.json] precreated=%d path=%s", precreated, manifest_path)
+    return manifest_path
+
+
+def _finalize_ctrl_vina_manifest(
+    cfg,
+    paths,
+    stage_name,
+    variant_token,
+    ph_label,
+    legacy_mode,
+    manifest_path,
+    jobs,
+):
+    if manifest_path is None:
+        return
+    run_id = cfg["RUN_ID"]
+    stage_dir = manifest_path.parent
+    receptor_path = receptor_file(
+        paths.pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    out_root = docked_dir(
+        paths.pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    out_root.mkdir(parents=True, exist_ok=True)
+    out_dir = out_root / stage_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = []
+    for job in jobs:
+        lig_base = Path(job["ligand_path"]).stem
+        entry = {
+            "ligand": lig_base,
+            "config": str(stage_dir / f"{lig_base}_{stage_name}.txt"),
+            "out": str(out_dir / f"{lig_base}_{stage_name}.pdbqt"),
+            "receptor": str(receptor_path),
+        }
+        entries.append(entry)
+
+    entries.sort(key=lambda e: e["ligand"])
+
+    payload = {
+        "run_id": run_id,
+        "pdb_id": paths.pdb_id,
+        "stage": stage_name,
+        "variant": variant_token,
+        "ph": ph_label,
+        "legacy": bool(legacy_mode),
+        "entries": entries,
+    }
+
+    tmp = manifest_path.with_suffix(".part")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, manifest_path)
+
+
 def _ctrl_quick_file_sig(pth: str) -> str:
     try:
         p = Path(pth)
@@ -1763,6 +2057,7 @@ def _ctrl_redock_job(payload: dict) -> dict:
         variant=payload["variant"],
         ph_token=payload["ph"],
         legacy=payload["legacy"],
+        skip_manifest_if_exists=bool(payload.get("skip_manifest", False)),
     )
     try:
         _, score = run_docking_task(
@@ -1949,6 +2244,8 @@ def select_center_via_control_redock(
     stage_name = "ctrl_redock"
     parallel_enabled = workers > 1 and len(cand_pdbqts) > 1
 
+    manifest_path = None
+
     if not parallel_enabled:
         for lig_pdbqt in cand_pdbqts:
             base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
@@ -2013,6 +2310,16 @@ def select_center_via_control_redock(
                 if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
                     best = (rmsd, e_print if e_print is not None else None, base, center)
     else:
+        manifest_path = _ensure_ctrl_vina_manifest(
+            cfg,
+            paths,
+            stage_name,
+            variant_token,
+            ph_label,
+            legacy_mode,
+            logger,
+        )
+        logger.info("[ctrl.parallel] write_once=on path=%s", manifest_path)
         cfg_payload = dict(cfg)
         jobs = []
         for order, lig_pdbqt in enumerate(cand_pdbqts):
@@ -2053,6 +2360,7 @@ def select_center_via_control_redock(
                     "vina_exe": vina_exe,
                     "obabel": obabel,
                     "base": base,
+                    "skip_manifest": True,
                 }
             )
 
@@ -2067,6 +2375,16 @@ def select_center_via_control_redock(
                 results.append(res)
 
         results.sort(key=lambda r: r["order"])
+        _finalize_ctrl_vina_manifest(
+            cfg,
+            paths,
+            stage_name,
+            variant_token,
+            ph_label,
+            legacy_mode,
+            manifest_path,
+            jobs,
+        )
         for res in results:
             base = res["base"]
             center = tuple(res["center"])
