@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import atexit, datetime
 from pathlib import Path
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 from tqdm import tqdm
@@ -1665,6 +1665,127 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
 # ---- Multi-control center selection via crystallographic controls ----
+
+
+def _ctrl_quick_file_sig(pth: str) -> str:
+    try:
+        p = Path(pth)
+        if not p.exists():
+            return "exists=False size=-1 sha=0000000000"
+        sz = p.stat().st_size
+        h = hashlib.sha1()
+        with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+            for ln in fh:
+                if ln.startswith(("ATOM", "HETATM")):
+                    h.update(ln[12:54].encode("utf-8", "ignore"))
+        return f"exists=True size={sz} sha={h.hexdigest()[:10]}"
+    except Exception:
+        return "sig=unavailable"
+
+
+def _ctrl_best_model_to_pdb(pdbqt_file: str, obabel: str):
+    from pathlib import Path as _Path
+    import tempfile
+    import subprocess
+    import shutil as _sh
+
+    best_e = None
+    best_chunk = None
+    pdbqt_path = _Path(pdbqt_file)
+    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+        chunk = []
+        in_model = False
+        for ln in fh:
+            u = ln.strip().upper()
+            if u.startswith("MODEL"):
+                chunk = [ln]
+                in_model = True
+            elif u.startswith("ENDMDL"):
+                chunk.append(ln)
+                in_model = False
+                for cl in chunk:
+                    if "REMARK VINA RESULT" in cl.upper():
+                        try:
+                            e = float(cl.strip().split()[3])
+                            if (best_e is None) or (e < best_e):
+                                best_e = e
+                                best_chunk = chunk[:]
+                        except Exception:
+                            pass
+            else:
+                if in_model:
+                    chunk.append(ln)
+    if best_chunk is None:
+        try:
+            with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if "REMARK VINA RESULT" in ln.upper():
+                        best_e = float(ln.strip().split()[3])
+                        break
+            best_chunk = None
+        except Exception:
+            return None, None
+
+    td = _Path(tempfile.mkdtemp(prefix="ctrl_redock_"))
+    best_pdbqt = td / "best.pdbqt"
+    if best_chunk:
+        with open(best_pdbqt, "w", encoding="utf-8") as out:
+            out.writelines(best_chunk)
+    else:
+        _sh.copy2(pdbqt_path, best_pdbqt)
+    out_pdb = td / "best.pdb"
+    try:
+        subprocess.run(
+            [obabel, "-ipdbqt", str(best_pdbqt), "-opdb", "-O", str(out_pdb)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None, best_e
+    return (out_pdb if out_pdb.exists() else None), best_e
+
+
+def _ctrl_redock_job(payload: dict) -> dict:
+    cfg = payload["cfg"]
+    stage_info = dict(payload["stage_info"])
+    conf_path, out_path = emit_vina_config(
+        cfg,
+        payload["pdb_id"],
+        payload["receptor_pdbqt"],
+        tuple(payload["center"]),
+        tuple(payload["box_size"]),
+        payload["ligand_path"],
+        payload["stage_name"],
+        stage_info,
+        int(payload["threads_per_job"]),
+        logger=None,
+        variant=payload["variant"],
+        ph_token=payload["ph"],
+        legacy=payload["legacy"],
+    )
+    try:
+        _, score = run_docking_task(
+            payload["vina_exe"],
+            str(conf_path),
+            payload["ligand_name"],
+            str(out_path),
+        )
+    except Exception:
+        score = None
+    best_pdb, best_e = _ctrl_best_model_to_pdb(str(out_path), payload["obabel"])
+    return {
+        "order": payload["order"],
+        "base": payload["base"],
+        "center": tuple(payload["center"]),
+        "ligand_name": payload["ligand_name"],
+        "best_pdb": str(best_pdb) if best_pdb else None,
+        "best_e": best_e,
+        "score": score,
+        "out_path": str(out_path),
+    }
+
+
 def select_center_via_control_redock(
     cfg,
     paths,
@@ -1803,137 +1924,175 @@ def select_center_via_control_redock(
 
     best = None  # (rmsd, score, base, center_tuple)
 
-    def _best_model_to_pdb(pdbqt_file: _Path):
-        # parse multi-model pdbqt, pick model with best (lowest) Vina score
-        best_e = None; best_chunk = None
-        with open(pdbqt_file, "r", encoding="utf-8", errors="ignore") as fh:
-            chunk = []; in_model = False
-            for ln in fh:
-                u = ln.strip().upper()
-                if u.startswith("MODEL"):
-                    chunk = [ln]; in_model = True
-                elif u.startswith("ENDMDL"):
-                    chunk.append(ln); in_model = False
-                    # evaluate chunk
-                    for cl in chunk:
-                        if "REMARK VINA RESULT" in cl.upper():
-                            try:
-                                e = float(cl.strip().split()[3])
-                                if (best_e is None) or (e < best_e):
-                                    best_e = e; best_chunk = chunk[:]
-                            except Exception:
-                                pass
-                else:
-                    if in_model: chunk.append(ln)
-        # if file had no explicit MODEL blocks, treat whole file
-        if best_chunk is None:
-            try:
-                with open(pdbqt_file, "r", encoding="utf-8", errors="ignore") as fh:
-                    for ln in fh:
-                        if "REMARK VINA RESULT" in ln.upper():
-                            best_e = float(ln.strip().split()[3])
-                            break
-                best_chunk = None
-            except Exception:
-                return None, None
-
-        import tempfile, subprocess, shutil as _sh
-        td = _Path(tempfile.mkdtemp(prefix="ctrl_redock_"))
-        best_pdbqt = td / "best.pdbqt"
-        if best_chunk:
-            with open(best_pdbqt, "w", encoding="utf-8") as out:
-                out.writelines(best_chunk)
-        else:
-            _sh.copy2(pdbqt_file, best_pdbqt)
-        out_pdb = td / "best.pdb"
-        try:
-            subprocess.run([obabel, "-ipdbqt", str(best_pdbqt), "-opdb", "-O", str(out_pdb)],
-                           check=True, capture_output=True, text=True)
-        except Exception:
-            return None, best_e
-        return (out_pdb if out_pdb.exists() else None), best_e
-
-    for lig_pdbqt in cand_pdbqts:
-        base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
-        center = centroids.get(base)
-        if not center:
-            ref = control_lookup.get(base)
-            if ref and ref.suffix.lower() == ".pdb":
-                center = _centroid_from_pdb(ref)
-        if not center:
-            continue
-
-        stage_info = {"exhaustiveness": ex, "num_modes": nm}
-        if cfg.get("FAST_MODE"):
-            stage_info["exhaustiveness"] = 1
-        stage_name = "ctrl_redock"
+    cpu_total = int(cfg.get("CPU", os.cpu_count() or 1) or 1)
+    cpu_total = max(1, cpu_total)
+    max_parallel = int(cfg.get("MAX_PARALLEL_JOBS", 1) or 1)
+    max_parallel = max(1, max_parallel)
+    workers = max(1, min(cpu_total, max_parallel))
+    job_threads = max(1, min(threads_per_vina, max(1, cpu_total // workers)))
+    total_threads = workers * job_threads
+    logger.info(
+        "[ctrl.parallel] CPU=%d MAX_PARALLEL_JOBS=%d workers=%d threads_per_job=%d total_threads=%d",
+        cpu_total,
+        max_parallel,
+        workers,
+        job_threads,
+        total_threads,
+    )
+    if job_threads < threads_per_vina:
         logger.info(
-            "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
-            paths.pdb_id,
-            stage_name,
-            variant_token or "None",
-            ph_label or "None",
-        )
-        conf_path, out_path = emit_vina_config(
-            cfg,
-            paths.pdb_id,
-            receptor_pdbqt,
-            center,
-            (24.0, 24.0, 24.0),
-            str(lig_pdbqt),
-            stage_name,
-            stage_info,
+            "[ctrl.parallel] adjust threads_per_vina old=%d new=%d",
             threads_per_vina,
-            logger=None,
-            variant=variant_token,
-            ph_token=ph_label,
-            legacy=legacy_mode,
+            job_threads,
         )
-        try:
-            _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
-        except Exception:
-            score = None
 
-        best_pdb, best_e = _best_model_to_pdb(_Path(out_path))
-        ref_path = control_lookup.get(base)
-        rmsd = float("inf")
+    stage_name = "ctrl_redock"
+    parallel_enabled = workers > 1 and len(cand_pdbqts) > 1
 
-        def _quick_file_sig(pth: str) -> str:
+    if not parallel_enabled:
+        for lig_pdbqt in cand_pdbqts:
+            base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
+            center = centroids.get(base)
+            if not center:
+                ref = control_lookup.get(base)
+                if ref and ref.suffix.lower() == ".pdb":
+                    center = _centroid_from_pdb(ref)
+            if not center:
+                continue
+
+            stage_info = {"exhaustiveness": ex, "num_modes": nm}
+            if cfg.get("FAST_MODE"):
+                stage_info["exhaustiveness"] = 1
+            logger.info(
+                "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                paths.pdb_id,
+                stage_name,
+                variant_token or "None",
+                ph_label or "None",
+            )
+            conf_path, out_path = emit_vina_config(
+                cfg,
+                paths.pdb_id,
+                receptor_pdbqt,
+                center,
+                (24.0, 24.0, 24.0),
+                str(lig_pdbqt),
+                stage_name,
+                stage_info,
+                job_threads,
+                logger=None,
+                variant=variant_token,
+                ph_token=ph_label,
+                legacy=legacy_mode,
+            )
             try:
-                p = Path(pth)
-                sz = p.stat().st_size if p.exists() else -1
-                # quick coordinate hash for PDB-like files (robust-ish, not crypto)
-                h = hashlib.sha1()
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    for ln in fh:
-                        if ln.startswith(("ATOM", "HETATM")):
-                            h.update(ln[12:54].encode("utf-8", "ignore"))  # atom name + coords
-                return f"exists={p.exists()} size={sz} sha={h.hexdigest()[:10]}"
+                _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
             except Exception:
-                return "sig=unavailable"
+                score = None
 
-        if best_pdb and ref_path:
-            logger.info(f"[rmsd.debug] ref={ref_path} | {_quick_file_sig(str(ref_path))}")
-            logger.info(f"[rmsd.debug] dock={best_pdb} | {_quick_file_sig(str(best_pdb))}")
-            same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
-            if same_file:
-                logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
-            try:
-                rmsd = compute_rmsd(str(ref_path), str(best_pdb))
-            except Exception as e:
-                rmsd = float("inf")
-                logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
+            best_pdb, best_e = _ctrl_best_model_to_pdb(str(out_path), obabel)
+            ref_path = control_lookup.get(base)
+            rmsd = float("inf")
 
+            if best_pdb and ref_path:
+                logger.info(f"[rmsd.debug] ref={ref_path} | {_ctrl_quick_file_sig(str(ref_path))}")
+                logger.info(f"[rmsd.debug] dock={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}")
+                same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
+                if same_file:
+                    logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
+                try:
+                    rmsd = compute_rmsd(str(ref_path), str(best_pdb))
+                except Exception as e:
+                    rmsd = float("inf")
+                    logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
 
+            e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
+            logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
 
+            if _math.isfinite(rmsd):
+                if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
+                    best = (rmsd, e_print if e_print is not None else None, base, center)
+    else:
+        cfg_payload = dict(cfg)
+        jobs = []
+        for order, lig_pdbqt in enumerate(cand_pdbqts):
+            base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
+            center = centroids.get(base)
+            if not center:
+                ref = control_lookup.get(base)
+                if ref and ref.suffix.lower() == ".pdb":
+                    center = _centroid_from_pdb(ref)
+            if not center:
+                continue
+            stage_info = {"exhaustiveness": ex, "num_modes": nm}
+            if cfg.get("FAST_MODE"):
+                stage_info["exhaustiveness"] = 1
+            logger.info(
+                "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                paths.pdb_id,
+                stage_name,
+                variant_token or "None",
+                ph_label or "None",
+            )
+            jobs.append(
+                {
+                    "order": order,
+                    "cfg": cfg_payload,
+                    "pdb_id": paths.pdb_id,
+                    "receptor_pdbqt": str(receptor_pdbqt),
+                    "center": tuple(center),
+                    "box_size": (24.0, 24.0, 24.0),
+                    "ligand_path": str(lig_pdbqt),
+                    "ligand_name": lig_pdbqt.name,
+                    "stage_name": stage_name,
+                    "stage_info": stage_info,
+                    "threads_per_job": job_threads,
+                    "variant": variant_token,
+                    "ph": ph_label,
+                    "legacy": legacy_mode,
+                    "vina_exe": vina_exe,
+                    "obabel": obabel,
+                    "base": base,
+                }
+            )
 
+        if not jobs:
+            return None, None
 
-        e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
-        logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
+        results = []
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            future_map = {pool.submit(_ctrl_redock_job, job): job for job in jobs}
+            for fut in as_completed(future_map):
+                res = fut.result()
+                results.append(res)
 
-        if _math.isfinite(rmsd):
-            if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
-                best = (rmsd, e_print if e_print is not None else None, base, center)
+        results.sort(key=lambda r: r["order"])
+        for res in results:
+            base = res["base"]
+            center = tuple(res["center"])
+            ref_path = control_lookup.get(base)
+            best_pdb = res["best_pdb"]
+            rmsd = float("inf")
+            if best_pdb and ref_path:
+                logger.info(f"[rmsd.debug] ref={ref_path} | {_ctrl_quick_file_sig(str(ref_path))}")
+                logger.info(f"[rmsd.debug] dock={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}")
+                same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
+                if same_file:
+                    logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
+                try:
+                    rmsd = compute_rmsd(str(ref_path), str(best_pdb))
+                except Exception as e:
+                    rmsd = float("inf")
+                    logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
+
+            best_e = res["best_e"]
+            score = res["score"]
+            e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
+            logger.info(f"[control-redock] lig={res['ligand_name']} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
+
+            if _math.isfinite(rmsd):
+                if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
+                    best = (rmsd, e_print if e_print is not None else None, base, center)
 
     if best is None:
         return None, None
