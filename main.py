@@ -244,6 +244,19 @@ def _clean_mode_token(s: str | None) -> str:
     s = s.replace("-", "").replace("_", "")
     return s
 
+def _debug_normalize_mode_token(tok: str | None) -> str:
+    t = (tok or "").strip().lower()
+    if t in {"", "none", "null", "false", "0", "legacy"}:
+        return "legacy"
+    if t in {"apo", "apo_only"}:
+        return "apo"
+    if t in {"holo", "holo_only"}:
+        return "holo"
+    if t in {"apo_vs_holo", "apo+holo", "both"}:
+        return "apo_vs_holo"
+    return f"unknown:{t}"
+
+
 def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
     """
     Single source of truth: ENV -> config -> default ('apo_vs_holo').
@@ -4454,7 +4467,25 @@ def main() -> None:
     start = time.time()
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
     mode, variants = resolve_apo_holo_mode(cfg)
-    cfg["_ROUTER_LEGACY"] = (mode == "legacy")
+    router_legacy = (mode == "legacy")
+    logging.info(
+        "[apo-holo.debug] env.APO_HOLO_MODE_raw=%r cfg.APO_HOLO_MODE_raw=%r",
+        os.environ.get("APO_HOLO_MODE"),
+        cfg.get("APO_HOLO_MODE"),
+    )
+    logging.info(
+        "[apo-holo.debug] resolved.mode=%s resolved.variants=%s",
+        mode,
+        variants,
+    )
+    logging.info("[apo-holo.debug] router_legacy=%s", router_legacy)
+    logging.info(
+        "[apo-holo.debug] normalized_mode_token=%s",
+        _debug_normalize_mode_token(
+            os.environ.get("APO_HOLO_MODE") or cfg.get("APO_HOLO_MODE")
+        ),
+    )
+    cfg["_ROUTER_LEGACY"] = router_legacy
     logging.info(f"[apo-holo] resolved mode={mode} variants={variants} "
                  f"env.APO_HOLO_MODE='{os.environ.get('APO_HOLO_MODE')}'")
 

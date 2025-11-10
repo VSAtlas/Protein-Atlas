@@ -42,17 +42,21 @@ def expand_variants(mode: Optional[str]) -> list[Optional[str]]:
     """
     key = _canon(mode)
     if key in {"", "none", "legacy", "null"}:
-        return [None]
-    if key == "apo":
-        return ["APO"]
-    if key == "holo":
-        return ["HOLO"]
-    if key in {"apovsholo", "both", "apoandholo"}:
-        return ["APO", "HOLO"]
+        expanded = [None]
+    elif key == "apo":
+        expanded = ["APO"]
+    elif key == "holo":
+        expanded = ["HOLO"]
+    elif key in {"apovsholo", "both", "apoandholo"}:
+        expanded = ["APO", "HOLO"]
+    else:
+        # Fallback: treat odd casing like "Apo" or "Holo"
+        v = _norm_variant(mode)
+        expanded = [v] if v is not None else [None]
 
-    # Fallback: treat odd casing like "Apo" or "Holo"
-    v = _norm_variant(mode)
-    return [v] if v is not None else [None]
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] expand_variants.in=%r -> %r", mode, expanded)
+    return expanded
 
 
 def _norm_variant(variant: Optional[str]) -> Optional[str]:
@@ -217,6 +221,8 @@ def receptor_dir(
     token = _norm_pdb_id(pdb_id)
     base = roots.processed / token
     v = _norm_variant(variant)
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
     if v:
         base = base / v
     dir_path = base / "receptor"
@@ -246,9 +252,12 @@ def docked_dir(
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.docked / token
+    logger = logging.getLogger("path_router")
     if legacy and not ph_tag:
+        logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, None, legacy)
         return base
     v = _norm_variant(variant)
+    logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
     if v:
         base = base / v
     if ph_tag:
@@ -274,9 +283,12 @@ def config_dir(
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.configs / str(run_id) / token
+    logger = logging.getLogger("path_router")
     if legacy:
+        logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, None, legacy)
         return base / _norm_stage(stage)
     v = _norm_variant(variant)
+    logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
     if v:
         base = base / v
     if ph_tag:
@@ -369,6 +381,13 @@ def print_pathmap(
     ph_tag: Optional[str] = None,
     legacy: bool = False,
 ) -> None:
+    logger = logging.getLogger("path_router")
+    logger.info(
+        "[router.debug] variant_in=%r norm=%r legacy_flag=%s",
+        variant,
+        _norm_variant(variant),
+        legacy,
+    )
     rec_dir = receptor_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
     print(f"receptor_dir={rec_dir}")
     rec_file = receptor_file(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
