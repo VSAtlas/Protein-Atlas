@@ -1,0 +1,38 @@
+HEADER    TEST STRUCTURE                           01-JAN-24   1BN1
+TITLE     MOCK 1BN1 METAL RETENTION SAMPLE
+EXPDTA    X-RAY DIFFRACTION
+ATOM      1    N GLY A   1      11.104  10.207  12.435  1.00 20.00           N
+ATOM      2   CA GLY A   1      12.102  11.302  11.812  1.00 20.00           C
+ATOM      3    C GLY A   1      11.542  11.678  10.431  1.00 20.00           C
+ATOM      4    O GLY A   1      10.361  11.369  10.158  1.00 20.00           O
+ATOM      5    N HIS A   2      12.383  12.341   9.628  1.00 20.00           N
+ATOM      6   CA HIS A   2      11.986  12.758   8.278  1.00 20.00           C
+ATOM      7    C HIS A   2      12.286  11.654   7.236  1.00 20.00           C
+ATOM      8    O HIS A   2      13.309  10.978   7.315  1.00 20.00           O
+ATOM      9   CB HIS A   2      12.684  14.064   7.883  1.00 20.00           C
+ATOM     10   CG HIS A   2      12.336  14.645   6.571  1.00 20.00           C
+ATOM     11  ND1 HIS A   2      13.188  14.557   5.498  1.00 20.00           N
+ATOM     12  CE1 HIS A   2      12.657  15.086   4.396  1.00 20.00           C
+ATOM     13  NE2 HIS A   2      11.513  15.593   4.741  1.00 20.00           N
+ATOM     14  CD2 HIS A   2      11.220  15.296   6.119  1.00 20.00           C
+ATOM     15    N GLU A   3      11.346  11.462   6.272  1.00 20.00           N
+ATOM     16   CA GLU A   3      11.487  10.431   5.248  1.00 20.00           C
+ATOM     17    C GLU A   3      11.927   9.034   5.786  1.00 20.00           C
+ATOM     18    O GLU A   3      11.455   8.042   5.225  1.00 20.00           O
+ATOM     19   CB GLU A   3      10.137  10.352   4.501  1.00 20.00           C
+ATOM     20   CG GLU A   3       9.688  11.648   3.876  1.00 20.00           C
+ATOM     21   CD GLU A   3       8.268  11.549   3.340  1.00 20.00           C
+ATOM     22  OE1 GLU A   3       7.888  10.425   2.897  1.00 20.00           O
+ATOM     23  OE2 GLU A   3       7.556  12.602   3.406  1.00 20.00           O
+ATOM     24    N ALA A   4      12.833   8.969   6.808  1.00 20.00           N
+ATOM     25   CA ALA A   4      13.362   7.687   7.321  1.00 20.00           C
+ATOM     26    C ALA A   4      12.220   6.699   7.583  1.00 20.00           C
+ATOM     27    O ALA A   4      11.187   7.096   8.141  1.00 20.00           O
+ATOM     28   CB ALA A   4      14.447   7.921   8.363  1.00 20.00           C
+TER              ALA A   4
+HETATM   30  ZN  ZN A 501      15.024  13.842   9.512  1.00 15.00          ZN
+HETATM   31  MG  MG A 502      13.482  12.437   9.018  1.00 15.00          MG
+HETATM   32  CL  CL A 503      12.215  11.118   8.041  1.00 15.00          CL
+HETATM   33  NA  NA A 504      16.547  12.709   9.287  1.00 15.00          NA
+HETATM   34   O HOH A 601      10.724  13.002   8.945  1.00 15.00           O
+END

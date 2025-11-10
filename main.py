@@ -47,6 +47,7 @@ from path_router import (
     config_dir as router_config_dir,
 )
 from library_index import LibraryIndex
+import automate_protein_prep as protein_prep
 
 # [ions] audit classification tokens
 _ION_AUDIT_METALS = {
@@ -4597,6 +4598,18 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             "file": "",
             "error": "missing",
         }
+
+    try:
+        probe_map = protein_prep.get_ion_probe_map(paths.pdb_id)  # type: ignore[attr-defined]
+    except Exception as exc:
+        logger.warning("[ions.summary] pdb=%s variant=%s action=skip err=%s", paths.pdb_id, variant_label, exc)
+    else:
+        before_counts = probe_map.get("strip_nonstandard:before", {})
+        final_counts = probe_map.get("receptor_write", {})
+        metals_before = sum(before_counts.values())
+        metals_kept = sum(final_counts.values())
+        metals_stripped = max(0, metals_before - metals_kept)
+        logger.info("[ions.summary] pdb=%s variant=%s metals_kept=%d metals_stripped=%d", paths.pdb_id, variant_label, metals_kept, metals_stripped)
 
     if cleaned_pdb:
         if variant_env == "HOLO":

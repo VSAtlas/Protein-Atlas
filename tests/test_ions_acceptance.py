@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import urllib.request
+import socket
 
 import pytest
 
@@ -37,11 +39,29 @@ METAL_ELEMENTS = {
 
 _METAL_RE = re.compile(r"^(?:HETATM|ATOM)\s")  # some structures mislabel ions as ATOM
 
+CACHE_DIR = ROOT / "tests" / "data"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_PDB = CACHE_DIR / "1BN1.pdb"
+RCSB_URL = "https://files.rcsb.org/download/1BN1.pdb"
+
+def _try_download_1bn1(dest: Path, timeout: float = 20.0) -> bool:
+    try:
+        with urllib.request.urlopen(RCSB_URL, timeout=timeout) as r:
+            data = r.read()
+        if not data or len(data) < 5000:  # sanity check
+            return False
+        dest.write_bytes(data)
+        return True
+    except (OSError, socket.timeout):
+        return False
+    except Exception:
+        return False
+
 def _element_from_pdb_line(line: str) -> Optional[str]:
     """
     Extract element:
-      (1) PDB fixed-width cols 77–78 (1-based),
-      (2) fallback: first alphabetic chars of atom name (cols 13–16).
+      (1) PDB fixed-width cols 77-78 (1-based),
+      (2) fallback: first alphabetic chars of atom name (cols 13-16).
     """
     if len(line) >= 78:
         elem = line[76:78].strip().upper()
@@ -49,7 +69,7 @@ def _element_from_pdb_line(line: str) -> Optional[str]:
             return elem
     if len(line) >= 16:
         name = line[12:16].strip().upper()
-        # Take 1–2 leading letters (handles 'ZN', 'MG', 'FE', 'CL', 'NA', etc.)
+        # Take 1-2 leading letters (handles 'ZN', 'MG', 'FE', 'CL', 'NA', 'K', etc.)
         m = re.match(r"[A-Z]{1,2}", name)
         if m:
             return m.group(0)
@@ -137,7 +157,7 @@ def _run_prep_python_entrypoint(pdb_path: Path, outdir: Path, variant: str) -> N
 def _run_prep_cli(pdb_path: Path, outdir: Path, variant: str) -> None:
     """
     Fallback: invoke your CLI. Codex: adjust this command to match your CLI.
-    Examples you’ve used:
+    Examples you've used:
       - `python main.py --1bn1 --holo --fast` (uses embedded target shortcuts)
       - or flags that accept an explicit path + variant.
     """
@@ -154,7 +174,7 @@ def _run_prep_cli(pdb_path: Path, outdir: Path, variant: str) -> None:
         "--fast",
     ]
 
-    # If your main.py doesn’t support these flags, Codex should map to your actual flags.
+    # If your main.py doesn't support these flags, Codex should map to your actual flags.
     subprocess.run(cmd, check=True, env=env, cwd=str(ROOT))
 
 
@@ -188,47 +208,40 @@ def run_prep_variant(pdb_path: Path, variant: str) -> Path:
 # --- Fixtures & tests ---------------------------------------------------------
 
 def _get_test_pdb() -> Path:
-    env_path = os.environ.get("ATLAS_TEST_PDB", "")
+    env_path = os.environ.get("ATLAS_TEST_PDB", "").strip()
     if env_path:
         return Path(env_path).resolve()
-    # Fallback to common repo location if present
-    default = ROOT / "input_pdbs" / "1BN1.pdb"
-    return default.resolve()
-
-@pytest.mark.ions_acceptance
-def test_input_has_metals_or_skip():
-    pdb_path = _get_test_pdb()
-    assert pdb_path.exists(), f"Missing test PDB: {pdb_path}"
-    total, counts, items = parse_pdb_metals(pdb_path)
-    if total == 0:
-        pytest.skip(f"Input PDB has no detectable metals: {pdb_path}")
-    # Basic sanity
-    assert total >= 1
-    # Optional: print for debugging
-    print("[input.metals]", json.dumps(counts, sort_keys=True))
-
-@pytest.mark.ions_acceptance
-def test_holo_retains_metals_vs_apo_reduces():
-    pdb_path = _get_test_pdb()
-    total_in, _, _ = parse_pdb_metals(pdb_path)
-    if total_in == 0:
-        pytest.skip(f"Input PDB has no detectable metals: {pdb_path}")
-
-    # Run HOLO
-    holo_clean = run_prep_variant(pdb_path, "HOLO")
-    holo_total, holo_counts, _ = parse_pdb_metals(holo_clean)
-    print("[holo.metals]", json.dumps(holo_counts, sort_keys=True))
-
-    # Run APO
-    apo_clean = run_prep_variant(pdb_path, "APO")
-    apo_total, apo_counts, _ = parse_pdb_metals(apo_clean)
-    print("[apo.metals]", json.dumps(apo_counts, sort_keys=True))
-
-    # Acceptance: HOLO keeps =1 metal when input has metals
-    assert holo_total >= 1, f"HOLO should retain metals; got 0 in {holo_clean}"
-
-    # Acceptance: APO reduces metals relative to HOLO (ideally to 0 for monoatomics)
-    assert apo_total < holo_total, (
-        f"APO should strip monoatomic metals relative to HOLO "
-        f"(apo={apo_total}, holo={holo_total})"
+    if CACHE_PDB.exists():
+        return CACHE_PDB.resolve()
+    if _try_download_1bn1(CACHE_PDB):
+        return CACHE_PDB.resolve()
+    pytest.skip(
+        f"ATLAS_TEST_PDB not set and could not download {RCSB_URL}. "
+        "Set ATLAS_TEST_PDB or vendor tests/data/1BN1.pdb."
     )
+
+
+class TestIonRetention:
+    @pytest.mark.ions_acceptance
+    def test_1bn1_holo_keeps_metals(self):
+        pdb_path = _get_test_pdb()
+        total_in, _, _ = parse_pdb_metals(pdb_path)
+        if total_in == 0:
+            pytest.skip(f"Input PDB has no metals: {pdb_path}")
+        holo_clean = run_prep_variant(pdb_path, "HOLO")
+        holo_total, *_ = parse_pdb_metals(holo_clean)
+        assert holo_total >= 1, f"HOLO should retain metals; got 0 in {holo_clean}"
+
+    @pytest.mark.ions_acceptance
+    def test_1bn1_apo_strips_metals(self):
+        pdb_path = _get_test_pdb()
+        total_in, _, _ = parse_pdb_metals(pdb_path)
+        if total_in == 0:
+            pytest.skip(f"Input PDB has no metals: {pdb_path}")
+        holo_clean = run_prep_variant(pdb_path, "HOLO")
+        apo_clean = run_prep_variant(pdb_path, "APO")
+        holo_total, *_ = parse_pdb_metals(holo_clean)
+        apo_total, *_ = parse_pdb_metals(apo_clean)
+        assert apo_total < holo_total, (
+            f"APO should strip metals vs HOLO (apo={apo_total}, holo={holo_total})"
+        )
