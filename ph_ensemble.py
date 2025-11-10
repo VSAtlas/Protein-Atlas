@@ -5,6 +5,7 @@ import json
 import argparse
 import logging
 import shutil
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable, Tuple
 import hashlib
@@ -92,6 +93,79 @@ def _pocket_name_counts(pdb_path: str, center: Tuple[float,float,float], radius:
 
 
 
+def _ph_member_job(job):
+    """ProcessPool worker: run A→B→C for a single pH member."""
+    (
+        idx,
+        ph,
+        tag,
+        cleaned_receptor_pdb,
+        ensemble_dir_str,
+        center,
+        radius,
+        reduce_exe,
+    ) = job
+
+    ensemble_dir = Path(ensemble_dir_str)
+
+    prestate_pdb, pka_path, _n = apply_propka_states(
+        cleaned_receptor_pdb=cleaned_receptor_pdb,
+        center=center,
+        radius=radius,
+        ph=ph,
+        out_dir=str(ensemble_dir),
+        tag=tag,
+    )
+
+    pre_sha = _sha1_of_file(prestate_pdb)
+    pre_atoms = _count_atoms_pdb(prestate_pdb)
+    pre_bins = _pocket_name_counts(prestate_pdb, center, radius)
+
+    withH_pdb = str(ensemble_dir / f"{tag}.withH.pdb")
+    automate_protein_prep.assign_protonation_states(
+        input_pdb=prestate_pdb,
+        output_pdb=withH_pdb,
+        reduce_exe=reduce_exe,
+    )
+
+    with_sha = _sha1_of_file(withH_pdb)
+    with_atoms = _count_atoms_pdb(withH_pdb)
+    with_bins = _pocket_name_counts(withH_pdb, center, radius)
+    pocket_H = _count_pocket_hydrogens(withH_pdb, center, radius)
+
+    pdbqt_path = str(ensemble_dir / f"{tag}.pdbqt")
+    ok = automate_protein_prep.run_prepare_receptor(
+        input_pdb=withH_pdb,
+        output_pdbqt=pdbqt_path,
+        cfg=automate_protein_prep.config,
+    )
+    if not ok:
+        shutil.copy2(withH_pdb, pdbqt_path)
+
+    try:
+        pdbqt_size = Path(pdbqt_path).stat().st_size
+    except Exception:
+        pdbqt_size = -1
+
+    return {
+        "idx": idx,
+        "ph": ph,
+        "tag": tag,
+        "prestate": prestate_pdb,
+        "pka": pka_path,
+        "pre_sha": pre_sha,
+        "pre_atoms": pre_atoms,
+        "pre_bins": pre_bins,
+        "withH": withH_pdb,
+        "withH_sha1": with_sha,
+        "with_atoms": with_atoms,
+        "with_bins": with_bins,
+        "pocket_H": pocket_H,
+        "pdbqt": pdbqt_path,
+        "pdbqt_size": pdbqt_size,
+    }
+
+
 def build_ph_ensemble(
     pdb_id: str,
     cleaned_receptor_pdb: str,
@@ -145,91 +219,141 @@ def build_ph_ensemble(
     ph_values = list(ph_values)
     elog.info("[ph.list] n=%d values=%s", len(ph_values), ph_values)
 
+    CPU = int(os.getenv("CPU", os.cpu_count() or 1))
+    max_parallel = int(os.getenv("MAX_PARALLEL_JOBS", CPU))
+    workers = max(1, min(CPU, max_parallel))
+    per_job_threads = 1
+    elog.info(
+        "[ph.parallel] CPU=%d MAX_PARALLEL_JOBS=%d workers=%d threads_per_job=%d total_threads=%d",
+        CPU,
+        max_parallel,
+        workers,
+        per_job_threads,
+        workers * per_job_threads,
+    )
+
+    jobs = []
+    for idx, ph in enumerate(ph_values):
+        tag = f"{tag_root}_pH{str(ph).replace('.', '_')}"
+        elog.info("[ph.member.start] ph=%.2f tag=%s", ph, tag)
+        elog.info(
+            "[ph.propka.call] ph=%.2f center=(%.3f,%.3f,%.3f) r=%.2f",
+            ph,
+            center[0],
+            center[1],
+            center[2],
+            radius,
+        )
+        jobs.append(
+            (
+                idx,
+                float(ph),
+                tag,
+                cleaned_receptor_pdb,
+                str(ensemble_dir),
+                center,
+                float(radius),
+                automate_protein_prep.REDUCE_EXE,
+            )
+        )
+
+    results = []
+    if workers == 1 or len(jobs) <= 1:
+        for job in jobs:
+            results.append(_ph_member_job(job))
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            future_to_job = {pool.submit(_ph_member_job, job): job for job in jobs}
+            for fut in as_completed(future_to_job):
+                job = future_to_job[fut]
+                try:
+                    res = fut.result()
+                except Exception as exc:
+                    for other in future_to_job:
+                        if other is not fut:
+                            other.cancel()
+                    raise RuntimeError(
+                        f"pH member failed ph={job[1]:.2f} tag={job[2]}"
+                    ) from exc
+                results.append(res)
+
     members = []
     mi = member_index_start
     _prev_pre_sha = None
     _prev_with_sha = None
     _prev_pdbqt_size = None
-    for ph in ph_values:
-        tag = f"{tag_root}_pH{str(ph).replace('.', '_')}"
-        elog.info("[ph.member.start] ph=%.2f tag=%s", ph, tag)
-        elog.info("[ph.propka.call] ph=%.2f center=(%.3f,%.3f,%.3f) r=%.2f", ph, center[0], center[1], center[2],
-                  radius)
 
-        # A) prestate (no H-add here)
-        prestate_pdb, pka_path, _n = apply_propka_states(
-            cleaned_receptor_pdb=cleaned_receptor_pdb,
-            center=center,
-            radius=radius,
-            ph=ph,
-            out_dir=str(ensemble_dir),
-            tag=tag
+    def _fmt_bins(bin_dict):
+        return " ".join(f"{k}={v}" for k, v in bin_dict.items())
+
+    for res in sorted(results, key=lambda d: d["idx"]):
+        ph = res["ph"]
+        tag = res["tag"]
+        prestate_pdb = res["prestate"]
+        pka_path = res["pka"]
+        pre_sha = res["pre_sha"]
+        pre_atoms = res["pre_atoms"]
+        pre_bins = res["pre_bins"]
+        withH_pdb = res["withH"]
+        with_sha = res["withH_sha1"]
+        with_atoms = res["with_atoms"]
+        with_bins = res["with_bins"]
+        pocket_H = res["pocket_H"]
+        pdbqt_path = res["pdbqt"]
+        pdbqt_size = res["pdbqt_size"]
+
+        elog.info(
+            "[stage.A.prestate] ph=%.2f atoms=%d sha1=%s bins=%s",
+            ph,
+            pre_atoms,
+            pre_sha,
+            _fmt_bins(pre_bins),
         )
-        # Fingerprint prestate
-        pre_sha = _sha1_of_file(prestate_pdb);
-        pre_atoms = _count_atoms_pdb(prestate_pdb)
-        pre_bins = _pocket_name_counts(prestate_pdb, center, radius)
-        elog.info("[stage.A.prestate] ph=%.2f atoms=%d sha1=%s bins=%s",
-                  ph, pre_atoms, pre_sha, " ".join(f"{k}={v}" for k, v in pre_bins.items()))
         if _prev_pre_sha is not None:
             elog.info("[compare.prestate] ph=%.2f same_as_prev=%s", ph, str(pre_sha == _prev_pre_sha))
         _prev_pre_sha = pre_sha
 
-        # B) single protonation  (assign_protonation_states)
-        withH_pdb = str(ensemble_dir / f"{tag}.withH.pdb")
-        automate_protein_prep.assign_protonation_states(
-            input_pdb=prestate_pdb,
-            output_pdb=withH_pdb,
-            reduce_exe=automate_protein_prep.REDUCE_EXE
+        elog.info("[withH.sha1] ph=%.2f sha1=%s", ph, with_sha)
+        elog.info(
+            "[stage.B.withH] ph=%.2f atoms=%d sha1=%s pocket_H=%d bins=%s",
+            ph,
+            with_atoms,
+            with_sha,
+            pocket_H,
+            _fmt_bins(with_bins),
         )
-
-        with_sha = _sha1_of_file(withH_pdb)
-        with_atoms = _count_atoms_pdb(withH_pdb)
-        with_bins = _pocket_name_counts(withH_pdb, center, radius)
-        elog.info("[withH.sha1] ph=%.2f sha1=%s", ph, with_sha)  # [ADD]
-
-        pocket_H = _count_pocket_hydrogens(withH_pdb, center, radius)
-        elog.info("[stage.B.withH] ph=%.2f atoms=%d sha1=%s pocket_H=%d bins=%s",
-                  ph, with_atoms, with_sha, pocket_H,
-                  " ".join(f"{k}={v}" for k, v in with_bins.items()))
-
         if _prev_with_sha is not None:
             elog.info("[compare.withH] ph=%.2f same_as_prev=%s", ph, str(with_sha == _prev_with_sha))
         _prev_with_sha = with_sha
 
-
-        # C) receptor prep (pdbqt)
-        pdbqt_path = str(ensemble_dir / f"{tag}.pdbqt")
-        ok = automate_protein_prep.run_prepare_receptor(
-            input_pdb=withH_pdb,
-            output_pdbqt=pdbqt_path,
-            cfg=automate_protein_prep.config
-        )
-        if not ok:
-            shutil.copy2(withH_pdb, pdbqt_path)
-
-        try:
-            pdbqt_size = Path(pdbqt_path).stat().st_size
-        except Exception:
-            pdbqt_size = -1
         elog.info("[stage.C.pdbqt] ph=%.2f size=%d path=%s", ph, pdbqt_size, pdbqt_path)
         if _prev_pdbqt_size is not None:
-            elog.info("[compare.pdbqt] ph=%.2f same_size_as_prev=%s", ph, str(pdbqt_size == _prev_pdbqt_size))
+            elog.info(
+                "[compare.pdbqt] ph=%.2f same_size_as_prev=%s",
+                ph,
+                str(pdbqt_size == _prev_pdbqt_size),
+            )
         _prev_pdbqt_size = pdbqt_size
-        elog.info("[ensemble.step] ph=%.2f prestate=%s withH=%s pdbqt=%s",
-                  ph, prestate_pdb, withH_pdb, pdbqt_path)
+        elog.info(
+            "[ensemble.step] ph=%.2f prestate=%s withH=%s pdbqt=%s",
+            ph,
+            prestate_pdb,
+            withH_pdb,
+            pdbqt_path,
+        )
 
-        members.append({
-            "ph": ph,
-            "tag": tag,
-            "prestate": prestate_pdb,
-            "pka": pka_path,
-            "withH": withH_pdb,
-            "pdbqt": pdbqt_path,
-            "withH_sha1": with_sha,
-        })
+        members.append(
+            {
+                "ph": ph,
+                "tag": tag,
+                "prestate": prestate_pdb,
+                "pka": pka_path,
+                "withH": withH_pdb,
+                "pdbqt": pdbqt_path,
+                "withH_sha1": with_sha,
+            }
+        )
         mi += 1
-
 
     # --- POST-PASS: group by withH SHA-1 and collapse identical members ---
     # group members by chemical identity
