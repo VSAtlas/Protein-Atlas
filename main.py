@@ -48,6 +48,29 @@ from path_router import (
 )
 from library_index import LibraryIndex
 
+# [ions] audit classification tokens
+_ION_AUDIT_METALS = {
+    "ZN",
+    "MG",
+    "MN",
+    "FE",
+    "CU",
+    "CO",
+    "NI",
+    "CA",
+    "HG",
+}
+_ION_AUDIT_SALTS = {
+    "NA",
+    "K",
+    "CL",
+    "BR",
+    "I",
+    "LI",
+    "RB",
+    "CS",
+}
+
 
 def _resolve_run_id(argv: list[str]) -> str:
     cli_run_id = _cli_val(argv, "--run-id")
@@ -4387,6 +4410,48 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     pdb_id = re.sub(r'(?i)_cleaned$', '', base_id)
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=os.path.basename(pdb_file))
 
+    # [ions] summarizer for raw/clean histograms
+    def _summarize_ions_file(file_path: Path | str) -> dict[str, object]:
+        path = Path(file_path)
+        if not path.exists():
+            return {
+                "hist": "missing",
+                "counts": {},
+                "metals_present": False,
+                "salts_present": False,
+                "error": "missing",
+            }
+        counts = Counter()
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if not ln.startswith("HETATM"):
+                        continue
+                    res = ln[17:20].strip().upper()
+                    elem = (ln[76:78].strip() or res).upper()
+                    token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
+                    if token and token.isalpha() and len(token) <= 3:
+                        counts[token] += 1
+        except Exception as exc:  # pragma: no cover - diagnostics
+            return {
+                "hist": "error",
+                "counts": {},
+                "metals_present": False,
+                "salts_present": False,
+                "error": str(exc),
+            }
+
+        hist = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
+        metals_present = any(token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts)
+        salts_present = any(token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts)
+        return {
+            "hist": hist,
+            "counts": dict(counts),
+            "metals_present": metals_present,
+            "salts_present": salts_present,
+            "error": None,
+        }
+
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
     logger.info(f"[paths] base_id={base_id} -> pdb_id={pdb_id}")
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
@@ -4428,6 +4493,38 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     active_ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
 
+    # [ions] track per-protein ion audit
+    ion_audit_root: dict = cfg.setdefault("_ION_AUDIT", {})
+    pdb_audit: dict = ion_audit_root.setdefault(paths.pdb_id, {})
+    clean_audit: dict = pdb_audit.setdefault("clean_counts", {})
+
+    # [ions] raw input audit
+    input_summary = _summarize_ions_file(paths.input_pdb_path)
+    input_hist = str(input_summary.get("hist", "none"))
+    input_error = input_summary.get("error")
+    if input_error not in (None, "missing"):
+        logger.warning(
+            "[ions.input.counts] pdb=%s file=%s action=skip err=%s",
+            paths.pdb_id,
+            paths.input_pdb_path,
+            input_error,
+        )
+    else:
+        logger.info(
+            "[ions.input.counts] pdb=%s file=%s present_pdb=%s",
+            paths.pdb_id,
+            paths.input_pdb_path,
+            input_hist,
+        )
+    pdb_audit["input_counts"] = {
+        "hist": input_hist,
+        "counts": dict(input_summary.get("counts", {})),
+        "metals_present": bool(input_summary.get("metals_present", False)),
+        "salts_present": bool(input_summary.get("salts_present", False)),
+        "file": str(paths.input_pdb_path),
+        "error": input_error,
+    }
+
     cfg["_CURRENT_VARIANT"] = variant_env
     cleaned_target = paths.receptor_cleaned_pdb(variant_token)
     receptor_target = paths.receptor_pdbqt(variant_token, None)
@@ -4453,34 +4550,43 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         logger.warning("Skipping protein due to prep failure.")
         return
 
-    ion_histogram = "none"
+    cleaned_hist = "none"
     if cleaned_pdb:
-        try:
-            counts = Counter()
-            with open(cleaned_pdb, "r", encoding="utf-8", errors="ignore") as fh:
-                for ln in fh:
-                    if not ln.startswith("HETATM"):
-                        continue
-                    res = ln[17:20].strip().upper()
-                    elem = (ln[76:78].strip() or res).upper()
-                    token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
-                    if token and token.isalpha() and len(token) <= 3:
-                        counts[token] += 1
-            ion_histogram = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
+        clean_summary = _summarize_ions_file(cleaned_pdb)
+        cleaned_hist = str(clean_summary.get("hist", "none"))
+        clean_error = clean_summary.get("error")
+        if clean_error not in (None, "missing"):
+            logger.warning(
+                "[ions.clean.counts] pdb=%s variant=%s action=skip err=%s",
+                paths.pdb_id,
+                variant_label,
+                clean_error,
+            )
+        else:
             logger.info(
                 "[ions.clean.counts] pdb=%s variant=%s file=%s present_pdb=%s",
                 paths.pdb_id,
                 variant_label,
                 cleaned_pdb,
-                ion_histogram,
+                cleaned_hist,
             )
-        except Exception as exc:
-            logger.warning(
-                "[ions.clean.counts] pdb=%s variant=%s action=skip err=%s",
-                paths.pdb_id,
-                variant_label,
-                exc,
-            )
+        clean_audit[variant_label] = {
+            "hist": cleaned_hist,
+            "counts": dict(clean_summary.get("counts", {})),
+            "metals_present": bool(clean_summary.get("metals_present", False)),
+            "salts_present": bool(clean_summary.get("salts_present", False)),
+            "file": str(cleaned_pdb),
+            "error": clean_error,
+        }
+    else:
+        clean_audit[variant_label] = {
+            "hist": "missing",
+            "counts": {},
+            "metals_present": False,
+            "salts_present": False,
+            "file": "",
+            "error": "missing",
+        }
 
     if cleaned_pdb:
         if variant_env == "HOLO":
@@ -4534,6 +4640,25 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         apo_sha,
                         holo_sha,
                     )
+                    # [ions] dedup audit guard
+                    audit_root = cfg.get("_ION_AUDIT", {})
+                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(pdb_id)
+                    warn_needed = False
+                    if isinstance(pdb_entry, dict):
+                        input_info = pdb_entry.get("input_counts", {})
+                        clean_map = pdb_entry.get("clean_counts", {}) or {}
+                        holo_info = clean_map.get("HOLO") or clean_map.get(variant_label) or {}
+                        if input_info.get("metals_present") or input_info.get("salts_present"):
+                            warn_needed = True
+                        if holo_info.get("metals_present") or holo_info.get("salts_present"):
+                            warn_needed = True
+                    if warn_needed:
+                        logger.warning(
+                            "[apo-vs-holo] unexpected_identical_after_ion_policy pdb=%s apo_sha=%s holo_sha=%s",
+                            pdb_id,
+                            apo_sha,
+                            holo_sha,
+                        )
                     if receptor_pdbqt:
                         _record_apo_holo_usage(cfg, pdb_id, variant_token, None, receptor_pdbqt)
                     _record_apo_holo_decision(cfg, pdb_id, "HOLO", "skipped_preflight")

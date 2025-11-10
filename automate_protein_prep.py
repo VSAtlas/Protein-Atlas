@@ -267,8 +267,9 @@ def _maybe_strip_ions(
     radius = radius_cfg if (policy == "by_variant" and variant_token == "HOLO") else 0.0
     radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
 
+    # [ions] stage=clean instrumentation
     logging.info(
-        "[ions.policy] variant=%s policy=%s salts_radius=%s allowlist=%d file=%s",
+        "[ions.policy] stage=clean variant=%s policy=%s salts_radius=%s allowlist=%d file=%s",
         variant_label,
         policy,
         radius_term,
@@ -377,9 +378,19 @@ def _maybe_strip_ions(
             kept_counter[res_token] += 1
             category_totals[category]["kept"] += 1
 
-    logging.debug("[ions.counts.before] %s", _format_counts(before))
+    logging.info(
+        "[ions.counts.before] stage=clean variant=%s file=%s detail=%s",
+        variant_label,
+        path,
+        _format_counts(before),
+    )
     kept = before - stripped
-    logging.debug("[ions.counts.after] %s", _format_counts(kept))
+    logging.info(
+        "[ions.counts.after] stage=clean variant=%s file=%s detail=%s",
+        variant_label,
+        path,
+        _format_counts(kept),
+    )
     total_kept = sum(kept_counter.values())
     total_stripped = sum(stripped.values())
     logging.info(
