@@ -4299,6 +4299,39 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         logger.warning("Skipping protein due to prep failure.")
         return
 
+    # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
+    resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
+    if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
+        apo_clean = _variant_receptor_path(pdb_id, "APO", cfg)
+        holo_clean = cleaned_pdb or _variant_receptor_path(pdb_id, "HOLO", cfg)
+        if apo_clean and holo_clean and _files_identical(apo_clean, holo_clean):
+            try:
+                apo_sha = file_sha1(apo_clean)
+                holo_sha = file_sha1(holo_clean)
+            except Exception as hash_err:
+                logger.warning(
+                    "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight reason=sha_fail err=%s",
+                    pdb_id,
+                    hash_err,
+                )
+                apo_sha = "error"
+                holo_sha = "error"
+            logger.info(
+                "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=identical apo_sha=%s holo_sha=%s",
+                pdb_id,
+                apo_sha,
+                holo_sha,
+            )
+            try:
+                delete_variant_trees(pdb_id, "HOLO", cfg)
+            except Exception as cleanup_err:
+                logger.warning(
+                    "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=cleanup_warn err=%s",
+                    pdb_id,
+                    cleanup_err,
+                )
+            return
+
 
     # insert: strip monoatomic ions (Na+, K+, Cl-, etc.) before Meeko uses the PDB
     try:
@@ -5291,6 +5324,7 @@ def main() -> None:
         _debug_normalize_mode_token(cfg_raw_mode),
     )
     cfg["_ROUTER_LEGACY"] = router_legacy
+    cfg["_RESOLVED_APO_HOLO_MODE"] = mode
     logging.info(
         "[apo-holo] resolved mode=%s variants=%s cfg_token=%r",
         mode,
