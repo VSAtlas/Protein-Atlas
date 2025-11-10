@@ -279,6 +279,57 @@ def _log_ion_diff(
     )
 
 
+def _format_diff_map(data: dict[str, int]) -> str:
+    if not data:
+        return "none"
+    filtered = [(res, count) for res, count in data.items() if count > 0]
+    if not filtered:
+        return "none"
+    items = sorted(filtered, key=lambda kv: (-kv[1], kv[0]))
+    return ",".join(f"{res}:{cnt}" for res, cnt in items)
+
+
+def _log_pdb_pdbqt_counts_diff(pdb_path: Union[str, Path], pdbqt_path: Union[str, Path]) -> None:
+    pdb_file = Path(pdb_path)
+    pdbqt_file = Path(pdbqt_path)
+    if not pdb_file.exists() or not pdbqt_file.exists():
+        logging.warning(
+            "[iondiff.pdb_pdbqt] action=skip reason=missing file_pdb=%s exists_pdb=%s file_pdbqt=%s exists_pdbqt=%s",
+            pdb_file,
+            pdb_file.exists(),
+            pdbqt_file,
+            pdbqt_file.exists(),
+        )
+        return
+
+    pdb_counts = Counter(_scan_metal_map(pdb_file, ALIASES))
+    pdbqt_counts = Counter(_scan_metal_map(pdbqt_file, ALIASES))
+
+    kept: dict[str, int] = {}
+    lost: dict[str, int] = {}
+    gained: dict[str, int] = {}
+
+    for resname, count in pdb_counts.items():
+        matched = min(count, pdbqt_counts.get(resname, 0))
+        if matched > 0:
+            kept[resname] = matched
+        delta = count - pdbqt_counts.get(resname, 0)
+        if delta > 0:
+            lost[resname] = delta
+
+    for resname, count in pdbqt_counts.items():
+        delta = count - pdb_counts.get(resname, 0)
+        if delta > 0:
+            gained[resname] = delta
+
+    logging.info(
+        "[iondiff.pdb_pdbqt] kept=%s lost=%s added=%s",
+        _format_diff_map(kept),
+        _format_diff_map(lost),
+        _format_diff_map(gained),
+    )
+
+
 def get_ion_probe_map(pdb_id: str) -> dict[str, dict[str, int]]:
     bucket = _ION_PIPE_AUDIT.get((pdb_id or "").upper(), {})
     return {k: dict(v) for k, v in bucket.items()}
@@ -2411,10 +2462,12 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     
     fix_pdb_elements(stripped_pdb, elemfix_pdb)
     _log_ions_probe(pdb_id, "elemfix", elemfix_pdb)
+    quick_element_histogram(elemfix_pdb)
     _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
     loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
     fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
     _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
+    quick_element_histogram(loop_fixed_pdb)
     _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
 
     # MODELLER (detect whether a new file was actually produced)
@@ -2535,6 +2588,8 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         logging.info(f"[elem-fix] file={Path(chain_validated_pdb).name} stage=preflight He->H={_delta}")
     except Exception as _e:
         logging.warning(f"[elements] receptor preflight failed for {Path(chain_validated_pdb).name}: {_e}")
+
+    quick_element_histogram(chain_validated_pdb)
         
     # (8) Protonation (Reduce when safe; else Open Babel fallback)
     def _present_resnames(pdb_path: Path) -> set[str]:
@@ -2557,6 +2612,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     )
     if used_pdb2pqr and pdb_for_reduce and Path(pdb_for_reduce).exists():
         _log_ions_probe(pdb_id, "pdb2pqr", pdb_for_reduce)
+        quick_element_histogram(pdb_for_reduce)
 
     # If PDB2PQR succeeded, pdb_for_reduce now has hydrogens and titration states.
     # assign_protonation_states() will detect H presence and run Reduce WITHOUT -BUILD,
@@ -3909,7 +3965,12 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
                      "receptor_pdbqt=%s exists=%s size=%d\n"
                      "meeko_attempts=(see work/*.cmd.txt | *.stderr.txt)",
                      cleaned_pdb, output_pdbqt, exists, size)
-        
+
+        try:
+            _log_pdb_pdbqt_counts_diff(cleaned_pdb, output_pdbqt)
+        except Exception as exc:
+            logging.warning("[iondiff.pdb_pdbqt] action=skip reason=%s", exc)
+
         logging.info("[prep.return] cleaned=%s receptor_pdbqt=%s", cleaned_pdb, output_pdbqt)
         logging.info("Prepared receptor PDBQT: %s", output_pdbqt)
         return cleaned_pdb, output_pdbqt

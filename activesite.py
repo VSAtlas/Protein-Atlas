@@ -170,6 +170,18 @@ def get_atom_rules():
         retain_sample,
     )
 
+    # Metals/ions audit: expose the elemental retain tokens for quick inspection.
+    metal_tokens = sorted(tok for tok in retain_res if len(tok) <= 2)
+    metal_sample = ",".join(metal_tokens[:10]) if metal_tokens else "none"
+    logging.info(
+        "[aliases.section] name=element_resnames.metals size=%d sample=[%s]",
+        len(metal_tokens),
+        metal_sample,
+    )
+    required_metals = ["ZN", "MG", "CA", "FE", "MN", "CU", "CO", "NI", "NA", "K"]
+    coverage = {tok: (tok in retain_res) for tok in required_metals}
+    logging.info("[aliases.audit] metal_core_coverage=%s", coverage)
+
     # --- APO/HOLO mode (env or config) ---
     mode = str(os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "")).strip().lower()
 
