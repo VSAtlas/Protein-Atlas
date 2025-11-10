@@ -2002,16 +2002,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
         _build_ph_ensemble(cleaned_pdb)
 
-    try:
-        automate_protein_prep._maybe_strip_ions(
-            Path(cleaned_pdb),
-            cfg=cfg,
-            variant=variant,
-            pocket_center=None,
-        )
-    except Exception as ions_err:
-        logger.warning("[ions] pre_meeko_skip err=%s", ions_err)
-
     # Generate receptor PDBQT directly at the variant-aware path
     try:
         ok = automate_protein_prep.run_prepare_receptor(

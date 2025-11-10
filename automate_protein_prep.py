@@ -92,7 +92,8 @@ _TWO     = _canonize_two_letter(_TWORAW)
 _ELEM_CANON = _ONE | _TWO
 _MEEKO_DROP_IONS = set(_flatten_semicolons(RULES.get("meeko_drop_free_ions", []))) or {"NA", "K", "LI"}
 
-_SALT_RESNAMES = {"NA", "K", "CL"}
+_SALT_RESNAMES = {"NA", "K", "CL", "BR", "I"}
+_METAL_RESNAMES = {"MG", "MN", "FE", "ZN", "CU", "CO", "NI", "CA"}
 _IONS_CFG_CACHE: tuple[set[str], str] | None = None
 _IONS_CFG_LOGGED = False
 
@@ -242,26 +243,38 @@ def _maybe_strip_ions(
         logging.warning("[ions] skip_missing file=%s", path)
         return 0
 
-    allow_set, _ = _load_retain_allowlist(cfg)
-    allow_set = set(allow_set)
+    allow_tokens, _ = _load_retain_allowlist(cfg)
+    allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
+    extra_set: set[str] = set()
     if extra_keep:
         for token in extra_keep:
             if token:
-                allow_set.add(str(token).strip().upper())
+                extra_set.add(str(token).strip().upper())
+    holo_keep_tokens = allow_set | extra_set
+    apo_keep_tokens = set(extra_set)
+
     policy = _normalize_ion_policy(cfg)
     variant_token = _resolve_variant_token(cfg, variant)
     variant_label = variant_token or "legacy"
 
+    radius_cfg = 6.0
+    if cfg is not None:
+        try:
+            radius_cfg = float(cfg.get("HOLO_SALT_STRIP_RADIUS", 6.0) or 0.0)
+        except Exception:
+            radius_cfg = 6.0
+    radius_cfg = max(0.0, radius_cfg)
+    radius = radius_cfg if (policy == "by_variant" and variant_token == "HOLO") else 0.0
+    radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
+
     logging.info(
-        "[ions] variant=%s policy=%s file=%s",
+        "[ions.policy] variant=%s policy=%s salts_radius=%s allowlist=%d file=%s",
         variant_label,
         policy,
+        radius_term,
+        len(allow_set),
         path,
     )
-
-    if policy == "never_strip":
-        logging.debug("[ions.skip] policy=never_strip")
-        return 0
 
     try:
         text = path.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -279,13 +292,12 @@ def _maybe_strip_ions(
 
     before = Counter()
     stripped = Counter()
-
-    radius = 0.0
-    if cfg is not None:
-        try:
-            radius = max(0.0, float(cfg.get("HOLO_SALT_STRIP_RADIUS", 0.0) or 0.0))
-        except Exception:
-            radius = 0.0
+    kept_counter = Counter()
+    category_totals: dict[str, dict[str, int]] = {
+        "metal": {"kept": 0, "stripped": 0},
+        "salt": {"kept": 0, "stripped": 0},
+        "other": {"kept": 0, "stripped": 0},
+    }
 
     warn_missing_center = False
     remove_indices: set[int] = set()
@@ -302,14 +314,23 @@ def _maybe_strip_ions(
         reason = ""
         elem = (line[76:78].strip() or res_token).upper()
 
-        if policy == "always_strip":
-            remove = True
-            reason = "always_strip"
-        else:  # by_variant
+        is_metal = res_token in _METAL_RESNAMES or elem in _METAL_RESNAMES
+        is_salt = res_token in _SALT_RESNAMES or elem in _SALT_RESNAMES
+        category = "metal" if is_metal else "salt" if is_salt else "other"
+
+        if policy == "never_strip":
+            remove = False
+        elif policy == "always_strip":
+            if res_token in holo_keep_tokens:
+                remove = False
+            else:
+                remove = True
+                reason = "policy_always_strip"
+        else:  # policy == by_variant
             if variant_token == "HOLO":
-                if res_token in allow_set:
+                if res_token in holo_keep_tokens or is_metal:
                     remove = False
-                elif res_token in _SALT_RESNAMES:
+                elif is_salt:
                     if radius > 0.0:
                         dist = _distance_from_center(line, pocket_center)
                         if dist is None:
@@ -317,17 +338,27 @@ def _maybe_strip_ions(
                             remove = False
                         elif dist >= radius:
                             remove = True
-                            reason = "holo_salt_far"
+                            reason = "salt_far"
                         else:
                             remove = False
                     else:
                         remove = False
                 else:
-                    remove = True
-                    reason = "apo_policy"
+                    remove = False
             else:
-                remove = True
-                reason = "apo_policy"
+                if res_token in apo_keep_tokens:
+                    remove = False
+                    reason = "apo_keep_override"
+                else:
+                    if is_metal:
+                        remove = True
+                        reason = "apo_strip_metal"
+                    elif is_salt:
+                        remove = True
+                        reason = "apo_strip_salt"
+                    else:
+                        remove = True
+                        reason = "apo_strip_other"
 
         if remove:
             stripped[res_token] += 1
@@ -341,16 +372,25 @@ def _maybe_strip_ions(
                 (resi or "0").strip() or "0",
                 reason,
             )
+            category_totals[category]["stripped"] += 1
+        else:
+            kept_counter[res_token] += 1
+            category_totals[category]["kept"] += 1
 
     logging.debug("[ions.counts.before] %s", _format_counts(before))
     kept = before - stripped
     logging.debug("[ions.counts.after] %s", _format_counts(kept))
-    kept_fmt = _bucket_counts(kept)
-    stripped_fmt = _bucket_counts(stripped)
-    order = ["ZN", "MG", "NA", "K", "CA", "MN", "FE", "CL", "OTHER"]
-    kept_str = "{" + ",".join(f"{k}:{kept_fmt.get(k, 0)}" for k in order) + "}"
-    stripped_str = "{" + ",".join(f"{k}:{stripped_fmt.get(k, 0)}" for k in order) + "}"
-    logging.info("[ions.summary] kept=%s stripped=%s", kept_str, stripped_str)
+    total_kept = sum(kept_counter.values())
+    total_stripped = sum(stripped.values())
+    logging.info(
+        "[ions.summary] kept=%d stripped=%d metals_kept=%d metals_stripped=%d salts_kept=%d salts_stripped=%d",
+        total_kept,
+        total_stripped,
+        category_totals["metal"]["kept"],
+        category_totals["metal"]["stripped"],
+        category_totals["salt"]["kept"],
+        category_totals["salt"]["stripped"],
+    )
 
     if warn_missing_center and radius > 0.0 and variant_token == "HOLO":
         logging.warning(
