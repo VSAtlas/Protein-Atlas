@@ -575,7 +575,8 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         return None
 
     allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
-    order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")).replace(" ", "").split(",")
+    raw_order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global"))
+    order = [w for w in raw_order.replace(" ", "").split(",") if w]
     skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
     if skip_global:
         order = [w for w in order if w != "global"]
@@ -583,15 +584,22 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
     manifest_only = _to_bool(str(cfg.get("SINGLE_LIGAND_MANIFEST_ONLY", True)))
     suggestions_cap = int(cfg.get("SINGLE_LIGAND_SUGGESTIONS", 5) or 5)
     lib_index = cfg.get("_LIB_INDEX")
+    has_index = isinstance(lib_index, LibraryIndex)
     per_roots = [Path(p) for p in cfg.get("_LIB_INDEX_PER_ROOTS", []) if p]
     library_roots = [Path(p) for p in cfg.get("_LIB_INDEX_LIBRARY_ROOTS", []) if p]
     per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")
-    use_manifest = manifest_only and isinstance(lib_index, LibraryIndex)
+    use_manifest = manifest_only and has_index
+    output_ligands_dir = cfg.get("OUTPUT_LIGANDS_DIR")
+    fda_root = Path(output_ligands_dir).joinpath("fda_library") if output_ligands_dir else None
+    name_map: Optional[dict[str, set[str]]] = None
+    fda_logged = False
+    key = _norm_name_key(selector)
 
     logger.info(
-        "[single.debug] selector=%s order=%s manifest_only=%s allow_prefix=%s",
+        "[single.debug] selector=%s order=%s skip_global=%s manifest_only=%s allow_prefix=%s",
         selector,
         order,
+        skip_global,
         str(use_manifest).lower(),
         allow_prefix,
     )
@@ -601,34 +609,51 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         [str(p) for p in library_roots],
     )
 
-    def _lookup_via_index(scopes: list[str]) -> Optional[Path]:
-        if not isinstance(lib_index, LibraryIndex):
-            return None
-        try:
+    def _ensure_name_map() -> dict[str, set[str]]:
+        nonlocal name_map
+        if name_map is None:
             name_map = _load_fda_name_map(cfg, logger)
-            key = _norm_name_key(selector)
-            basenames = list(name_map.get(key, []))
-            if not basenames and allow_prefix and key:
-                for map_key, values in name_map.items():
-                    if map_key.startswith(key):
-                        basenames.extend(list(values))
-            for basename in basenames:
-                hit = lib_index.lookup_filename(basename, library_roots)
-                if hit:
-                    logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
-                    return hit
-        except Exception as exc:
-            logger.debug("[single.name] mapping search skipped: %s", exc)
+        return name_map
 
+    def _resolve_fda_scope() -> Optional[Path]:
+        nonlocal fda_logged
+        if fda_root is None or not fda_root.exists():
+            return None
+        mapping = _ensure_name_map()
+        basenames: list[str] = []
+        if key:
+            if key in mapping:
+                basenames.extend(sorted(mapping.get(key, set())))
+            if not basenames and allow_prefix:
+                for map_key, values in mapping.items():
+                    if map_key.startswith(key):
+                        basenames.extend(sorted(values))
+        basenames = list(dict.fromkeys(basenames))
+        probe_target: Path = fda_root if not basenames else fda_root / basenames[0]
+        if not fda_logged:
+            logger.info("[single.name] key=%s basenames=%s probe=%s", key, basenames, norm(probe_target))
+            fda_logged = True
+        for basename in basenames:
+            candidate = fda_root / basename
+            if candidate.exists():
+                logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(candidate))
+                return candidate
+        return None
+
+    def _lookup_via_index(scopes: list[str]) -> Optional[Path]:
         for where in scopes:
-            if where == "per_protein":
-                if per_roots:
+            if where == "fda_library":
+                hit = _resolve_fda_scope()
+                if hit:
+                    return hit
+            elif where == "per_protein":
+                if has_index and per_roots:
                     hit = lib_index.lookup(selector, per_roots, allow_prefix=allow_prefix)
                     if hit:
                         logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
                         return hit
             elif where == "global":
-                if library_roots:
+                if has_index and library_roots:
                     hit = lib_index.lookup(selector, library_roots, allow_prefix=allow_prefix)
                     if hit:
                         logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
@@ -690,7 +715,11 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         return None
 
     for where in order:
-        if where == "per_protein":
+        if where == "fda_library":
+            hit = _resolve_fda_scope()
+            if hit:
+                return hit
+        elif where == "per_protein":
             search_roots = per_roots
             if not search_roots and per_protein_dir:
                 search_roots = [Path(per_protein_dir)]
@@ -4543,7 +4572,7 @@ def main() -> None:
 
     # --- Single-ligand config (ported) ---------------------------------------
     cfg.setdefault("SINGLE_LIGAND", "")
-    cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")
+    cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global")
     cfg.setdefault("SINGLE_LIGAND_ALLOW_PREFIX", False)
     cfg.setdefault("SINGLE_LIGAND_MANIFEST_ONLY", True)
     cfg.setdefault("SINGLE_LIGAND_SUGGESTIONS", 5)
