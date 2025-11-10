@@ -1796,9 +1796,6 @@ def select_center_via_control_redock(
             stage_info,
             threads_per_vina,
             logger=None,
-            variant=variant_token,
-            ph_token=ph_label,
-            legacy=legacy_mode,
         )
         try:
             _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
@@ -2470,10 +2467,10 @@ def run_one_stage(
                     stage_for_cfg,
                     threads_per_vina,
                     logger,
-                    variant=variant_token,
-                    ph_token=ph_label,
-                    legacy=legacy_mode,
                 )
+
+                # anchor: emit_vina_config resolves variant/pH from cfg/env
+                logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path)
 
                 # Guard: config must live under current RUN_DIR
                 try:
@@ -2613,10 +2610,9 @@ def run_one_stage(
                                     stage_retry,
                                     threads_per_vina,
                                     logger,
-                                    variant=variant_token,
-                                    ph_token=ph_label,
-                                    legacy=legacy_mode,
                                 )
+                                # anchor: retry config uses same variant/pH resolution
+                                logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path2)
                                 try:
                                     Path(conf_path2).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
                                 except Exception:
@@ -2741,10 +2737,9 @@ def run_one_stage(
                             stage_retry2,
                             threads_per_vina,
                             logger,
-                            variant=variant_token,
-                            ph_token=ph_label,
-                            legacy=legacy_mode,
                         )
+                        # anchor: fallback config mirrors initial variant/pH discovery
+                        logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path3)
                         try:
                             Path(conf_path3).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
                         except Exception:
