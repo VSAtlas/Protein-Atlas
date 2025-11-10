@@ -98,6 +98,193 @@ _IONS_CFG_CACHE: tuple[set[str], str] | None = None
 _IONS_CFG_LOGGED = False
 
 
+
+
+_ION_PIPE_AUDIT: dict[str, dict[str, dict[str, int]]] = {}
+
+
+def _reset_ion_probe(pdb_id: str) -> None:
+    """Reset ion probe cache for a PDB identifier (case-normalized)."""
+    if not pdb_id:
+        return
+    _ION_PIPE_AUDIT[pdb_id.upper()] = {}
+
+
+def _ion_candidate_tokens(rules_obj=ALIASES) -> set[str]:
+    tokens: set[str] = set()
+    for attr in ("one_letter", "two_letter"):
+        values = getattr(rules_obj, attr, None) or []
+        for tok in values:
+            if tok is None:
+                continue
+            text = str(tok).strip()
+            if text:
+                tokens.add(text.upper())
+    retain_tokens: set[str] = set()
+    for attr in ("retain_resnames", "retain_in_receptor_resnames"):
+        values = getattr(rules_obj, attr, None) or []
+        for tok in values:
+            if tok is None:
+                continue
+            text = str(tok).strip()
+            if text:
+                retain_tokens.add(text.upper())
+    tokens.update({tok for tok in retain_tokens if len(tok) <= 3})
+    return tokens
+
+
+def _scan_metal_map(path: Union[str, Path], rules=ALIASES) -> dict[str, int]:
+    file_path = Path(path)
+    if not file_path.exists():
+        return {}
+    tokens = _ion_candidate_tokens(rules)
+    counts: Counter[str] = Counter()
+    try:
+        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith(("HETATM", "ATOM  ")):
+                    continue
+                resname = line[17:20].strip().upper()
+                if not resname:
+                    continue
+                if resname in tokens:
+                    counts[resname] += 1
+    except Exception as exc:
+        logging.warning("[ions.probe] stage=scan_fail file=%s err=%s", file_path, exc)
+        return dict(counts)
+    return dict(counts)
+
+
+def _format_probe_counts(counts: dict[str, int], *, limit: int | None = None) -> str:
+    if not counts:
+        return "none"
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    if limit is not None:
+        items = items[:limit]
+    return ",".join(f"{res}:{cnt}" for res, cnt in items)
+
+
+def _log_ions_probe(
+    pdb_id: str,
+    stage: str,
+    file_path: Union[str, Path],
+    *,
+    phase: str | None = None,
+) -> dict[str, int]:
+    counts = _scan_metal_map(file_path, ALIASES)
+    total = sum(counts.values())
+    sample = _format_probe_counts(counts, limit=5)
+    if phase:
+        logging.info(
+            "[ions.probe] stage=%s phase=%s file=%s totals=%d sample=%s",
+            stage,
+            phase,
+            file_path,
+            total,
+            sample,
+        )
+        key = f"{stage}:{phase}"
+    else:
+        logging.info(
+            "[ions.probe] stage=%s file=%s totals=%d sample=%s",
+            stage,
+            file_path,
+            total,
+            sample,
+        )
+        key = stage
+    bucket = _ION_PIPE_AUDIT.setdefault(pdb_id.upper() if pdb_id else "UNKNOWN", {})
+    bucket[key] = counts
+    return counts
+
+
+def _scan_pdb_ion_pairs(path: Union[str, Path], rules=ALIASES) -> set[tuple[str, str]]:
+    file_path = Path(path)
+    pairs: set[tuple[str, str]] = set()
+    if not file_path.exists():
+        return pairs
+    tokens = _ion_candidate_tokens(rules)
+    try:
+        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith(("HETATM", "ATOM  ")):
+                    continue
+                resname = line[17:20].strip().upper()
+                if not resname or resname not in tokens:
+                    continue
+                chain = (line[21] or "-").strip() or "-"
+                resseq = (line[22:26] or "0").strip() or "0"
+                icode = (line[26] or "").strip()
+                loc = f"{chain}:{resseq}{icode}".rstrip()
+                pairs.add((resname, loc))
+    except Exception as exc:
+        logging.warning("[ion.diff] stage=scan_pdb_fail file=%s err=%s", file_path, exc)
+    return pairs
+
+
+def _scan_pdbqt_ion_pairs(path: Union[str, Path], rules=ALIASES) -> set[tuple[str, str]]:
+    file_path = Path(path)
+    pairs: set[tuple[str, str]] = set()
+    if not file_path.exists():
+        return pairs
+    tokens = _ion_candidate_tokens(rules)
+    try:
+        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith(("ATOM  ", "HETATM")):
+                    continue
+                resname = line[17:20].strip().upper()
+                if not resname or resname not in tokens:
+                    continue
+                chain = (line[21] or "-").strip() or "-"
+                resseq = (line[22:26] or "0").strip() or "0"
+                icode = (line[26] or "").strip()
+                loc = f"{chain}:{resseq}{icode}".rstrip()
+                pairs.add((resname, loc))
+    except Exception as exc:
+        logging.warning("[ion.diff] stage=scan_pdbqt_fail file=%s err=%s", file_path, exc)
+    return pairs
+
+
+def _format_pair_list(pairs: set[tuple[str, str]]) -> str:
+    if not pairs:
+        return "none"
+    items = sorted(pairs)
+    return ",".join(f"{res}:{loc}" for res, loc in items)
+
+
+def _log_ion_diff(
+    tool: str,
+    pdb_pairs: set[tuple[str, str]] | None = None,
+    pdbqt_pairs: set[tuple[str, str]] | None = None,
+    *,
+    pdb_path: Union[str, Path, None] = None,
+    pdbqt_path: Union[str, Path, None] = None,
+) -> None:
+    before = set(pdb_pairs or ())
+    after = set(pdbqt_pairs or ())
+    if not before and pdb_path is not None:
+        before = _scan_pdb_ion_pairs(pdb_path)
+    if not after and pdbqt_path is not None:
+        after = _scan_pdbqt_ion_pairs(pdbqt_path)
+    kept = before & after
+    lost = before - after
+    gained = after - before
+    logging.info(
+        "[ion.diff] tool=%s kept=%s lost=%s gained=%s",
+        tool,
+        _format_pair_list(kept),
+        _format_pair_list(lost),
+        _format_pair_list(gained),
+    )
+
+
+def get_ion_probe_map(pdb_id: str) -> dict[str, dict[str, int]]:
+    bucket = _ION_PIPE_AUDIT.get((pdb_id or "").upper(), {})
+    return {k: dict(v) for k, v in bucket.items()}
+
+
+
 def _resolve_variant_token(cfg: Optional[dict] = None, override: Optional[str] = None) -> Optional[str]:
     token = (override or "").strip().upper() if override else ""
     if token in {"APO", "HOLO"}:
@@ -1133,25 +1320,39 @@ def extract_ligands_from_filtered(filtered_pdb: Union[str, Path], out_dir: Union
         except Exception as e:
             logging.warning("Could not write pristine reference for %s: %s", outp.name, e)
 
-    with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if not ln.startswith("HETATM"):
-                continue
-            resname = ln[17:20].strip().upper()
-            if resname in _WATER_NAMES:
-                continue  # never extract waters
-            if resname in _RETAIN:
-                continue  # don't extract cofactors/metals/ions you keep with protein
-            chain = ln[21]
-            resseq = ln[22:26].strip() or "0"
-            icode = ln[26]
-            key = (resname, chain, resseq, icode)
-            if cur_key is None:
-                cur_key = key
-            if key != cur_key:
-                flush()
-                cur_key = key
-            bucket.append(ln)
+    lines: List[str] = []
+    try:
+        with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception as exc:
+        logging.warning("[extract.check] file=%s err=%s", filtered_pdb, exc)
+        lines = []
+
+    candidate_resnames = {ln[17:20].strip().upper() for ln in lines if ln.startswith("HETATM") and ln[17:20].strip()}
+    logging.info("[extract.check] file=%s candidate_resnames=%s", filtered_pdb, ",".join(sorted(candidate_resnames)) if candidate_resnames else "none")
+    retain_allow = {tok.upper() for tok in getattr(ALIASES, "retain_resnames", [])}
+    overlap = sorted(candidate_resnames & retain_allow)
+    if overlap:
+        logging.warning("[extract.violation] file=%s will_extract_retain_list=%s", filtered_pdb, ",".join(overlap))
+
+    for ln in lines:
+        if not ln.startswith("HETATM"):
+            continue
+        resname = ln[17:20].strip().upper()
+        if resname in _WATER_NAMES:
+            continue  # never extract waters
+        if resname in _RETAIN:
+            continue  # don't extract cofactors/metals/ions you keep with protein
+        chain = ln[21]
+        resseq = ln[22:26].strip() or "0"
+        icode = ln[26]
+        key = (resname, chain, resseq, icode)
+        if cur_key is None:
+            cur_key = key
+        if key != cur_key:
+            flush()
+            cur_key = key
+        bucket.append(ln)
     flush()
     logging.info("Extracted %d ligand residues to %s", len(written), out_dir)
     return written
@@ -1682,6 +1883,8 @@ def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[st
     Water handling still honors your numeric policy (radius/B-factor) but
     the water names themselves come from the YAML.
     """
+    before_map = _scan_metal_map(input_pdb, ALIASES)
+    logging.info("[stripnsr.before] metals=%s", _format_probe_counts(before_map))
     standard_residues = {
         "ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE",
         "LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL",
@@ -1767,6 +1970,16 @@ def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[st
     with open(output_pdb, 'w', encoding="utf-8") as f:
         f.writelines(kept_lines)
     _post_write_element_guard("strip_nonstandard", output_pdb)
+
+    after_map = _scan_metal_map(output_pdb, ALIASES)
+    logging.info("[stripnsr.after] metals=%s", _format_probe_counts(after_map))
+    kept_res = sorted([res for res, count in after_map.items() if count > 0])
+    stripped_res = sorted({res for res, count in before_map.items() if after_map.get(res, 0) < count})
+    logging.info("[stripnsr.diff] kept=%s stripped=%s", ",".join(kept_res) if kept_res else "none", ",".join(stripped_res) if stripped_res else "none")
+    retain_targets = {tok.upper() for tok in getattr(ALIASES, "retain_resnames", [])}
+    for res in stripped_res:
+        if res in retain_targets:
+            logging.warning("[stripnsr.violation] resname=%s", res)
 
     logging.info("Removed nonstandard residues (YAML-driven): %s", sorted(removed))
     if pocket_center:
@@ -2125,6 +2338,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     raw_stem = os.path.splitext(os.path.basename(str(pdb_file)))[0]
     pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
+    _reset_ion_probe(pdb_id)
     logging.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
     paths = canon_paths(pdb_id, output_root)
     logging.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
@@ -2154,6 +2368,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     # (3) Extract ligands now (controls live here), with YAML element repair per-file
     _ = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
+    _log_ions_probe(pdb_id, "extract_ligands", filtered_pdb)
 
     if os.environ.get("EARLY_CHAIN_PRUNE", "1").lower() not in {"0", "false", "no"}:
         try:
@@ -2186,16 +2401,20 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
     stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
+    _log_ions_probe(pdb_id, "strip_nonstandard", source_for_strip, phase="before")
     removed_count, _out = strip_nonstandard_residues(source_for_strip, stripped_pdb)
+    _log_ions_probe(pdb_id, "strip_nonstandard", stripped_pdb, phase="after")
     logging.info("Removed %d nonstandard residue lines.", removed_count)
 
     # (5) Element fix → MODELLER → element fix again (PDB only)
     elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
     
     fix_pdb_elements(stripped_pdb, elemfix_pdb)
+    _log_ions_probe(pdb_id, "elemfix", elemfix_pdb)
     _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
     loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
     fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
+    _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
     _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
 
     # MODELLER (detect whether a new file was actually produced)
@@ -2336,6 +2555,8 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         str(paths["work"]),               # write PROPKA/PDB2PQR artifacts into the work directory
         logging
     )
+    if used_pdb2pqr and pdb_for_reduce and Path(pdb_for_reduce).exists():
+        _log_ions_probe(pdb_id, "pdb2pqr", pdb_for_reduce)
 
     # If PDB2PQR succeeded, pdb_for_reduce now has hydrogens and titration states.
     # assign_protonation_states() will detect H presence and run Reduce WITHOUT -BUILD,
@@ -2353,6 +2574,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     )
 
     _helium_postwrite_counter("reduce_or_fallback", reduced_pdb)
+    _log_ions_probe(pdb_id, "reduce", reduced_pdb)
     print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
 
     # (9) Final element fix and sanity on the protonated file
@@ -2382,6 +2604,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     shutil.copyfile(reduced_pdb, receptor_pdb)
     _helium_postwrite_counter("promote_receptor_copy", receptor_pdb)
+    _log_ions_probe(pdb_id, "receptor_write", receptor_pdb)
 
     after_counts, after_detail = _collect_monoatomic_records(receptor_pdb)
     logging.info(
@@ -2393,7 +2616,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     kept_total = sum(after_counts.values())
     stripped_total = max(0, sum(before_counts.values()) - kept_total)
     logging.info(
-        "[ions.summary] action=write_cleaned kept=%d stripped=%d changed=%d",
+        "[ions.receptor.copy] action=write_cleaned kept=%d stripped=%d changed=%d",
         kept_total,
         stripped_total,
         len(diff_list),
@@ -2677,6 +2900,10 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             raise
 
 
+    drop_policy = _cfg_bool("MEEKO_DROP_FREE_IONS", True)
+    drop_list = ",".join(sorted(_MEEKO_DROP_IONS)) if _MEEKO_DROP_IONS else "none"
+    logging.info("[meeko.policy] drop_free_ions=%s variant=%s list=%s", str(bool(drop_policy)).lower(), variant_label, drop_list)
+
     his_default = str(cfg.get("HIS_DEFAULT", "HIE")).upper()
     if his_default not in {"HIE", "HID", "HIP"}:
         his_default = "HIE"
@@ -2818,7 +3045,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         logging.warning("HIS classify/rename step failed (continuing with original): %s", e)
         tmp1_path = input_pdb
 
-    if _cfg_bool("MEEKO_DROP_FREE_IONS", True):
+    if drop_policy:
         logging.info(
             "[ions.touch] stage=meeko-pre variant=%s action=pre_sanitize file=%s",
             variant_label,
@@ -2887,6 +3114,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
         if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
             logging.info("Prepared receptor with ADT prepare_receptor4.py.")
+            _log_ion_diff("ADT", pdb_path=input_pdb, pdbqt_path=output_pdbqt)
             return True
         if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
             head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
@@ -3024,6 +3252,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
                     logging.warning("[ion lost] %s", _lost_retained)
+                _log_ion_diff("Meeko", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
             return True
@@ -3094,6 +3323,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
                     logging.warning("[ion lost] %s", _lost_retained)
+                _log_ion_diff("Meeko", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
             return True
@@ -3152,6 +3382,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
                     logging.warning("[ion lost] %s", _lost_retained)
+                _log_ion_diff("Meeko", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
             return True
