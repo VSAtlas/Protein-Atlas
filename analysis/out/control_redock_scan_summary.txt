@@ -1,16 +1,15 @@
 Control Log Scan Summary
-n_targets_total: 22
-n_logs_scanned: 22
+n_targets_total: 20
+n_logs_scanned: 20
 n_logs_missing: 0
-scanned_ok: 1Q5K,1T46,2AEV,2GQG,2HYY,2WGJ,3CS9,3ERT,3G0E,3M2W,3OG7,3OXZ,3SFF,3WZD,3WZE,4AG8,4ASD,4GRL,4MCH,4XV2,5MO4,6GQ6
+scanned_ok: 1Q5K,1T46,2GQG,2HYY,2WGJ,3CS9,3ERT,3G0E,3M2W,3OG7,3SFF,3WZD,3WZE,4AG8,4ASD,4GRL,4MCH,4XV2,5MO4,6GQ6
 missing_logs: (none)
-totals: redock_lines=24 control_centers_found=19 report_rows=24
+totals: redock_lines=24 control_centers_found=17 report_rows=24
 
 Per-target counts
 pdb_id  centers_found  redock_lines  report_rows
   1Q5K              1             2            2
   1T46              1             1            1
-  2AEV              1             0            0
   2GQG              1             2            2
   2HYY              1             4            4
   2WGJ              1             1            1
@@ -19,7 +18,6 @@ pdb_id  centers_found  redock_lines  report_rows
   3G0E              1             0            0
   3M2W              1             1            1
   3OG7              1             0            0
-  3OXZ              1             0            0
   3SFF              1             1            1
   3WZD              1             1            1
   3WZE              1             1            1

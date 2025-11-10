@@ -260,7 +260,13 @@ def _debug_normalize_mode_token(tok: str | None) -> str:
 def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
     """Normalize APO/HOLO mode from config tokens."""
 
-    raw_value = cfg.get("APO_HOLO_MODE")
+    import os  # if not already imported
+
+    env_raw = os.environ.get("APO_HOLO_MODE")
+    raw_value = env_raw if env_raw is not None else cfg.get("APO_HOLO_MODE")
+    logging.info("[apo-holo.debug] env.APO_HOLO_MODE_raw=%r cfg.APO_HOLO_MODE_raw=%r", env_raw,
+                 cfg.get("APO_HOLO_MODE"))
+
     token = _clean_mode_token(str(raw_value) if raw_value is not None else "")
 
     if token in {"", "none", "legacy", "null", "false", "0"}:
