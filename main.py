@@ -824,7 +824,24 @@ def _ensure_single_ligand_index(cfg: Dict, paths: Paths, logger: logging.Logger)
 
     index_roots = _dedupe_manifest_roots([*per_roots, *library_roots])
     if index_roots:
+        status_parts = []
+        for root in index_roots:
+            manifest_path = Path(root) / manifest_filename
+            manifest_state = "present" if manifest_path.exists() else "missing"
+            status_parts.append(f"{manifest_path}={manifest_state}")
         index.load(index_roots)
+        logger.info(
+            "[single.index] per_roots=%s lib_roots=%s manifests=%s",
+            [str(p) for p in per_roots],
+            [str(p) for p in library_roots],
+            ";".join(status_parts) or "none",
+        )
+    else:
+        logger.info(
+            "[single.index] per_roots=%s lib_roots=%s manifests=none",
+            [str(p) for p in per_roots],
+            [str(p) for p in library_roots],
+        )
 
 
 def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
@@ -833,7 +850,11 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         return None
 
     allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
+    raw_order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global"))
+    order = ["fda_library", "per_protein", "global"]
     skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
+    if skip_global:
+        order = [scope for scope in order if scope != "global"]
     manifest_only = _to_bool(str(cfg.get("SINGLE_LIGAND_MANIFEST_ONLY", True)))
     suggestions_cap = int(cfg.get("SINGLE_LIGAND_SUGGESTIONS", 5) or 5)
 
@@ -849,23 +870,21 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
     fda_logged = False
     key = _norm_name_key(selector)
 
-    order = ["fda_library", "per_protein", "global"]
-    effective_order = [scope for scope in order if scope != "global" or not skip_global]
+    effective_order = order
     use_manifest = has_index and (bool(per_roots) or (not skip_global and bool(library_roots)))
 
     logger.info(
-        "[single.debug] selector=%s order=%s skip_global=%s manifest_only=%s use_manifest=%s allow_prefix=%s",
+        "[single.debug] selector=%s raw_order=%s order=%s skip_global=%s manifest_only=%s has_index=%s use_manifest=%s per_roots=%s lib_roots=%s allow_prefix=%s",
         selector,
+        raw_order,
         effective_order,
         skip_global,
         manifest_only,
+        str(has_index).lower(),
         str(use_manifest).lower(),
-        allow_prefix,
-    )
-    logger.info(
-        "[single.debug.paths] per_roots=%s lib_roots=%s",
         [str(p) for p in per_roots],
         [str(p) for p in library_roots],
+        str(allow_prefix).lower(),
     )
 
     def _ensure_name_map() -> dict[str, set[str]]:
@@ -895,6 +914,12 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         for basename in basenames:
             candidate = fda_root / basename
             if candidate.exists():
+                logger.info(
+                    "[single.fda.hit] key=%s basename=%s path=%s",
+                    key,
+                    basename,
+                    norm(candidate),
+                )
                 logger.info("[single.lookup.hit] source=fda selector=%s path=%s", selector, norm(candidate))
                 return candidate
         return None
@@ -2640,6 +2665,14 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
                 roots.append(p)
                 extra_paths.append(p)
 
+    single_selector = cfg.get("_EFFECTIVE_SINGLE_LIGAND")
+    crawl_allowed = not bool(single_selector)
+    logger.info(
+        "[ligands.scan.guard] single_mode=%s roots=%d crawl_allowed=%s",
+        str(bool(single_selector)).lower(),
+        len(roots),
+        "true" if crawl_allowed else "false(single)",
+    )
     logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
 
     # --- collect all .pdbqt (dedup by normalized path), directory-first ---
@@ -2708,7 +2741,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     test_map = _coerce_test_map(maybe_map)
     logger.info(f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}")
-    hit = test_map.get(pdb_id)  # <- now robust
+    mapped_subdir = test_map.get(pdb_id)
 
     # Build allowed non-control roots
     allowed_noncontrol_roots: list[Path] = []
@@ -2732,12 +2765,11 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     allowed_noncontrol_roots.extend(deduped_roots)
 
     logger.info(
-        "[fuel] pdb_id=%s test_mode=%s roots=%s"
-        % (
-            pdb_id,
-            str(test_enable).lower(),
-            ",".join(str(r.resolve()) for r in deduped_roots),
-        )
+        "[fuel] pdb_id=%s test_mode=%s mapped_subdir=%s roots=%s",
+        pdb_id,
+        str(test_enable).lower(),
+        mapped_subdir or "default",
+        ",".join(str(r.resolve()) for r in deduped_roots) or "none",
     )
 
     # Always include extras (unchanged)
@@ -4407,14 +4439,18 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 "[single.block] selector '%s' not found; ALLOW_FDA_FALLBACK enabled, continuing with fallback flow.",
                 selector_token,
             )
+            cfg["_EFFECTIVE_SINGLE_LIGAND"] = ""
 
-    ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
-    if single_ligand_hit:
+    if cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
+        if not single_ligand_hit:
+            return
         ligands = [str(single_ligand_hit)]
         ha = _count_heavy_atoms_from_pdbqt(single_ligand_hit)
         heavy_atom_counts = {str(single_ligand_hit): ha}
         pains_flags = {}
         logger.info(f"[single] Active ? docking only: {single_ligand_hit.name} (heavy={ha})")
+    else:
+        ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
 
     # (skipped in single-ligand mode)
     if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):

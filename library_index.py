@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -56,8 +57,13 @@ class LibraryIndex:
             seen.add(key)
             ordered.append(Path(root))
         self._roots = ordered
-        roots_str = ",".join(str(r) for r in ordered)
-        self._logger.info("[lib-index.load] roots=%s", roots_str)
+        status_entries: list[str] = []
+        for root in ordered:
+            manifest_path = self._manifest_path(Path(root), self._manifest_filename)
+            manifest_state = "present" if manifest_path.exists() else "missing"
+            status_entries.append(f"{Path(root)}:{manifest_state}")
+        roots_summary = ",".join(status_entries) if status_entries else "none"
+        self._logger.info("[lib-index.load] roots=%s", roots_summary)
         self._cache = {}
         for root in ordered:
             self._cache[root] = self._load_one(root)
@@ -105,6 +111,7 @@ class LibraryIndex:
         entries: dict[str, str] = {}
         filenames: dict[str, str] = {}
         count = 0
+        start = time.perf_counter()
         for dirpath, _dirnames, filenames_list in os.walk(root):
             for name in filenames_list:
                 if not name.lower().endswith(".pdbqt"):
@@ -133,7 +140,8 @@ class LibraryIndex:
                 str(manifest_path),
                 exc,
             )
-        self._logger.info("[lib-index.build] root=%s count=%d", str(root), count)
+        elapsed = time.perf_counter() - start
+        self._logger.info("[lib-index.build] root=%s count=%d time_sec=%.3f", str(root), count, elapsed)
         return entries, filenames
 
     def lookup(
