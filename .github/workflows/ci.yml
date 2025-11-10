@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}  # login shell for micromamba activation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up micromamba from environment.yml
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          micromamba-version: "latest"
+          environment-file: environment.yml
+          environment-name: atlas-ci
+          cache-environment: true
+          cache-downloads: true
+          create-args: >-
+            --yes
+          init-shell: bash
+
+      - name: Sanity: show conda list
+        run: |
+          micromamba info
+          micromamba run -n atlas-ci python -V
+          micromamba run -n atlas-ci python -c "import sys; print(sys.version)"
+          micromamba run -n atlas-ci python -c "import Bio, rdkit; print('biopython+rdkit ok')"
+
+      - name: Fetch 1BN1 if needed (test cache)
+        run: |
+          mkdir -p tests/data
+          if [ ! -s tests/data/1BN1.pdb ]; then
+            curl -fsSL https://files.rcsb.org/download/1BN1.pdb -o tests/data/1BN1.pdb || true
+          fi
+
+      - name: Run ions acceptance tests
+        run: |
+          micromamba run -n atlas-ci pytest -q tests/test_ions_acceptance.py -k ions_acceptance --maxfail=1 -vv
