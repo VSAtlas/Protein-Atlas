@@ -138,8 +138,6 @@ IDENTIFY_UNMAPPED_CSV=fda_mapping_unmapped_or_no_smiles.csv
 IDENTIFY_MAX_WORKERS=100
 IDENTIFY_HTTP_WORKERS=100
 
-# Optional: list of PDB IDs for massinstall.py
-# PDB_ID_LIST=${OVERALL_DIR}/pdb_ids.txt
 
 # Vina verbosity (0=minimal, 1=normal, 2=verbose)
 VINA_VERBOSITY=0
@@ -190,8 +188,10 @@ POLYPHARM_SELECTION_PCTS=1.0,0.05,0.005
 
 # --- Single-ligand (optional) ---
 SINGLE_LIGAND = 
-SINGLE_LIGAND_SEARCH_ORDER = per_protein,global
+SINGLE_LIGAND_SEARCH_ORDER = fda_library,per_protein,global
+SINGLE_LIGAND_SKIP_GLOBAL = true
 SINGLE_LIGAND_ALLOW_PREFIX = false
+SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
