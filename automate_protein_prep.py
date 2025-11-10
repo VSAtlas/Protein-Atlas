@@ -235,13 +235,19 @@ def _maybe_strip_ions(
     *,
     variant: Optional[str] = None,
     pocket_center: Optional[tuple[float, float, float]] = None,
-) -> None:
+    extra_keep: Optional[Iterable[str]] = None,
+) -> int:
     path = Path(pdb_path)
     if not path.exists():
         logging.warning("[ions] skip_missing file=%s", path)
-        return
+        return 0
 
     allow_set, _ = _load_retain_allowlist(cfg)
+    allow_set = set(allow_set)
+    if extra_keep:
+        for token in extra_keep:
+            if token:
+                allow_set.add(str(token).strip().upper())
     policy = _normalize_ion_policy(cfg)
     variant_token = _resolve_variant_token(cfg, variant)
     variant_label = variant_token or "legacy"
@@ -255,13 +261,13 @@ def _maybe_strip_ions(
 
     if policy == "never_strip":
         logging.debug("[ions.skip] policy=never_strip")
-        return
+        return 0
 
     try:
         text = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except Exception as exc:
         logging.warning("[ions] read_failed file=%s err=%s", path, exc)
-        return
+        return 0
 
     residues: dict[tuple[str, str, str, str], list[tuple[int, str]]] = {}
     for idx, line in enumerate(text):
@@ -354,7 +360,7 @@ def _maybe_strip_ions(
 
     if not remove_indices:
         logging.debug("[ions] no_monoatomic_hits remove=0")
-        return
+        return 0
 
     for idx in sorted(remove_indices):
         text[idx] = None  # type: ignore
@@ -364,7 +370,9 @@ def _maybe_strip_ions(
         path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
     except Exception as exc:
         logging.warning("[ions] write_failed file=%s err=%s", path, exc)
-        return
+        return 0
+
+    return len(remove_indices)
 
 
 def _is_element_token(sym):
@@ -1149,39 +1157,41 @@ def file_contains_hydrogens(pdb_path: Union[str, Path]) -> bool:
 
 
 
-def strip_monoatomic_ions_inplace(pdb_path: Union[str, Path],
-                                  keep_resnames: Optional[Set[str]] = None) -> int:
-    """
-    Remove single-atom HET residues that look like elemental ions (Na, Cl, Zn, ...),
-    UNLESS resname is in keep_resnames (e.g., YAML retain list).
-    Returns number of residues removed.
-    """
-    keep_resnames = set(keep_resnames or [])
-    by_res = {}
-    lines = []
-    with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if ln.startswith(("ATOM  ", "HETATM")):
-                resname = ln[17:20].strip().upper()
-                key = (ln[21], ln[22:26], ln[26], resname)
-                by_res.setdefault(key, []).append(ln)
-    # ...
-    removed = 0
-    for key, atms in by_res.items():
-        chain, resi, icode, resname = key
-        if resname in keep_resnames:
-            lines.extend(atms); continue
-        if len(atms) == 1 and _is_element_token(resname):
-            removed += 1
-            continue
-        lines.extend(atms)
+def strip_monoatomic_ions_inplace(
+    pdb_path: Union[str, Path],
+    keep_resnames: Optional[Set[str]] = None,
+    *,
+    cfg: Optional[dict] = None,
+    variant: Optional[str] = None,
+    pocket_center: Optional[tuple[float, float, float]] = None,
+    force_policy: Optional[str] = None,
+) -> int:
+    """Legacy wrapper that now delegates to the policy-aware ion stripping."""
 
-    with open(pdb_path, "w", encoding="utf-8") as w:
-        w.writelines(lines)
+    base_cfg = cfg if cfg is not None else config
+    if isinstance(base_cfg, dict):
+        cfg_obj: dict = dict(base_cfg)
+    else:
+        cfg_obj = {}
+
+    if force_policy:
+        cfg_obj = cfg_obj or {}
+        cfg_obj["ION_STRIP_POLICY"] = force_policy
+
+    extra_keep = set(keep_resnames or []) or None
+
+    removed = _maybe_strip_ions(
+        pdb_path,
+        cfg=cfg_obj,
+        variant=variant,
+        pocket_center=pocket_center,
+        extra_keep=extra_keep,
+    )
 
     if removed:
         logging.info("Stripped %d monoatomic ions from %s", removed, pdb_path)
-    return removed
+
+    return removed or 0
 
 # Compatibility alias for older callers
 def _strip_monoatomic_ions_inplace(*args, **kwargs):
