@@ -775,37 +775,90 @@ def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None)
             yield p
 
 
+# [single-index] Deduplicate manifest roots and retain stable ordering.
+def _dedupe_manifest_roots(seq) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for entry in seq:
+        if not entry:
+            continue
+        path_obj = Path(entry)
+        try:
+            key = str(path_obj.resolve())
+        except Exception:
+            key = str(path_obj)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path_obj)
+    return deduped
+
+
+# [single-index] Prime the manifest-backed index before single-ligand lookups.
+def _ensure_single_ligand_index(cfg: Dict, paths: Paths, logger: logging.Logger) -> None:
+    cfg.setdefault(
+        "OUTPUT_LIGANDS_DIR",
+        cfg.get("PREPPED_LIGANDS_DIR") or cfg.get("PREPPED_LIGANDS_ROOT"),
+    )
+
+    per_roots = _dedupe_manifest_roots([
+        getattr(paths, "prepped_ligands_dir", None),
+    ])
+    library_roots = _dedupe_manifest_roots([
+        cfg.get("OUTPUT_LIGANDS_DIR"),
+        cfg.get("PREPPED_LIGANDS_ROOT"),
+        cfg.get("PREPPED_LIGANDS_DIR"),
+    ])
+
+    cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_roots]
+    cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in library_roots]
+
+    if not per_roots and not library_roots:
+        cfg["_LIB_INDEX"] = None
+        return
+
+    manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+    index = cfg.get("_LIB_INDEX")
+    if not isinstance(index, LibraryIndex):
+        index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
+        cfg["_LIB_INDEX"] = index
+
+    index_roots = _dedupe_manifest_roots([*per_roots, *library_roots])
+    if index_roots:
+        index.load(index_roots)
+
+
 def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
     """Resolve SINGLE_LIGAND selector using manifest-backed lookups (if enabled)."""
     if not selector:
         return None
 
     allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
-    raw_order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global"))
-    order = [w for w in raw_order.replace(" ", "").split(",") if w]
     skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
-    if skip_global:
-        order = [w for w in order if w != "global"]
-
     manifest_only = _to_bool(str(cfg.get("SINGLE_LIGAND_MANIFEST_ONLY", True)))
     suggestions_cap = int(cfg.get("SINGLE_LIGAND_SUGGESTIONS", 5) or 5)
+
+    per_roots = _dedupe_manifest_roots(cfg.get("_LIB_INDEX_PER_ROOTS", []))
+    library_roots = _dedupe_manifest_roots(cfg.get("_LIB_INDEX_LIBRARY_ROOTS", []))
+
     lib_index = cfg.get("_LIB_INDEX")
     has_index = isinstance(lib_index, LibraryIndex)
-    per_roots = [Path(p) for p in cfg.get("_LIB_INDEX_PER_ROOTS", []) if p]
-    library_roots = [Path(p) for p in cfg.get("_LIB_INDEX_LIBRARY_ROOTS", []) if p]
-    per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")
-    use_manifest = manifest_only and has_index
+
     output_ligands_dir = cfg.get("OUTPUT_LIGANDS_DIR")
     fda_root = Path(output_ligands_dir).joinpath("fda_library") if output_ligands_dir else None
     name_map: Optional[dict[str, set[str]]] = None
     fda_logged = False
     key = _norm_name_key(selector)
 
+    order = ["fda_library", "per_protein", "global"]
+    effective_order = [scope for scope in order if scope != "global" or not skip_global]
+    use_manifest = has_index and (bool(per_roots) or (not skip_global and bool(library_roots)))
+
     logger.info(
-        "[single.debug] selector=%s order=%s skip_global=%s manifest_only=%s allow_prefix=%s",
+        "[single.debug] selector=%s order=%s skip_global=%s manifest_only=%s use_manifest=%s allow_prefix=%s",
         selector,
-        order,
+        effective_order,
         skip_global,
+        manifest_only,
         str(use_manifest).lower(),
         allow_prefix,
     )
@@ -842,30 +895,8 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         for basename in basenames:
             candidate = fda_root / basename
             if candidate.exists():
-                logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(candidate))
+                logger.info("[single.lookup.hit] source=fda selector=%s path=%s", selector, norm(candidate))
                 return candidate
-        return None
-
-    def _lookup_via_index(scopes: list[str]) -> Optional[Path]:
-        for where in scopes:
-            if where == "fda_library":
-                hit = _resolve_fda_scope()
-                if hit:
-                    return hit
-            elif where == "per_protein":
-                if has_index and per_roots:
-                    hit = lib_index.lookup(selector, per_roots, allow_prefix=allow_prefix)
-                    if hit:
-                        logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
-                        return hit
-            elif where == "global":
-                if has_index and library_roots:
-                    hit = lib_index.lookup(selector, library_roots, allow_prefix=allow_prefix)
-                    if hit:
-                        logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
-                        return hit
-            else:
-                logger.debug("[single.debug.scope] selector=%s scope=%s", selector, where)
         return None
 
     def _suggest_from_index() -> list[str]:
@@ -874,11 +905,11 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
             seen: set[str] = set()
             for candidate in [*per_roots, *library_roots]:
                 try:
-                    key = str(candidate.resolve())
+                    key_str = str(candidate.resolve())
                 except Exception:
-                    key = str(candidate)
-                if key not in seen:
-                    seen.add(key)
+                    key_str = str(candidate)
+                if key_str not in seen:
+                    seen.add(key_str)
                     ordered.append(candidate)
             return lib_index.suggest(selector, ordered, suggestions_cap)
         return []
@@ -890,58 +921,33 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
             ",".join(suggestions),
         )
 
-    if use_manifest:
-        hit = _lookup_via_index(order)
-        if hit:
-            return hit
-        _log_miss(_suggest_from_index())
-        return None
-
-    hit = _lookup_via_index(order)
+    hit = _resolve_fda_scope()
     if hit:
         return hit
 
-    def _match_one_dir(root: Optional[Path], recursive: bool = False) -> Optional[Path]:
-        if not root:
-            return None
-        root_path = Path(root)
-        if not root_path.exists():
-            return None
-        iterator = root_path.rglob("*.pdbqt") if recursive else root_path.glob("*.pdbqt")
-        candidates = list(iterator)
-        for p in candidates:
-            base = p.stem.split("_stage")[0]
-            if base.lower() == selector.lower():
-                return p
-        if allow_prefix:
-            for p in candidates:
-                base = p.stem.split("_stage")[0]
-                if base.lower().startswith(selector.lower()):
-                    return p
+    if manifest_only and not use_manifest:
+        _log_miss(_suggest_from_index())
         return None
 
-    for where in order:
-        if where == "fda_library":
-            hit = _resolve_fda_scope()
-            if hit:
-                return hit
-        elif where == "per_protein":
-            search_roots = per_roots
-            if not search_roots and per_protein_dir:
-                search_roots = [Path(per_protein_dir)]
-            for root in search_roots:
-                hit = _match_one_dir(root, recursive=False)
-                if hit:
-                    logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
-                    return hit
-        elif where == "global":
-            for root in library_roots:
-                hit = _match_one_dir(root, recursive=True)
-                if hit:
-                    logger.info("[single.lookup.hit] selector=%s path=%s", selector, norm(hit))
-                    return hit
-        else:
-            logger.debug("[single.debug.scope] selector=%s scope=%s", selector, where)
+    if not has_index:
+        _log_miss(_suggest_from_index())
+        return None
+
+    if not use_manifest:
+        _log_miss(_suggest_from_index())
+        return None
+
+    if per_roots:
+        hit = lib_index.lookup(selector, per_roots, allow_prefix=allow_prefix)
+        if hit:
+            logger.info("[single.lookup.hit] source=manifest scope=per_protein selector=%s path=%s", selector, norm(hit))
+            return hit
+
+    if not skip_global and library_roots:
+        hit = lib_index.lookup(selector, library_roots, allow_prefix=allow_prefix)
+        if hit:
+            logger.info("[single.lookup.hit] source=manifest scope=global selector=%s path=%s", selector, norm(hit))
+            return hit
 
     _log_miss(_suggest_from_index())
     return None
@@ -4361,6 +4367,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     cfg.pop("_SINGLE_RESOLVED_PATH", None)
     # --- Single-ligand mode (if active) --------------------------------------
     if cfg["_EFFECTIVE_SINGLE_LIGAND"]:
+        _ensure_single_ligand_index(cfg, paths, logger)
         # Provide per-protein paths to resolver
         cfg.setdefault("paths", {})
         cfg["paths"]["prepped_ligands_dir"] = str(paths.prepped_ligands_dir)
