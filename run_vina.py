@@ -3,8 +3,8 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Tuple, Optional, List
-import logging
+from typing import Tuple, Optional, List, Dict, Any, Iterable
+import logging, json
 _log = logging.getLogger("vina")
 
 from input_and_export_functions import extract_best_score
@@ -341,3 +341,88 @@ def resolve_stage_and_config_dirs(
     # >>> CONFIG PATHS PATCH END
 
     return stage_dir, cfg_dir
+
+
+MANIFEST_NAME = "vina.json"
+
+
+def _load_manifest(manifest_path: Path) -> Dict[str, Any]:
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def iter_stage_jobs(
+    cfg: Dict[str, Any],
+    run_id: str,
+    pdb_id: str,
+    stage: str,
+    variants: Iterable[Optional[str]],
+    ph_tags: Optional[Iterable[Optional[str]]],
+    legacy: bool,
+) -> List[Dict[str, Any]]:
+    jobs: List[Dict[str, Any]] = []
+    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+
+    variant_list = list(variants) or [None]
+    ph_iterable = list(ph_tags) if ph_tags is not None else [None]
+
+    for variant in variant_list:
+        for ph_token in ph_iterable:
+            cfg_dir = router_config_dir(
+                run_id,
+                pdb_id,
+                stage,
+                variant=variant,
+                ph_tag=ph_token,
+                legacy=legacy,
+            )
+            manifest_path = cfg_dir / MANIFEST_NAME
+            if not manifest_path.exists():
+                continue
+            payload = _load_manifest(manifest_path)
+            entries = payload.get("entries") if isinstance(payload, dict) else None
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                config_path = item.get("config") or item.get("config_path")
+                out_path = item.get("out") or item.get("out_path")
+                ligand = item.get("ligand")
+                receptor = item.get("receptor")
+                if not (config_path and out_path and ligand):
+                    continue
+                job = {
+                    "pdb_id": pdb_id,
+                    "stage": stage,
+                    "variant": variant,
+                    "ph": ph_token,
+                    "config": config_path,
+                    "out": out_path,
+                    "ligand": ligand,
+                    "receptor": receptor,
+                }
+                jobs.append(job)
+    return jobs
+
+
+def dispatch_job(vina_exe: str, job: Dict[str, Any]):
+    variant_display = job.get("variant") or "None"
+    ph_display = job.get("ph") or "None"
+    cfg_path = job["config"]
+    ligand = job.get("ligand") or Path(cfg_path).stem
+    out_path = job.get("out")
+    _log.info(
+        "[run.dispatch] pdb=%s stage=%s variant=%s ph=%s cfg=%s",
+        job.get("pdb_id"),
+        job.get("stage"),
+        variant_display,
+        ph_display,
+        cfg_path,
+    )
+    return run_docking_task(vina_exe, cfg_path, ligand, out_path)

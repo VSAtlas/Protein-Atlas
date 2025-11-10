@@ -283,11 +283,8 @@ def config_dir(
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.configs / str(run_id) / token
-    logger = logging.getLogger("path_router")
-    if legacy:
-        logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, None, legacy)
-        return base / _norm_stage(stage)
     v = _norm_variant(variant)
+    logger = logging.getLogger("path_router")
     logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
     if v:
         base = base / v
@@ -302,7 +299,7 @@ def config_file(
     stage: str,
     variant: Optional[str] = None,
     ph_tag: Optional[str] = None,
-    suffix: str = "vina.json",
+    name: str = "vina.json",
     legacy: bool = False,
 ) -> Path:
     return config_dir(
@@ -312,7 +309,7 @@ def config_file(
         variant=variant,
         ph_tag=ph_tag,
         legacy=legacy,
-    ) / suffix
+    ) / name
 
 
 # --- full replacement for load_ph_tags() ---
