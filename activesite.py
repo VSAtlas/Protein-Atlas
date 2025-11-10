@@ -86,23 +86,63 @@ def get_atom_rules():
         return _rules_cache
 
     a  = _load_aliases_yaml() or {}
+    logging.info(
+        "[aliases.load] source=%s keys=%d",
+        ALIASES_PATH,
+        len(a),
+    )
     es = a.get("element_sets", {}) or {}
     ligand_sets = a.get("ligand_sets", {}) or {}
     meeko_cfg   = a.get("meeko", {}) or {}
 
-    # helpers
+    token_splitter = re.compile(r"[,\s]+")
+
     def _flatten(items):
-        out = []
         for x in (items or []):
             if isinstance(x, (list, tuple, set)):
-                out.extend(_flatten(x))
+                yield from _flatten(x)
             else:
-                parts = [p.strip() for p in str(x).split(";")]
-                out.extend([p for p in parts if p])
-        return out
+                text = "" if x is None else str(x)
+                if not text:
+                    continue
+                for semi in text.split(";"):
+                    segment = semi.strip()
+                    if not segment:
+                        continue
+                    for token in token_splitter.split(segment):
+                        tok = token.strip()
+                        if tok:
+                            yield tok
 
-    def _as_set(items, up=True):
-        return { (v.upper() if up else v) for v in _flatten(items) }
+    def _as_set(items, up=True, section=None):
+        tokens = list(_flatten(items))
+        normalized = []
+        ignored = []
+        for tok in tokens:
+            norm = tok.strip()
+            if not norm:
+                ignored.append(tok)
+                continue
+            normalized.append(norm.upper() if up else norm)
+        result = set(normalized)
+        if section:
+            sample = ",".join(sorted(result)[:5]) if result else "none"
+            logging.debug(
+                "[aliases.tokens] section=%s total=%d unique=%d sample=%s",
+                section,
+                len(normalized),
+                len(result),
+                sample,
+            )
+            if ignored:
+                filtered = sorted({t.strip() for t in ignored if t.strip()})[:5]
+                if filtered:
+                    logging.debug(
+                        "[aliases.ignored] section=%s tokens=%s",
+                        section,
+                        ",".join(filtered),
+                    )
+        return result
 
     # element/name logic
     peptide_like      = _as_set(es.get("peptide_like_names"))
@@ -118,11 +158,11 @@ def get_atom_rules():
 
     #  ligand & Meeko lists from YAML
     nucleotide_like_resnames = _as_set(ligand_sets.get("nucleotide_like_resnames"))
-    meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"))
+    meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"), section="meeko.drop_free_ions")
 
     # retain list (and a compat copy)
     retain_raw = a.get("retain_in_receptor_resnames", []) or []
-    retain_res = _as_set(retain_raw)
+    retain_res = _as_set(retain_raw, section="retain_in_receptor_resnames")
 
     # --- APO/HOLO mode (env or config) ---
     mode = str(os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "")).strip().lower()

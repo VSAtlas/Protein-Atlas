@@ -4482,43 +4482,20 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 exc,
             )
 
-    try:
-        import automate_protein_prep as _auto_prep_mod
-    except Exception as import_err:
-        logger.warning(
-            "[ions.prep-early] pdb=%s variant=%s action=skip reason=import err=%s",
+    if cleaned_pdb:
+        if variant_env == "HOLO":
+            skip_reason = "variant"
+        elif not variant_env:
+            skip_reason = "legacy"
+        else:
+            skip_reason = "disabled"
+        logger.info(
+            "[ions.prep-early] pdb=%s variant=%s action=skip reason=%s file=%s",
             paths.pdb_id,
             variant_label,
-            import_err,
+            skip_reason,
+            cleaned_pdb,
         )
-    else:
-        if cleaned_pdb and (variant_env in ("", "APO")):
-            logger.info(
-                "[ions.prep-early] pdb=%s variant=%s action=strip_inplace file=%s",
-                paths.pdb_id,
-                variant_label,
-                cleaned_pdb,
-            )
-            try:
-                _auto_prep_mod._maybe_strip_ions(
-                    Path(cleaned_pdb),
-                    cfg=cfg,
-                    variant=variant_token,
-                    pocket_center=None,
-                )
-            except Exception as early_err:
-                logger.warning(
-                    "[ions.prep-early] pdb=%s variant=%s action=error err=%s",
-                    paths.pdb_id,
-                    variant_label,
-                    early_err,
-                )
-        elif cleaned_pdb:
-            logger.info(
-                "[ions.prep-early] pdb=%s variant=%s action=skip reason=variant",
-                paths.pdb_id,
-                variant_label,
-            )
 
     # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
     resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
