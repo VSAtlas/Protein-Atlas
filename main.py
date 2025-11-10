@@ -244,24 +244,38 @@ def _clean_mode_token(s: str | None) -> str:
     s = s.replace("-", "").replace("_", "")
     return s
 
-def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
-    """
-    Single source of truth: ENV -> config -> default ('apo_vs_holo').
-    Returns (mode, variants). For legacy/no-variant mode, variants == [None].
-    """
-    env_raw = _clean_mode_token(os.environ.get("APO_HOLO_MODE"))
-    cfg_raw = _clean_mode_token(str(cfg.get("APO_HOLO_MODE", "")))
-    raw = env_raw or cfg_raw or "apovsholo"
+def _debug_normalize_mode_token(tok: str | None) -> str:
+    t = (tok or "").strip().lower()
+    if t in {"", "none", "null", "false", "0", "legacy"}:
+        return "legacy"
+    if t in {"apo", "apo_only"}:
+        return "apo"
+    if t in {"holo", "holo_only"}:
+        return "holo"
+    if t in {"apo_vs_holo", "apo+holo", "both"}:
+        return "apo_vs_holo"
+    return f"unknown:{t}"
 
-    if raw in {"apo"}:
-        return "apo", ["APO"]
-    if raw in {"holo"}:
-        return "holo", ["HOLO"]
-    if raw in {"none", "legacy", "null", "false"}:
+
+def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
+    """Normalize APO/HOLO mode from config tokens."""
+
+    raw_value = cfg.get("APO_HOLO_MODE")
+    token = _clean_mode_token(str(raw_value) if raw_value is not None else "")
+
+    if token in {"", "none", "legacy", "null", "false", "0"}:
         return "legacy", [None]
-    if raw in {"apovsholo", "apovsholo", "apovsholo"} or raw == "apovsholo":
-        return "apo_vs_holo", ["HOLO", "APO"]  # HOLO-first aligns dedup 'keep' with HOLO
-    return "apo_vs_holo", ["HOLO", "APO"]
+    if token == "apo":
+        return "apo", ["APO"]
+    if token == "holo":
+        return "holo", ["HOLO"]
+    if token in {"apovsholo", "apoandholo", "both"}:
+        return "apo_vs_holo", ["APO", "HOLO"]
+
+    logging.warning(
+        "[apo-holo.debug] unknown_mode=%r defaulting=apo_vs_holo", raw_value
+    )
+    return "apo_vs_holo", ["APO", "HOLO"]
 
 
 
@@ -4454,9 +4468,31 @@ def main() -> None:
     start = time.time()
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
     mode, variants = resolve_apo_holo_mode(cfg)
-    cfg["_ROUTER_LEGACY"] = (mode == "legacy")
-    logging.info(f"[apo-holo] resolved mode={mode} variants={variants} "
-                 f"env.APO_HOLO_MODE='{os.environ.get('APO_HOLO_MODE')}'")
+    router_legacy = (mode == "legacy")
+    ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
+    cfg_raw_mode = cfg.get("APO_HOLO_MODE")
+    logging.info(
+        "[apo-holo.debug] cfg.APO_HOLO_MODE_raw=%r -> resolved.mode=%s variants=%s",
+        cfg_raw_mode,
+        mode,
+        variants,
+    )
+    logging.info(
+        "[apo-holo.debug] router_legacy=%s ph_enabled=%s",
+        router_legacy,
+        ph_enabled,
+    )
+    logging.info(
+        "[apo-holo.debug] normalized_mode_token=%s",
+        _debug_normalize_mode_token(cfg_raw_mode),
+    )
+    cfg["_ROUTER_LEGACY"] = router_legacy
+    logging.info(
+        "[apo-holo] resolved mode=%s variants=%s cfg_token=%r",
+        mode,
+        variants,
+        cfg_raw_mode,
+    )
 
     from tqdm import tqdm as _tqdm
     for variant in variants:

@@ -1,4 +1,4 @@
-import os, sys, shutil
+import os, sys, shutil, json
 from pathlib import Path
 from distutils.util import strtobool
 from typing import Any, Dict, Optional
@@ -358,101 +358,88 @@ def emit_vina_config(
     ph_token: Optional[str] = None,
     legacy: bool = False,
 ):
-    # Determine active variant from caller or fallback env (back-compat)
-    variant_env = variant if variant is not None else (os.environ.get("APO_HOLO_VARIANT", "") or "")
-    variant_token = (str(variant_env).strip().upper() or None)
-
     make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    ph_label_src = ph_token if ph_token is not None else (cfg.get("_ACTIVE_PH_LABEL") or "")
-    ph_label = str(ph_label_src).strip() or None
 
-    # ---  define lig_base from ligand_path (fixes NameError) ---
+    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
+    legacy_mode = bool(legacy)
+
     from pathlib import Path
-    lig_base = Path(ligand_path).stem
 
+    lig_base = Path(ligand_path).stem
     run_id = cfg["RUN_ID"]
-    conf_dir = router_config_dir(
+
+    cfg_dir = router_config_dir(
         run_id,
         pdb_id,
         stage_name,
         variant=variant_token,
         ph_tag=ph_label,
-        legacy=legacy,
+        legacy=legacy_mode,
     )
-    conf_dir.mkdir(parents=True, exist_ok=True)
-    cfg_path = router_config_file(
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = router_config_file(
         run_id,
         pdb_id,
         stage_name,
         variant=variant_token,
         ph_tag=ph_label,
-        suffix=f"{lig_base}_{stage_name}.txt",
-        legacy=legacy,
+        name="vina.json",
+        legacy=legacy_mode,
     )
+
+    cfg_path = cfg_dir / f"{lig_base}_{stage_name}.txt"
 
     stage_root = router_docked_dir(
         pdb_id,
         variant=variant_token,
         ph_tag=ph_label,
-        legacy=legacy,
+        legacy=legacy_mode,
     )
     out_dir = stage_root / stage_name
+    out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{lig_base}_{stage_name}.pdbqt"
 
     expected_receptor = router_receptor_file(
         pdb_id,
         variant=variant_token,
         ph_tag=ph_label,
-        legacy=legacy,
+        legacy=legacy_mode,
     )
     receptor_exists = expected_receptor.exists()
     receptor_for_config = str(expected_receptor)
 
-    variant_tag = variant_token or "None"
-    ph_tag_display = ph_label or "None"
-    log_payload = (
-        "[cfg.router] run=%s pdb=%s stage=%s variant=%s ph=%s\n"
-        "             receptor=%s\n"
-        "             outdir=%s\n"
-        "             cfgdir=%s"
+    variant_display = variant_token or "None"
+    ph_display = ph_label or "None"
+    breadcrumb = (
+        "[cfg.emit] run=%s pdb=%s stage=%s variant=%s ph=%s\n"
+        "           cfg_dir=%s receptor=%s out_root=%s"
     )
-    log_args = (
+    breadcrumb_args = (
         run_id,
         pdb_id,
         stage_name,
-        variant_tag,
-        ph_tag_display,
+        variant_display,
+        ph_display,
+        str(cfg_dir),
         receptor_for_config,
-        str(out_dir),
-        str(conf_dir),
+        str(stage_root),
     )
     if logger:
-        logger.info(log_payload, *log_args)
+        logger.info(breadcrumb, *breadcrumb_args)
     else:
-        print(log_payload % log_args)
-
-    receptor_log = f"[cfg.receptor] file={receptor_for_config} exists={str(receptor_exists).lower()}"
-    if logger:
-        logger.info(receptor_log)
-    else:
-        print(receptor_log)
+        print(breadcrumb % breadcrumb_args)
 
     if not receptor_exists:
         msg = (
-            f"[router.error] missing receptor for pdb={pdb_id} variant={variant_tag} "
-            f"ph={ph_tag_display} -> {expected_receptor}"
+            f"[router.error] missing receptor for pdb={pdb_id} variant={variant_display} "
+            f"ph={ph_display} -> {expected_receptor}"
         )
         if logger:
             logger.error(msg)
         else:
             print(msg)
-
-    if logger:
-        logger.debug(
-            "[emit_vina_config] variant=%r stage=%s lig_base=%s conf_dir=%s out_path=%s",
-            variant_token, stage_name, lig_base, str(conf_dir), str(out_path)
-        )
-
 
     lines = [
         f"receptor = {receptor_for_config}",
@@ -473,24 +460,74 @@ def emit_vina_config(
 
     if "seed" in stage_info:
         lines.append(f"seed = {int(stage_info['seed'])}")
-    # --- AUDIT: compact Vina config trace ---
     if logger:
         cx, cy, cz = center
         sx, sy, sz = box_size
         lig_name = os.path.basename(str(ligand_path))
-        logger.info("[vina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
-                    lig_name, cx, cy, cz, sx, sy, sz)
+        logger.info(
+            "[vina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
+            lig_name,
+            cx,
+            cy,
+            cz,
+            sx,
+            sy,
+            sz,
+        )
+
     payload = ("\n".join(lines)).encode("utf-8")
     overwrite = cfg_path.exists()
 
-
-    # atomic write
     tmp = cfg_path.with_suffix(".part")
     with open(tmp, "wb") as f:
         f.write(payload)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, cfg_path)
+
+    manifest_data: Dict[str, Any]
+    entries_map: Dict[str, Dict[str, Any]]
+    if manifest_path.exists():
+        try:
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            manifest_data = {}
+    else:
+        manifest_data = {}
+
+    entries = manifest_data.get("entries") if isinstance(manifest_data, dict) else None
+    entries_map = {}
+    if isinstance(entries, list):
+        for item in entries:
+            if isinstance(item, dict):
+                lig = str(item.get("ligand", ""))
+                if lig:
+                    entries_map[lig] = item
+
+    entry = {
+        "ligand": lig_base,
+        "config": str(cfg_path),
+        "out": str(out_path),
+        "receptor": receptor_for_config,
+    }
+    entries_map[lig_base] = entry
+
+    manifest_data = {
+        "run_id": run_id,
+        "pdb_id": pdb_id,
+        "stage": stage_name,
+        "variant": variant_token,
+        "ph": ph_label,
+        "legacy": legacy_mode,
+        "entries": [entries_map[k] for k in sorted(entries_map.keys())],
+    }
+
+    manifest_tmp = manifest_path.with_suffix(".part")
+    with open(manifest_tmp, "w", encoding="utf-8") as fh:
+        json.dump(manifest_data, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(manifest_tmp, manifest_path)
 
     emit_msg = (
         "[cfg.emit] run=%s pdb=%s variant=%s ph=%s stage=%s ligand=%s "
@@ -499,18 +536,20 @@ def emit_vina_config(
     emit_args = (
         run_id,
         pdb_id,
-        variant_tag,
-        ph_tag_display,
+        variant_display,
+        ph_display,
         stage_name,
         lig_base,
-        str(conf_dir),
+        str(cfg_dir),
         str(stage_root),
         str(cfg_path),
         str(overwrite).lower(),
         len(payload),
     )
-    msg = emit_msg % emit_args
-    (logger.info(msg) if logger else print(msg))
+    if logger:
+        logger.info(emit_msg, *emit_args)
+    else:
+        print(emit_msg % emit_args)
 
     return str(cfg_path), str(out_path)
 
