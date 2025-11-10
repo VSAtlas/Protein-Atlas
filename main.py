@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import atexit, datetime
 from pathlib import Path
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 from tqdm import tqdm
@@ -27,7 +27,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from input_and_export_functions import (
     load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, emit_vina_config, record_score, score_key, _to_bool, init_config_run_dir
+    extract_best_score, emit_vina_config as _emit_vina_config_impl, record_score, score_key, _to_bool, init_config_run_dir
 )
 from protein_functions import detect_active_site
 from activesite import extract_and_remove_ligands
@@ -44,7 +44,9 @@ from path_router import (
     receptor_file,
     docked_dir,
     load_ph_tags,
+    config_dir as router_config_dir,
 )
+from library_index import LibraryIndex
 
 
 def _resolve_run_id(argv: list[str]) -> str:
@@ -124,6 +126,211 @@ class ConfigDict(dict):
         self[key] = value
     def copy(self):
         return ConfigDict(super().copy())
+
+
+def emit_vina_config(
+    cfg,
+    pdb_id,
+    receptor_pdbqt,
+    center,
+    box_size,
+    ligand_path,
+    stage_name,
+    stage_info,
+    cpu_per_job,
+    logger=None,
+    *,
+    variant=None,
+    ph_token=None,
+    legacy=False,
+    skip_manifest_if_exists=False,
+):
+    if not skip_manifest_if_exists:
+        return _emit_vina_config_impl(
+            cfg,
+            pdb_id,
+            receptor_pdbqt,
+            center,
+            box_size,
+            ligand_path,
+            stage_name,
+            stage_info,
+            cpu_per_job,
+            logger,
+            variant=variant,
+            ph_token=ph_token,
+            legacy=legacy,
+        )
+    return _emit_vina_config_skip_manifest(
+        cfg,
+        pdb_id,
+        receptor_pdbqt,
+        center,
+        box_size,
+        ligand_path,
+        stage_name,
+        stage_info,
+        cpu_per_job,
+        logger,
+        variant=variant,
+        ph_token=ph_token,
+        legacy=legacy,
+    )
+
+
+def _emit_vina_config_skip_manifest(
+    cfg,
+    pdb_id,
+    receptor_pdbqt,
+    center,
+    box_size,
+    ligand_path,
+    stage_name,
+    stage_info,
+    cpu_per_job,
+    logger,
+    *,
+    variant=None,
+    ph_token=None,
+    legacy=False,
+):
+    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+
+    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
+    legacy_mode = bool(legacy)
+
+    lig_base = Path(ligand_path).stem
+    run_id = cfg["RUN_ID"]
+
+    cfg_dir = router_config_dir(
+        run_id,
+        pdb_id,
+        stage_name,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_path = cfg_dir / f"{lig_base}_{stage_name}.txt"
+
+    stage_root = docked_dir(
+        pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    stage_root.mkdir(parents=True, exist_ok=True)
+    out_dir = stage_root / stage_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{lig_base}_{stage_name}.pdbqt"
+
+    expected_receptor = receptor_file(
+        pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    receptor_exists = expected_receptor.exists()
+    receptor_for_config = str(expected_receptor)
+
+    variant_display = variant_token or "None"
+    ph_display = ph_label or "None"
+    breadcrumb = (
+        "[cfg.emit] run=%s pdb=%s stage=%s variant=%s ph=%s\n"
+        "           cfg_dir=%s receptor=%s out_root=%s"
+    )
+    breadcrumb_args = (
+        run_id,
+        pdb_id,
+        stage_name,
+        variant_display,
+        ph_display,
+        str(cfg_dir),
+        receptor_for_config,
+        str(stage_root),
+    )
+    if logger:
+        logger.info(breadcrumb, *breadcrumb_args)
+    else:
+        print(breadcrumb % breadcrumb_args)
+
+    if not receptor_exists:
+        msg = (
+            f"[router.error] missing receptor for pdb={pdb_id} variant={variant_display} "
+            f"ph={ph_display} -> {expected_receptor}"
+        )
+        if logger:
+            logger.error(msg)
+        else:
+            print(msg)
+
+    lines = [
+        f"receptor = {receptor_for_config}",
+        f"ligand   = {ligand_path}",
+        f"center_x = {center[0]:.3f}",
+        f"center_y = {center[1]:.3f}",
+        f"center_z = {center[2]:.3f}",
+        f"size_x   = {box_size[0]:.3f}",
+        f"size_y   = {box_size[1]:.3f}",
+        f"size_z   = {box_size[2]:.3f}",
+        f"cpu      = {int(cpu_per_job)}",
+        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
+        f"energy_range   = {int(stage_info.get('energy_range', 4))}",
+        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
+        f"verbosity      = {int(stage_info.get('verbosity', 0))}",
+        f"out = {out_path}",
+    ]
+
+    if logger:
+        cx, cy, cz = center
+        sx, sy, sz = box_size
+        lig_name = os.path.basename(str(ligand_path))
+        logger.info(
+            "[vina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
+            lig_name,
+            cx,
+            cy,
+            cz,
+            sx,
+            sy,
+            sz,
+        )
+
+    payload = ("\n".join(lines)).encode("utf-8")
+    overwrite = cfg_path.exists()
+
+    tmp = cfg_path.with_suffix(".part")
+    with open(tmp, "wb") as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, cfg_path)
+
+    emit_msg = (
+        "[cfg.emit] run=%s pdb=%s variant=%s ph=%s stage=%s ligand=%s "
+        "cfg_dir=%s docked_root=%s path=%s overwrite=%s bytes=%d"
+    )
+    emit_args = (
+        run_id,
+        pdb_id,
+        variant_display,
+        ph_display,
+        stage_name,
+        lig_base,
+        str(cfg_dir),
+        str(stage_root),
+        str(cfg_path),
+        str(overwrite).lower(),
+        len(payload),
+    )
+    if logger:
+        logger.info(emit_msg, *emit_args)
+    else:
+        print(emit_msg % emit_args)
+
+    return str(cfg_path), str(out_path)
 
 # --- Debug wrappers to locate legacy/incorrect folder creation ---
 import re, traceback
@@ -567,97 +774,208 @@ def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None)
         for p in root.rglob("*.pdbqt"):
             yield p
 
-def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
-    """
-    Apply SINGLE_LIGAND_SEARCH_ORDER with a minimal optimization:
-    When SINGLE_LIGAND_SKIP_GLOBAL=True (default), ignore the 'global' scope entirely.
 
-    Match semantics: exact or prefix match depending on SINGLE_LIGAND_ALLOW_PREFIX.
-    Returns a Path to the first hit, or None.
-    """
+# [single-index] Deduplicate manifest roots and retain stable ordering.
+def _dedupe_manifest_roots(seq) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for entry in seq:
+        if not entry:
+            continue
+        path_obj = Path(entry)
+        try:
+            key = str(path_obj.resolve())
+        except Exception:
+            key = str(path_obj)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path_obj)
+    return deduped
+
+
+# [single-index] Prime the manifest-backed index before single-ligand lookups.
+def _ensure_single_ligand_index(cfg: Dict, paths: Paths, logger: logging.Logger) -> None:
+    cfg.setdefault(
+        "OUTPUT_LIGANDS_DIR",
+        cfg.get("PREPPED_LIGANDS_DIR") or cfg.get("PREPPED_LIGANDS_ROOT"),
+    )
+
+    per_roots = _dedupe_manifest_roots([
+        getattr(paths, "prepped_ligands_dir", None),
+    ])
+    library_roots = _dedupe_manifest_roots([
+        cfg.get("OUTPUT_LIGANDS_DIR"),
+        cfg.get("PREPPED_LIGANDS_ROOT"),
+        cfg.get("PREPPED_LIGANDS_DIR"),
+    ])
+
+    cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_roots]
+    cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in library_roots]
+
+    if not per_roots and not library_roots:
+        cfg["_LIB_INDEX"] = None
+        return
+
+    manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+    index = cfg.get("_LIB_INDEX")
+    if not isinstance(index, LibraryIndex):
+        index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
+        cfg["_LIB_INDEX"] = index
+
+    index_roots = _dedupe_manifest_roots([*per_roots, *library_roots])
+    if index_roots:
+        status_parts = []
+        for root in index_roots:
+            manifest_path = Path(root) / manifest_filename
+            manifest_state = "present" if manifest_path.exists() else "missing"
+            status_parts.append(f"{manifest_path}={manifest_state}")
+        index.load(index_roots)
+        logger.info(
+            "[single.index] per_roots=%s lib_roots=%s manifests=%s",
+            [str(p) for p in per_roots],
+            [str(p) for p in library_roots],
+            ";".join(status_parts) or "none",
+        )
+    else:
+        logger.info(
+            "[single.index] per_roots=%s lib_roots=%s manifests=none",
+            [str(p) for p in per_roots],
+            [str(p) for p in library_roots],
+        )
+
+
+def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
+    """Resolve SINGLE_LIGAND selector using manifest-backed lookups (if enabled)."""
     if not selector:
         return None
 
     allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
-    # Default order unchanged, but we may filter it below:
-    order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")).replace(" ", "").split(",")
-
-    # NEW: default to skip 'global' traversal in single-ligand mode (cheap win)
+    raw_order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global"))
+    order = ["fda_library", "per_protein", "global"]
     skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
     if skip_global:
-        order = [w for w in order if w != "global"]
+        order = [scope for scope in order if scope != "global"]
+    manifest_only = _to_bool(str(cfg.get("SINGLE_LIGAND_MANIFEST_ONLY", True)))
+    suggestions_cap = int(cfg.get("SINGLE_LIGAND_SUGGESTIONS", 5) or 5)
 
-    # Where to look
-    per_protein_dir = cfg.get("paths", {}).get("prepped_ligands_dir")  # injected at runtime in process_one_protein
-    global_root     = Path(cfg.get("OUTPUT_LIGANDS_DIR", "")) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+    per_roots = _dedupe_manifest_roots(cfg.get("_LIB_INDEX_PER_ROOTS", []))
+    library_roots = _dedupe_manifest_roots(cfg.get("_LIB_INDEX_LIBRARY_ROOTS", []))
 
-    logger.info("[single.debug] selector=%s order=%s skip_global=%s", selector, order, skip_global)
-    logger.info("[single.debug.paths] per_protein_dir=%s global_root=%s", per_protein_dir, global_root)
+    lib_index = cfg.get("_LIB_INDEX")
+    has_index = isinstance(lib_index, LibraryIndex)
 
-    try:
-        name_map = _load_fda_name_map(cfg, logger)
-        key = _norm_name_key(selector)
-        basenames = list(name_map.get(key, []))
-        if not basenames and allow_prefix and key:
-            pref = key
-            for k, v in name_map.items():
-                if k.startswith(pref):
-                    basenames.extend(list(v))
-        if global_root:
-            for bn in basenames:
-                p = Path(global_root) / "fda_library" / bn
-                if p.exists():
-                    logger.info("[single.name] key=%s basenames=%s probe=%s", _norm_name_key(selector), list(basenames), str(p))
-                    return p
-    except Exception as _e:
-        logger.debug("[single.name] mapping search skipped: %s", _e)
+    output_ligands_dir = cfg.get("OUTPUT_LIGANDS_DIR")
+    fda_root = Path(output_ligands_dir).joinpath("fda_library") if output_ligands_dir else None
+    name_map: Optional[dict[str, set[str]]] = None
+    fda_logged = False
+    key = _norm_name_key(selector)
 
-    def _match_one_dir(root: Optional[Path]) -> Optional[Path]:
-        if not root or not Path(root).exists():
+    effective_order = order
+    use_manifest = has_index and (bool(per_roots) or (not skip_global and bool(library_roots)))
+
+    logger.info(
+        "[single.debug] selector=%s raw_order=%s order=%s skip_global=%s manifest_only=%s has_index=%s use_manifest=%s per_roots=%s lib_roots=%s allow_prefix=%s",
+        selector,
+        raw_order,
+        effective_order,
+        skip_global,
+        manifest_only,
+        str(has_index).lower(),
+        str(use_manifest).lower(),
+        [str(p) for p in per_roots],
+        [str(p) for p in library_roots],
+        str(allow_prefix).lower(),
+    )
+
+    def _ensure_name_map() -> dict[str, set[str]]:
+        nonlocal name_map
+        if name_map is None:
+            name_map = _load_fda_name_map(cfg, logger)
+        return name_map
+
+    def _resolve_fda_scope() -> Optional[Path]:
+        nonlocal fda_logged
+        if fda_root is None or not fda_root.exists():
             return None
-        candidates = list(Path(root).glob("*.pdbqt"))
-        # Try exact stem (without _stage suffix), then prefix
-        for p in candidates:
-            base = p.stem.split("_stage")[0]
-            if base.lower() == selector.lower():
-                return p
-        if allow_prefix:
-            for p in candidates:
-                base = p.stem.split("_stage")[0]
-                if base.lower().startswith(selector.lower()):
-                    return p
+        mapping = _ensure_name_map()
+        basenames: list[str] = []
+        if key:
+            if key in mapping:
+                basenames.extend(sorted(mapping.get(key, set())))
+            if not basenames and allow_prefix:
+                for map_key, values in mapping.items():
+                    if map_key.startswith(key):
+                        basenames.extend(sorted(values))
+        basenames = list(dict.fromkeys(basenames))
+        probe_target: Path = fda_root if not basenames else fda_root / basenames[0]
+        if not fda_logged:
+            logger.info("[single.name] key=%s basenames=%s probe=%s", key, basenames, norm(probe_target))
+            fda_logged = True
+        for basename in basenames:
+            candidate = fda_root / basename
+            if candidate.exists():
+                logger.info(
+                    "[single.fda.hit] key=%s basename=%s path=%s",
+                    key,
+                    basename,
+                    norm(candidate),
+                )
+                logger.info("[single.lookup.hit] source=fda selector=%s path=%s", selector, norm(candidate))
+                return candidate
         return None
 
-    for where in order:
-        if where == "per_protein":
-            hit = _match_one_dir(Path(per_protein_dir) if per_protein_dir else None)
-            if hit:
-                logger.info(f"[single] matched in per-protein dir: {hit.name}")
-                return hit
+    def _suggest_from_index() -> list[str]:
+        if isinstance(lib_index, LibraryIndex):
+            ordered: list[Path] = []
+            seen: set[str] = set()
+            for candidate in [*per_roots, *library_roots]:
+                try:
+                    key_str = str(candidate.resolve())
+                except Exception:
+                    key_str = str(candidate)
+                if key_str not in seen:
+                    seen.add(key_str)
+                    ordered.append(candidate)
+            return lib_index.suggest(selector, ordered, suggestions_cap)
+        return []
 
-        elif where == "global":
-            # Retained for optional use if SINGLE_LIGAND_SKIP_GLOBAL=False
-            if global_root and global_root.exists():
-                # Fallback rglob only if you explicitly re-enable global (skip_global=False)
-                for p in global_root.rglob("*.pdbqt"):
-                    base = p.stem.split("_stage")[0]
-                    if base.lower() == selector.lower():
-                        logger.info(f"[single] matched in global dir: {p}")
-                        return p
-                if allow_prefix:
-                    for p in global_root.rglob("*.pdbqt"):
-                        base = p.stem.split("_stage")[0]
-                        if base.lower().startswith(selector.lower()):
-                            logger.info(f"[single] prefix-matched in global dir: {p}")
-                            return p
-        else:
-            logger.debug(f"[single] unknown search scope: {where}")
-    logger.warning("[single.miss] selector=%s (no FDA map hit / file absent)", selector)
+    def _log_miss(suggestions: list[str]) -> None:
+        logger.error(
+            "[single.lookup.miss] selector=%s suggestions=[%s]",
+            selector,
+            ",".join(suggestions),
+        )
+
+    hit = _resolve_fda_scope()
+    if hit:
+        return hit
+
+    if manifest_only and not use_manifest:
+        _log_miss(_suggest_from_index())
+        return None
+
+    if not has_index:
+        _log_miss(_suggest_from_index())
+        return None
+
+    if not use_manifest:
+        _log_miss(_suggest_from_index())
+        return None
+
+    if per_roots:
+        hit = lib_index.lookup(selector, per_roots, allow_prefix=allow_prefix)
+        if hit:
+            logger.info("[single.lookup.hit] source=manifest scope=per_protein selector=%s path=%s", selector, norm(hit))
+            return hit
+
+    if not skip_global and library_roots:
+        hit = lib_index.lookup(selector, library_roots, allow_prefix=allow_prefix)
+        if hit:
+            logger.info("[single.lookup.hit] source=manifest scope=global selector=%s path=%s", selector, norm(hit))
+            return hit
+
+    _log_miss(_suggest_from_index())
     return None
-
-
-
-
 # --- FDA name mapping (CSV) ---------------------------------------------------
 # Lets SINGLE_LIGAND resolve by generic/brand/synonym (e.g., "imatinib", "Gleevec").
 _FDA_NAME_MAP_CACHE = None
@@ -1584,6 +1902,216 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
 # ---- Multi-control center selection via crystallographic controls ----
+
+
+def _ensure_ctrl_vina_manifest(cfg, paths, stage_name, variant_token, ph_label, legacy_mode, logger):
+    run_id = cfg["RUN_ID"]
+    stage_dir = paths.configs_stage_dir(run_id, variant_token, stage_name, ph_label)
+    manifest_path = stage_dir / "vina.json"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    precreated = 0
+    if not manifest_path.exists():
+        payload = {
+            "run_id": run_id,
+            "pdb_id": paths.pdb_id,
+            "stage": stage_name,
+            "variant": variant_token,
+            "ph": ph_label,
+            "legacy": bool(legacy_mode),
+            "entries": [],
+        }
+        tmp = manifest_path.with_suffix(".part")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, manifest_path)
+        precreated = 1
+    logger.info("[ctrl.vina.json] precreated=%d path=%s", precreated, manifest_path)
+    return manifest_path
+
+
+def _finalize_ctrl_vina_manifest(
+    cfg,
+    paths,
+    stage_name,
+    variant_token,
+    ph_label,
+    legacy_mode,
+    manifest_path,
+    jobs,
+):
+    if manifest_path is None:
+        return
+    run_id = cfg["RUN_ID"]
+    stage_dir = manifest_path.parent
+    receptor_path = receptor_file(
+        paths.pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    out_root = docked_dir(
+        paths.pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    out_root.mkdir(parents=True, exist_ok=True)
+    out_dir = out_root / stage_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = []
+    for job in jobs:
+        lig_base = Path(job["ligand_path"]).stem
+        entry = {
+            "ligand": lig_base,
+            "config": str(stage_dir / f"{lig_base}_{stage_name}.txt"),
+            "out": str(out_dir / f"{lig_base}_{stage_name}.pdbqt"),
+            "receptor": str(receptor_path),
+        }
+        entries.append(entry)
+
+    entries.sort(key=lambda e: e["ligand"])
+
+    payload = {
+        "run_id": run_id,
+        "pdb_id": paths.pdb_id,
+        "stage": stage_name,
+        "variant": variant_token,
+        "ph": ph_label,
+        "legacy": bool(legacy_mode),
+        "entries": entries,
+    }
+
+    tmp = manifest_path.with_suffix(".part")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, manifest_path)
+
+
+def _ctrl_quick_file_sig(pth: str) -> str:
+    try:
+        p = Path(pth)
+        if not p.exists():
+            return "exists=False size=-1 sha=0000000000"
+        sz = p.stat().st_size
+        h = hashlib.sha1()
+        with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+            for ln in fh:
+                if ln.startswith(("ATOM", "HETATM")):
+                    h.update(ln[12:54].encode("utf-8", "ignore"))
+        return f"exists=True size={sz} sha={h.hexdigest()[:10]}"
+    except Exception:
+        return "sig=unavailable"
+
+
+def _ctrl_best_model_to_pdb(pdbqt_file: str, obabel: str):
+    from pathlib import Path as _Path
+    import tempfile
+    import subprocess
+    import shutil as _sh
+
+    best_e = None
+    best_chunk = None
+    pdbqt_path = _Path(pdbqt_file)
+    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+        chunk = []
+        in_model = False
+        for ln in fh:
+            u = ln.strip().upper()
+            if u.startswith("MODEL"):
+                chunk = [ln]
+                in_model = True
+            elif u.startswith("ENDMDL"):
+                chunk.append(ln)
+                in_model = False
+                for cl in chunk:
+                    if "REMARK VINA RESULT" in cl.upper():
+                        try:
+                            e = float(cl.strip().split()[3])
+                            if (best_e is None) or (e < best_e):
+                                best_e = e
+                                best_chunk = chunk[:]
+                        except Exception:
+                            pass
+            else:
+                if in_model:
+                    chunk.append(ln)
+    if best_chunk is None:
+        try:
+            with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if "REMARK VINA RESULT" in ln.upper():
+                        best_e = float(ln.strip().split()[3])
+                        break
+            best_chunk = None
+        except Exception:
+            return None, None
+
+    td = _Path(tempfile.mkdtemp(prefix="ctrl_redock_"))
+    best_pdbqt = td / "best.pdbqt"
+    if best_chunk:
+        with open(best_pdbqt, "w", encoding="utf-8") as out:
+            out.writelines(best_chunk)
+    else:
+        _sh.copy2(pdbqt_path, best_pdbqt)
+    out_pdb = td / "best.pdb"
+    try:
+        subprocess.run(
+            [obabel, "-ipdbqt", str(best_pdbqt), "-opdb", "-O", str(out_pdb)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None, best_e
+    return (out_pdb if out_pdb.exists() else None), best_e
+
+
+def _ctrl_redock_job(payload: dict) -> dict:
+    cfg = payload["cfg"]
+    stage_info = dict(payload["stage_info"])
+    conf_path, out_path = emit_vina_config(
+        cfg,
+        payload["pdb_id"],
+        payload["receptor_pdbqt"],
+        tuple(payload["center"]),
+        tuple(payload["box_size"]),
+        payload["ligand_path"],
+        payload["stage_name"],
+        stage_info,
+        int(payload["threads_per_job"]),
+        logger=None,
+        variant=payload["variant"],
+        ph_token=payload["ph"],
+        legacy=payload["legacy"],
+        skip_manifest_if_exists=bool(payload.get("skip_manifest", False)),
+    )
+    try:
+        _, score = run_docking_task(
+            payload["vina_exe"],
+            str(conf_path),
+            payload["ligand_name"],
+            str(out_path),
+        )
+    except Exception:
+        score = None
+    best_pdb, best_e = _ctrl_best_model_to_pdb(str(out_path), payload["obabel"])
+    return {
+        "order": payload["order"],
+        "base": payload["base"],
+        "center": tuple(payload["center"]),
+        "ligand_name": payload["ligand_name"],
+        "best_pdb": str(best_pdb) if best_pdb else None,
+        "best_e": best_e,
+        "score": score,
+        "out_path": str(out_path),
+    }
+
+
 def select_center_via_control_redock(
     cfg,
     paths,
@@ -1722,129 +2250,198 @@ def select_center_via_control_redock(
 
     best = None  # (rmsd, score, base, center_tuple)
 
-    def _best_model_to_pdb(pdbqt_file: _Path):
-        # parse multi-model pdbqt, pick model with best (lowest) Vina score
-        best_e = None; best_chunk = None
-        with open(pdbqt_file, "r", encoding="utf-8", errors="ignore") as fh:
-            chunk = []; in_model = False
-            for ln in fh:
-                u = ln.strip().upper()
-                if u.startswith("MODEL"):
-                    chunk = [ln]; in_model = True
-                elif u.startswith("ENDMDL"):
-                    chunk.append(ln); in_model = False
-                    # evaluate chunk
-                    for cl in chunk:
-                        if "REMARK VINA RESULT" in cl.upper():
-                            try:
-                                e = float(cl.strip().split()[3])
-                                if (best_e is None) or (e < best_e):
-                                    best_e = e; best_chunk = chunk[:]
-                            except Exception:
-                                pass
-                else:
-                    if in_model: chunk.append(ln)
-        # if file had no explicit MODEL blocks, treat whole file
-        if best_chunk is None:
-            try:
-                with open(pdbqt_file, "r", encoding="utf-8", errors="ignore") as fh:
-                    for ln in fh:
-                        if "REMARK VINA RESULT" in ln.upper():
-                            best_e = float(ln.strip().split()[3])
-                            break
-                best_chunk = None
-            except Exception:
-                return None, None
-
-        import tempfile, subprocess, shutil as _sh
-        td = _Path(tempfile.mkdtemp(prefix="ctrl_redock_"))
-        best_pdbqt = td / "best.pdbqt"
-        if best_chunk:
-            with open(best_pdbqt, "w", encoding="utf-8") as out:
-                out.writelines(best_chunk)
-        else:
-            _sh.copy2(pdbqt_file, best_pdbqt)
-        out_pdb = td / "best.pdb"
-        try:
-            subprocess.run([obabel, "-ipdbqt", str(best_pdbqt), "-opdb", "-O", str(out_pdb)],
-                           check=True, capture_output=True, text=True)
-        except Exception:
-            return None, best_e
-        return (out_pdb if out_pdb.exists() else None), best_e
-
-    for lig_pdbqt in cand_pdbqts:
-        base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
-        center = centroids.get(base)
-        if not center:
-            ref = control_lookup.get(base)
-            if ref and ref.suffix.lower() == ".pdb":
-                center = _centroid_from_pdb(ref)
-        if not center:
-            continue
-
-        stage_info = {"exhaustiveness": ex, "num_modes": nm}
-        if cfg.get("FAST_MODE"):
-            stage_info["exhaustiveness"] = 1
-        conf_path, out_path = emit_vina_config(
-            cfg,
-            paths.pdb_id,
-            receptor_pdbqt,
-            center,
-            (24.0, 24.0, 24.0),
-            str(lig_pdbqt),
-            "ctrl_redock",
-            stage_info,
+    cpu_total = int(cfg.get("CPU", os.cpu_count() or 1) or 1)
+    cpu_total = max(1, cpu_total)
+    max_parallel = int(cfg.get("MAX_PARALLEL_JOBS", 1) or 1)
+    max_parallel = max(1, max_parallel)
+    workers = max(1, min(cpu_total, max_parallel))
+    job_threads = max(1, min(threads_per_vina, max(1, cpu_total // workers)))
+    total_threads = workers * job_threads
+    logger.info(
+        "[ctrl.parallel] CPU=%d MAX_PARALLEL_JOBS=%d workers=%d threads_per_job=%d total_threads=%d",
+        cpu_total,
+        max_parallel,
+        workers,
+        job_threads,
+        total_threads,
+    )
+    if job_threads < threads_per_vina:
+        logger.info(
+            "[ctrl.parallel] adjust threads_per_vina old=%d new=%d",
             threads_per_vina,
-            logger=None,
-            variant=variant_token,
-            ph_token=ph_label,
-            legacy=legacy_mode,
+            job_threads,
         )
-        try:
-            _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
-        except Exception:
-            score = None
 
-        best_pdb, best_e = _best_model_to_pdb(_Path(out_path))
-        ref_path = control_lookup.get(base)
-        rmsd = float("inf")
+    stage_name = "ctrl_redock"
+    parallel_enabled = workers > 1 and len(cand_pdbqts) > 1
 
-        def _quick_file_sig(pth: str) -> str:
+    manifest_path = None
+
+    if not parallel_enabled:
+        for lig_pdbqt in cand_pdbqts:
+            base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
+            center = centroids.get(base)
+            if not center:
+                ref = control_lookup.get(base)
+                if ref and ref.suffix.lower() == ".pdb":
+                    center = _centroid_from_pdb(ref)
+            if not center:
+                continue
+
+            stage_info = {"exhaustiveness": ex, "num_modes": nm}
+            if cfg.get("FAST_MODE"):
+                stage_info["exhaustiveness"] = 1
+            logger.info(
+                "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                paths.pdb_id,
+                stage_name,
+                variant_token or "None",
+                ph_label or "None",
+            )
+            conf_path, out_path = emit_vina_config(
+                cfg,
+                paths.pdb_id,
+                receptor_pdbqt,
+                center,
+                (24.0, 24.0, 24.0),
+                str(lig_pdbqt),
+                stage_name,
+                stage_info,
+                job_threads,
+                logger=None,
+                variant=variant_token,
+                ph_token=ph_label,
+                legacy=legacy_mode,
+            )
             try:
-                p = Path(pth)
-                sz = p.stat().st_size if p.exists() else -1
-                # quick coordinate hash for PDB-like files (robust-ish, not crypto)
-                h = hashlib.sha1()
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    for ln in fh:
-                        if ln.startswith(("ATOM", "HETATM")):
-                            h.update(ln[12:54].encode("utf-8", "ignore"))  # atom name + coords
-                return f"exists={p.exists()} size={sz} sha={h.hexdigest()[:10]}"
+                _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
             except Exception:
-                return "sig=unavailable"
+                score = None
 
-        if best_pdb and ref_path:
-            logger.info(f"[rmsd.debug] ref={ref_path} | {_quick_file_sig(str(ref_path))}")
-            logger.info(f"[rmsd.debug] dock={best_pdb} | {_quick_file_sig(str(best_pdb))}")
-            same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
-            if same_file:
-                logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
-            try:
-                rmsd = compute_rmsd(str(ref_path), str(best_pdb))
-            except Exception as e:
-                rmsd = float("inf")
-                logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
+            best_pdb, best_e = _ctrl_best_model_to_pdb(str(out_path), obabel)
+            ref_path = control_lookup.get(base)
+            rmsd = float("inf")
 
+            if best_pdb and ref_path:
+                logger.info(f"[rmsd.debug] ref={ref_path} | {_ctrl_quick_file_sig(str(ref_path))}")
+                logger.info(f"[rmsd.debug] dock={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}")
+                same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
+                if same_file:
+                    logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
+                try:
+                    rmsd = compute_rmsd(str(ref_path), str(best_pdb))
+                except Exception as e:
+                    rmsd = float("inf")
+                    logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
 
+            e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
+            logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
 
+            if _math.isfinite(rmsd):
+                if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
+                    best = (rmsd, e_print if e_print is not None else None, base, center)
+    else:
+        manifest_path = _ensure_ctrl_vina_manifest(
+            cfg,
+            paths,
+            stage_name,
+            variant_token,
+            ph_label,
+            legacy_mode,
+            logger,
+        )
+        logger.info("[ctrl.parallel] write_once=on path=%s", manifest_path)
+        cfg_payload = dict(cfg)
+        jobs = []
+        for order, lig_pdbqt in enumerate(cand_pdbqts):
+            base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
+            center = centroids.get(base)
+            if not center:
+                ref = control_lookup.get(base)
+                if ref and ref.suffix.lower() == ".pdb":
+                    center = _centroid_from_pdb(ref)
+            if not center:
+                continue
+            stage_info = {"exhaustiveness": ex, "num_modes": nm}
+            if cfg.get("FAST_MODE"):
+                stage_info["exhaustiveness"] = 1
+            logger.info(
+                "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                paths.pdb_id,
+                stage_name,
+                variant_token or "None",
+                ph_label or "None",
+            )
+            jobs.append(
+                {
+                    "order": order,
+                    "cfg": cfg_payload,
+                    "pdb_id": paths.pdb_id,
+                    "receptor_pdbqt": str(receptor_pdbqt),
+                    "center": tuple(center),
+                    "box_size": (24.0, 24.0, 24.0),
+                    "ligand_path": str(lig_pdbqt),
+                    "ligand_name": lig_pdbqt.name,
+                    "stage_name": stage_name,
+                    "stage_info": stage_info,
+                    "threads_per_job": job_threads,
+                    "variant": variant_token,
+                    "ph": ph_label,
+                    "legacy": legacy_mode,
+                    "vina_exe": vina_exe,
+                    "obabel": obabel,
+                    "base": base,
+                    "skip_manifest": True,
+                }
+            )
 
+        if not jobs:
+            return None, None
 
-        e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
-        logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
+        results = []
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            future_map = {pool.submit(_ctrl_redock_job, job): job for job in jobs}
+            for fut in as_completed(future_map):
+                res = fut.result()
+                results.append(res)
 
-        if _math.isfinite(rmsd):
-            if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
-                best = (rmsd, e_print if e_print is not None else None, base, center)
+        results.sort(key=lambda r: r["order"])
+        _finalize_ctrl_vina_manifest(
+            cfg,
+            paths,
+            stage_name,
+            variant_token,
+            ph_label,
+            legacy_mode,
+            manifest_path,
+            jobs,
+        )
+        for res in results:
+            base = res["base"]
+            center = tuple(res["center"])
+            ref_path = control_lookup.get(base)
+            best_pdb = res["best_pdb"]
+            rmsd = float("inf")
+            if best_pdb and ref_path:
+                logger.info(f"[rmsd.debug] ref={ref_path} | {_ctrl_quick_file_sig(str(ref_path))}")
+                logger.info(f"[rmsd.debug] dock={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}")
+                same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
+                if same_file:
+                    logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
+                try:
+                    rmsd = compute_rmsd(str(ref_path), str(best_pdb))
+                except Exception as e:
+                    rmsd = float("inf")
+                    logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
+
+            best_e = res["best_e"]
+            score = res["score"]
+            e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
+            logger.info(f"[control-redock] lig={res['ligand_name']} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
+
+            if _math.isfinite(rmsd):
+                if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
+                    best = (rmsd, e_print if e_print is not None else None, base, center)
 
     if best is None:
         return None, None
@@ -2057,6 +2654,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         roots.append(paths.prepped_ligands_dir)
 
     extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
+    extra_paths: list[Path] = []
     if extra_dirs:
         for d in extra_dirs.split(";"):
             d = d.strip()
@@ -2065,7 +2663,16 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
             p = Path(d)
             if p.exists():
                 roots.append(p)
+                extra_paths.append(p)
 
+    single_selector = cfg.get("_EFFECTIVE_SINGLE_LIGAND")
+    crawl_allowed = not bool(single_selector)
+    logger.info(
+        "[ligands.scan.guard] single_mode=%s roots=%d crawl_allowed=%s",
+        str(bool(single_selector)).lower(),
+        len(roots),
+        "true" if crawl_allowed else "false(single)",
+    )
     logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
 
     # --- collect all .pdbqt (dedup by normalized path), directory-first ---
@@ -2134,7 +2741,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     test_map = _coerce_test_map(maybe_map)
     logger.info(f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}")
-    hit = test_map.get(pdb_id)  # <- now robust
+    mapped_subdir = test_map.get(pdb_id)
 
     # Build allowed non-control roots
     allowed_noncontrol_roots: list[Path] = []
@@ -2158,12 +2765,11 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     allowed_noncontrol_roots.extend(deduped_roots)
 
     logger.info(
-        "[fuel] pdb_id=%s test_mode=%s roots=%s"
-        % (
-            pdb_id,
-            str(test_enable).lower(),
-            ",".join(str(r.resolve()) for r in deduped_roots),
-        )
+        "[fuel] pdb_id=%s test_mode=%s mapped_subdir=%s roots=%s",
+        pdb_id,
+        str(test_enable).lower(),
+        mapped_subdir or "default",
+        ",".join(str(r.resolve()) for r in deduped_roots) or "none",
     )
 
     # Always include extras (unchanged)
@@ -2174,6 +2780,47 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
 
     # Final audits (after list is populated)
     logger.info("[lib-roots] non-control roots = " + ", ".join(map(str, allowed_noncontrol_roots)))
+
+    def _dedup_index_roots(seq: list[Path]) -> list[Path]:
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for candidate in seq:
+            if not candidate:
+                continue
+            path_obj = Path(candidate)
+            try:
+                key = str(path_obj.resolve())
+            except Exception:
+                key = str(path_obj)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(path_obj)
+        return deduped
+
+    per_index_roots: list[Path] = []
+    if paths.prepped_ligands_dir:
+        per_index_roots.append(paths.prepped_ligands_dir)
+
+    index_library_roots: list[Path] = []
+    mapped_value = test_map.get(pdb_id) if test_enable else None
+    if test_enable and mapped_value is not None and cfg.get("OUTPUT_LIGANDS_DIR"):
+        base_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
+        tokens = [tok.strip() for tok in str(mapped_value).split(",") if tok.strip()]
+        index_library_roots.extend(base_root / tok for tok in tokens)
+    else:
+        index_library_roots.extend(deduped_roots)
+        index_library_roots.extend(extra_paths)
+
+    per_index_roots = _dedup_index_roots(per_index_roots)
+    index_library_roots = _dedup_index_roots(index_library_roots)
+    index_roots = _dedup_index_roots(per_index_roots + index_library_roots)
+
+    manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+    lib_index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
+    lib_index.load(index_roots)
+    cfg["_LIB_INDEX"] = lib_index
+    cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_index_roots]
+    cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in index_library_roots]
 
 
     # Helper: path under root?
@@ -2286,10 +2933,11 @@ def run_one_stage(
 
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     max_workers = int(cfg["MAX_PARALLEL_JOBS"])
-    # >>> DOCKED PATHS PATCH START
-    variant = None
+    variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_token = variant_env or None
+    legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
+    ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    # >>> DOCKED PATHS PATCH END
 
     scores: Dict[str, float] = {}
     validated_ligands: List[str] = []
@@ -2459,6 +3107,14 @@ def run_one_stage(
                 if cfg.get("FAST_MODE"):
                     stage_for_cfg["exhaustiveness"] = 1
 
+                stage_name = stage["name"]
+                logger.info(
+                    "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                    pdb_id,
+                    stage_name,
+                    variant_token or "None",
+                    ph_label or "None",
+                )
                 conf_path, out_path = emit_vina_config(
                     cfg,
                     pdb_id,
@@ -2466,7 +3122,7 @@ def run_one_stage(
                     center,
                     box_size,
                     lig,
-                    stage["name"],
+                    stage_name,
                     stage_for_cfg,
                     threads_per_vina,
                     logger,
@@ -2474,6 +3130,9 @@ def run_one_stage(
                     ph_token=ph_label,
                     legacy=legacy_mode,
                 )
+
+                # anchor: emit_vina_config resolves variant/pH from cfg/env
+                logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path)
 
                 # Guard: config must live under current RUN_DIR
                 try:
@@ -2602,6 +3261,14 @@ def run_one_stage(
                                     
                                 retry_center = center
                                 retry_box = box_size
+                                stage_retry_name = stage_retry["name"]
+                                logger.info(
+                                    "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                                    pdb_id,
+                                    stage_retry_name,
+                                    variant_token or "None",
+                                    ph_label or "None",
+                                )
                                 conf_path2, out_path2 = emit_vina_config(
                                     cfg,
                                     pdb_id,
@@ -2609,7 +3276,7 @@ def run_one_stage(
                                     retry_center,
                                     retry_box,
                                     lig,
-                                    stage_retry["name"],
+                                    stage_retry_name,
                                     stage_retry,
                                     threads_per_vina,
                                     logger,
@@ -2617,6 +3284,8 @@ def run_one_stage(
                                     ph_token=ph_label,
                                     legacy=legacy_mode,
                                 )
+                                # anchor: retry config uses same variant/pH resolution
+                                logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path2)
                                 try:
                                     Path(conf_path2).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
                                 except Exception:
@@ -2730,6 +3399,14 @@ def run_one_stage(
                         except Exception as _e:
                             logger.warning(f"Retry recenter/box tweak failed: {_e}")
 
+                        stage_retry2_name = stage_retry2["name"]
+                        logger.info(
+                            "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
+                            pdb_id,
+                            stage_retry2_name,
+                            variant_token or "None",
+                            ph_label or "None",
+                        )
                         conf_path3, out_path3 = emit_vina_config(
                             cfg,
                             pdb_id,
@@ -2737,7 +3414,7 @@ def run_one_stage(
                             retry_center,
                             retry_box,
                             lig,
-                            stage_retry2["name"],
+                            stage_retry2_name,
                             stage_retry2,
                             threads_per_vina,
                             logger,
@@ -2745,6 +3422,8 @@ def run_one_stage(
                             ph_token=ph_label,
                             legacy=legacy_mode,
                         )
+                        # anchor: fallback config mirrors initial variant/pH discovery
+                        logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path3)
                         try:
                             Path(conf_path3).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
                         except Exception:
@@ -3720,6 +4399,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     cfg.pop("_SINGLE_RESOLVED_PATH", None)
     # --- Single-ligand mode (if active) --------------------------------------
     if cfg["_EFFECTIVE_SINGLE_LIGAND"]:
+        _ensure_single_ligand_index(cfg, paths, logger)
         # Provide per-protein paths to resolver
         cfg.setdefault("paths", {})
         cfg["paths"]["prepped_ligands_dir"] = str(paths.prepped_ligands_dir)
@@ -3729,16 +4409,48 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             cfg["_SINGLE_RESOLVED_PATH"] = str(hit)
             single_ligand_hit = hit
         else:
-            logger.error("[single.block] selector '%s' not found in fda_library via FDA_MAPPING_CSV; aborting instead of fallback.", cfg["_EFFECTIVE_SINGLE_LIGAND"])
-            raise SystemExit(2)
+            selector_token = cfg["_EFFECTIVE_SINGLE_LIGAND"]
+            suggestions: list[str] = []
+            try:
+                import difflib
 
-    ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
-    if single_ligand_hit:
+                fda_map = _load_fda_name_map(cfg, logger)
+                suggestions = difflib.get_close_matches(
+                    selector_token,
+                    list(fda_map.keys()),
+                    n=5,
+                    cutoff=0.7,
+                )
+            except Exception:
+                suggestions = []
+            if suggestions:
+                logger.error("[single.miss.suggest] did_you_mean=%s", ", ".join(suggestions))
+
+            allow_flag = os.environ.get("ALLOW_FDA_FALLBACK")
+            if allow_flag is None:
+                allow_flag = cfg.get("ALLOW_FDA_FALLBACK", False)
+            if not _to_bool(allow_flag):
+                logger.error(
+                    "[single.block] selector '%s' not found in fda_library via FDA_MAPPING_CSV; aborting instead of fallback.",
+                    selector_token,
+                )
+                raise SystemExit(2)
+            logger.warning(
+                "[single.block] selector '%s' not found; ALLOW_FDA_FALLBACK enabled, continuing with fallback flow.",
+                selector_token,
+            )
+            cfg["_EFFECTIVE_SINGLE_LIGAND"] = ""
+
+    if cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
+        if not single_ligand_hit:
+            return
         ligands = [str(single_ligand_hit)]
         ha = _count_heavy_atoms_from_pdbqt(single_ligand_hit)
         heavy_atom_counts = {str(single_ligand_hit): ha}
         pains_flags = {}
         logger.info(f"[single] Active ? docking only: {single_ligand_hit.name} (heavy={ha})")
+    else:
+        ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
 
     # (skipped in single-ligand mode)
     if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
@@ -4236,6 +4948,85 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     cfg.pop("_ACTIVE_PH_LABEL", None)
 
 
+def _smoke_emit_config_demo() -> None:
+    """Emit a small config to exercise router paths in isolation."""
+    smoke_log = logging.getLogger("smoke")
+    old_variant = os.environ.get("APO_HOLO_VARIANT")
+    try:
+        base_cfg = ConfigDict(load_inputs())
+    except Exception as exc:
+        smoke_log.warning("[smoke.emit.skip] reason=%s", exc)
+        return
+
+    try:
+        cfg = ConfigDict(base_cfg.copy())
+        repo_root = Path(__file__).resolve().parent
+        smoke_root = repo_root / "analysis" / "_smoke"
+        overrides = {
+            "OVERALL_DIR": smoke_root,
+            "INPUT_DIR": smoke_root / "input_pdbs",
+            "OUTPUT_DIR": smoke_root / "processed_pdbs",
+            "DOCKED_DIR": smoke_root / "docked",
+            "PREPPED_LIGANDS_DIR": smoke_root / "prepped_ligands",
+            "OUTPUT_LIGANDS_DIR": smoke_root / "prepped_ligands",
+            "PREPPED_LIGANDS_ROOT": smoke_root / "prepped_ligands",
+            "LIGANDS_MOL2_DIR": smoke_root / "ligands_mol2",
+            "CONFIGS_DIR": smoke_root / "configs",
+        }
+        for key, path_value in overrides.items():
+            cfg[key] = str(path_value)
+            Path(path_value).mkdir(parents=True, exist_ok=True)
+
+        cfg["RUN_ID"] = "smoke_demo"
+        cfg["RESET_CONFIGS"] = False
+        init_config_run_dir(cfg, run_id=cfg["RUN_ID"], reset=False, logger=smoke_log)
+
+        mode, variants = resolve_apo_holo_mode(cfg)
+        smoke_log.info("[smoke.emit] mode=%s variants=%s", mode, variants)
+
+        pdb_id = "3CS9"
+        paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+        lig_dir = paths.prepped_ligands_dir
+        lig_dir.mkdir(parents=True, exist_ok=True)
+        lig_path = lig_dir / "smoke_ligand.pdbqt"
+        if not lig_path.exists():
+            lig_path.write_text("SMOKE", encoding="utf-8")
+
+        ph_label = "pH6_7"
+        cfg["_ACTIVE_PH_LABEL"] = ph_label
+        os.environ["APO_HOLO_VARIANT"] = "APO"
+
+        receptor_path = receptor_file(paths.pdb_id, variant="APO", ph_tag=ph_label, legacy=False)
+        receptor_path.parent.mkdir(parents=True, exist_ok=True)
+        if not receptor_path.exists():
+            receptor_path.write_text("RECEPTOR", encoding="utf-8")
+
+        stage_info = {"name": "smoke_stage", "exhaustiveness": 8, "num_modes": 9, "verbosity": 0}
+        conf_path, out_path = emit_vina_config(
+            cfg,
+            paths.pdb_id,
+            str(receptor_path),
+            (0.0, 0.0, 0.0),
+            (20.0, 20.0, 20.0),
+            str(lig_path),
+            stage_info["name"],
+            stage_info,
+            1,
+            smoke_log,
+            variant="APO",
+            ph_token=ph_label,
+            legacy=False,
+        )
+        smoke_log.info("[smoke.emit.done] config=%s out=%s", conf_path, out_path)
+    except Exception as exc:
+        smoke_log.warning("[smoke.emit.skip] reason=%s", exc)
+    finally:
+        if old_variant is None:
+            os.environ.pop("APO_HOLO_VARIANT", None)
+        else:
+            os.environ["APO_HOLO_VARIANT"] = old_variant
+
+
 # ======================
 # Program entry point
 # ======================
@@ -4301,8 +5092,12 @@ def main() -> None:
 
     # --- Single-ligand config (ported) ---------------------------------------
     cfg.setdefault("SINGLE_LIGAND", "")
-    cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "per_protein,global")
+    cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global")
     cfg.setdefault("SINGLE_LIGAND_ALLOW_PREFIX", False)
+    cfg.setdefault("SINGLE_LIGAND_MANIFEST_ONLY", True)
+    cfg.setdefault("SINGLE_LIGAND_SUGGESTIONS", 5)
+    cfg.setdefault("ALLOW_FDA_FALLBACK", False)
+    cfg.setdefault("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
     cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
 
     # CLI > ENV > CFG precedence
@@ -4535,4 +5330,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    _smoke_emit_config_demo()
     main()
