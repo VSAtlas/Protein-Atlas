@@ -73,9 +73,6 @@ _ION_AUDIT_SALTS = {
 }
 
 
-_CLEAN_PROVENANCE_LOGGED = False
-
-
 def _resolve_run_id(argv: list[str]) -> str:
     cli_run_id = _cli_val(argv, "--run-id")
     env_run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
@@ -1762,6 +1759,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     import automate_protein_prep
     from distutils.util import strtobool
 
+    prepare_receptor.last_provenance = "unknown"
     force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
     log = logging.getLogger("ph_ensemble")
     # >>> RECEPTOR PATHS PATCH START
@@ -1983,6 +1981,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
         try:
             if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)) and not receptor_sanity_check(str(receptor_pdbqt_path)):
                 logger.warning("Receptor sanity check failed (cached receptor).")
+                prepare_receptor.last_provenance = "cache_reuse_failed"
                 return None, None
         except Exception as _e:
             logger.warning(f"Receptor sanity check skipped due to error: {_e}")
@@ -1990,6 +1989,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
         receptor_norm = norm(receptor_pdbqt_path)
         if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
             _build_ph_ensemble(cleaned_norm)
+        prepare_receptor.last_provenance = "cache_reuse"
         return cleaned_norm, receptor_norm
     
     # --- PH_ENSEMBLE gating of legacy protonation ---
@@ -2008,10 +2008,12 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
         )
     except Exception as e:
         logger.warning(f"Protein cleaning failed: {e}")
+        prepare_receptor.last_provenance = "clean_failed"
         return None, None
 
     if not cleaned_pdb or not Path(cleaned_pdb).exists():
         logger.warning("Protein cleaning did not produce a cleaned PDB.")
+        prepare_receptor.last_provenance = "clean_failed"
         return None, None
 
     # Relocate cleaned PDB into the variant receptor dir if needed
@@ -2029,6 +2031,12 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
         _build_ph_ensemble(cleaned_pdb)
 
+    try:
+        provenance = getattr(automate_protein_prep, "get_clean_provenance", lambda: "clean_pdb")()
+    except Exception:
+        provenance = "clean_pdb"
+    prepare_receptor.last_provenance = provenance
+
     # Generate receptor PDBQT directly at the variant-aware path
     try:
         ok = automate_protein_prep.run_prepare_receptor(
@@ -2043,6 +2051,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
 
     if not receptor_pdbqt or not Path(receptor_pdbqt).exists():
         logger.warning("Receptor PDBQT was not created.")
+        prepare_receptor.last_provenance = "clean_failed"
         return None, None
 
     try:
@@ -2059,6 +2068,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             ok = receptor_sanity_check(receptor_pdbqt)
             if not ok:
                 logger.warning("Receptor sanity check failed (too few atoms or zero coords).")
+                prepare_receptor.last_provenance = "clean_failed"
                 return None, None
     except Exception as _e:
         logger.warning(f"Receptor sanity check skipped due to error: {_e}")
@@ -4532,13 +4542,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     cfg["_CURRENT_VARIANT"] = variant_env
     cleaned_target = paths.receptor_cleaned_pdb(variant_token)
     receptor_target = paths.receptor_pdbqt(variant_token, None)
-    global _CLEAN_PROVENANCE_LOGGED
-    if not _CLEAN_PROVENANCE_LOGGED:
-        logging.info(
-            "[receptor.clean.provenance] cleaned_pdb_created_by=unknown source=%s",
-            cleaned_target,
-        )
-        _CLEAN_PROVENANCE_LOGGED = True
     logger.info(
         "[receptor.path] pdb=%s variant=%s cleaned_pdb=%s exists=%s",
         paths.pdb_id,
@@ -4557,6 +4560,13 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # 2) Protein prep (re-use if cached)
     logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
     cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
+    provenance = getattr(prepare_receptor, "last_provenance", None)
+    if provenance is None:
+        try:
+            provenance = getattr(protein_prep, "get_clean_provenance", lambda: "unknown")()
+        except Exception:
+            provenance = "unknown"
+    logger.info("[receptor.clean.provenance] created_by=%s", provenance)
     if not cleaned_pdb or not receptor_pdbqt:
         logger.warning("Skipping protein due to prep failure.")
         return

@@ -223,7 +223,14 @@ def _get_test_pdb() -> Path:
 
 class TestIonRetention:
     @pytest.mark.ions_acceptance
-    def test_1bn1_holo_keeps_metals(self):
+    def test_input_has_metals_or_skip(self):
+        pdb_path = _get_test_pdb()
+        total_in, _, _ = parse_pdb_metals(pdb_path)
+        if total_in == 0:
+            pytest.skip(f"Input PDB has no metals: {pdb_path}")
+
+    @pytest.mark.ions_acceptance
+    def test_holo_retains_metals_vs_apo_reduces(self):
         pdb_path = _get_test_pdb()
         total_in, _, _ = parse_pdb_metals(pdb_path)
         if total_in == 0:
@@ -231,14 +238,6 @@ class TestIonRetention:
         holo_clean = run_prep_variant(pdb_path, "HOLO")
         holo_total, *_ = parse_pdb_metals(holo_clean)
         assert holo_total >= 1, f"HOLO should retain metals; got 0 in {holo_clean}"
-
-    @pytest.mark.ions_acceptance
-    def test_1bn1_apo_strips_metals(self):
-        pdb_path = _get_test_pdb()
-        total_in, _, _ = parse_pdb_metals(pdb_path)
-        if total_in == 0:
-            pytest.skip(f"Input PDB has no metals: {pdb_path}")
-        holo_clean = run_prep_variant(pdb_path, "HOLO")
         apo_clean = run_prep_variant(pdb_path, "APO")
         holo_total, *_ = parse_pdb_metals(holo_clean)
         apo_total, *_ = parse_pdb_metals(apo_clean)

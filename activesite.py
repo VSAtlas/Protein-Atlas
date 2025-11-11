@@ -32,6 +32,17 @@ if not os.path.exists(ALIASES_PATH):
 _aliases_cache = None
 _rules_cache = None
 
+
+def _log_alias_tokens(kind: str, tokens: set[str]) -> None:
+    sample = ",".join(sorted(tokens)[:10]) if tokens else "none"
+    logging.info(
+        "[aliases.tokens] source=%s kind=%s count=%d sample=%s",
+        ALIASES_PATH,
+        kind,
+        len(tokens),
+        sample,
+    )
+
 # ---  YAML loader with encoding fallbacks & punctuation cleanup ---
 def _load_aliases_yaml():
     import yaml, unicodedata
@@ -125,23 +136,14 @@ def get_atom_rules():
                 continue
             normalized.append(norm.upper() if up else norm)
         result = set(normalized)
-        if section:
-            sample = ",".join(sorted(result)[:5]) if result else "none"
-            logging.debug(
-                "[aliases.tokens] section=%s total=%d unique=%d sample=%s",
-                section,
-                len(normalized),
-                len(result),
-                sample,
-            )
-            if ignored:
-                filtered = sorted({t.strip() for t in ignored if t.strip()})[:5]
-                if filtered:
-                    logging.debug(
-                        "[aliases.ignored] section=%s tokens=%s",
-                        section,
-                        ",".join(filtered),
-                    )
+        if section and ignored:
+            filtered = sorted({t.strip() for t in ignored if t and t.strip()})[:5]
+            if filtered:
+                logging.debug(
+                    "[aliases.tokens.ignored] section=%s tokens=%s",
+                    section,
+                    ",".join(filtered),
+                )
         return result
 
     # element/name logic
@@ -159,10 +161,18 @@ def get_atom_rules():
     #  ligand & Meeko lists from YAML
     nucleotide_like_resnames = _as_set(ligand_sets.get("nucleotide_like_resnames"))
     meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"), section="meeko.drop_free_ions")
+    strip_raw = a.get("strip_in_receptor_resnames", []) or []
+    strip_tokens = _as_set(strip_raw, section="strip_in_receptor_resnames")
+    strip_tokens |= meeko_drop_free_ions
+    _log_alias_tokens("strip", strip_tokens)
 
     # retain list (and a compat copy)
     retain_raw = a.get("retain_in_receptor_resnames", []) or []
     retain_res = _as_set(retain_raw, section="retain_in_receptor_resnames")
+    _log_alias_tokens("retain", retain_res)
+    allow_raw = a.get("allow_in_receptor_resnames", []) or []
+    allow_tokens = _as_set(allow_raw, section="allow_in_receptor_resnames")
+    _log_alias_tokens("allow", allow_tokens)
     retain_sample = ",".join(sorted(retain_res)[:10]) if retain_res else "none"
     logging.info(
         "[aliases.section] name=retain_in_receptor_resnames size=%d sample=%s",
