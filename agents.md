@@ -209,3 +209,57 @@ Reviewer-friendly checkboxes (per PR)
  No duplicate handlers; logs appear once in console and in per-protein file.
 
 Implementation hint for Codex: Add logs where decisions are made (conditionals, returns, exceptions) and where side effects happen (file writes, deletions, external tool calls). Keep messages â‰¤ 120 chars, keys in snake_case, and reuse the component tags above.
+
+
+## Patch Boundaries & Protected Paths (Must Read)
+
+**Goal:** Prevent patch collisions between automation and local/CI setup by strictly scoping what the agent may edit.
+
+### Allowed default patch scope
+Focus patches in:
+- `code/protein_automation/**` (Python pipeline code)
+- `analysis/**` (non-test analysis helpers)
+- `docs/**` (text only)
+
+### Protected paths (DO NOT EDIT unless explicitly requested)
+- `tests/**`
+- `tests/data/**`  ? cached artifacts only; never commit binaries here
+- `.github/workflows/**`
+- `ci/**`
+- `input_pdbs/**`  ? source inputs; never auto-rewrite
+- `processed_pdbs/**`, `docked/**`  ? build outputs; hands off
+- `agents.md`  ? only edit when asked to change policy
+
+**If your patch touches any protected path, abort** unless the PR title or top of the user’s prompt contains one of:
+- `override:tests`, `override:ci`, or `override:agents`
+
+### Binary / data policy
+- Never vendor PDBs, SDFs, MOL2, or other binaries into the repo.
+- Tests must **download/cache** required artifacts at runtime under `tests/data/` and rely on `.gitignore`.
+- If a required file is missing, update tests to fetch or to skip with a clear message; do **not** add the file to git.
+
+### Environment & CI policy
+- Use **only** `ci/run_in_env.sh` to create/activate the environment and run tests.
+- Do not modify `.github/workflows/**` unless the user asked for CI changes (`override:ci`).
+- Do not add new package installs in code; place them in `environment.yml` and rely on the CI/bootstrap script.
+
+### Test policy
+- Do not edit `tests/**` unless the user asked for test changes (`override:tests`).
+- Acceptance tests (e.g., ions retention) are the source of truth; code should be modified to satisfy them.
+
+### Conflict-avoidance with setup scripts
+- If a patch would change files that the setup/bootstrap scripts also touch in the same run, **abort** and emit:
+  `ERROR [agent-guard] protected_paths_touched=<list>; action=abort`
+- Prefer adding **logging** or **configuration flags** instead of restructuring shared bootstrapping code.
+
+### PR checklist (agent MUST enforce)
+- [ ] No changes in protected paths (unless override tag present).
+- [ ] No binaries added to the repo.
+- [ ] Patch is single-topic and minimal.
+- [ ] New/changed code emits clear logs for key decisions (grep-able tags).
+- [ ] Tests pass locally via `ci/run_in_env.sh`.
+
+### Examples
+**OK:** Add debug lines in `code/protein_automation/automate_protein_prep.py` and `main.py`.
+**NOT OK:** Edit `tests/test_ions_acceptance.py` to “make it pass” (unless PR is tagged `override:tests`).
+
