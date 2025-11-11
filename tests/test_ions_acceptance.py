@@ -3,20 +3,19 @@
 import os
 import re
 import sys
-import json
+import gzip
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import urllib.request
-import socket
 
 import pytest
 
 # --- Repo path setup (adjust if needed) ---------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 CODE_DIR = ROOT / "code" / "protein_automation"
+FIXTURE_GZ = ROOT / "tests" / "fixtures" / "1BN1.pdb.gz"
 if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
@@ -39,23 +38,16 @@ METAL_ELEMENTS = {
 
 _METAL_RE = re.compile(r"^(?:HETATM|ATOM)\s")  # some structures mislabel ions as ATOM
 
-CACHE_DIR = ROOT / "tests" / "data"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-CACHE_PDB = CACHE_DIR / "1BN1.pdb"
-RCSB_URL = "https://files.rcsb.org/download/1BN1.pdb"
-
-def _try_download_1bn1(dest: Path, timeout: float = 20.0) -> bool:
-    try:
-        with urllib.request.urlopen(RCSB_URL, timeout=timeout) as r:
-            data = r.read()
-        if not data or len(data) < 5000:  # sanity check
-            return False
-        dest.write_bytes(data)
-        return True
-    except (OSError, socket.timeout):
-        return False
-    except Exception:
-        return False
+def _inflate_fixture_gz() -> Optional[Path]:
+    """Inflate the vendored gzipped 1BN1 fixture into a temporary file."""
+    if FIXTURE_GZ.exists() and FIXTURE_GZ.stat().st_size > 0:
+        fd, tmp_name = tempfile.mkstemp(prefix="1BN1_", suffix=".pdb")
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        with gzip.open(FIXTURE_GZ, "rb") as gzf, tmp_path.open("wb") as out:
+            out.write(gzf.read())
+        return tmp_path.resolve()
+    return None
 
 def _element_from_pdb_line(line: str) -> Optional[str]:
     """
@@ -208,16 +200,17 @@ def run_prep_variant(pdb_path: Path, variant: str) -> Path:
 # --- Fixtures & tests ---------------------------------------------------------
 
 def _get_test_pdb() -> Path:
+    """Resolve the test PDB path, preferring offline fixtures."""
+    inflated = _inflate_fixture_gz()
+    if inflated:
+        return inflated
+
     env_path = os.environ.get("ATLAS_TEST_PDB", "").strip()
     if env_path:
         return Path(env_path).resolve()
-    if CACHE_PDB.exists():
-        return CACHE_PDB.resolve()
-    if _try_download_1bn1(CACHE_PDB):
-        return CACHE_PDB.resolve()
+
     pytest.skip(
-        f"ATLAS_TEST_PDB not set and could not download {RCSB_URL}. "
-        "Set ATLAS_TEST_PDB or vendor tests/data/1BN1.pdb."
+        "1BN1 fixture missing and ATLAS_TEST_PDB unset; offline run skipped."
     )
 
 
@@ -228,9 +221,10 @@ class TestIonRetention:
         total_in, _, _ = parse_pdb_metals(pdb_path)
         if total_in == 0:
             pytest.skip(f"Input PDB has no metals: {pdb_path}")
+        assert total_in >= 1
 
     @pytest.mark.ions_acceptance
-    def test_holo_retains_metals_vs_apo_reduces(self):
+    def test_1bn1_holo_keeps_metals(self):
         pdb_path = _get_test_pdb()
         total_in, _, _ = parse_pdb_metals(pdb_path)
         if total_in == 0:
@@ -238,6 +232,14 @@ class TestIonRetention:
         holo_clean = run_prep_variant(pdb_path, "HOLO")
         holo_total, *_ = parse_pdb_metals(holo_clean)
         assert holo_total >= 1, f"HOLO should retain metals; got 0 in {holo_clean}"
+
+    @pytest.mark.ions_acceptance
+    def test_1bn1_apo_strips_metals(self):
+        pdb_path = _get_test_pdb()
+        total_in, _, _ = parse_pdb_metals(pdb_path)
+        if total_in == 0:
+            pytest.skip(f"Input PDB has no metals: {pdb_path}")
+        holo_clean = run_prep_variant(pdb_path, "HOLO")
         apo_clean = run_prep_variant(pdb_path, "APO")
         holo_total, *_ = parse_pdb_metals(holo_clean)
         apo_total, *_ = parse_pdb_metals(apo_clean)
