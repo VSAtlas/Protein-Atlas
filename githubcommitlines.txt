@@ -2,6 +2,7 @@ this makes a new branch and commits changes, update v0.916 to whatever it needs 
 ( git switch brcf-path-router-update-v0.916 || git switch -c brcf-path-router-update-v0.916 ) && git add -A && git commit -m "brcf-path-router-update-v0.916" && git push -u origin brcf-path-router-update-v0.916 
 
 
+( git switch brcf-update-FAST_EDITION-v0.922 || git switch -c brcf-update-FAST_EDITION-v0.922 ) && git add -A && git commit -m "brcf-update-FAST_EDITION-v0.922" && git push -u origin brcf-update-FAST_EDITION-v0.922 
 
 
 PULL from most recent codex 

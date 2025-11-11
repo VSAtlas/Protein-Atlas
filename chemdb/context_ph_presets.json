@@ -1,55 +1,238 @@
 {
   "compartment_pH": {
-    "extracellular": [7.35, 7.45],
-    "blood": [7.35, 7.45],
-    "serum": [7.35, 7.45],
-    "interstitial_fluid": [7.30, 7.45],
-    "synovial_fluid": [7.35, 7.45],
-    "cerebrospinal_fluid": [7.31, 7.33],
-    "plasma_membrane": [7.00, 7.40],
-    "cell_surface": [7.20, 7.40],
-    "secreted": [7.30, 7.50],
-    "extracellular_matrix": [7.20, 7.40],
-
-    "cytosol": [7.00, 7.20],
-    "cytoplasm": [7.00, 7.20],
-    "nucleus": [7.20, 7.40],
-    "nucleoplasm": [7.20, 7.40],
-    "nucleolus": [7.20, 7.40],
-
-    "mitochondrial_matrix": [7.70, 8.00],
-    "mitochondrial_intermembrane_space": [6.80, 7.20],
-    "peroxisome": [7.40, 8.20],
-    "er_lumen": [7.10, 7.20],
-    "endoplasmic_reticulum": [7.10, 7.20],
-    "golgi": [6.30, 6.70],
-    "endosome": [5.50, 6.50],
-    "early_endosome": [6.30, 6.80],
-    "late_endosome": [5.50, 6.00],
-    "lysosome": [4.50, 5.50],
-    "secretory_granule": [5.00, 6.00],
-    "synaptic_vesicle_lumen": [5.20, 5.90],
-
-    "periplasm": [6.50, 7.50],
-    "bacterial_cytosol": [7.20, 7.60],
-
-    "chloroplast_stroma": [7.90, 8.20],
-    "thylakoid_lumen": [5.00, 6.00],
-    "plant_vacuole": [5.00, 6.50],
-    "apoplast": [5.00, 6.50],
-
-    "skin_surface": [4.70, 5.80],
-    "stomach_lumen": [1.50, 3.50],
-    "small_intestine_lumen": [6.00, 7.40],
-    "colon_lumen": [6.00, 7.00],
-    "bile": [7.50, 8.20],
-    "urine": [4.50, 8.00],
-    "saliva": [6.20, 7.60],
-
-    "tumor_microenvironment": [6.20, 7.00],
-    "hypoxic_tumor": [6.40, 6.90]
+    "extracellular": [
+      7.35,
+      7.45
+    ],
+    "blood": [
+      7.35,
+      7.45
+    ],
+    "serum": [
+      7.35,
+      7.45
+    ],
+    "interstitial_fluid": [
+      7.3,
+      7.45
+    ],
+    "synovial_fluid": [
+      7.35,
+      7.45
+    ],
+    "cerebrospinal_fluid": [
+      7.31,
+      7.33
+    ],
+    "plasma_membrane": [
+      7.0,
+      7.4
+    ],
+    "cell_surface": [
+      7.2,
+      7.4
+    ],
+    "secreted": [
+      7.3,
+      7.5
+    ],
+    "extracellular_matrix": [
+      7.2,
+      7.4
+    ],
+    "cytosol": [
+      7.0,
+      7.2
+    ],
+    "cytoplasm": [
+      7.0,
+      7.2
+    ],
+    "nucleus": [
+      7.2,
+      7.4
+    ],
+    "nucleoplasm": [
+      7.2,
+      7.4
+    ],
+    "nucleolus": [
+      7.2,
+      7.4
+    ],
+    "mitochondrial_matrix": [
+      7.7,
+      8.0
+    ],
+    "mitochondrial_intermembrane_space": [
+      6.8,
+      7.2
+    ],
+    "peroxisome": [
+      7.4,
+      8.2
+    ],
+    "er_lumen": [
+      7.1,
+      7.2
+    ],
+    "endoplasmic_reticulum": [
+      7.1,
+      7.2
+    ],
+    "golgi": [
+      6.3,
+      6.7
+    ],
+    "endosome": [
+      5.5,
+      6.5
+    ],
+    "early_endosome": [
+      6.3,
+      6.8
+    ],
+    "late_endosome": [
+      5.5,
+      6.0
+    ],
+    "lysosome": [
+      4.5,
+      5.5
+    ],
+    "secretory_granule": [
+      5.0,
+      6.0
+    ],
+    "synaptic_vesicle_lumen": [
+      5.2,
+      5.9
+    ],
+    "periplasm": [
+      6.5,
+      7.5
+    ],
+    "bacterial_cytosol": [
+      7.2,
+      7.6
+    ],
+    "chloroplast_stroma": [
+      7.9,
+      8.2
+    ],
+    "thylakoid_lumen": [
+      5.0,
+      6.0
+    ],
+    "plant_vacuole": [
+      5.0,
+      6.5
+    ],
+    "apoplast": [
+      5.0,
+      6.5
+    ],
+    "skin_surface": [
+      4.7,
+      5.8
+    ],
+    "stomach_lumen": [
+      1.5,
+      3.5
+    ],
+    "small_intestine_lumen": [
+      6.0,
+      7.4
+    ],
+    "colon_lumen": [
+      6.0,
+      7.0
+    ],
+    "bile": [
+      7.5,
+      8.2
+    ],
+    "urine": [
+      4.5,
+      8.0
+    ],
+    "saliva": [
+      6.2,
+      7.6
+    ],
+    "tumor_microenvironment": [
+      6.2,
+      7.0
+    ],
+    "hypoxic_tumor": [
+      6.4,
+      6.9
+    ],
+    "endolysosome": [
+      5.0,
+      5.5
+    ],
+    "phagosome": [
+      5.5,
+      6.5
+    ],
+    "phagolysosome": [
+      4.5,
+      5.0
+    ],
+    "melanosome": [
+      5.0,
+      6.8
+    ],
+    "acrosome": [
+      4.5,
+      5.5
+    ],
+    "tear_fluid": [
+      6.5,
+      7.6
+    ],
+    "phosphate_buffered_saline": [
+      7.2,
+      7.4
+    ],
+    "tris": [
+      7.0,
+      9.0
+    ],
+    "hepes": [
+      7.0,
+      8.0
+    ],
+    "mes": [
+      5.5,
+      6.7
+    ],
+    "mops": [
+      6.5,
+      7.9
+    ],
+    "pipes": [
+      6.0,
+      7.5
+    ],
+    "acetate_buffer": [
+      4.0,
+      5.5
+    ],
+    "citrate_buffer": [
+      3.0,
+      6.0
+    ],
+    "phosphate_buffer": [
+      6.0,
+      8.0
+    ],
+    "glycine_buffer": [
+      2.0,
+      3.5
+    ]
   },
-
   "aliases": {
     "membrane": "plasma_membrane",
     "mitochondria": "mitochondrial_matrix",
@@ -73,9 +256,25 @@
     "bacterial_cytoplasm": "bacterial_cytosol",
     "plant_vacuole_lumen": "plant_vacuole",
     "thylakoid": "thylakoid_lumen",
-    "tme": "tumor_microenvironment"
+    "tme": "tumor_microenvironment",
+    "endolysosomal": "endolysosome",
+    "phagosomal": "phagosome",
+    "phagolysosomal": "phagolysosome",
+    "lysosomal": "lysosome",
+    "endosomal": "endosome",
+    "autolysosome": "lysosome",
+    "autolysosomal": "lysosome",
+    "zymogen_granule": "secretory_granule",
+    "sweat": "skin_surface",
+    "lacrimal_fluid": "tear_fluid",
+    "lacrimal": "tear_fluid",
+    "tears": "tear_fluid",
+    "tear": "tear_fluid",
+    "acrosomal": "acrosome",
+    "melanosomal": "melanosome",
+    "tris-hcl": "tris",
+    "pbs": "phosphate_buffered_saline"
   },
-
   "weights": {
     "override": 1.0,
     "assay": 0.9,
@@ -85,9 +284,7 @@
     "project_compartment": 0.8,
     "default": 0.5
   },
-
   "default_pH": 7.0,
-
   "location_tokens": {
     "phrases": [
       "cell surface",
@@ -96,7 +293,15 @@
       "early endosome",
       "late endosome",
       "synaptic vesicle",
-      "tumor microenvironment"
+      "tumor microenvironment",
+      "tear fluid",
+      "zymogen granule",
+      "phosphate buffered saline",
+      "phosphate buffer",
+      "acetate buffer",
+      "citrate buffer",
+      "glycine buffer",
+      "tris-hcl"
     ],
     "singles": [
       "extracellular",
@@ -105,7 +310,7 @@
       "lysosome",
       "endosome",
       "golgi",
-      "er", 
+      "er",
       "peroxisome",
       "mitochondrial",
       "intermembrane",
@@ -128,8 +333,17 @@
       "saliva",
       "urine",
       "synaptic",
-      "hypoxic"
+      "hypoxic",
+      "endolysosome",
+      "phagosome",
+      "phagolysosome",
+      "melanosome",
+      "acrosome",
+      "tris",
+      "hepes",
+      "mes",
+      "mops",
+      "pipes"
     ]
   }
 }
-
