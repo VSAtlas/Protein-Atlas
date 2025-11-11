@@ -103,6 +103,197 @@ _IONS_CFG_LOGGED = False
 _ION_PIPE_AUDIT: dict[str, dict[str, dict[str, int]]] = {}
 
 
+_ION_AUDIT_METALS = {
+    "ZN",
+    "MG",
+    "MN",
+    "FE",
+    "CU",
+    "CO",
+    "NI",
+    "CA",
+    "HG",
+}
+_ION_AUDIT_SALTS = {
+    "NA",
+    "K",
+    "CL",
+    "BR",
+    "I",
+    "LI",
+    "RB",
+    "CS",
+}
+
+
+def _summarize_ions_file(file_path: Union[str, Path]) -> dict[str, object]:
+    path = Path(file_path)
+    if not path.exists():
+        return {
+            "hist": "missing",
+            "counts": {},
+            "metals_present": False,
+            "salts_present": False,
+            "error": "missing",
+        }
+    counts = Counter()
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if not line.startswith("HETATM"):
+                    continue
+                res = line[17:20].strip().upper()
+                elem = (line[76:78].strip() or res).upper()
+                token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
+                if token and token.isalpha() and len(token) <= 3:
+                    counts[token] += 1
+    except Exception as exc:
+        return {
+            "hist": "error",
+            "counts": {},
+            "metals_present": False,
+            "salts_present": False,
+            "error": str(exc),
+        }
+
+    hist = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
+    metals_present = any(token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts)
+    salts_present = any(token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts)
+    return {
+        "hist": hist,
+        "counts": dict(counts),
+        "metals_present": metals_present,
+        "salts_present": salts_present,
+        "error": None,
+    }
+
+
+def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
+    seq = sorted(pairs)
+    if not seq:
+        return "none"
+    return ",".join(f"{res}:{loc}" for res, loc in seq)
+
+
+def _collect_stage_ion_pairs(file_path: Union[str, Path], prefixes: Sequence[str] = ("ATOM  ", "HETATM")) -> set[tuple[str, str]]:
+    path = Path(file_path)
+    pairs: set[tuple[str, str]] = set()
+    if not path.exists():
+        return pairs
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if not any(line.startswith(prefix) for prefix in prefixes):
+                    continue
+                resname = line[17:20].strip().upper()
+                if not resname or not _is_element_token(resname):
+                    continue
+                chain = (line[21:22] or "-").strip() or "-"
+                resseq = (line[22:26] or "0").strip() or "0"
+                pairs.add((resname, f"{chain}:{resseq}"))
+    except Exception as exc:
+        logging.warning("[ions.stage.parse] file=%s err=%s", file_path, exc)
+    return pairs
+
+
+class _IonStageAudit:
+    def __init__(self, pdb_id: str | None) -> None:
+        self.pdb_id = (pdb_id or "UNKNOWN")
+        self._prev_stage: str | None = None
+        self._prev_pairs: set[tuple[str, str]] | None = None
+        self._first_loss_logged = False
+
+    def log(self, stage_name: str, file_path: Union[str, Path]) -> None:
+        summary = _summarize_ions_file(file_path)
+        hist = str(summary.get("hist", "none"))
+        logging.info(
+            "[ions.stage.counts] pdb=%s stage=%s file=%s present_pdb=%s",
+            self.pdb_id,
+            stage_name,
+            file_path,
+            hist,
+        )
+        pairs = _collect_stage_ion_pairs(file_path)
+        if self._prev_pairs is not None and self._prev_stage is not None:
+            kept = pairs & self._prev_pairs
+            lost = self._prev_pairs - pairs
+            lost_display = sorted(f"{res}:{loc}" for res, loc in lost)
+            logging.info(
+                "[ions.stage.diff] pdb=%s from=%s to=%s kept=%d stripped=%d lost=%s",
+                self.pdb_id,
+                self._prev_stage,
+                stage_name,
+                len(kept),
+                len(lost),
+                lost_display,
+            )
+            if lost and not self._first_loss_logged:
+                logging.info("[ions.first_loss] pdb=%s stage=%s", self.pdb_id, stage_name)
+                self._first_loss_logged = True
+        self._prev_stage = stage_name
+        self._prev_pairs = pairs
+
+
+def _ion_pairs_from_records(file_path: Union[str, Path], prefixes: Sequence[str]) -> set[tuple[str, str]]:
+    path = Path(file_path)
+    pairs: set[tuple[str, str]] = set()
+    if not path.exists():
+        return pairs
+    with path.open("r", encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            if not any(line.startswith(prefix) for prefix in prefixes):
+                continue
+            res = line[17:20].strip().upper()
+            if not res or not _is_element_token(res):
+                continue
+            chain = (line[21:22] or "-").strip() or "-"
+            resseq = (line[22:26] or "0").strip() or "0"
+            pairs.add((res, f"{chain}:{resseq}"))
+    return pairs
+
+
+def _ion_pairs_from_pdb(file_path: Union[str, Path]) -> set[tuple[str, str]]:
+    return _ion_pairs_from_records(file_path, ("HETATM",))
+
+
+def _ion_pairs_from_pdbqt(file_path: Union[str, Path]) -> set[tuple[str, str]]:
+    return _ion_pairs_from_records(file_path, ("ATOM  ", "HETATM"))
+
+
+def _log_ion_diff(tag: str, pdb_ions: set[tuple[str, str]], pdbqt_ions: set[tuple[str, str]]) -> None:
+    missing = pdb_ions - pdbqt_ions
+    kept = pdb_ions & pdbqt_ions
+    logging.info(
+        "[ions.diff.pdb↔pdbqt.%s] kept=%d stripped=%d detail=%s",
+        tag,
+        len(kept),
+        len(missing),
+        _format_ion_pairs(pdb_ions),
+    )
+    if pdb_ions or missing:
+        logging.warning(
+            "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+            sorted(pdb_ions),
+            sorted(missing),
+        )
+    retained = {r for r in _RETAIN if _is_element_token(r)}
+    lost_retained = sorted([item for item in missing if item[0] in retained])
+    if lost_retained:
+        logging.warning("[ion lost] %s", lost_retained)
+
+
+_LAST_CLEAN_PROVENANCE = "unknown"
+
+
+def get_clean_provenance() -> str:
+    return _LAST_CLEAN_PROVENANCE
+
+
+def _set_clean_provenance(label: str) -> None:
+    global _LAST_CLEAN_PROVENANCE
+    _LAST_CLEAN_PROVENANCE = label or "unknown"
+
+
 def _reset_ion_probe(pdb_id: str) -> None:
     """Reset ion probe cache for a PDB identifier (case-normalized)."""
     if not pdb_id:
@@ -196,87 +387,6 @@ def _log_ions_probe(
     bucket = _ION_PIPE_AUDIT.setdefault(pdb_id.upper() if pdb_id else "UNKNOWN", {})
     bucket[key] = counts
     return counts
-
-
-def _scan_pdb_ion_pairs(path: Union[str, Path], rules=ALIASES) -> set[tuple[str, str]]:
-    file_path = Path(path)
-    pairs: set[tuple[str, str]] = set()
-    if not file_path.exists():
-        return pairs
-    tokens = _ion_candidate_tokens(rules)
-    try:
-        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if not line.startswith(("HETATM", "ATOM  ")):
-                    continue
-                resname = line[17:20].strip().upper()
-                if not resname or resname not in tokens:
-                    continue
-                chain = (line[21] or "-").strip() or "-"
-                resseq = (line[22:26] or "0").strip() or "0"
-                icode = (line[26] or "").strip()
-                loc = f"{chain}:{resseq}{icode}".rstrip()
-                pairs.add((resname, loc))
-    except Exception as exc:
-        logging.warning("[ion.diff] stage=scan_pdb_fail file=%s err=%s", file_path, exc)
-    return pairs
-
-
-def _scan_pdbqt_ion_pairs(path: Union[str, Path], rules=ALIASES) -> set[tuple[str, str]]:
-    file_path = Path(path)
-    pairs: set[tuple[str, str]] = set()
-    if not file_path.exists():
-        return pairs
-    tokens = _ion_candidate_tokens(rules)
-    try:
-        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if not line.startswith(("ATOM  ", "HETATM")):
-                    continue
-                resname = line[17:20].strip().upper()
-                if not resname or resname not in tokens:
-                    continue
-                chain = (line[21] or "-").strip() or "-"
-                resseq = (line[22:26] or "0").strip() or "0"
-                icode = (line[26] or "").strip()
-                loc = f"{chain}:{resseq}{icode}".rstrip()
-                pairs.add((resname, loc))
-    except Exception as exc:
-        logging.warning("[ion.diff] stage=scan_pdbqt_fail file=%s err=%s", file_path, exc)
-    return pairs
-
-
-def _format_pair_list(pairs: set[tuple[str, str]]) -> str:
-    if not pairs:
-        return "none"
-    items = sorted(pairs)
-    return ",".join(f"{res}:{loc}" for res, loc in items)
-
-
-def _log_ion_diff(
-    tool: str,
-    pdb_pairs: set[tuple[str, str]] | None = None,
-    pdbqt_pairs: set[tuple[str, str]] | None = None,
-    *,
-    pdb_path: Union[str, Path, None] = None,
-    pdbqt_path: Union[str, Path, None] = None,
-) -> None:
-    before = set(pdb_pairs or ())
-    after = set(pdbqt_pairs or ())
-    if not before and pdb_path is not None:
-        before = _scan_pdb_ion_pairs(pdb_path)
-    if not after and pdbqt_path is not None:
-        after = _scan_pdbqt_ion_pairs(pdbqt_path)
-    kept = before & after
-    lost = before - after
-    gained = after - before
-    logging.info(
-        "[ion.diff] tool=%s kept=%s lost=%s gained=%s",
-        tool,
-        _format_pair_list(kept),
-        _format_pair_list(lost),
-        _format_pair_list(gained),
-    )
 
 
 def _format_diff_map(data: dict[str, int]) -> str:
@@ -2389,6 +2499,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     raw_stem = os.path.splitext(os.path.basename(str(pdb_file)))[0]
     pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
+    _set_clean_provenance("automate_protein_prep.clean_pdb")
     _reset_ion_probe(pdb_id)
     logging.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
     paths = canon_paths(pdb_id, output_root)
@@ -2400,6 +2511,11 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
         paths[d].mkdir(parents=True, exist_ok=True)
+
+    stage_audit = _IonStageAudit(pdb_id)
+
+    def _log_stage(stage_name: str, file_path: Union[str, Path]) -> None:
+        stage_audit.log(stage_name, file_path)
 
     # (1) Working copy → raw/
     working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
@@ -2459,13 +2575,15 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     # (5) Element fix → MODELLER → element fix again (PDB only)
     elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
-    
+
     fix_pdb_elements(stripped_pdb, elemfix_pdb)
+    _log_stage("elemfix", elemfix_pdb)
     _log_ions_probe(pdb_id, "elemfix", elemfix_pdb)
     quick_element_histogram(elemfix_pdb)
     _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
     loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
     fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
+    _log_stage("modeller", loop_fixed_pdb)
     _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
     quick_element_histogram(loop_fixed_pdb)
     _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
@@ -2614,6 +2732,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "pdb2pqr", pdb_for_reduce)
         quick_element_histogram(pdb_for_reduce)
 
+    validated_source = Path(pdb_for_reduce) if pdb_for_reduce else Path(chain_validated_pdb)
+    _log_stage("validated", validated_source)
+
     # If PDB2PQR succeeded, pdb_for_reduce now has hydrogens and titration states.
     # assign_protonation_states() will detect H presence and run Reduce WITHOUT -BUILD,
     # i.e., do flips/cleanup only. If PDB2PQR failed, pdb_for_reduce == chain_validated_pdb
@@ -2635,6 +2756,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     # (9) Final element fix and sanity on the protonated file
     fix_pdb_elements(reduced_pdb)
+    _log_stage("reduced", reduced_pdb)
     _helium_postwrite_counter("elemfix_after_reduce", reduced_pdb)
 
     quick_element_histogram(reduced_pdb)
@@ -2681,6 +2803,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         logging.info("[ions.diff.reduced→cleaned] lost=%s", ",".join(diff_list))
 
     fix_pdb_elements(receptor_pdb)
+    _log_stage("cleaned", receptor_pdb)
     _helium_postwrite_counter("elemfix_final_receptor", receptor_pdb)
 
     quick_element_histogram(receptor_pdb)
@@ -3170,7 +3293,12 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
         if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
             logging.info("Prepared receptor with ADT prepare_receptor4.py.")
-            _log_ion_diff("ADT", pdb_path=input_pdb, pdbqt_path=output_pdbqt)
+            try:
+                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+                _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
+            except Exception as _e:
+                logging.warning("[ion diff] skipped note=%s", _e)
             return True
         if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
             head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
@@ -3192,51 +3320,9 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         logging.info("Prepared receptor PDBQT with modern Meeko.")
         # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
         try:
-            # Compute present/missing sets in-line (keeps compare logic decoupled from warn-only helper)
-            def _ions_in_pdb(p):
-                s = set()
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    for _ln in fh:
-                        if not _ln.startswith("HETATM"): continue
-                        _res = _ln[17:20].strip().upper();
-                        _c = _ln[21];
-                        _i = _ln[22:26].strip()
-                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                return s
-
-            def _ions_in_pdbqt(p):
-                s = set()
-                if not Path(p).exists(): return s
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    for _ln in fh:
-                        if not _ln.startswith(("ATOM  ", "HETATM")): continue
-                        _res = _ln[17:20].strip().upper();
-                        _c = _ln[21];
-                        _i = _ln[22:26].strip()
-                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                return s
-
-            _pdb_ions = _ions_in_pdb(input_pdb)
-            _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
-            _missing = _pdb_ions - _pdbqt_ions
-            kept_pairs = _pdb_ions & _pdbqt_ions
-            logging.info(
-                "[ions.diff.pdb↔pdbqt.meeko] kept=%d stripped=%d detail=%s",
-                len(kept_pairs),
-                len(_missing),
-                _format_ion_pairs(_pdb_ions),
-            )
-            if _pdb_ions or _missing:
-                logging.warning(
-                    "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                    sorted(_pdb_ions),
-                    sorted(_missing),
-                )
-            # If any missing ion is YAML-retained, emit a targeted warning
-            _retained = {r for r in _RETAIN if _is_element_token(r)}
-            _lost_retained = sorted([x for x in _missing if x[0] in _retained])
-            if _lost_retained:
-                logging.warning("[ion lost] %s", _lost_retained)
+            _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+            _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+            _log_ion_diff("meeko", _pdb_ions, _pdbqt_ions)
         except Exception as _e:
             logging.warning("[ion diff] skipped note=%s", _e)
         return True
@@ -3265,52 +3351,12 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             logging.info("Prepared receptor after HIS -n mapping.")
             # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
             try:
-                def _ions_in_pdb(p):
-                    s = set()
-                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                        for _ln in fh:
-                            if not _ln.startswith("HETATM"): continue
-                            _res = _ln[17:20].strip().upper();
-                            _c = _ln[21];
-                            _i = _ln[22:26].strip()
-                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                    return s
-
-                def _ions_in_pdbqt(p):
-                    s = set()
-                    if not Path(p).exists(): return s
-                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                        for _ln in fh:
-                            if not _ln.startswith(("ATOM  ", "HETATM")): continue
-                            _res = _ln[17:20].strip().upper();
-                            _c = _ln[21];
-                            _i = _ln[22:26].strip()
-                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                    return s
-
-                _pdb_ions = _ions_in_pdb(input_pdb)
-                _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
-                _missing = _pdb_ions - _pdbqt_ions
-                kept_pairs = _pdb_ions & _pdbqt_ions
-                logging.info(
-                    "[ions.diff.pdb↔pdbqt.meeko_retry] kept=%d stripped=%d detail=%s",
-                    len(kept_pairs),
-                    len(_missing),
-                    _format_ion_pairs(_pdb_ions),
-                )
-                if _pdb_ions or _missing:
-                    logging.warning(
-                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                        sorted(_pdb_ions),
-                        sorted(_missing),
-                    )
-                _retained = {r for r in _RETAIN if _is_element_token(r)}
-                _lost_retained = sorted([x for x in _missing if x[0] in _retained])
-                if _lost_retained:
-                    logging.warning("[ion lost] %s", _lost_retained)
-                _log_ion_diff("Meeko", _pdb_ions, _pdbqt_ions)
+                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+                _log_ion_diff("meeko_retry", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
+
             return True
 
         if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
@@ -3336,52 +3382,12 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             logging.info("Prepared receptor after -a allow_bad_res.")
             # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
             try:
-                def _ions_in_pdb(p):
-                    s = set()
-                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                        for _ln in fh:
-                            if not _ln.startswith("HETATM"): continue
-                            _res = _ln[17:20].strip().upper();
-                            _c = _ln[21];
-                            _i = _ln[22:26].strip()
-                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                    return s
-
-                def _ions_in_pdbqt(p):
-                    s = set()
-                    if not Path(p).exists(): return s
-                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                        for _ln in fh:
-                            if not _ln.startswith(("ATOM  ", "HETATM")): continue
-                            _res = _ln[17:20].strip().upper();
-                            _c = _ln[21];
-                            _i = _ln[22:26].strip()
-                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                    return s
-
-                _pdb_ions = _ions_in_pdb(input_pdb)
-                _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
-                _missing = _pdb_ions - _pdbqt_ions
-                kept_pairs = _pdb_ions & _pdbqt_ions
-                logging.info(
-                    "[ions.diff.pdb↔pdbqt.meeko_allow_bad_res] kept=%d stripped=%d detail=%s",
-                    len(kept_pairs),
-                    len(_missing),
-                    _format_ion_pairs(_pdb_ions),
-                )
-                if _pdb_ions or _missing:
-                    logging.warning(
-                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                        sorted(_pdb_ions),
-                        sorted(_missing),
-                    )
-                _retained = {r for r in _RETAIN if _is_element_token(r)}
-                _lost_retained = sorted([x for x in _missing if x[0] in _retained])
-                if _lost_retained:
-                    logging.warning("[ion lost] %s", _lost_retained)
-                _log_ion_diff("Meeko", _pdb_ions, _pdbqt_ions)
+                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+                _log_ion_diff("meeko_allow_bad_res", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
+
             return True
 
         if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
@@ -3395,52 +3401,12 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             logging.info("Prepared receptor with legacy Meeko.")
             # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
             try:
-                def _ions_in_pdb(p):
-                    s = set()
-                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                        for _ln in fh:
-                            if not _ln.startswith("HETATM"): continue
-                            _res = _ln[17:20].strip().upper();
-                            _c = _ln[21];
-                            _i = _ln[22:26].strip()
-                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                    return s
-
-                def _ions_in_pdbqt(p):
-                    s = set()
-                    if not Path(p).exists(): return s
-                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                        for _ln in fh:
-                            if not _ln.startswith(("ATOM  ", "HETATM")): continue
-                            _res = _ln[17:20].strip().upper();
-                            _c = _ln[21];
-                            _i = _ln[22:26].strip()
-                            if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                    return s
-
-                _pdb_ions = _ions_in_pdb(input_pdb)
-                _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
-                _missing = _pdb_ions - _pdbqt_ions
-                kept_pairs = _pdb_ions & _pdbqt_ions
-                logging.info(
-                    "[ions.diff.pdb↔pdbqt.meeko_legacy] kept=%d stripped=%d detail=%s",
-                    len(kept_pairs),
-                    len(_missing),
-                    _format_ion_pairs(_pdb_ions),
-                )
-                if _pdb_ions or _missing:
-                    logging.warning(
-                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                        sorted(_pdb_ions),
-                        sorted(_missing),
-                    )
-                _retained = {r for r in _RETAIN if _is_element_token(r)}
-                _lost_retained = sorted([x for x in _missing if x[0] in _retained])
-                if _lost_retained:
-                    logging.warning("[ion lost] %s", _lost_retained)
-                _log_ion_diff("Meeko", _pdb_ions, _pdbqt_ions)
+                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+                _log_ion_diff("meeko_legacy", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
+
             return True
 
         if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
@@ -3454,51 +3420,12 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         logging.info("Prepared receptor with ADT prepare_receptor4.py.")
         # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
         try:
-            def _ions_in_pdb(p):
-                s = set()
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    for _ln in fh:
-                        if not _ln.startswith("HETATM"): continue
-                        _res = _ln[17:20].strip().upper();
-                        _c = _ln[21];
-                        _i = _ln[22:26].strip()
-                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                return s
-
-            def _ions_in_pdbqt(p):
-                s = set()
-                if not Path(p).exists(): return s
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    for _ln in fh:
-                        if not _ln.startswith(("ATOM  ", "HETATM")): continue
-                        _res = _ln[17:20].strip().upper();
-                        _c = _ln[21];
-                        _i = _ln[22:26].strip()
-                        if _is_element_token(_res): s.add((_res, f"{_c}:{_i}"))
-                return s
-
-            _pdb_ions = _ions_in_pdb(input_pdb)
-            _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
-            _missing = _pdb_ions - _pdbqt_ions
-            kept_pairs = _pdb_ions & _pdbqt_ions
-            logging.info(
-                "[ions.diff.pdb↔pdbqt.adt] kept=%d stripped=%d detail=%s",
-                len(kept_pairs),
-                len(_missing),
-                _format_ion_pairs(_pdb_ions),
-            )
-            if _pdb_ions or _missing:
-                logging.warning(
-                    "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                    sorted(_pdb_ions),
-                    sorted(_missing),
-                )
-            _retained = {r for r in _RETAIN if _is_element_token(r)}
-            _lost_retained = sorted([x for x in _missing if x[0] in _retained])
-            if _lost_retained:
-                logging.warning("[ion lost] %s", _lost_retained)
+            _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+            _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+            _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
         except Exception as _e:
             logging.warning("[ion diff] skipped note=%s", _e)
+
         return True
 
     if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
