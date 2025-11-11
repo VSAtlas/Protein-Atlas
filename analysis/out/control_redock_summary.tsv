@@ -1,13 +1,14 @@
 pdb_id	run_id	target_name	library_name	controls_found	control_id	rmsd_to_crystal_A	redock_best_energy_kcal_mol	chosen	max_spread_A	policy
 1Q5K	20251108_174003	GLYCOGEN SYNTHASE KINASE-3 BETA	fda_library	22	TMU_B902.pdbqt	1.0	-7.914	1	40.23	best_redock thr=8.00A
+1QCF	20251108_174003	TYROSINE-PROTEIN KINASE HCK	fda_library	4	PP1_A532.pdbqt	0.91	-9.291	1	0.0	best_redock thr=8.00A
 1T46		HOMO SAPIENS V-KIT HARDY-ZUCKERMAN 4 FELINE SARCOMA VIRAL ONCOGENE HOMOLOG		13	STI_A3.sanitized.sanitized.sanitized.sanitized.sanitized.sanitized.sanitized.sanitized.pdbqt	0.11	-13.327	1	21.19	first | closest_to_p2rank_top | best_redock | average_when_close
 2GQG	20251108_174003	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	9	1N1_B502.sanitized.pdbqt	0.04	-10.407	1	55.65	first | closest_to_p2rank_top | best_redock | average_when_close
 2HYY	20251108_174003	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	12	STI_D600.sanitized.pdbqt	0.05	-12.464	1	61.61	best_redock thr=8.00A
 2WGJ	20251108_174003	HEPATOCYTE GROWTH FACTOR RECEPTOR	met	6	VGH_A2346.sanitized.sanitized.sanitized.sanitized.pdbqt	0.09	-10.058	1	0.0	best_redock thr=8.00A
-3CS9	20251108_174003	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	12	NIL_B600.pdbqt	0.85	-9.676	1	89.53	best_redock thr=8.00A
-3ERT	20251108_174003	PROTEIN (ESTROGEN RECEPTOR ALPHA)	esr1	5	OHT_A600.sanitized.sanitized.pdbqt	1.41	-9.305	1	0.0	best_redock thr=8.00A
+3CS9	20251108_174003	PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1	abl1	12	NIL_B600.pdbqt	0.87	-9.559	1	89.53	best_redock thr=8.00A
+3ERT	20251108_174003	PROTEIN (ESTROGEN RECEPTOR ALPHA)	esr1	3	OHT_A600.sanitized.pdbqt	1.42	-9.312	1	0.0	best_redock thr=8.00A
 3G0E	20251108_174003	MAST/STEM CELL GROWTH FACTOR RECEPTOR	kit	3				0	0.0	best_redock thr=8.00A
-3M2W		MAP KINASE-ACTIVATED PROTEIN KINASE 2		4	L8I_A1.sanitized.sanitized.pdbqt	0.0	-9.224	1	0.0	best_redock thr=8.00A
+3M2W	20251108_174003	MAP KINASE-ACTIVATED PROTEIN KINASE 2	fda_library	4	L8I_A1.sanitized.sanitized.pdbqt	0.0	-9.224	1	0.0	best_redock thr=8.00A
 3OG7	20251108_174003	AKAP9-BRAF FUSION PROTEIN	braf	4				0	0.0	first | closest_to_p2rank_top | best_redock | average_when_close
 3SFF	20251108_174003	HISTONE DEACETYLASE 8	fda_library	6	0DI_A378.sanitized.sanitized.sanitized.pdbqt	1.01	-10.091	1	0.0	best_redock thr=8.00A
 3WZD	20251108_174003	VASCULAR ENDOTHELIAL GROWTH FACTOR RECEPTOR 2	3WZD	14	LEV_A1201.pdbqt	0.55	-10.155	1	49.48	first | closest_to_p2rank_top | best_redock | average_when_close
@@ -17,5 +18,5 @@ pdb_id	run_id	target_name	library_name	controls_found	control_id	rmsd_to_crystal
 4GRL	20251108_174003	MHC CLASS II HLA-DQ-ALPHA CHAIN, MHC CLASS II ANTIGEN, TCR HY.1B11 ALPHA CHAIN, TCR HY.1B11 BETA CHAIN	fda_library	0				0		
 4MCH	20251108_174003	URIDINE PHOSPHORYLASE	fda_library	19	61N_A501.sanitized.pdbqt	0.07	-5.564	1	55.48	best_redock thr=8.00A
 4XV2	20251108_174003	SERINE/THREONINE-PROTEIN KINASE B-RAF	braf	8	P06_A801.sanitized.sanitized.pdbqt	0.14	-13.256	1	27.11	first | closest_to_p2rank_top | best_redock | average_when_close
-5MO4	20251108_174003	TYROSINE-PROTEIN KINASE ABL1	abl1	8	NIL_A601.sanitized.sanitized.pdbqt	0.67	-13.236	1	27.78	first | closest_to_p2rank_top | best_redock | average_when_close
+5MO4	20251108_174003	TYROSINE-PROTEIN KINASE ABL1	abl1	12	NIL_A601.sanitized.sanitized.sanitized.pdbqt	0.67	-13.237	1	27.78	best_redock thr=8.00A
 6GQ6	20251108_174003	HEAT SHOCK PROTEIN HSP 90-ALPHA	fda_library	0				0		
