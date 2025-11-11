@@ -1711,19 +1711,19 @@ def canon_paths(
     root = Path(output_root).resolve()
     base = root / pdb_id.upper()
     variant_token = _resolve_variant_token(config, variant)
-    receptor_dir = base / "receptor"
-    if variant_token:
-        receptor_dir = base / variant_token / "receptor"
+    protein_root = base / variant_token if variant_token else base
+    receptor_dir = protein_root / "receptor"
     paths = {
-        "protein_root": base,
-        "raw":          base / "raw",
-        "work":         base / "work",
+        "protein_root": protein_root,
+        "raw":          protein_root / "raw",
+        "work":         protein_root / "work",
         "ligands_raw":  base / "ligands_raw",
-        "nolig":        base / "nolig",
+        "nolig":        protein_root / "nolig",
         "receptor":     receptor_dir,
     }
     if variant_token:
         paths["variant"] = variant_token
+        paths["variant_root"] = protein_root
     return paths
 
 # =============================

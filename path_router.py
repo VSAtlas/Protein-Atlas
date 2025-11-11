@@ -269,6 +269,54 @@ def receptor_file(
     return dir_path / f"{stem}{suffix}.pdbqt"
 
 
+def variant_root(pdb_id: str, variant: Optional[str] = None) -> Path:
+    """Return the processed/ tree root for a given PDB/variant."""
+    roots = _ensure_router_roots()
+    token = _norm_pdb_id(pdb_id)
+    base = roots.processed / token
+    v = _norm_variant(variant)
+    if v:
+        base = base / v
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] kind=variant_root variant=%s path=%s", v or "None", base)
+    return base
+
+
+def raw_dir_v(pdb_id: str, variant: Optional[str] = None) -> Path:
+    """Variant-aware raw/ directory."""
+    base = variant_root(pdb_id, variant=variant)
+    v = _norm_variant(variant)
+    path = base / "raw"
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] kind=raw variant=%s path=%s", v or "None", path)
+    return path
+
+
+def nolig_dir_v(pdb_id: str, variant: Optional[str] = None) -> Path:
+    """Variant-aware nolig/ directory."""
+    base = variant_root(pdb_id, variant=variant)
+    v = _norm_variant(variant)
+    path = base / "nolig"
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] kind=nolig variant=%s path=%s", v or "None", path)
+    return path
+
+
+def work_dir_v(pdb_id: str, variant: Optional[str] = None) -> Path:
+    """Variant-aware work/ directory."""
+    base = variant_root(pdb_id, variant=variant)
+    v = _norm_variant(variant)
+    path = base / "work"
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] kind=work variant=%s path=%s", v or "None", path)
+    return path
+
+
+_raw_dir_v_fn = raw_dir_v
+_nolig_dir_v_fn = nolig_dir_v
+_work_dir_v_fn = work_dir_v
+
+
 def docked_dir(
     pdb_id: str,
     variant: Optional[str] = None,
@@ -493,6 +541,21 @@ class Paths:
         """
         path = receptor_file(self.pdb_id, variant=variant, ph_tag=ph_token)
         path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def raw_dir_v(self, variant: Optional[str]) -> Path:
+        path = _raw_dir_v_fn(self.pdb_id, variant=variant)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def nolig_dir_v(self, variant: Optional[str]) -> Path:
+        path = _nolig_dir_v_fn(self.pdb_id, variant=variant)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def work_dir_v(self, variant: Optional[str]) -> Path:
+        path = _work_dir_v_fn(self.pdb_id, variant=variant)
+        path.mkdir(parents=True, exist_ok=True)
         return path
 
     # ---------------------------
