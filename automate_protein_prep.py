@@ -106,37 +106,66 @@ _ION_PIPE_AUDIT: dict[str, dict[str, dict[str, int]]] = {}
 _ION_AUDIT_METALS = {
     "ZN",
     "MG",
+    "NA",
+    "K",
+    "CA",
     "MN",
     "FE",
-    "CU",
     "CO",
     "NI",
-    "CA",
+    "CU",
+    "CD",
     "HG",
 }
 _ION_AUDIT_SALTS = {
-    "NA",
-    "K",
     "CL",
     "BR",
     "I",
-    "LI",
     "RB",
     "CS",
+    "LI",
 }
+
+
+def _format_histogram(counter: Counter[str]) -> str:
+    if not counter:
+        return "none"
+    items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ",".join(f"{name}:{count}" for name, count in items)
+
+
+def _format_token_list(tokens: Iterable[str], *, limit: int = 8) -> str:
+    unique = []
+    seen: set[str] = set()
+    for token in sorted(str(tok).strip().upper() for tok in tokens if str(tok).strip()):
+        if token in seen:
+            continue
+        seen.add(token)
+        unique.append(token)
+    if not unique:
+        return "none"
+    head = unique[:limit]
+    remaining = len(unique) - len(head)
+    if remaining > 0:
+        head.append(f"+{remaining}")
+    return ",".join(head)
 
 
 def _summarize_ions_file(file_path: Union[str, Path]) -> dict[str, object]:
     path = Path(file_path)
     if not path.exists():
         return {
-            "hist": "missing",
-            "counts": {},
+            "res_hist": "missing",
+            "elem_hist": "missing",
+            "res_counts": {},
+            "elem_counts": {},
             "metals_present": False,
             "salts_present": False,
             "error": "missing",
         }
-    counts = Counter()
+
+    res_counts: Counter[str] = Counter()
+    elem_counts: Counter[str] = Counter()
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as fh:
             for line in fh:
@@ -144,24 +173,33 @@ def _summarize_ions_file(file_path: Union[str, Path]) -> dict[str, object]:
                     continue
                 res = line[17:20].strip().upper()
                 elem = (line[76:78].strip() or res).upper()
-                token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
-                if token and token.isalpha() and len(token) <= 3:
-                    counts[token] += 1
+                if res:
+                    res_counts[res] += 1
+                if elem:
+                    elem_counts[elem] += 1
     except Exception as exc:
         return {
-            "hist": "error",
-            "counts": {},
+            "res_hist": "error",
+            "elem_hist": "error",
+            "res_counts": {},
+            "elem_counts": {},
             "metals_present": False,
             "salts_present": False,
             "error": str(exc),
         }
 
-    hist = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
-    metals_present = any(token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts)
-    salts_present = any(token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts)
+    metals_present = any(
+        token in _ION_AUDIT_METALS and res_counts[token] > 0 for token in res_counts
+    ) or any(token in _ION_AUDIT_METALS and elem_counts[token] > 0 for token in elem_counts)
+    salts_present = any(
+        token in _ION_AUDIT_SALTS and res_counts[token] > 0 for token in res_counts
+    ) or any(token in _ION_AUDIT_SALTS and elem_counts[token] > 0 for token in elem_counts)
+
     return {
-        "hist": hist,
-        "counts": dict(counts),
+        "res_hist": _format_histogram(res_counts),
+        "elem_hist": _format_histogram(elem_counts),
+        "res_counts": dict(res_counts),
+        "elem_counts": dict(elem_counts),
         "metals_present": metals_present,
         "salts_present": salts_present,
         "error": None,
@@ -205,19 +243,21 @@ class _IonStageAudit:
 
     def log(self, stage_name: str, file_path: Union[str, Path]) -> None:
         summary = _summarize_ions_file(file_path)
-        hist = str(summary.get("hist", "none"))
+        res_hist = str(summary.get("res_hist", "none"))
+        elem_hist = str(summary.get("elem_hist", "none"))
         logging.info(
-            "[ions.stage.counts] pdb=%s stage=%s file=%s present_pdb=%s",
+            "[ions.stage.counts] pdb=%s stage=%s file=%s res_hist=%s elem_hist=%s",
             self.pdb_id,
             stage_name,
             file_path,
-            hist,
+            res_hist,
+            elem_hist,
         )
         pairs = _collect_stage_ion_pairs(file_path)
         if self._prev_pairs is not None and self._prev_stage is not None:
             kept = pairs & self._prev_pairs
             lost = self._prev_pairs - pairs
-            lost_display = sorted(f"{res}:{loc}" for res, loc in lost)
+            lost_display = sorted(f"({res},{loc})" for res, loc in lost)
             logging.info(
                 "[ions.stage.diff] pdb=%s from=%s to=%s kept=%d stripped=%d lost=%s",
                 self.pdb_id,
@@ -399,12 +439,18 @@ def _format_diff_map(data: dict[str, int]) -> str:
     return ",".join(f"{res}:{cnt}" for res, cnt in items)
 
 
-def _log_pdb_pdbqt_counts_diff(pdb_path: Union[str, Path], pdbqt_path: Union[str, Path]) -> None:
+def _log_pdb_pdbqt_counts_diff(
+    pdb_path: Union[str, Path],
+    pdbqt_path: Union[str, Path],
+    *,
+    tool: str | None = None,
+) -> None:
     pdb_file = Path(pdb_path)
     pdbqt_file = Path(pdbqt_path)
     if not pdb_file.exists() or not pdbqt_file.exists():
         logging.warning(
-            "[iondiff.pdb_pdbqt] action=skip reason=missing file_pdb=%s exists_pdb=%s file_pdbqt=%s exists_pdbqt=%s",
+            "[iondiff.pdb_pdbqt] action=skip reason=missing tool=%s file_pdb=%s exists_pdb=%s file_pdbqt=%s exists_pdbqt=%s",
+            tool or "unknown",
             pdb_file,
             pdb_file.exists(),
             pdbqt_file,
@@ -433,7 +479,8 @@ def _log_pdb_pdbqt_counts_diff(pdb_path: Union[str, Path], pdbqt_path: Union[str
             gained[resname] = delta
 
     logging.info(
-        "[iondiff.pdb_pdbqt] kept=%s lost=%s added=%s",
+        "[iondiff.pdb_pdbqt] tool=%s kept=%s lost=%s added=%s",
+        tool or "unknown",
         _format_diff_map(kept),
         _format_diff_map(lost),
         _format_diff_map(gained),
@@ -671,12 +718,29 @@ def _maybe_strip_ions(
     radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
 
     # [ions] stage=clean instrumentation
+    drop_free_ions = policy != "never_strip"
+    if variant_token == "HOLO":
+        allow_display_set = holo_keep_tokens
+        block_candidates = {tok for tok in _SALT_RESNAMES if tok not in holo_keep_tokens}
+    elif variant_token == "APO":
+        allow_display_set = apo_keep_tokens
+        block_candidates = {
+            tok
+            for tok in (_METAL_RESNAMES | _SALT_RESNAMES)
+            if tok not in apo_keep_tokens
+        }
+    else:
+        allow_display_set = allow_set
+        block_candidates = set()
+
     logging.info(
-        "[ions.policy] stage=clean variant=%s policy=%s salts_radius=%s allowlist=%d file=%s",
+        "[ions.policy] stage=central variant=%s drop_free_ions=%s allow_list=%s block_list=%s radius=%s policy=%s file=%s",
         variant_label,
-        policy,
+        str(drop_free_ions).lower(),
+        _format_token_list(allow_display_set),
+        _format_token_list(block_candidates),
         radius_term,
-        len(allow_set),
+        policy,
         path,
     )
 
@@ -797,7 +861,8 @@ def _maybe_strip_ions(
     total_kept = sum(kept_counter.values())
     total_stripped = sum(stripped.values())
     logging.info(
-        "[ions.summary] kept=%d stripped=%d metals_kept=%d metals_stripped=%d salts_kept=%d salts_stripped=%d",
+        "[ions.summary] variant=%s kept=%d stripped=%d metals_kept=%d metals_stripped=%d salts_kept=%d salts_stripped=%d",
+        variant_label,
         total_kept,
         total_stripped,
         category_totals["metal"]["kept"],
@@ -1421,17 +1486,29 @@ def _write_pristine_reference(pdb_lig_path: Path) -> None:
 # Canonical per-protein directory layout
 # =============================
 
-def canon_paths(pdb_id: str, output_root: Union[str, Path]) -> Dict[str, Path]:
+def canon_paths(
+    pdb_id: str,
+    output_root: Union[str, Path],
+    *,
+    variant: Optional[str] = None,
+) -> Dict[str, Path]:
     root = Path(output_root).resolve()
     base = root / pdb_id.upper()
-    return {
+    variant_token = _resolve_variant_token(config, variant)
+    receptor_dir = base / "receptor"
+    if variant_token:
+        receptor_dir = base / variant_token / "receptor"
+    paths = {
         "protein_root": base,
         "raw":          base / "raw",
         "work":         base / "work",
         "ligands_raw":  base / "ligands_raw",
         "nolig":        base / "nolig",
-        "receptor":     base / "receptor",
+        "receptor":     receptor_dir,
     }
+    if variant_token:
+        paths["variant"] = variant_token
+    return paths
 
 # =============================
 # Ligand extraction (single source lives here)
@@ -1731,7 +1808,7 @@ def compare_ion_presence_between_pdb_and_pdbqt(clean_pdb: Union[str, Path],
     pdbqt_ions = ions_in_pdbqt(receptor_pdbqt)
     missing = pdb_ions - pdbqt_ions
     if missing:
-        logging.warning("Ions present in PDB but not in receptor PDBQT: %s", sorted(missing))
+        logging.warning("[iondiff.warn] retained_missing=%s", sorted(missing))
 
 def log_possible_metal_mislabels(pdb_path: Union[str, Path]) -> None:
     """
@@ -2037,15 +2114,28 @@ def _cofactor_policy_keep(resname: str) -> bool:
     return False
 
 
-def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[str, Path]) -> Tuple[int, str]:
+def strip_nonstandard_residues(
+    input_pdb: Union[str, Path],
+    output_pdb: Union[str, Path],
+    *,
+    variant: Optional[str] = None,
+) -> Tuple[int, str]:
     """
     Remove nonstandard residues while keeping what the YAML says to keep
     (retain_in_receptor_resnames) and standard amino acids.
     Water handling still honors your numeric policy (radius/B-factor) but
     the water names themselves come from the YAML.
     """
+    variant_token = _resolve_variant_token(config, variant)
+    variant_label = variant_token or "legacy"
     before_map = _scan_metal_map(input_pdb, ALIASES)
-    logging.info("[stripnsr.before] metals=%s", _format_probe_counts(before_map))
+    before_summary = _summarize_ions_file(input_pdb)
+    logging.info(
+        "[stripnsr.before] variant=%s ions_res=%s ions_elem=%s",
+        variant_label,
+        before_summary.get("res_hist", "none"),
+        before_summary.get("elem_hist", "none"),
+    )
     standard_residues = {
         "ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE",
         "LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL",
@@ -2053,6 +2143,7 @@ def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[st
     }
 
     removed: Set[str] = set()
+    removed_hits: List[Tuple[str, str, str, str]] = []
     kept_lines: List[str] = []
 
     # Estimate pocket center from any YAML-retained cofactors/metals present
@@ -2090,32 +2181,61 @@ def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[st
 
             if line.startswith("HETATM"):
                 resname = line[17:20].strip().upper()
+                chain = (line[21] or "-").strip() or "-"
+                resseq = (line[22:26] or "0").strip() or "0"
+                elem_token = (line[76:78].strip() or resname).upper()
+                reason = None
 
                 # Water names come from YAML (no hardcoded list here)
                 if resname in _WATER_NAMES:
+                    keep_line = False
                     if water_policy == "keep_all":
-                        kept_lines.append(line); continue
-                    if water_policy == "remove_all":
-                        removed.add(resname);      continue
-                    # site_only / auto: keep if near pocket center and not too mobile
-                    if pocket_center is not None:
+                        keep_line = True
+                    elif water_policy == "remove_all":
+                        removed.add(resname)
+                        reason = "water_remove_all"
+                    elif pocket_center is not None:
                         xyz = _parse_xyz(line)
                         keep = False
                         if xyz:
-                            dx = xyz[0]-pocket_center[0]; dy = xyz[1]-pocket_center[1]; dz = xyz[2]-pocket_center[2]
-                            dist2 = dx*dx + dy*dy + dz*dz
-                            if dist2 <= water_radius*water_radius:
+                            dx = xyz[0] - pocket_center[0]
+                            dy = xyz[1] - pocket_center[1]
+                            dz = xyz[2] - pocket_center[2]
+                            dist2 = dx * dx + dy * dy + dz * dz
+                            if dist2 <= water_radius * water_radius:
                                 try:
-                                    b = float(line[60:66]); keep = (b <= water_bmax)
+                                    b = float(line[60:66])
+                                    keep = b <= water_bmax
                                 except Exception:
                                     keep = True
                         if keep:
-                            kept_lines.append(line)
+                            keep_line = True
                         else:
                             removed.add(resname)
+                            reason = "water_far"
                     else:
-                        # no pocket estimate: default to remove unless keep_all
                         removed.add(resname)
+                        reason = "water_no_center"
+
+                    if keep_line:
+                        kept_lines.append(line)
+                        continue
+
+                    if reason and (
+                        resname in _ION_AUDIT_METALS
+                        or resname in _ION_AUDIT_SALTS
+                        or elem_token in _ION_AUDIT_METALS
+                        or elem_token in _ION_AUDIT_SALTS
+                    ):
+                        removed_hits.append((resname, chain, resseq, reason))
+                        logging.info(
+                            "[stripnsr.hit] resname=%s chain=%s resSeq=%s reason=%s variant=%s",
+                            resname,
+                            chain,
+                            resseq,
+                            reason,
+                            variant_label,
+                        )
                     continue
 
                 # Retain anything listed in YAML retain block (cofactors, metals, ions, etc.)
@@ -2123,6 +2243,22 @@ def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[st
                     kept_lines.append(line)
                 else:
                     removed.add(resname)
+                    reason = "not_in_retain"
+                if reason and (
+                    resname in _ION_AUDIT_METALS
+                    or resname in _ION_AUDIT_SALTS
+                    or elem_token in _ION_AUDIT_METALS
+                    or elem_token in _ION_AUDIT_SALTS
+                ):
+                    removed_hits.append((resname, chain, resseq, reason))
+                    logging.info(
+                        "[stripnsr.hit] resname=%s chain=%s resSeq=%s reason=%s variant=%s",
+                        resname,
+                        chain,
+                        resseq,
+                        reason,
+                        variant_label,
+                    )
                 continue
 
             # non-coordinate records pass through
@@ -2133,7 +2269,14 @@ def strip_nonstandard_residues(input_pdb: Union[str, Path], output_pdb: Union[st
     _post_write_element_guard("strip_nonstandard", output_pdb)
 
     after_map = _scan_metal_map(output_pdb, ALIASES)
-    logging.info("[stripnsr.after] metals=%s", _format_probe_counts(after_map))
+    after_summary = _summarize_ions_file(output_pdb)
+    logging.info(
+        "[stripnsr.after] variant=%s ions_res=%s ions_elem=%s removed_total=%d",
+        variant_label,
+        after_summary.get("res_hist", "none"),
+        after_summary.get("elem_hist", "none"),
+        len(removed_hits),
+    )
     kept_res = sorted([res for res, count in after_map.items() if count > 0])
     stripped_res = sorted({res for res, count in before_map.items() if after_map.get(res, 0) < count})
     logging.info("[stripnsr.diff] kept=%s stripped=%s", ",".join(kept_res) if kept_res else "none", ",".join(stripped_res) if stripped_res else "none")
@@ -2502,9 +2645,18 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     _set_clean_provenance("automate_protein_prep.clean_pdb")
     _reset_ion_probe(pdb_id)
     logging.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
-    paths = canon_paths(pdb_id, output_root)
+    variant_token = _resolve_variant_token(config)
+    variant_label = variant_token or "legacy"
+    paths = canon_paths(pdb_id, output_root, variant=variant_token)
     logging.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
                  paths["protein_root"], paths["receptor"], paths["nolig"], paths["work"])
+    receptor_target = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
+    logging.info(
+        "[receptor.clean.location] path=%s variant=%s variant_scoped=%s",
+        receptor_target,
+        variant_label,
+        bool(variant_token),
+    )
 
 
     logging.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
@@ -2569,7 +2721,11 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
     stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
     _log_ions_probe(pdb_id, "strip_nonstandard", source_for_strip, phase="before")
-    removed_count, _out = strip_nonstandard_residues(source_for_strip, stripped_pdb)
+    removed_count, _out = strip_nonstandard_residues(
+        source_for_strip,
+        stripped_pdb,
+        variant=variant_token,
+    )
     _log_ions_probe(pdb_id, "strip_nonstandard", stripped_pdb, phase="after")
     logging.info("Removed %d nonstandard residue lines.", removed_count)
 
@@ -2765,7 +2921,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
     # (10) Move to receptor and re-fix (post-step edits)
     # [ions] receptor_write audit
-    variant_env = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
+    variant_env = variant_token or (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
     variant_label = variant_env if variant_env else "legacy"
     before_counts, before_detail = _collect_monoatomic_records(reduced_pdb)
     logging.info(
@@ -3325,6 +3481,10 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             _log_ion_diff("meeko", _pdb_ions, _pdbqt_ions)
         except Exception as _e:
             logging.warning("[ion diff] skipped note=%s", _e)
+        try:
+            _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="Meeko")
+        except Exception as diff_exc:
+            logging.warning("[iondiff.pdb_pdbqt] action=skip tool=Meeko reason=%s", diff_exc)
         return True
 
     if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
@@ -3356,6 +3516,10 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _log_ion_diff("meeko_retry", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
+            try:
+                _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="Meeko-nmap")
+            except Exception as diff_exc:
+                logging.warning("[iondiff.pdb_pdbqt] action=skip tool=Meeko-nmap reason=%s", diff_exc)
 
             return True
 
@@ -3387,6 +3551,13 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _log_ion_diff("meeko_allow_bad_res", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
+            try:
+                _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="Meeko-allow_bad_res")
+            except Exception as diff_exc:
+                logging.warning(
+                    "[iondiff.pdb_pdbqt] action=skip tool=Meeko-allow_bad_res reason=%s",
+                    diff_exc,
+                )
 
             return True
 
@@ -3406,6 +3577,13 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _log_ion_diff("meeko_legacy", _pdb_ions, _pdbqt_ions)
             except Exception as _e:
                 logging.warning("[ion diff] skipped note=%s", _e)
+            try:
+                _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="Meeko-legacy")
+            except Exception as diff_exc:
+                logging.warning(
+                    "[iondiff.pdb_pdbqt] action=skip tool=Meeko-legacy reason=%s",
+                    diff_exc,
+                )
 
             return True
 
@@ -3425,6 +3603,13 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
         except Exception as _e:
             logging.warning("[ion diff] skipped note=%s", _e)
+        try:
+            _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="ADT")
+        except Exception as diff_exc:
+            logging.warning(
+                "[iondiff.pdb_pdbqt] action=skip tool=ADT reason=%s",
+                diff_exc,
+            )
 
         return True
 
@@ -3894,7 +4079,7 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
                      cleaned_pdb, output_pdbqt, exists, size)
 
         try:
-            _log_pdb_pdbqt_counts_diff(cleaned_pdb, output_pdbqt)
+            _log_pdb_pdbqt_counts_diff(cleaned_pdb, output_pdbqt, tool="final")
         except Exception as exc:
             logging.warning("[iondiff.pdb_pdbqt] action=skip reason=%s", exc)
 

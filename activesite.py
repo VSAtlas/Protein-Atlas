@@ -33,14 +33,14 @@ _aliases_cache = None
 _rules_cache = None
 
 
-def _log_alias_tokens(kind: str, tokens: set[str]) -> None:
+def _log_alias_tokens(key: str, tokens: set[str]) -> None:
     sample = ",".join(sorted(tokens)[:10]) if tokens else "none"
     logging.info(
-        "[aliases.tokens] source=%s kind=%s count=%d sample=%s",
-        ALIASES_PATH,
-        kind,
+        "[aliases.tokens] key=%s count=%d sample=%s source=%s",
+        key,
         len(tokens),
         sample,
+        ALIASES_PATH,
     )
 
 # ---  YAML loader with encoding fallbacks & punctuation cleanup ---
@@ -164,15 +164,15 @@ def get_atom_rules():
     strip_raw = a.get("strip_in_receptor_resnames", []) or []
     strip_tokens = _as_set(strip_raw, section="strip_in_receptor_resnames")
     strip_tokens |= meeko_drop_free_ions
-    _log_alias_tokens("strip", strip_tokens)
+    _log_alias_tokens("strip_in_receptor_resnames", strip_tokens)
 
     # retain list (and a compat copy)
     retain_raw = a.get("retain_in_receptor_resnames", []) or []
     retain_res = _as_set(retain_raw, section="retain_in_receptor_resnames")
-    _log_alias_tokens("retain", retain_res)
+    _log_alias_tokens("retain_in_receptor_resnames", retain_res)
     allow_raw = a.get("allow_in_receptor_resnames", []) or []
     allow_tokens = _as_set(allow_raw, section="allow_in_receptor_resnames")
-    _log_alias_tokens("allow", allow_tokens)
+    _log_alias_tokens("allow_in_receptor_resnames", allow_tokens)
     retain_sample = ",".join(sorted(retain_res)[:10]) if retain_res else "none"
     logging.info(
         "[aliases.section] name=retain_in_receptor_resnames size=%d sample=%s",
