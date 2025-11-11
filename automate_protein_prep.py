@@ -142,6 +142,24 @@ _ION_AUDIT_ALIAS_MAP = {
     "I-": "I",
 }
 _ION_AUDIT_ENABLED_VALUES = {"1", "true", "yes"}
+_ION_AUDIT_DISABLED_VALUES = {"0", "false", "no"}
+
+_ION_PIPE_AUDIT: dict = {}
+_ION_PIPE_WARNED = False
+
+_ION_BREADCRUMB_METAL_ORDER = (
+    "ZN",
+    "HG",
+    "MG",
+    "FE",
+    "MN",
+    "CO",
+    "NI",
+    "CU",
+    "CD",
+    "CA",
+)
+_ION_BREADCRUMB_SIMPLE_ORDER = ("NA", "K", "CL", "BR", "I")
 
 
 def _format_histogram(counter: Counter[str]) -> str:
@@ -231,8 +249,8 @@ def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
 
 
 def _ion_audit_enabled() -> bool:
-    raw = os.environ.get("ION_AUDIT", "").strip().lower()
-    return raw in _ION_AUDIT_ENABLED_VALUES
+    raw = os.environ.get("ION_AUDIT", "")
+    return raw.strip().lower() in _ION_AUDIT_ENABLED_VALUES
 
 
 def _canon_ion_resname(resname: str) -> str:
@@ -251,11 +269,73 @@ def _short_path_for_log(path: Path) -> str:
             return str(path)
 
 
+def _format_breadcrumb_counts(counts: dict[str, int], order: Sequence[str]) -> str:
+    parts: list[str] = []
+    for key in order:
+        parts.append(f"{key}:{int(counts.get(key, 0))}")
+    extras = [key for key in sorted(counts) if key not in order]
+    for key in extras:
+        parts.append(f"{key}:{int(counts.get(key, 0))}")
+    return "{" + ",".join(parts) + "}"
+
+
+def _breadcrumbs_enabled() -> bool:
+    raw = os.environ.get("ION_AUDIT")
+    if raw is None:
+        return True
+    text = raw.strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in _ION_AUDIT_DISABLED_VALUES:
+        return False
+    return lowered in _ION_AUDIT_ENABLED_VALUES
+
+
+def _emit_ion_breadcrumb(stage: str, file_path: Union[str, Path]) -> None:
+    if not _breadcrumbs_enabled():
+        return
+    summarizer = getattr(_activesite_mod, "summarize_ions", None)
+    if summarizer is None:
+        return
+    try:
+        summary = summarizer(file_path)
+    except Exception:
+        summary = None
+    short_path = _short_path_for_log(Path(file_path))
+    if not summary:
+        logging.info("[ions.breadcrumb] stage=%s file=%s missing=true", stage, short_path)
+        return
+    if summary.get("missing"):
+        logging.info("[ions.breadcrumb] stage=%s file=%s missing=true", stage, short_path)
+        return
+    metals = summary.get("metals", {}) or {}
+    simple = summary.get("simple_ions", {}) or {}
+    waters = int(summary.get("waters", 0) or 0)
+    other = int(summary.get("other_het", 0) or 0)
+    logging.info(
+        "[ions.breadcrumb] stage=%s file=%s metals=%s waters=%d simple_ions=%s other_het=%d",
+        stage,
+        short_path,
+        _format_breadcrumb_counts(metals, _ION_BREADCRUMB_METAL_ORDER),
+        waters,
+        _format_breadcrumb_counts(simple, _ION_BREADCRUMB_SIMPLE_ORDER),
+        other,
+    )
+
+
 def _serialize_counts(counts: dict[str, int]) -> str:
     if not counts:
         return "{}"
     ordered = {key: counts[key] for key in sorted(counts)}
     return json.dumps(ordered, sort_keys=True)
+
+
+def _legacy_ion_global_missing() -> None:
+    global _ION_PIPE_WARNED
+    if not _ION_PIPE_WARNED:
+        logging.warning("[ion.audit.warn] disabled=legacy_global_missing")
+        _ION_PIPE_WARNED = True
 
 
 def _gather_ion_counts(path: Path) -> tuple[dict[str, int], dict[str, int], int, int]:
@@ -552,7 +632,10 @@ def _reset_ion_probe(pdb_id: str) -> None:
     """Reset ion probe cache for a PDB identifier (case-normalized)."""
     if not pdb_id:
         return
-    _ION_PIPE_AUDIT[pdb_id.upper()] = {}
+    try:
+        _ION_PIPE_AUDIT[pdb_id.upper()] = {}
+    except NameError:
+        _legacy_ion_global_missing()
 
 
 def _ion_candidate_tokens(rules_obj=ALIASES) -> set[str]:
@@ -638,8 +721,12 @@ def _log_ions_probe(
             sample,
         )
         key = stage
-    bucket = _ION_PIPE_AUDIT.setdefault(pdb_id.upper() if pdb_id else "UNKNOWN", {})
-    bucket[key] = counts
+    try:
+        bucket = _ION_PIPE_AUDIT.setdefault(pdb_id.upper() if pdb_id else "UNKNOWN", {})
+    except NameError:
+        _legacy_ion_global_missing()
+    else:
+        bucket[key] = counts
     return counts
 
 
@@ -702,7 +789,11 @@ def _log_pdb_pdbqt_counts_diff(
 
 
 def get_ion_probe_map(pdb_id: str) -> dict[str, dict[str, int]]:
-    bucket = _ION_PIPE_AUDIT.get((pdb_id or "").upper(), {})
+    try:
+        bucket = _ION_PIPE_AUDIT.get((pdb_id or "").upper(), {})
+    except NameError:
+        _legacy_ion_global_missing()
+        return {}
     return {k: dict(v) for k, v in bucket.items()}
 
 
@@ -920,6 +1011,13 @@ def _maybe_strip_ions(
     policy = _normalize_ion_policy(cfg)
     variant_token = _resolve_variant_token(cfg, variant)
     variant_label = variant_token or "legacy"
+
+    log_pre_variant = getattr(_activesite_mod, "log_pre_variant_policy_breadcrumb", None)
+    if log_pre_variant is not None:
+        try:
+            log_pre_variant(path)
+        except Exception:
+            pass
 
     emit_ion_audit_probe("pre_variant_policy", path, variant=variant_token)
 
@@ -2880,11 +2978,21 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
         paths[d].mkdir(parents=True, exist_ok=True)
 
-    ion_audit = _IonAuditManager(pdb_id, paths["work"], variant_token)
+    try:
+        ion_audit = _IonAuditManager(pdb_id, paths["work"], variant_token)
+    except NameError:
+        class _NoOpIonAuditManager:
+            enabled = False
+
+            def probe(self, *args, **kwargs):
+                return None
+
+        ion_audit = _NoOpIonAuditManager()
     _push_ion_audit_manager(ion_audit)
 
     try:
         ion_audit.probe("input", pdb_file)
+        _emit_ion_breadcrumb("input", pdb_file)
     
         # (1) Working copy → raw/
         working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
@@ -2938,6 +3046,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
         stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
         ion_audit.probe("strip_nsr_before", source_for_strip)
+        _emit_ion_breadcrumb("strip_nsr_before", source_for_strip)
         _log_ions_probe(pdb_id, "strip_nonstandard", source_for_strip, phase="before")
         removed_count, _out = strip_nonstandard_residues(
             source_for_strip,
@@ -2946,6 +3055,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         )
         _log_ions_probe(pdb_id, "strip_nonstandard", stripped_pdb, phase="after")
         ion_audit.probe("strip_nsr_after", stripped_pdb)
+        _emit_ion_breadcrumb("strip_nsr_after", stripped_pdb)
         logging.info("Removed %d nonstandard residue lines.", removed_count)
     
         # (5) Element fix → MODELLER → element fix again (PDB only)
@@ -2959,6 +3069,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
         fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
         ion_audit.probe("modeller", loop_fixed_pdb)
+        _emit_ion_breadcrumb("modeller", loop_fixed_pdb)
         _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
         quick_element_histogram(loop_fixed_pdb)
         _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
@@ -3183,8 +3294,39 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     
         quick_element_histogram(receptor_pdb)
         assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
-    
+
         logging.info("Cleaned receptor: %s", receptor_pdb)
+        try:
+            router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+            receptor_pdbqt_path = router_paths.receptor_pdbqt(variant_token, ph_token=None)
+            receptor_dir_path = router_paths.receptor_dir(variant_token)
+            ph_dir = receptor_dir_path / "ph_ensemble"
+            variant_log = (variant_token or "NONE").upper()
+            logging.info(
+                "[receptor.path.final] variant=%s receptor_pdbqt=%s",
+                variant_log,
+                receptor_pdbqt_path,
+            )
+            ph_enabled = 0
+            try:
+                if ph_dir.exists():
+                    next(ph_dir.iterdir())
+                    ph_enabled = 1
+            except StopIteration:
+                ph_enabled = 0
+            except Exception:
+                ph_enabled = 1 if ph_dir.exists() else 0
+            logging.info(
+                "[receptor.path.ensemble] enabled=%d dir=%s",
+                ph_enabled,
+                ph_dir,
+            )
+        except Exception as exc:
+            logging.warning(
+                "[receptor.path.final] variant=%s action=skip reason=%s",
+                (variant_token or "NONE").upper(),
+                exc,
+            )
         print(f"[proteinprep] cleaned receptor exists={Path(receptor_pdb).is_file()} -> {receptor_pdb}")
         return str(receptor_pdb)
     finally:

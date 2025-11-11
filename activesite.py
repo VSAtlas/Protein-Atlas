@@ -4,7 +4,7 @@ from collections import defaultdict
 from logger_setup import setup_logger
 from pathlib import Path
 import hashlib
-from typing import Iterable, Tuple, List
+from typing import Iterable, Tuple, List, Union
 
 # >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
@@ -31,6 +31,178 @@ if not os.path.exists(ALIASES_PATH):
 
 _aliases_cache = None
 _rules_cache = None
+
+
+_ION_BREADCRUMB_METAL_ORDER = (
+    "ZN",
+    "HG",
+    "MG",
+    "FE",
+    "MN",
+    "CO",
+    "NI",
+    "CU",
+    "CD",
+    "CA",
+)
+_ION_BREADCRUMB_SIMPLE_ORDER = ("NA", "K", "CL", "BR", "I")
+_ION_BREADCRUMB_WATERS = {"HOH", "WAT"}
+_ION_BREADCRUMB_ALIAS_MAP = {
+    "ZN1": "ZN",
+    "ZN2": "ZN",
+    "ZN3": "ZN",
+    "ZN+": "ZN",
+    "ZN+2": "ZN",
+    "ZN2+": "ZN",
+    "MG1": "MG",
+    "MG2": "MG",
+    "MG+": "MG",
+    "MN2": "MN",
+    "MN3": "MN",
+    "FE2": "FE",
+    "FE3": "FE",
+    "CO2": "CO",
+    "NI2": "NI",
+    "CU1": "CU",
+    "CU2": "CU",
+    "CD2": "CD",
+    "HG2": "HG",
+    "CA1": "CA",
+    "CA2": "CA",
+    "NA1": "NA",
+    "K1": "K",
+    "K+": "K",
+    "CL-": "CL",
+    "BR-": "BR",
+    "I-": "I",
+}
+_ION_BREADCRUMB_ENABLED_VALUES = {"1", "true", "yes"}
+_ION_BREADCRUMB_DISABLED_VALUES = {"0", "false", "no"}
+
+
+def _ion_audit_env_enabled() -> bool:
+    raw = os.environ.get("ION_AUDIT")
+    if raw is None:
+        return True
+    text = raw.strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in _ION_BREADCRUMB_DISABLED_VALUES:
+        return False
+    return lowered in _ION_BREADCRUMB_ENABLED_VALUES
+
+
+def _short_path_for_log(path: Union[str, Path]) -> str:
+    try:
+        return str(Path(path).resolve(strict=False).relative_to(Path.cwd()))
+    except Exception:
+        try:
+            return str(Path(path).resolve(strict=False))
+        except Exception:
+            return str(Path(path))
+
+
+def _format_breadcrumb_counts(counts: dict[str, int], order: Iterable[str]) -> str:
+    parts: list[str] = []
+    for token in order:
+        parts.append(f"{token}:{int(counts.get(token, 0))}")
+    extras = [tok for tok in sorted(counts) if tok not in order]
+    for token in extras:
+        parts.append(f"{token}:{int(counts.get(token, 0))}")
+    return "{" + ",".join(parts) + "}"
+
+
+def summarize_ions(pdb_path: Union[str, Path]) -> dict[str, object]:
+    path = Path(pdb_path)
+    metals_counts = {token: 0 for token in _ION_BREADCRUMB_METAL_ORDER}
+    simple_counts = {token: 0 for token in _ION_BREADCRUMB_SIMPLE_ORDER}
+    if not path.exists():
+        return {
+            "metals": metals_counts,
+            "simple_ions": simple_counts,
+            "waters": 0,
+            "other_het": 0,
+            "missing": True,
+        }
+
+    metal_hits = {token: set() for token in _ION_BREADCRUMB_METAL_ORDER}
+    simple_hits = {token: set() for token in _ION_BREADCRUMB_SIMPLE_ORDER}
+    water_hits: set[str] = set()
+    other_hits: set[tuple[str, str]] = set()
+
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith("HETATM"):
+                    continue
+                resname_raw = line[17:20].strip().upper()
+                if not resname_raw:
+                    continue
+                chain = (line[21:22] or "-").strip() or "-"
+                resseq = (line[22:26] or "0").strip() or "0"
+                icode = (line[26:27] or "").strip() or "-"
+                canonical = _ION_BREADCRUMB_ALIAS_MAP.get(resname_raw, resname_raw)
+                token = canonical.upper()
+                residue_key = f"{chain}:{resseq}:{icode}"
+                if token in _ION_BREADCRUMB_METAL_ORDER:
+                    metal_hits.setdefault(token, set()).add(residue_key)
+                    continue
+                if token in _ION_BREADCRUMB_SIMPLE_ORDER:
+                    simple_hits.setdefault(token, set()).add(residue_key)
+                    continue
+                if token in _ION_BREADCRUMB_WATERS:
+                    water_hits.add(residue_key)
+                    continue
+                other_hits.add((token, residue_key))
+    except FileNotFoundError:
+        return {
+            "metals": metals_counts,
+            "simple_ions": simple_counts,
+            "waters": 0,
+            "other_het": 0,
+            "missing": True,
+        }
+    except Exception as exc:
+        logging.debug(
+            "[ions.breadcrumb] stage=summarize error=%s file=%s",
+            exc,
+            path,
+        )
+
+    for token in metals_counts:
+        metals_counts[token] = len(metal_hits.get(token, set()))
+    for token in simple_counts:
+        simple_counts[token] = len(simple_hits.get(token, set()))
+
+    return {
+        "metals": metals_counts,
+        "simple_ions": simple_counts,
+        "waters": len(water_hits),
+        "other_het": len(other_hits),
+        "missing": False,
+    }
+
+
+def log_pre_variant_policy_breadcrumb(pdb_path: Union[str, Path]) -> None:
+    if not _ion_audit_env_enabled():
+        return
+    summary = summarize_ions(pdb_path)
+    short_path = _short_path_for_log(pdb_path)
+    if summary.get("missing"):
+        logging.info(
+            "[ions.breadcrumb] stage=pre_variant_policy file=%s missing=true",
+            short_path,
+        )
+        return
+    logging.info(
+        "[ions.breadcrumb] stage=pre_variant_policy file=%s metals=%s waters=%d simple_ions=%s other_het=%d",
+        short_path,
+        _format_breadcrumb_counts(summary.get("metals", {}), _ION_BREADCRUMB_METAL_ORDER),
+        int(summary.get("waters", 0) or 0),
+        _format_breadcrumb_counts(summary.get("simple_ions", {}), _ION_BREADCRUMB_SIMPLE_ORDER),
+        int(summary.get("other_het", 0) or 0),
+    )
 
 
 def _log_alias_tokens(key: str, tokens: set[str]) -> None:
