@@ -4,7 +4,7 @@ from collections import defaultdict
 from logger_setup import setup_logger
 from pathlib import Path
 import hashlib
-from typing import Dict, Iterable, List, NamedTuple, Set, Tuple, Union
+from typing import Dict, Iterable, List, NamedTuple, Optional, Set, Tuple, Union
 
 # >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
@@ -42,6 +42,7 @@ class AliasSets(NamedTuple):
 
 
 _ALIAS_POLICY_LOGGED = False
+_ALIAS_WARNED_KEYS: set[str] = set()
 
 
 _ION_BREADCRUMB_METAL_ORDER = (
@@ -227,11 +228,25 @@ def _log_alias_tokens(key: str, tokens: set[str]) -> None:
     )
 
 
-def _normalize_alias_token(token: str, alias_map: Dict[str, str]) -> str:
+def _normalize_alias_token(
+    token: str,
+    alias_map: Dict[str, str],
+    canonical_targets: Optional[Set[str]] = None,
+) -> str:
     raw = (token or "").strip().upper()
     if not raw:
         return ""
-    return alias_map.get(raw, raw)
+    mapped = alias_map.get(raw)
+    if mapped:
+        return mapped
+    if canonical_targets is not None and raw not in canonical_targets:
+        if raw not in _ALIAS_WARNED_KEYS and any(ch.isdigit() or ch in "+-" for ch in raw):
+            logging.debug(
+                "[aliases.alias.warn] key=%s had no mapping in retain_element_alias_map",
+                raw,
+            )
+            _ALIAS_WARNED_KEYS.add(raw)
+    return raw
 
 
 def _format_alias_sample(tokens: Iterable[str], limit: int = 6) -> str:
@@ -304,9 +319,15 @@ def _derive_alias_sets(
             cofactors = set()
             element_tokens = set()
 
+    alias_values = {str(v or "").strip().upper() for v in element_alias.values() if str(v or "").strip()}
+    canonical_hints = set(element_tokens) | alias_values
     canonical_elem_tokens: Set[str] = set()
-    for tok in element_tokens | set(element_alias.values()):
-        canonical = _normalize_alias_token(tok, element_alias)
+    for tok in (set(element_tokens) | alias_values):
+        canonical = _normalize_alias_token(
+            tok,
+            element_alias,
+            canonical_targets=canonical_hints,
+        )
         if canonical:
             canonical_elem_tokens.add(canonical)
 
@@ -502,16 +523,23 @@ def get_atom_rules():
     retain_res = set(waters_set) | set(canonical_elements) | set(cofactors_policy)
 
     logging.info(
-        "[aliases.policy] mode=%s keep_sets=waters{n=%d} cofactors{n=%d} elements{n=%d}",
+        "[aliases.policy] mode=%s keep_sets=waters{n=%d} cofactors{n=%d} elements{n=%d} final_retained=%d",
         policy_mode,
         len(waters_set),
         len(cofactors_policy),
         len(canonical_elements),
+        len(retain_res),
     )
     logging.info(
-        "[aliases.samples] waters=[%s] cofactors=[%s] elements=[%s]",
+        "[aliases.samples] waters=%s",
         _format_alias_sample(waters_set),
+    )
+    logging.info(
+        "[aliases.samples] cofactors=%s",
         _format_alias_sample(cofactors_policy),
+    )
+    logging.info(
+        "[aliases.samples] elements=%s",
         _format_alias_sample(canonical_elements),
     )
     global _ALIAS_POLICY_LOGGED
@@ -535,7 +563,12 @@ def get_atom_rules():
     compat_element_sets = dict(es)
     compat_retain_list = sorted(retain_res)
 
-    normalize_fn = lambda token: _normalize_alias_token(token, element_alias)
+    def _normalize_resname_for_rules(token: str) -> str:
+        return _normalize_alias_token(
+            token,
+            element_alias,
+            canonical_targets=canonical_elements,
+        )
 
     from types import SimpleNamespace
 
@@ -552,12 +585,13 @@ def get_atom_rules():
         # alias policy exposure
         alias_sets=alias_sets,
         waters=waters_set,
-        cofactors=cofactors_set,
+        cofactors=set(cofactors_policy),
+        cofactors_all=cofactors_set,
         element_tokens=element_tokens_raw,
         element_alias=element_alias,
         elem_tokens_canonical=canonical_elements,
         policy_mode=policy_mode,
-        normalize_resname=normalize_fn,
+        normalize_resname=_normalize_resname_for_rules,
 
         # NEW exports used elsewhere
         nucleotide_like_resnames=sorted(nucleotide_like_resnames),

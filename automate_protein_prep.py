@@ -120,31 +120,39 @@ def _normalize_resname(token: str) -> str:
     return _ELEMENT_ALIAS_MAP.get(base, base)
 
 
-_RETAIN_ORIGINAL = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
-if not _RETAIN_ORIGINAL:
-    _RETAIN_ORIGINAL = set(_flatten_semicolons(RULES.get("retain_in_receptor_resnames", [])))
+_POLICY_MODE = getattr(ALIASES, "policy_mode", "LEGACY")
 
-_RETAIN_CANONICAL = {
-    _normalize_resname(tok) for tok in getattr(ALIASES, "retain_resnames", []) if _normalize_resname(tok)
+_RETAIN_VARIANT = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
+_RETAIN_VARIANT_CANONICAL = {
+    _normalize_resname(tok)
+    for tok in getattr(ALIASES, "retain_resnames", [])
+    if _normalize_resname(tok)
 }
-if not _RETAIN_CANONICAL:
-    _RETAIN_CANONICAL = {tok for tok in _RETAIN_ORIGINAL}
 
-_RETAIN = set(_RETAIN_ORIGINAL)
+_WATER_NAMES = _to_upper_set(
+    getattr(ALIASES, "waters", getattr(_ALIAS_SETS, "waters", set()))
+)
 
-_WATER_NAMES = _to_upper_set(getattr(_ALIAS_SETS, "waters", set()))
-if not _WATER_NAMES:
-    _WATER_NAMES = {w for w in _RETAIN if w in {"HOH", "WAT", "DOD", "H2O", "TIP", "TIP3", "SOL"}}
-
-_COFACTOR_NAMES = _to_upper_set(getattr(_ALIAS_SETS, "cofactors", set()))
+_COFACTOR_NAMES = _to_upper_set(getattr(ALIASES, "cofactors", set()))
 _COFACTOR_CANONICAL = {
-    _normalize_resname(tok) for tok in getattr(_ALIAS_SETS, "cofactors", set()) if _normalize_resname(tok)
+    _normalize_resname(tok)
+    for tok in getattr(ALIASES, "cofactors", set())
+    if _normalize_resname(tok)
 }
+_COFACTOR_RAW_ALL = _to_upper_set(
+    getattr(ALIASES, "cofactors_all", getattr(_ALIAS_SETS, "cofactors", set()))
+)
 
-_ELEMENT_TOKENS_RAW = _to_upper_set(getattr(_ALIAS_SETS, "element_tokens", set()))
-_ELEM_CANON = _to_upper_set(getattr(_ALIAS_SETS, "elem_tokens_canonical", set()))
-if not _ELEM_CANON:
-    _ELEM_CANON = _ONE | _TWO
+_ELEMENT_TOKENS_RAW = _to_upper_set(
+    getattr(ALIASES, "element_tokens", getattr(_ALIAS_SETS, "element_tokens", set()))
+)
+_ELEM_CANON = _to_upper_set(
+    getattr(ALIASES, "elem_tokens_canonical", getattr(_ALIAS_SETS, "elem_tokens_canonical", set()))
+)
+
+_ALIASES_BIND_LOGGED = False
+_ION_KEEP_LOGGED: set[str] = set()
+_COFACTOR_DROP_LOGGED: set[str] = set()
 
 _MEEKO_DROP_IONS = set(_flatten_semicolons(RULES.get("meeko_drop_free_ions", []))) or {"NA", "K", "LI"}
 
@@ -666,7 +674,13 @@ def _log_ion_diff(tag: str, pdb_ions: set[tuple[str, str]], pdbqt_ions: set[tupl
             sorted(pdb_ions),
             sorted(missing),
         )
-    retained = set(_ELEM_CANON)
+    retained = {
+        str(tok).strip().upper()
+        for tok in getattr(ALIASES, "elem_tokens_canonical", set())
+        if str(tok).strip()
+    }
+    if not retained:
+        retained = set(_ELEM_CANON)
     lost_retained = sorted(
         [item for item in missing if _normalize_resname(item[0]) in retained]
     )
@@ -698,24 +712,21 @@ def _reset_ion_probe(pdb_id: str) -> None:
 
 def _ion_candidate_tokens(rules_obj=ALIASES) -> set[str]:
     tokens: set[str] = set()
-    for attr in ("one_letter", "two_letter"):
-        values = getattr(rules_obj, attr, None) or []
-        for tok in values:
+    canonical = getattr(rules_obj, "elem_tokens_canonical", None) or set()
+    for tok in canonical:
+        if tok is None:
+            continue
+        text = str(tok).strip()
+        if text:
+            tokens.add(text.upper())
+    alias_sets = getattr(rules_obj, "alias_sets", None)
+    if alias_sets and getattr(alias_sets, "elem_tokens_canonical", None):
+        for tok in getattr(alias_sets, "elem_tokens_canonical", set()):
             if tok is None:
                 continue
             text = str(tok).strip()
             if text:
                 tokens.add(text.upper())
-    retain_tokens: set[str] = set()
-    for attr in ("retain_resnames", "retain_in_receptor_resnames"):
-        values = getattr(rules_obj, attr, None) or []
-        for tok in values:
-            if tok is None:
-                continue
-            text = str(tok).strip()
-            if text:
-                retain_tokens.add(text.upper())
-    tokens.update({tok for tok in retain_tokens if len(tok) <= 3})
     return tokens
 
 
@@ -885,7 +896,7 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
     if _IONS_CFG_CACHE is not None:
         allow, source = _IONS_CFG_CACHE
         if not _IONS_CFG_LOGGED:
-            logging.info("[ions.cfg] retain_in_receptor_resnames=%s source=%s", ",".join(sorted(allow)), source)
+            logging.info("[ions.cfg] retain_tokens=%s source=%s", ",".join(sorted(allow)), source)
             _IONS_CFG_LOGGED = True
         return allow, source
 
@@ -895,12 +906,12 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
     elif "retain_in_receptor_resnames" in config:
         candidate = config.get("retain_in_receptor_resnames")
 
-    allow_items: Iterable[str] | None = None
-    source = "default"
+    allow_items: Iterable[str] | None = list(getattr(ALIASES, "retain_resnames", []))
+    source = "aliases"
 
     if isinstance(candidate, (list, tuple, set)):
         allow_items = list(candidate)
-        source = "inline"
+        source = "config"
     elif isinstance(candidate, str) and candidate.strip():
         text = candidate.strip()
         parsed: Iterable[str] | None = None
@@ -909,7 +920,7 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
                 loaded = json.loads(text)
                 if isinstance(loaded, list):
                     parsed = loaded
-                    source = "inline"
+                    source = "config"
             except Exception as exc:
                 logging.warning("[ions.cfg] inline_json_parse_failed=%s err=%s", text[:40], exc)
         if parsed is None:
@@ -929,30 +940,25 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
                         raise TypeError("yaml_payload_not_list")
                 except Exception as exc:
                     logging.warning("[ions.cfg] yaml_load_failed path=%s err=%s", yaml_path, exc)
-            if parsed is None:
-                tokens = [tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()]
-                if tokens:
-                    parsed = tokens
-                    source = "inline"
-        allow_items = parsed
+        if parsed is None:
+            tokens = [tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()]
+            if tokens:
+                parsed = tokens
+                source = "config"
+        if parsed is not None:
+            allow_items = parsed
 
-    if allow_items is None:
-        default_items = getattr(ALIASES, "retain_resnames", [])
-        if default_items:
-            allow_items = list(default_items)
-            source = "aliases"
-        else:
-            allow_items = RULES.get("retain_in_receptor_resnames", [])
-            source = "default"
+    base_tokens = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
+    merged_tokens = _to_upper_set(allow_items)
+    allow_set = set(base_tokens) | merged_tokens
+    if source != "aliases" and base_tokens:
+        source = f"aliases+{source}"
+    elif not source:
+        source = "aliases"
 
-    allow_set = {tok.upper() for tok in _flatten_semicolons(allow_items)}
     _IONS_CFG_CACHE = (allow_set, source)
     if not _IONS_CFG_LOGGED:
-        logging.info(
-            "[ions.cfg] retain_in_receptor_resnames=%s source=%s",
-            ",".join(sorted(allow_set)),
-            source,
-        )
+        logging.info("[ions.cfg] retain_tokens=%s source=%s", ",".join(sorted(allow_set)), source)
         _IONS_CFG_LOGGED = True
     return allow_set, source
 
@@ -1990,7 +1996,7 @@ def extract_ligands_from_filtered(filtered_pdb: Union[str, Path], out_dir: Union
         if resname in _WATER_NAMES:
             continue  # never extract waters
         canonical_res = _normalize_resname(resname)
-        if (resname in _RETAIN) or (canonical_res in _RETAIN_CANONICAL):
+        if (resname in _RETAIN_VARIANT) or (canonical_res in _RETAIN_VARIANT_CANONICAL):
             continue  # don't extract cofactors/metals/ions you keep with protein
         chain = ln[21]
         resseq = ln[22:26].strip() or "0"
@@ -2161,12 +2167,7 @@ def detect_catalytic_metals(pdb_path: Union[str, Path]) -> Set[str]:
     Return the set of retained ion-like resnames present in the PDB (e.g., ZN, MG).
     Uses YAML retain list + element tokens. For diagnostics only.
     """
-    RETAIN = set()
-    for item in RULES.get("retain_in_receptor_resnames", []):
-        for t in str(item).split(";"):
-            tok = t.strip().upper()
-            if tok:
-                RETAIN.add(tok)
+    RETAIN = set(_RETAIN_VARIANT)
 
     ionic = set()
     with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -2523,7 +2524,7 @@ def _cofactor_policy_keep(resname: str) -> bool:
     if rn_upper in _WATER_NAMES:
         return False
     canonical = _normalize_resname(rn_upper)
-    if canonical and (canonical in _COFACTOR_CANONICAL):
+    if canonical and canonical in _COFACTOR_CANONICAL:
         return True
     return rn_upper in _COFACTOR_NAMES
 
@@ -2542,6 +2543,15 @@ def strip_nonstandard_residues(
     """
     variant_token = _resolve_variant_token(config, variant)
     variant_label = variant_token or "legacy"
+    global _ALIASES_BIND_LOGGED
+    if not _ALIASES_BIND_LOGGED:
+        logging.info(
+            "[aliases.bind] water_set=%d cofactor_set=%d elem_tokens=%d",
+            len(_WATER_NAMES),
+            len(_COFACTOR_NAMES),
+            len(_ELEM_CANON),
+        )
+        _ALIASES_BIND_LOGGED = True
     before_map = _scan_metal_map(input_pdb, ALIASES)
     before_summary = _summarize_ions_file(input_pdb)
     logging.info(
@@ -2570,7 +2580,7 @@ def strip_nonstandard_residues(
                 continue
             resname = line[17:20].strip().upper()
             canonical_res = _normalize_resname(resname)
-            if (resname in _RETAIN) or (canonical_res in _RETAIN_CANONICAL):
+            if (resname in _RETAIN_VARIANT) or (canonical_res in _RETAIN_VARIANT_CANONICAL):
                 xyz = _parse_xyz(line)
                 if xyz: cofm_xyz.append(xyz)
 
@@ -2583,6 +2593,11 @@ def strip_nonstandard_residues(
     water_policy = (config.get("WATER_POLICY", "site_only") or "site_only").lower()
     water_radius = float(config.get("WATER_SITE_RADIUS_ANG", 6.0))
     water_bmax   = float(config.get("WATER_MAX_BFACTOR", 60.0))
+    logging.info(
+        "[water.policy] mode=%s policy=%s waters_kept_rule_applied=true",
+        _POLICY_MODE,
+        water_policy,
+    )
 
     with open(input_pdb, 'r', encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -2600,6 +2615,8 @@ def strip_nonstandard_residues(
                 resseq = (line[22:26] or "0").strip() or "0"
                 elem_token = (line[76:78].strip() or resname).upper()
                 reason = None
+                canonical = _normalize_resname(resname)
+                canonical_token = canonical or resname
 
                 # Water names come from YAML (no hardcoded list here)
                 if resname in _WATER_NAMES:
@@ -2653,31 +2670,56 @@ def strip_nonstandard_residues(
                         )
                     continue
 
-                # Retain anything listed in YAML retain block (cofactors, metals, ions, etc.)
-                canonical = _normalize_resname(resname)
                 keep_line = False
-                if canonical and (canonical in _RETAIN_CANONICAL):
+                if canonical_token and canonical_token in _ELEM_CANON:
                     keep_line = True
-                elif resname in _RETAIN:
+                    if canonical_token not in _ION_KEEP_LOGGED:
+                        logging.info(
+                            "[ion.keep] token=%s source=elem_tokens_canonical",
+                            canonical_token,
+                        )
+                        _ION_KEEP_LOGGED.add(canonical_token)
+                elif _cofactor_policy_keep(resname):
                     keep_line = True
+                elif (
+                    resname in _RETAIN_VARIANT
+                    or (canonical and canonical in _RETAIN_VARIANT_CANONICAL)
+                ):
+                    keep_line = True
+
                 if keep_line:
                     kept_lines.append(line)
                 else:
                     removed.add(resname)
                     reason = "not_in_retain"
-                if reason and (
+                    if (
+                        _POLICY_MODE == "APO"
+                        and (
+                            resname in _COFACTOR_RAW_ALL
+                            or (canonical and canonical in _COFACTOR_RAW_ALL)
+                        )
+                    ):
+                        reason = "apo_policy"
+                        drop_key = canonical or resname
+                        if drop_key and drop_key not in _COFACTOR_DROP_LOGGED:
+                            logging.info(
+                                "[cofactor.drop] mode=APO resname=%s reason=apo_policy",
+                                drop_key,
+                            )
+                            _COFACTOR_DROP_LOGGED.add(drop_key)
+                if not keep_line and (
                     resname in _ION_AUDIT_METALS
                     or resname in _ION_AUDIT_SIMPLE_IONS
                     or elem_token in _ION_AUDIT_METALS
                     or elem_token in _ION_AUDIT_SIMPLE_IONS
                 ):
-                    removed_hits.append((resname, chain, resseq, reason))
+                    removed_hits.append((resname, chain, resseq, reason or "not_in_retain"))
                     logging.info(
                         "[stripnsr.hit] resname=%s chain=%s resSeq=%s reason=%s variant=%s",
                         resname,
                         chain,
                         resseq,
-                        reason,
+                        reason or "not_in_retain",
                         variant_label,
                     )
                 continue
@@ -2742,7 +2784,14 @@ def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
     ptm_resnames = ptm_yaml or {"PTR", "SEP", "TPO"}
 
     # Element tokens considered "ionic" from YAML context (retain + element list)
-    ionic_tokens = set(_ELEM_CANON)
+    rules_snapshot = get_atom_rules()
+    ionic_tokens = {
+        str(tok).strip().upper()
+        for tok in getattr(rules_snapshot, "elem_tokens_canonical", set())
+        if str(tok).strip()
+    }
+    if not ionic_tokens:
+        ionic_tokens = set(_ELEM_CANON)
 
     res_atoms = defaultdict(list)
     with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -2813,7 +2862,7 @@ def detect_pocket_center_from_ligands(filtered_pdb: Union[str, Path],
                     continue
                 resname = ln[17:20].strip().upper()
                 canonical_res = _normalize_resname(resname)
-                if (resname in _RETAIN) or (canonical_res in _RETAIN_CANONICAL):
+                if (resname in _RETAIN_VARIANT) or (canonical_res in _RETAIN_VARIANT_CANONICAL):
                     try:
                         x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
                         pts.append((x,y,z))
@@ -3547,7 +3596,7 @@ def _drop_free_ions_for_meeko(
 
     allow_tokens, _ = _load_retain_allowlist(cfg_obj)
     allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
-    retain_ions = {r for r in _RETAIN if _is_element_token(r)}
+    retain_ions = {r for r in _RETAIN_VARIANT if _is_element_token(r)}
     base_ban = set(banlist) if banlist else _MEEKO_DROP_IONS
 
     policy = _normalize_ion_policy(cfg_obj)
