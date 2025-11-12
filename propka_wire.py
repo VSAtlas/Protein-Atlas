@@ -8,8 +8,8 @@ import warnings
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 from Bio import BiopythonWarning
 
-from activesite import fix_pdb_elements
-from activesite.constants import (
+from activesite import (
+    fix_pdb_elements,
     load_canonical_cofactors,
     load_canonical_metals,
     load_canonical_waters,
@@ -155,15 +155,20 @@ def _canonical_sets(cfg: Mapping[str, Any] | None = None) -> tuple[Set[str], Set
     if cfg is not None and not isinstance(cfg, Mapping):
         cfg = None
 
+    if cfg is not None:
+        metals = set(load_canonical_metals(cfg))
+        cofactors = set(load_canonical_cofactors(cfg))
+        waters = set(load_canonical_waters(cfg))
+        return metals, cofactors, waters
+
     if _CANONICAL_CACHE is None:
-        source = cfg if cfg is not None else (_CFG if isinstance(_CFG, Mapping) else {})
-        metals = load_canonical_metals(source)
-        cofactors = load_canonical_cofactors(source)
-        waters = load_canonical_waters(source)
+        metals = set(load_canonical_metals(None))
+        cofactors = set(load_canonical_cofactors(None))
+        waters = set(load_canonical_waters(None))
         _CANONICAL_CACHE = {
-            "metals": set(metals),
-            "cofactors": set(cofactors),
-            "waters": set(waters),
+            "metals": metals,
+            "cofactors": cofactors,
+            "waters": waters,
         }
     return (
         set(_CANONICAL_CACHE.get("metals", set())),
@@ -285,6 +290,21 @@ def _probe_pdb_classes(
 
 def _needs_elemfix(pre: _ProbeResult, post: _ProbeResult) -> bool:
     return ((pre.metals > 0 and post.metals == 0) or (pre.cofactors > 0 and post.cofactors == 0))
+
+
+def _elements_column_blank(pdb_path: Path) -> bool:
+    try:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as handle:
+            found = False
+            for line in handle:
+                if not line.startswith(("ATOM  ", "HETATM")):
+                    continue
+                found = True
+                if line[76:78].strip():
+                    return False
+            return found
+    except Exception:
+        return False
 
 
 def _rescue_metals_and_cofactors(
@@ -485,7 +505,7 @@ def pdb2pqr_protonate(
     cmd.extend([str(pdb_in), str(pqr_out)])
 
     try:
-        res = subprocess.run(cmd, check=True, text=True, capture_output=True, cwd=str(out_dir))
+        subprocess.run(cmd, check=True, text=True, capture_output=True, cwd=str(out_dir))
         _strip_pqr_to_pdb(pqr_out, pdb_out)
         # Copy PROPKA table if it was emitted near the PQR (cwd was set to out_dir)
         pka_candidate = next((p for p in Path(out_dir).glob("*.propka*")), None)
@@ -501,11 +521,22 @@ def pdb2pqr_protonate(
             str(pdb_out),
         )
 
-        if _needs_elemfix(pre_probe, post_raw):
+        post_elemfix = post_raw
+        elemfix_ran = False
+        if _elements_column_blank(pdb_out):
             try:
                 fix_pdb_elements(str(pdb_out))
+                elemfix_ran = True
             except Exception as exc:
                 logger.warning("[pdb2pqr.elemfix] failed error=%s file=%s", exc, str(pdb_out))
+        elif _needs_elemfix(pre_probe, post_raw):
+            try:
+                fix_pdb_elements(str(pdb_out))
+                elemfix_ran = True
+            except Exception as exc:
+                logger.warning("[pdb2pqr.elemfix] failed error=%s file=%s", exc, str(pdb_out))
+
+        if elemfix_ran:
             post_elemfix = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
             logger.info(
                 "(3c) p2pqr AFTER (elemfix): metals=%d cofactors=%d waters=%d file=%s",
@@ -514,17 +545,19 @@ def pdb2pqr_protonate(
                 post_elemfix.waters,
                 str(pdb_out),
             )
+        else:
+            post_elemfix = post_raw
 
-            if _needs_elemfix(pre_probe, post_elemfix):
-                appended = _rescue_metals_and_cofactors(pdb_out, pre_probe.records)
-                post_rescue = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
-                logger.info(
-                    "[p2pqr.rescue] attempted=true reinserted=%d metals=%d cofactors=%d file=%s",
-                    appended,
-                    post_rescue.metals,
-                    post_rescue.cofactors,
-                    str(pdb_out),
-                )
+        if _needs_elemfix(pre_probe, post_elemfix):
+            appended = _rescue_metals_and_cofactors(pdb_out, pre_probe.records)
+            post_rescue = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
+            logger.info(
+                "[p2pqr.rescue] attempted=true reinserted=%d metals=%d cofactors=%d file=%s",
+                appended,
+                post_rescue.metals,
+                post_rescue.cofactors,
+                str(pdb_out),
+            )
 
         return str(pdb_out), (str(pk_log) if pk_log.exists() else None)
 

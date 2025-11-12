@@ -693,7 +693,7 @@ element_sets:
   default_element: C
 
 # Canonical residue groups for active-site handling.
-# These sets feed new loader utilities (activesite.constants) while the
+# These sets feed new loader utilities (activesite) while the
 # legacy retain_in_receptor_resnames block below is preserved for
 # compatibility with existing call sites.
 canonical_metals:
