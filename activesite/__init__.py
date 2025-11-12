@@ -17,17 +17,23 @@ P2RANK_DIR = config.get("P2RANK_PATH")
 import yaml
 from types import SimpleNamespace
 
+BASE_DIR = Path(__file__).resolve().parent
+
 ALIASES_PATH = (
     config.get("ALIASES_PATH")
     or os.environ.get("ALIASES_YAML")
-    or os.path.join(os.path.dirname(__file__), "aliases.yaml")
+    or str(BASE_DIR / "aliases.yaml")
 )
 
 # if not found, try ./chemdb/aliases.yaml automatically
 if not os.path.exists(ALIASES_PATH):
-    probe = os.path.join(os.path.dirname(__file__), "chemdb", "aliases.yaml")
-    if os.path.exists(probe):
-        ALIASES_PATH = probe
+    probe = BASE_DIR / "chemdb" / "aliases.yaml"
+    if probe.exists():
+        ALIASES_PATH = str(probe)
+    else:
+        project_probe = (BASE_DIR.parent / "chemdb" / "aliases.yaml").resolve()
+        if project_probe.exists():
+            ALIASES_PATH = str(project_probe)
 
 _aliases_cache = None
 _rules_cache = None
@@ -294,6 +300,7 @@ def _derive_alias_sets(
         alias_cfg.get("retain_element_tokens"), section="retain_element_tokens"
     )
 
+    # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
     legacy = as_set(alias_cfg.get("retain_in_receptor_resnames", []))
     used_backcompat = False
     if not (waters or cofactors or element_tokens):
@@ -617,6 +624,7 @@ def get_atom_rules():
 
         # compatibility views for older call sites
         element_sets=compat_element_sets,
+        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
         retain_in_receptor_resnames=compat_retain_list,
         ad4_types=ad4_types,
         legacy_retain_tokens=legacy_tokens,
