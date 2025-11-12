@@ -1,11 +1,19 @@
 
 import os, re, json, subprocess, shutil, math, tempfile, hashlib
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Tuple, Optional, Set
+from typing import Any, Dict, Iterable, Mapping, Optional, Set, Tuple
 import logging
 import warnings
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 from Bio import BiopythonWarning
+
+from activesite import (
+    fix_pdb_elements,
+    load_canonical_cofactors,
+    load_canonical_metals,
+    load_canonical_waters,
+)
 
 #this filters out the occupancy messages, not  really relevant to us. occupancy from my understanding
 # is not used by reduce, vina or anything else here 
@@ -26,6 +34,30 @@ except Exception:
         _CFG = _load_cfg_legacy()
     except Exception:
         _CFG = {}
+
+
+_CANONICAL_CACHE: dict[str, Set[str]] | None = None
+_HET_FLAG_CACHE: dict[str, Optional[str]] = {}
+
+
+@dataclass
+class _AtomRecord:
+    kind: str
+    line: str
+    resname: str
+    element: str
+    chain: str
+    resseq: str
+    atom_name: str
+    serial: str
+
+
+@dataclass
+class _ProbeResult:
+    metals: int = 0
+    cofactors: int = 0
+    waters: int = 0
+    records: list[_AtomRecord] = field(default_factory=list)
 
 def _cfg(key: str, default: str = "", legacy_key: str | None = None) -> str:
     v = os.environ.get(key)
@@ -117,6 +149,215 @@ def _ensure_exec(env_var: str, fallback_names: list[str]) -> Optional[str]:
             return p
     return None
 
+
+def _canonical_sets(cfg: Mapping[str, Any] | None = None) -> tuple[Set[str], Set[str], Set[str]]:
+    global _CANONICAL_CACHE
+    if cfg is not None and not isinstance(cfg, Mapping):
+        cfg = None
+
+    if cfg is not None:
+        metals = set(load_canonical_metals(cfg))
+        cofactors = set(load_canonical_cofactors(cfg))
+        waters = set(load_canonical_waters(cfg))
+        return metals, cofactors, waters
+
+    if _CANONICAL_CACHE is None:
+        metals = set(load_canonical_metals(None))
+        cofactors = set(load_canonical_cofactors(None))
+        waters = set(load_canonical_waters(None))
+        _CANONICAL_CACHE = {
+            "metals": metals,
+            "cofactors": cofactors,
+            "waters": waters,
+        }
+    return (
+        set(_CANONICAL_CACHE.get("metals", set())),
+        set(_CANONICAL_CACHE.get("cofactors", set())),
+        set(_CANONICAL_CACHE.get("waters", set())),
+    )
+
+
+def _resolve_keep_het_policy(cfg: Mapping[str, Any] | None = None) -> str:
+    valid = {"AUTO", "ALWAYS", "NEVER"}
+    env_raw = (os.environ.get("P2PQR_KEEP_HET") or "").strip().upper()
+    if env_raw in valid:
+        return env_raw
+    if env_raw:
+        logger.warning("[pdb2pqr.policy] invalid_env_value=%s fallback=AUTO", env_raw)
+
+    if cfg and isinstance(cfg, Mapping):
+        cfg_raw = str(cfg.get("P2PQR_KEEP_HET", "")).strip().upper()
+        if cfg_raw in valid:
+            return cfg_raw
+        if cfg_raw:
+            logger.warning("[pdb2pqr.policy] invalid_cfg_value=%s fallback=AUTO", cfg_raw)
+    return "AUTO"
+
+
+def _detect_keep_hetero_flag(exe: str) -> Optional[str]:
+    if not exe:
+        return None
+    cached = _HET_FLAG_CACHE.get(exe)
+    if cached is not None:
+        return cached
+
+    candidates = ["--keep-hetatoms", "--keep-hetatm", "--keep-hetero", "--keep-het"]
+    detected: Optional[str] = None
+    try:
+        help_run = subprocess.run(
+            [exe, "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        output = (help_run.stdout or "") + "\n" + (help_run.stderr or "")
+        for cand in candidates:
+            if cand in output:
+                detected = cand
+                break
+    except Exception:
+        detected = None
+
+    _HET_FLAG_CACHE[exe] = detected
+    if detected is None:
+        logger.debug("[pdb2pqr.policy] keep_het_flag_unresolved exe=%s", exe)
+    return detected
+
+
+def _atom_identity(line: str) -> tuple[str, str, str, str, str, str, str]:
+    padded = line.rstrip("\n").ljust(80)
+    return (
+        padded[:6],
+        padded[12:16].strip(),
+        padded[16:17].strip(),
+        padded[17:20].strip(),
+        padded[21:22].strip(),
+        padded[22:26].strip(),
+        padded[26:27].strip(),
+    )
+
+
+def _probe_pdb_classes(
+    pdb_path: Path,
+    metals: Set[str],
+    cofactors: Set[str],
+    waters: Set[str],
+) -> _ProbeResult:
+    result = _ProbeResult()
+    try:
+        lines = pdb_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return result
+
+    for line in lines:
+        if not line.startswith(("ATOM  ", "HETATM")):
+            continue
+
+        resname = line[17:20].strip().upper()
+        element = line[76:78].strip().upper()
+        chain = line[21:22].strip()
+        resseq = line[22:26].strip()
+        atom_name = line[12:16].strip()
+        serial = line[6:11].strip()
+        is_het = line.startswith("HETATM")
+
+        if resname in waters:
+            result.waters += 1
+            continue
+
+        candidate_metal = (resname in metals) or (element in metals if element else False)
+        counted_metal = bool(element) and ((element in metals) or (resname in metals))
+
+        if candidate_metal:
+            if counted_metal:
+                result.metals += 1
+            if is_het:
+                result.records.append(
+                    _AtomRecord("metal", line, resname, element, chain, resseq, atom_name, serial)
+                )
+            continue
+
+        if resname in cofactors:
+            result.cofactors += 1
+            if is_het:
+                result.records.append(
+                    _AtomRecord("cofactor", line, resname, element, chain, resseq, atom_name, serial)
+                )
+
+    return result
+
+
+def _needs_elemfix(pre: _ProbeResult, post: _ProbeResult) -> bool:
+    return ((pre.metals > 0 and post.metals == 0) or (pre.cofactors > 0 and post.cofactors == 0))
+
+
+def _elements_column_blank(pdb_path: Path) -> bool:
+    try:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as handle:
+            found = False
+            for line in handle:
+                if not line.startswith(("ATOM  ", "HETATM")):
+                    continue
+                found = True
+                if line[76:78].strip():
+                    return False
+            return found
+    except Exception:
+        return False
+
+
+def _rescue_metals_and_cofactors(
+    out_path: Path,
+    pre_records: Iterable[_AtomRecord],
+) -> int:
+    if not out_path.exists():
+        return 0
+
+    try:
+        existing_lines = out_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        existing_lines = []
+
+    existing_keys = {_atom_identity(line) for line in existing_lines if line.startswith(("ATOM  ", "HETATM"))}
+    existing_serials: set[int] = set()
+    for line in existing_lines:
+        if not line.startswith(("ATOM  ", "HETATM")):
+            continue
+        serial_text = line[6:11].strip()
+        if serial_text.isdigit():
+            existing_serials.add(int(serial_text))
+
+    next_serial = (max(existing_serials) + 1) if existing_serials else 1
+    appended = 0
+    seen: set[tuple[str, str, str, str, str, str, str]] = set()
+
+    with open(out_path, "a", encoding="utf-8") as handle:
+        for record in pre_records:
+            if record.kind not in {"metal", "cofactor"}:
+                continue
+            ident = _atom_identity(record.line)
+            if ident in existing_keys or ident in seen:
+                continue
+            seen.add(ident)
+
+            base = record.line.rstrip("\n")
+            if len(base) < 80:
+                base = base + " " * (80 - len(base))
+
+            serial_val: Optional[int] = int(record.serial) if record.serial.isdigit() else None
+            if serial_val is None or serial_val in existing_serials:
+                serial_val = next_serial
+                next_serial += 1
+            existing_serials.add(serial_val)
+
+            rewritten = f"{base[:6]}{serial_val:5d}{base[11:]}"
+            handle.write(rewritten.rstrip("\n") + "\n")
+            existing_keys.add(_atom_identity(rewritten))
+            appended += 1
+
+    return appended
+
 # --------------------
 # PDB2PQR / PROPKA
 # --------------------
@@ -176,13 +417,12 @@ def pdb2pqr_protonate(
     target_ph: float,
     out_dir: str | Path,
     ff: str = "amber",
-    keep_waters: bool = True
+    keep_waters: bool = True,
+    *,
+    variant: Optional[str] = None,
+    cfg: Mapping[str, Any] | None = None,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Run PDB2PQR (with PROPKA) at the requested pH and return (protonated_pdb, propka_log).
-    - Writes a temporary .pqr then converts back to .pdb (coords + Hs, charges dropped).
-    - If pdb2pqr not found, returns (None, None).
-    """
+    """Run PDB2PQR (with PROPKA) and guard against hetero loss."""
     pdb2pqr = _ensure_exec("PDB2PQR_EXE", ["pdb2pqr"])
     if not pdb2pqr:
         logger.warning("pdb2pqr not found on PATH; skipping pre-protonation.")
@@ -194,6 +434,50 @@ def pdb2pqr_protonate(
     pqr_out = out_dir / f"{base}.p{tag}.pqr"
     pdb_out = out_dir / f"{base}.p{tag}.pdb"
     pk_log  = out_dir / f"{base}.propka_pka.txt"
+
+    cfg_obj: Mapping[str, Any] | None = cfg if isinstance(cfg, Mapping) else (_CFG if isinstance(_CFG, Mapping) else None)
+    metals, cofactors, waters = _canonical_sets(cfg_obj)
+    pre_probe = _probe_pdb_classes(Path(pdb_in), metals, cofactors, waters)
+    logger.info(
+        "(3a) p2pqr BEFORE: metals=%d cofactors=%d waters=%d file=%s",
+        pre_probe.metals,
+        pre_probe.cofactors,
+        pre_probe.waters,
+        str(pdb_in),
+    )
+
+    policy = _resolve_keep_het_policy(cfg_obj)
+    variant_norm = (variant or "").strip().upper()
+    keep_hetero: bool
+    if policy == "ALWAYS":
+        keep_hetero = True
+    elif policy == "NEVER":
+        keep_hetero = False
+    else:
+        if variant_norm == "HOLO":
+            keep_hetero = True
+        elif pre_probe.metals > 0 or pre_probe.cofactors > 0:
+            keep_hetero = True
+        else:
+            keep_hetero = False
+
+    logger.info(
+        "[pdb2pqr.policy] keep_hetatoms=%s policy=%s variant=%s metals_pre=%d cofactors_pre=%d",
+        "true" if keep_hetero else "false",
+        policy,
+        variant_norm or "NONE",
+        pre_probe.metals,
+        pre_probe.cofactors,
+    )
+
+    summary_keep = "true" if keep_hetero else "false"
+    logger.info(
+        "[pdb2pqr] keep_hetatoms=%s in=%s out=%s",
+        summary_keep,
+        str(pdb_in),
+        str(pdb_out),
+    )
+
     # PDB2PQR 3.x expects uppercase FF names; default to AMBER if unknown
     ALLOWED_FF = {"AMBER", "CHARMM", "PARSE", "TYL06", "PEOEPB", "SWANSON"}
     ff_norm = (ff or "AMBER").upper()
@@ -209,15 +493,72 @@ def pdb2pqr_protonate(
     ]
     if not keep_waters:
         cmd.append("--drop-water")
+
+    if keep_hetero:
+        het_flag = _detect_keep_hetero_flag(pdb2pqr)
+        if het_flag:
+            cmd.append(het_flag)
+        else:
+            logger.info(
+                "[pdb2pqr.policy] keep_hetatoms requested but CLI flag unavailable; TODO confirm support"
+            )
     cmd.extend([str(pdb_in), str(pqr_out)])
 
     try:
-        res = subprocess.run(cmd, check=True, text=True, capture_output=True, cwd=str(out_dir))
+        subprocess.run(cmd, check=True, text=True, capture_output=True, cwd=str(out_dir))
         _strip_pqr_to_pdb(pqr_out, pdb_out)
         # Copy PROPKA table if it was emitted near the PQR (cwd was set to out_dir)
         pka_candidate = next((p for p in Path(out_dir).glob("*.propka*")), None)
         _copy_if_exists(pka_candidate, pk_log)
         logger.info("[pdb2pqr] ph=%.2f out=%s pkas=%s", float(target_ph), str(pdb_out), str(pk_log.exists()))
+
+        post_raw = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
+        logger.info(
+            "(3b) p2pqr AFTER (raw): metals=%d cofactors=%d waters=%d file=%s",
+            post_raw.metals,
+            post_raw.cofactors,
+            post_raw.waters,
+            str(pdb_out),
+        )
+
+        post_elemfix = post_raw
+        elemfix_ran = False
+        if _elements_column_blank(pdb_out):
+            try:
+                fix_pdb_elements(str(pdb_out))
+                elemfix_ran = True
+            except Exception as exc:
+                logger.warning("[pdb2pqr.elemfix] failed error=%s file=%s", exc, str(pdb_out))
+        elif _needs_elemfix(pre_probe, post_raw):
+            try:
+                fix_pdb_elements(str(pdb_out))
+                elemfix_ran = True
+            except Exception as exc:
+                logger.warning("[pdb2pqr.elemfix] failed error=%s file=%s", exc, str(pdb_out))
+
+        if elemfix_ran:
+            post_elemfix = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
+            logger.info(
+                "(3c) p2pqr AFTER (elemfix): metals=%d cofactors=%d waters=%d file=%s",
+                post_elemfix.metals,
+                post_elemfix.cofactors,
+                post_elemfix.waters,
+                str(pdb_out),
+            )
+        else:
+            post_elemfix = post_raw
+
+        if _needs_elemfix(pre_probe, post_elemfix):
+            appended = _rescue_metals_and_cofactors(pdb_out, pre_probe.records)
+            post_rescue = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
+            logger.info(
+                "[p2pqr.rescue] attempted=true reinserted=%d metals=%d cofactors=%d file=%s",
+                appended,
+                post_rescue.metals,
+                post_rescue.cofactors,
+                str(pdb_out),
+            )
+
         return str(pdb_out), (str(pk_log) if pk_log.exists() else None)
 
     except subprocess.CalledProcessError as e:

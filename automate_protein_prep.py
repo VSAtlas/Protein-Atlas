@@ -902,8 +902,10 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
 
     candidate = None
     if cfg and "retain_in_receptor_resnames" in cfg:
+        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
         candidate = cfg.get("retain_in_receptor_resnames")
     elif "retain_in_receptor_resnames" in config:
+        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
         candidate = config.get("retain_in_receptor_resnames")
 
     allow_items: Iterable[str] | None = list(getattr(ALIASES, "retain_resnames", []))
@@ -930,6 +932,7 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
                     with open(yaml_path, "r", encoding="utf-8") as fh:
                         data = _activesite_mod.yaml.safe_load(fh) or []
                     if isinstance(data, dict):
+                        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
                         payload = data.get("retain_in_receptor_resnames")
                         if isinstance(payload, list):
                             data = payload
@@ -3080,7 +3083,13 @@ def _maybe_get_target_ph() -> float | None:
         pass
     return None
 
-def _protonate_with_pdb2pqr_if_available(nolig_pdb_path: str, out_dir: Path, logger) -> tuple[Path, bool, str|None]:
+def _protonate_with_pdb2pqr_if_available(
+    nolig_pdb_path: str,
+    out_dir: Path,
+    logger,
+    *,
+    variant: Optional[str] = None,
+) -> tuple[Path, bool, str | None]:
     """
     Try PDB2PQR at the *pipeline pH* if available; fall back to the input PDB.
     Returns: (pdb_for_reduce, used_pdb2pqr, propka_log_path_or_None)
@@ -3095,7 +3104,18 @@ def _protonate_with_pdb2pqr_if_available(nolig_pdb_path: str, out_dir: Path, log
         target_ph = 7.0
 
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    pdb_from_p2p, pk_log = pdb2pqr_protonate(nolig_pdb_path, target_ph, out_dir)
+
+    variant_token = (variant or "").strip().upper() if variant else None
+    if variant_token not in {"APO", "HOLO"}:
+        variant_token = _resolve_variant_token(config)
+
+    pdb_from_p2p, pk_log = pdb2pqr_protonate(
+        nolig_pdb_path,
+        target_ph,
+        out_dir,
+        variant=variant_token,
+        cfg=config,
+    )
     if pdb_from_p2p:
         logger.info("PDB2PQR succeeded at pH %.2f -> %s", target_ph, pdb_from_p2p)
         return Path(pdb_from_p2p), True, pk_log
@@ -3664,7 +3684,8 @@ def clean_pdb(
         pdb_for_reduce, used_pdb2pqr, pk_log = _protonate_with_pdb2pqr_if_available(
             str(chain_validated_pdb),         # protonate the validated, ligand-free coordinates
             str(paths["work"]),               # write PROPKA/PDB2PQR artifacts into the work directory
-            logging
+            logging,
+            variant=variant_token,
         )
         if used_pdb2pqr and pdb_for_reduce and Path(pdb_for_reduce).exists():
             _log_ions_probe(pdb_id, "pdb2pqr", pdb_for_reduce)

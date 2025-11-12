@@ -692,6 +692,48 @@ element_sets:
   treat_backbone_CA_as_C: true
   default_element: C
 
+# Canonical residue groups for active-site handling.
+# These sets feed new loader utilities (activesite) while the
+# legacy retain_in_receptor_resnames block below is preserved for
+# compatibility with existing call sites.
+canonical_metals:
+  # Monatomic ions (alkali and alkaline-earth metals)
+  - LI; NA; K; RB; CS
+  - MG; CA; SR; BA
+  # Transition and post-transition metals commonly retained
+  - ZN; MN; FE; CO; NI; CU
+  - CD; HG; PB; AG; AU; PT
+  - MO; RU; RH; PD
+  - AL
+  # Halides retained as elemental ions
+  - CL; BR; I; F; AT
+  # Lanthanides / actinides sometimes present
+  - LA; CE; PR; ND; PM; SM; EU; GD; TB; DY; HO; ER; TM; YB; LU
+  - U; TH
+
+canonical_cofactors:
+  # Multi-atom prosthetic groups / clusters
+  - FES; SF4; F3S; F4S; FE2; FE3; CU1; CU2; ZN2; 3NI; 2FE; 4FE; 3CO
+  # Porphyrins / hemes
+  - HEM; HEC; HEB; HEA; HEME
+  # Flavins
+  - FAD; FMN; FADH; FMNH
+  # Nicotinamide / adenine coenzymes
+  - NAD; NADH; NADP; NAP; NMN
+  # Thiamine & pyridoxal coenzymes
+  - PLP; TPP
+  # S-adenosyl donors / metabolites
+  - SAM; SAH
+  # Nucleotide-based cofactors
+  - ATP; ADP; AMP; GTP; GDP; CTP; UTP; TTP
+  - COA
+  - BTN
+  - MGD; MGN; MPT
+
+canonical_waters:
+  # Water residue aliases encountered in PDB files
+  - HOH; H2O; WAT; DOD; TIP; TIP3; SOL
+
 # Keep these in the receptor (not extracted as small ligands)
 retain_in_receptor_resnames:
   # Water

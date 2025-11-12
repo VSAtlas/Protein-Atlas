@@ -4,7 +4,7 @@ from collections import defaultdict
 from logger_setup import setup_logger
 from pathlib import Path
 import hashlib
-from typing import Dict, Iterable, List, NamedTuple, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
 # >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
@@ -17,17 +17,26 @@ P2RANK_DIR = config.get("P2RANK_PATH")
 import yaml
 from types import SimpleNamespace
 
+BASE_DIR = Path(__file__).resolve().parent
+
 ALIASES_PATH = (
     config.get("ALIASES_PATH")
     or os.environ.get("ALIASES_YAML")
-    or os.path.join(os.path.dirname(__file__), "aliases.yaml")
+    or str(BASE_DIR / "aliases.yaml")
 )
 
-# if not found, try ./chemdb/aliases.yaml automatically
+# if not found, try canonical chemdb/aliases.yaml automatically
 if not os.path.exists(ALIASES_PATH):
-    probe = os.path.join(os.path.dirname(__file__), "chemdb", "aliases.yaml")
-    if os.path.exists(probe):
-        ALIASES_PATH = probe
+    for candidate in (
+        BASE_DIR / "chemdb" / "aliases.yaml",
+        BASE_DIR / "activesite" / "aliases.yaml",
+        BASE_DIR / "activesite" / "chemdb" / "aliases.yaml",
+        BASE_DIR.parent / "chemdb" / "aliases.yaml",
+    ):
+        try_path = candidate.resolve() if hasattr(candidate, "resolve") else candidate
+        if Path(try_path).exists():
+            ALIASES_PATH = str(try_path)
+            break
 
 _aliases_cache = None
 _rules_cache = None
@@ -294,6 +303,7 @@ def _derive_alias_sets(
         alias_cfg.get("retain_element_tokens"), section="retain_element_tokens"
     )
 
+    # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
     legacy = as_set(alias_cfg.get("retain_in_receptor_resnames", []))
     used_backcompat = False
     if not (waters or cofactors or element_tokens):
@@ -617,6 +627,7 @@ def get_atom_rules():
 
         # compatibility views for older call sites
         element_sets=compat_element_sets,
+        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
         retain_in_receptor_resnames=compat_retain_list,
         ad4_types=ad4_types,
         legacy_retain_tokens=legacy_tokens,
@@ -1542,3 +1553,103 @@ def main(pdb_file):
             logging.info(f"Temporary file removed: {temp_fixed_pdb_path}")
         except OSError:
             logging.warning(f"Could not delete temp file: {temp_fixed_pdb_path}")
+
+# --- Canonical residue loader helpers (aliases-migration) ---
+_TOKEN_SPLIT = re.compile(r"[;\s,]+")
+
+
+def _iter_values(payload: Any) -> Iterable[Any]:
+    if payload is None:
+        return []
+    if isinstance(payload, Mapping):
+        items: list[Any] = []
+        for key, value in payload.items():
+            items.append(key)
+            items.extend(_iter_values(value))
+        return items
+    if isinstance(payload, (str, bytes)):
+        return [payload]
+    if isinstance(payload, Iterable):
+        items: list[Any] = []
+        for entry in payload:
+            items.extend(_iter_values(entry))
+        return items
+    return [payload]
+
+
+def _load_default_alias_cfg() -> Mapping[str, Any]:
+    global _aliases_cache
+    if _aliases_cache is not None:
+        cached = _aliases_cache
+        if isinstance(cached, Mapping):
+            return cached
+    try:
+        with open(ALIASES_PATH, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except Exception:
+        data = {}
+    if not isinstance(data, Mapping):
+        data = {}
+    _aliases_cache = data
+    return data
+
+
+def _normalize_tokens(raw_tokens: Iterable[Any]) -> Set[str]:
+    tokens: Set[str] = set()
+    for raw in raw_tokens:
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        for piece in _TOKEN_SPLIT.split(text):
+            token = piece.strip()
+            if token:
+                tokens.add(token.upper())
+    return tokens
+
+
+def _collect_alias_synonyms(alias_map: Any, canonical: Set[str]) -> Set[str]:
+    if not isinstance(alias_map, Mapping):
+        return set()
+    synonyms: Set[str] = set()
+    for alias, target in alias_map.items():
+        alias_tokens = _normalize_tokens([alias])
+        target_tokens = _normalize_tokens([target])
+        if canonical & target_tokens:
+            synonyms |= alias_tokens
+    return synonyms
+
+
+def _resolve_alias_cfg(cfg: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if cfg:
+        return cfg
+    return _load_default_alias_cfg()
+
+
+# Public loaders --------------------------------------------------------------
+def load_canonical_metals(cfg: Mapping[str, Any] | None) -> Set[str]:
+    cfg_map = _resolve_alias_cfg(cfg)
+    canonical = _normalize_tokens(_iter_values(cfg_map.get("canonical_metals")))
+
+    element_sets = cfg_map.get("element_sets")
+    if isinstance(element_sets, Mapping):
+        canonical |= _collect_alias_synonyms(
+            element_sets.get("cation_resname_aliases"), canonical
+        )
+        canonical |= _collect_alias_synonyms(
+            element_sets.get("halide_resname_aliases"), canonical
+        )
+
+    canonical |= _collect_alias_synonyms(cfg_map.get("retain_element_alias_map"), canonical)
+    return {token.strip().upper() for token in canonical if token.strip()}
+
+
+def load_canonical_cofactors(cfg: Mapping[str, Any] | None) -> Set[str]:
+    cfg_map = _resolve_alias_cfg(cfg)
+    return _normalize_tokens(_iter_values(cfg_map.get("canonical_cofactors")))
+
+
+def load_canonical_waters(cfg: Mapping[str, Any] | None) -> Set[str]:
+    cfg_map = _resolve_alias_cfg(cfg)
+    return _normalize_tokens(_iter_values(cfg_map.get("canonical_waters")))
