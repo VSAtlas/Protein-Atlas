@@ -4717,6 +4717,20 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         apo_exists = apo_path.exists() if apo_path else False
         holo_exists = holo_path.exists() if holo_path else False
 
+        def _safe_abs(path_obj: Path | None) -> str:
+            if not path_obj:
+                return "None"
+            try:
+                return str(path_obj.resolve())
+            except Exception:
+                return str(path_obj)
+
+        logger.info(
+            "[apo-vs-holo.preflight.paths] apo_clean=%s holo_clean=%s",
+            _safe_abs(apo_path),
+            _safe_abs(holo_path),
+        )
+
         if not apo_exists or not holo_exists:
             logger.warning(
                 "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=missing_paths apo=%s holo=%s",
@@ -4737,9 +4751,28 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 )
                 _record_apo_holo_decision(cfg, pdb_id, "HOLO", "sha_error")
             else:
+                logger.info(
+                    "[apo-vs-holo.preflight.sha] apo_sha=%s holo_sha=%s",
+                    apo_sha,
+                    holo_sha,
+                )
+
+                ion_probe = getattr(protein_prep, "_scan_metal_map", None)
+                if apo_exists and holo_exists and callable(ion_probe):
+                    try:
+                        apo_metals = ion_probe(apo_path) or {}
+                        holo_metals = ion_probe(holo_path) or {}
+                        logger.info(
+                            "[apo-vs-holo.preflight.ions] apo_metals=%s holo_metals=%s",
+                            dict(sorted(apo_metals.items())),
+                            dict(sorted(holo_metals.items())),
+                        )
+                    except Exception:
+                        pass
+
                 if apo_sha == holo_sha:
                     logger.info(
-                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=identical apo_sha=%s holo_sha=%s",
+                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=preflight_delete reason=identical apo_sha=%s holo_sha=%s",
                         pdb_id,
                         apo_sha,
                         holo_sha,
@@ -4766,6 +4799,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     if receptor_pdbqt:
                         _record_apo_holo_usage(cfg, pdb_id, variant_token, None, receptor_pdbqt)
                     _record_apo_holo_decision(cfg, pdb_id, "HOLO", "skipped_preflight")
+                    cfg.setdefault("_APO_HOLO_AUDIT", {}).setdefault(pdb_id.upper(), {})[
+                        "dedup_decision"
+                    ] = "skipped_preflight"
                     try:
                         delete_variant_trees(pdb_id, "HOLO", cfg)
                     except Exception as cleanup_err:
