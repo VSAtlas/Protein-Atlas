@@ -207,6 +207,9 @@ def pdb2pqr_protonate(
         "--titration-state-method=propka",
         # note: default is to keep waters; only add --drop-water if requested
     ]
+    keep_hetatoms_supported = False  # TODO: enable explicit --keep-hetero once verified on deployed pdb2pqr build.
+    if keep_hetatoms_supported:
+        cmd.append("--keep-hetero")
     if not keep_waters:
         cmd.append("--drop-water")
     cmd.extend([str(pdb_in), str(pqr_out)])
@@ -217,6 +220,11 @@ def pdb2pqr_protonate(
         # Copy PROPKA table if it was emitted near the PQR (cwd was set to out_dir)
         pka_candidate = next((p for p in Path(out_dir).glob("*.propka*")), None)
         _copy_if_exists(pka_candidate, pk_log)
+        logger.info(
+            "[pdb2pqr] keep_hetatoms=%s out=%s",
+            str(bool(keep_hetatoms_supported)).lower(),
+            str(pdb_out),
+        )
         logger.info("[pdb2pqr] ph=%.2f out=%s pkas=%s", float(target_ph), str(pdb_out), str(pk_log.exists()))
         return str(pdb_out), (str(pk_log) if pk_log.exists() else None)
 
