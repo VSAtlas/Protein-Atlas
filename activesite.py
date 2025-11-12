@@ -4,7 +4,7 @@ from collections import defaultdict
 from logger_setup import setup_logger
 from pathlib import Path
 import hashlib
-from typing import Iterable, Tuple, List, Union
+from typing import Dict, Iterable, List, NamedTuple, Set, Tuple, Union
 
 # >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
@@ -31,6 +31,17 @@ if not os.path.exists(ALIASES_PATH):
 
 _aliases_cache = None
 _rules_cache = None
+
+
+class AliasSets(NamedTuple):
+    waters: Set[str]
+    cofactors: Set[str]
+    element_tokens: Set[str]
+    element_alias: Dict[str, str]
+    elem_tokens_canonical: Set[str]
+
+
+_ALIAS_POLICY_LOGGED = False
 
 
 _ION_BREADCRUMB_METAL_ORDER = (
@@ -215,6 +226,100 @@ def _log_alias_tokens(key: str, tokens: set[str]) -> None:
         ALIASES_PATH,
     )
 
+
+def _normalize_alias_token(token: str, alias_map: Dict[str, str]) -> str:
+    raw = (token or "").strip().upper()
+    if not raw:
+        return ""
+    return alias_map.get(raw, raw)
+
+
+def _format_alias_sample(tokens: Iterable[str], limit: int = 6) -> str:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for tok in sorted(str(t).strip().upper() for t in tokens if str(t).strip()):
+        if tok in seen:
+            continue
+        deduped.append(tok)
+        seen.add(tok)
+    if not deduped:
+        return "none"
+    if len(deduped) > limit:
+        trimmed = deduped[:limit]
+        trimmed.append(f"+{len(deduped) - limit}")
+        return ",".join(trimmed)
+    return ",".join(deduped)
+
+
+def _derive_alias_sets(
+    aliases_root: dict,
+    *,
+    as_set,
+    element_symbol_hints: Set[str],
+) -> tuple[AliasSets, set[str], bool]:
+    alias_cfg = aliases_root or {}
+
+    alias_raw = alias_cfg.get("retain_element_alias_map", {}) or {}
+    element_alias: Dict[str, str] = {}
+    if isinstance(alias_raw, dict):
+        for k, v in alias_raw.items():
+            key = str(k or "").strip().upper()
+            val = str(v or "").strip().upper()
+            if not key or not val:
+                continue
+            element_alias[key] = val
+    if not element_alias:
+        element_alias = {k.upper(): v.upper() for k, v in _ION_BREADCRUMB_ALIAS_MAP.items()}
+
+    waters = as_set(alias_cfg.get("retain_water_resnames"), section="retain_water_resnames")
+    cofactors = as_set(
+        alias_cfg.get("retain_cofactor_resnames"), section="retain_cofactor_resnames"
+    )
+    element_tokens = as_set(
+        alias_cfg.get("retain_element_tokens"), section="retain_element_tokens"
+    )
+
+    legacy = as_set(alias_cfg.get("retain_in_receptor_resnames", []))
+    used_backcompat = False
+    if not (waters or cofactors or element_tokens):
+        if legacy:
+            used_backcompat = True
+            waters = {tok for tok in legacy if tok in _ION_BREADCRUMB_WATERS}
+            canonical_elements: set[str] = set()
+            for tok in legacy:
+                canonical = _normalize_alias_token(tok, element_alias)
+                if not canonical:
+                    continue
+                if (len(canonical) <= 2) or (canonical in element_symbol_hints):
+                    canonical_elements.add(canonical)
+            element_tokens = set(canonical_elements)
+            cofactors = {
+                tok
+                for tok in legacy
+                if tok not in waters
+                and _normalize_alias_token(tok, element_alias) not in canonical_elements
+            }
+        else:
+            waters = set()
+            cofactors = set()
+            element_tokens = set()
+
+    canonical_elem_tokens: Set[str] = set()
+    for tok in element_tokens | set(element_alias.values()):
+        canonical = _normalize_alias_token(tok, element_alias)
+        if canonical:
+            canonical_elem_tokens.add(canonical)
+
+    alias_sets = AliasSets(
+        waters=set(waters),
+        cofactors=set(cofactors),
+        element_tokens=set(element_tokens),
+        element_alias=dict(element_alias),
+        elem_tokens_canonical=set(canonical_elem_tokens),
+    )
+    return alias_sets, legacy, used_backcompat
+
+
 # ---  YAML loader with encoding fallbacks & punctuation cleanup ---
 def _load_aliases_yaml():
     import yaml, unicodedata
@@ -332,62 +437,108 @@ def get_atom_rules():
 
     #  ligand & Meeko lists from YAML
     nucleotide_like_resnames = _as_set(ligand_sets.get("nucleotide_like_resnames"))
-    meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"), section="meeko.drop_free_ions")
+    meeko_drop_free_ions = _as_set(
+        meeko_cfg.get("drop_free_ions"), section="meeko.drop_free_ions"
+    )
     strip_raw = a.get("strip_in_receptor_resnames", []) or []
     strip_tokens = _as_set(strip_raw, section="strip_in_receptor_resnames")
     strip_tokens |= meeko_drop_free_ions
     _log_alias_tokens("strip_in_receptor_resnames", strip_tokens)
 
-    # retain list (and a compat copy)
-    retain_raw = a.get("retain_in_receptor_resnames", []) or []
-    retain_res = _as_set(retain_raw, section="retain_in_receptor_resnames")
-    _log_alias_tokens("retain_in_receptor_resnames", retain_res)
+    alias_sets, legacy_tokens, used_backcompat = _derive_alias_sets(
+        a,
+        as_set=_as_set,
+        element_symbol_hints=one_letter | two_letter,
+    )
+
+    _log_alias_tokens("retain_water_resnames", set(alias_sets.waters))
+    _log_alias_tokens("retain_cofactor_resnames", set(alias_sets.cofactors))
+    _log_alias_tokens("retain_element_tokens", set(alias_sets.element_tokens))
+
     allow_raw = a.get("allow_in_receptor_resnames", []) or []
     allow_tokens = _as_set(allow_raw, section="allow_in_receptor_resnames")
     _log_alias_tokens("allow_in_receptor_resnames", allow_tokens)
-    retain_sample = ",".join(sorted(retain_res)[:10]) if retain_res else "none"
-    logging.info(
-        "[aliases.section] name=retain_in_receptor_resnames size=%d sample=%s",
-        len(retain_res),
-        retain_sample,
-    )
 
-    # Metals/ions audit: expose the elemental retain tokens for quick inspection.
-    metal_tokens = sorted(tok for tok in retain_res if len(tok) <= 2)
-    metal_sample = ",".join(metal_tokens[:10]) if metal_tokens else "none"
+    waters_set = set(alias_sets.waters)
+    cofactors_set = set(alias_sets.cofactors)
+    element_tokens_raw = set(alias_sets.element_tokens)
+    canonical_elements = set(alias_sets.elem_tokens_canonical)
+    element_alias = dict(alias_sets.element_alias)
+
+    logging.info(
+        "[aliases.loaded] waters=%d cofactors=%d elements_raw=%d aliases=%d",
+        len(waters_set),
+        len(cofactors_set),
+        len(element_tokens_raw),
+        len(element_alias),
+    )
+    logging.info(
+        "[aliases.canonical] elem_tokens=%d samples=[%s]",
+        len(canonical_elements),
+        _format_alias_sample(canonical_elements),
+    )
+    if used_backcompat:
+        logging.info("[aliases.backcompat] using retain_in_receptor_resnames; split not provided")
+
+    required_metals = ["ZN", "MG", "CA", "FE", "MN", "CU", "CO", "NI", "NA", "K"]
+    coverage = {tok: (tok in canonical_elements) for tok in required_metals}
+    logging.info("[aliases.audit] metal_core_coverage=%s", coverage)
+
+    mode_raw = (
+        os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "") or ""
+    ).strip().upper()
+    if mode_raw == "APO":
+        policy_mode = "APO"
+    elif mode_raw == "HOLO":
+        policy_mode = "HOLO"
+    else:
+        policy_mode = "LEGACY"
+
+    if policy_mode == "APO":
+        cofactors_policy = set()
+    else:
+        cofactors_policy = set(cofactors_set)
+
+    retain_res = set(waters_set) | set(canonical_elements) | set(cofactors_policy)
+
+    logging.info(
+        "[aliases.policy] mode=%s keep_sets=waters{n=%d} cofactors{n=%d} elements{n=%d}",
+        policy_mode,
+        len(waters_set),
+        len(cofactors_policy),
+        len(canonical_elements),
+    )
+    logging.info(
+        "[aliases.samples] waters=[%s] cofactors=[%s] elements=[%s]",
+        _format_alias_sample(waters_set),
+        _format_alias_sample(cofactors_policy),
+        _format_alias_sample(canonical_elements),
+    )
+    global _ALIAS_POLICY_LOGGED
+    if not _ALIAS_POLICY_LOGGED:
+        logging.info(
+            "[aliases.summary] mode=%s keep={waters:%d, cofactors:%d, elements:%d}",
+            policy_mode,
+            len(waters_set),
+            len(cofactors_policy),
+            len(canonical_elements),
+        )
+        _ALIAS_POLICY_LOGGED = True
+
+    metal_tokens = sorted(tok for tok in canonical_elements if len(tok) <= 2)
     logging.info(
         "[aliases.section] name=element_resnames.metals size=%d sample=[%s]",
         len(metal_tokens),
-        metal_sample,
-    )
-    required_metals = ["ZN", "MG", "CA", "FE", "MN", "CU", "CO", "NI", "NA", "K"]
-    coverage = {tok: (tok in retain_res) for tok in required_metals}
-    logging.info("[aliases.audit] metal_core_coverage=%s", coverage)
-
-    # --- APO/HOLO mode (env or config) ---
-    mode = str(os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "")).strip().lower()
-
-    # water names come directly from the YAML retain list:
-    water_names = {w for w in retain_res if w in {"HOH", "WAT", "DOD", "H2O", "TIP", "TIP3", "SOL"}}
-
-    # element-token ions/metals: 1–2 letter tokens present in element sets
-    elem_tokens = {t for t in retain_res if ((len(t) in (1, 2)) and (t in one_letter or t in two_letter))}
-    elem_sample = ",".join(sorted(elem_tokens)[:10]) if elem_tokens else "none"
-    logging.info(
-        "[aliases.section] name=retain_element_tokens size=%d sample=%s",
-        len(elem_tokens),
-        elem_sample,
+        _format_alias_sample(metal_tokens),
     )
 
-    if mode == "apo":
-        # apo keeps waters + ions only; drop other small-molecule cofactors
-        retain_res = water_names | elem_tokens
-    # else (holo/default): keep full retain_res from YAML
+    compat_element_sets = dict(es)
+    compat_retain_list = sorted(retain_res)
 
-    compat_element_sets = dict(es)      # keep YAML shape
-    compat_retain_list  = list(retain_raw)
+    normalize_fn = lambda token: _normalize_alias_token(token, element_alias)
 
     from types import SimpleNamespace
+
     _rules_cache = SimpleNamespace(
         # normalized sets / maps
         peptide_like=peptide_like,
@@ -396,42 +547,60 @@ def get_atom_rules():
         halide_resnames=halide_resnames,
         default_element=default_element,
         treat_backbone_ca=treat_backbone_ca,
-        retain_resnames=retain_res,
+        retain_resnames=set(retain_res),
+
+        # alias policy exposure
+        alias_sets=alias_sets,
+        waters=waters_set,
+        cofactors=cofactors_set,
+        element_tokens=element_tokens_raw,
+        element_alias=element_alias,
+        elem_tokens_canonical=canonical_elements,
+        policy_mode=policy_mode,
+        normalize_resname=normalize_fn,
 
         # NEW exports used elsewhere
         nucleotide_like_resnames=sorted(nucleotide_like_resnames),
         meeko_drop_free_ions=sorted(meeko_drop_free_ions),
 
         # name/alias maps (uppercased keys/values)
-        prefix_map={ (k or "").upper(): (v or "").upper()
-                     for k, v in (es.get("derive_prefix_map") or {}).items() },
-        special_names={ (k or "").upper(): (v or "").upper()
-                        for k, v in (es.get("special_atom_names") or {}).items() },
-        halide_aliases={ (k or "").upper(): (v or "").upper()
-                         for k, v in (es.get("halide_resname_aliases") or {}).items() },
-        cation_aliases={ (k or "").upper(): (v or "").upper()
-                         for k, v in (es.get("cation_resname_aliases") or {}).items() },
+        prefix_map={
+            (k or "").upper(): (v or "").upper()
+            for k, v in (es.get("derive_prefix_map") or {}).items()
+        },
+        special_names={
+            (k or "").upper(): (v or "").upper()
+            for k, v in (es.get("special_atom_names") or {}).items()
+        },
+        halide_aliases={
+            (k or "").upper(): (v or "").upper()
+            for k, v in (es.get("halide_resname_aliases") or {}).items()
+        },
+        cation_aliases={
+            (k or "").upper(): (v or "").upper()
+            for k, v in (es.get("cation_resname_aliases") or {}).items()
+        },
 
         # compatibility views for older call sites
         element_sets=compat_element_sets,
         retain_in_receptor_resnames=compat_retain_list,
         ad4_types=ad4_types,
+        legacy_retain_tokens=legacy_tokens,
     )
 
-    # [ions] audit breadcrumbs
     metals_probe = ["ZN", "HG", "MG", "FE", "MN", "CA", "CU", "CO", "NI", "NA", "K", "CL"]
     includes = {tok: (tok in retain_res) for tok in metals_probe}
     detected_metals = sorted([tok for tok in retain_res if tok in metals_probe])
-    logging.info(
-        "[aliases.audit] metal_tokens_detected=%s",
-        ",".join(detected_metals) if detected_metals else "none",
-    )
     logging.info(
         "[aliases.audit] retain_in_receptor_resnames size=%d includes=%s",
         len(retain_res),
         includes,
     )
-    variant_env = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper() or "legacy"
+    logging.info(
+        "[aliases.audit] metal_tokens_detected=%s",
+        ",".join(detected_metals) if detected_metals else "none",
+    )
+    variant_env = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper() or "LEGACY"
     logging.info(
         "[activesite.retention] variant=%s retain_resnames_size=%d contains=%s",
         variant_env,
