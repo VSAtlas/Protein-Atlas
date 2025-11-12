@@ -669,8 +669,8 @@ element_sets:
   cation_resname_aliases:
     "K+": K
     "NA+": NA
-    "CA1": CA
-    "CA2": CA
+    CA1: CA
+    CA2: CA
     "CA++": CA
     "CA2+": CA
     "MG2+": MG

@@ -3190,6 +3190,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         *,
         diff_key: Optional[str] = None,
         reason: Optional[str] = None,
+        prev_path: Union[str, Path, None] = None,
+        prev_hist: Optional[Dict[str, int]] = None,
+        update_prev: bool = True,
     ) -> None:
         nonlocal _ion_trace_prev_path, _ion_trace_prev_hist
         if not _ION_TRACE:
@@ -3204,9 +3207,19 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 _format_hist(hist),
                 total,
             )
-            if _ion_trace_prev_path is not None:
+            if prev_hist is not None:
+                _prev_hist = dict(prev_hist)
+            elif prev_path:
+                prev_path_obj = Path(prev_path)
+                _prev_hist, _ = _count_metals(prev_path_obj) if prev_path_obj.exists() else ({}, 0)
+            elif _ion_trace_prev_path is not None:
+                _prev_hist = dict(_ion_trace_prev_hist)
+            else:
+                _prev_hist = {}
+
+            if (_ion_trace_prev_path is not None) or prev_path or prev_hist:
                 diff_label = diff_key or name
-                removed, kept, added = _diff_hist(_ion_trace_prev_hist, hist)
+                removed, kept, added = _diff_hist(_prev_hist, hist)
                 logger.info(
                     "[ions.diff] %s %s.vs.prev removed=%s kept=%s added=%s",
                     step_no,
@@ -3215,8 +3228,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     kept,
                     added,
                 )
-            _ion_trace_prev_path = Path(path)
-            _ion_trace_prev_hist = hist
+            if update_prev:
+                _ion_trace_prev_path = Path(path)
+                _ion_trace_prev_hist = hist
         else:
             logger.info(
                 "[ions.step] %s %s skipped reason=%s",
@@ -3224,6 +3238,13 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 name,
                 reason or "unspecified",
             )
+
+    strip_prev_for_log: Optional[Path] = None
+    strip_path_for_log: Optional[Path] = None
+    strip_reason_for_log: Optional[str] = None
+    water_policy_prev_for_log: Optional[Path] = None
+    water_policy_path_for_log: Optional[Path] = None
+    water_policy_reason_for_log: Optional[str] = None
     # ========================================================================
 
     output_root = str(output_root)
@@ -3334,6 +3355,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
         # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
         stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
+        strip_prev_for_log = Path(source_for_strip) if source_for_strip else None
         ion_audit.probe("strip_nsr_before", source_for_strip)
         _emit_ion_breadcrumb("strip_nsr_before", source_for_strip)
         _log_ions_probe(pdb_id, "strip_nonstandard", source_for_strip, phase="before")
@@ -3342,6 +3364,8 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
             stripped_pdb,
             variant=variant_token,
         )
+        strip_path_for_log = stripped_pdb
+        strip_reason_for_log = None
         _log_ions_probe(pdb_id, "strip_nonstandard", stripped_pdb, phase="after")
         ion_audit.probe("strip_nsr_after", stripped_pdb)
         _emit_ion_breadcrumb("strip_nsr_after", stripped_pdb)
@@ -3360,7 +3384,6 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
             _log_step("(4)", "after_nolig_write", nolig_candidate, diff_key="nolig")
         else:
             _log_step("(4)", "after_nolig_write", None, reason="nolig_not_written")
-        _log_step("(6b)", "after_strip_nonstandard", stripped_pdb, diff_key="strip_nonstandard")
 
         # (5) Element fix → MODELLER → element fix again (PDB only)
         elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
@@ -3393,15 +3416,17 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
         # (6) Optional external Phenix polish (non-fatal if missing)
         phenix_ok = False
-        water_policy_applied = False
-        water_policy_path: Optional[Path] = None
+        water_policy_prev_for_log = None
+        water_policy_path_for_log = None
+        water_policy_reason_for_log = "phenix_disabled"
         _use_phenix = str(config.get("use_phenix", config.get("USE_PHENIX", "false"))).strip().lower() in ("1", "true",
                                                                                                            "yes")
         if _use_phenix:        # Water policy & radius
+            water_policy_reason_for_log = "policy_not_applied"
             _remove_waters = str(_cfg_env_or_default("REMOVE_WATERS", "true")).strip().lower() in ("1", "true", "yes")
             _policy = (_cfg_env_or_default("WATER_KEEP_POLICY", "none") or "none").strip().lower()
             _keep_R = float(_cfg_env_or_default("KEEP_WATERS_WITHIN_A", "6.0") or 6.0)
-    
+
             # Default: feed Phenix the loop-fixed input
             _phenix_in = loop_fixed_pdb
     
@@ -3419,8 +3444,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     logging.info("[waters] policy=%s kept=%d within %.1f Å of %d centers",
                                  _policy, kept, _keep_R, len(ref_pts))
                     if Path(_phenix_in).exists():
-                        water_policy_applied = True
-                        water_policy_path = _phenix_in
+                        water_policy_prev_for_log = loop_fixed_pdb
+                        water_policy_path_for_log = _phenix_in
+                        water_policy_reason_for_log = None
                 else:
                     logging.info("[waters] policy=%s but no reference points found; skipping prefilter", _policy)
     
@@ -3447,17 +3473,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     
         if not phenix_ok:
             shutil.copyfile(loop_fixed_pdb, receptor_pdb)
-    
-    
-    
-    
-    
         _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
-
-        if water_policy_applied and water_policy_path and Path(water_policy_path).exists():
-            _log_step("(6c)", "after_water_cofactor_policy", water_policy_path, diff_key="water_policy")
-        else:
-            _log_step("(6c)", "after_water_cofactor_policy", None, reason="policy_not_applied")
 
         # choose the file to pass downstream
         pdb_for_reduce = loop_fixed_pdb if modeller_ok else elemfix_pdb
@@ -3560,11 +3576,45 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         ion_audit.probe("reduce", reduced_pdb)
         print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
         _log_step("(6)", "after_reduce", reduced_pdb, diff_key="reduce")
-    
+
+        if strip_path_for_log and Path(strip_path_for_log).exists():
+            _log_step(
+                "(6b)",
+                "after_strip_nonstandard",
+                strip_path_for_log,
+                diff_key="strip_nonstandard",
+                prev_path=strip_prev_for_log,
+                update_prev=False,
+            )
+        else:
+            _log_step(
+                "(6b)",
+                "after_strip_nonstandard",
+                None,
+                reason=strip_reason_for_log or "strip_missing",
+            )
+
+        if water_policy_path_for_log and Path(water_policy_path_for_log).exists():
+            _log_step(
+                "(6c)",
+                "after_water_cofactor_policy",
+                water_policy_path_for_log,
+                diff_key="water_policy",
+                prev_path=water_policy_prev_for_log,
+                update_prev=False,
+            )
+        else:
+            _log_step(
+                "(6c)",
+                "after_water_cofactor_policy",
+                None,
+                reason=water_policy_reason_for_log or "policy_not_applied",
+            )
+
         # (9) Final element fix and sanity on the protonated file
         fix_pdb_elements(reduced_pdb)
         _helium_postwrite_counter("elemfix_after_reduce", reduced_pdb)
-    
+
         quick_element_histogram(reduced_pdb)
     
         assert_no_metal_in_peptidic(reduced_pdb)
