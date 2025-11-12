@@ -17,7 +17,7 @@ import sys, hashlib, re, logging, json, time, os, shutil, re
 from dataclasses import dataclass, field
 import atexit, datetime
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
@@ -47,6 +47,32 @@ from path_router import (
     config_dir as router_config_dir,
 )
 from library_index import LibraryIndex
+
+# [ions] audit classification tokens
+_ION_AUDIT_METALS = {
+    "ZN",
+    "MG",
+    "MN",
+    "FE",
+    "CU",
+    "CO",
+    "NI",
+    "CA",
+    "HG",
+}
+_ION_AUDIT_SALTS = {
+    "NA",
+    "K",
+    "CL",
+    "BR",
+    "I",
+    "LI",
+    "RB",
+    "CS",
+}
+
+
+_CLEAN_PROVENANCE_LOGGED = False
 
 
 def _resolve_run_id(argv: list[str]) -> str:
@@ -128,6 +154,25 @@ class ConfigDict(dict):
         return ConfigDict(super().copy())
 
 
+def _log_cfg_emit_path_check(pdb_id, receptor_path, variant, legacy):
+    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_label = variant_token or "legacy"
+    contains_variant = bool(variant_token and variant_token in str(receptor_path))
+    logging.info(
+        "[cfg.emit.check] pdb=%s variant=%s receptor_path=%s path_contains_variant=%s",
+        pdb_id,
+        variant_label,
+        receptor_path,
+        contains_variant,
+    )
+    if variant_token and not contains_variant and not legacy:
+        logging.warning(
+            "[variant.mismatch] expected_variant=%s wrote_legacy_path=%s action=fail_ci",
+            variant_token,
+            receptor_path,
+        )
+
+
 def emit_vina_config(
     cfg,
     pdb_id,
@@ -146,7 +191,7 @@ def emit_vina_config(
     skip_manifest_if_exists=False,
 ):
     if not skip_manifest_if_exists:
-        return _emit_vina_config_impl(
+        result = _emit_vina_config_impl(
             cfg,
             pdb_id,
             receptor_pdbqt,
@@ -161,21 +206,24 @@ def emit_vina_config(
             ph_token=ph_token,
             legacy=legacy,
         )
-    return _emit_vina_config_skip_manifest(
-        cfg,
-        pdb_id,
-        receptor_pdbqt,
-        center,
-        box_size,
-        ligand_path,
-        stage_name,
-        stage_info,
-        cpu_per_job,
-        logger,
-        variant=variant,
-        ph_token=ph_token,
-        legacy=legacy,
-    )
+    else:
+        result = _emit_vina_config_skip_manifest(
+            cfg,
+            pdb_id,
+            receptor_pdbqt,
+            center,
+            box_size,
+            ligand_path,
+            stage_name,
+            stage_info,
+            cpu_per_job,
+            logger,
+            variant=variant,
+            ph_token=ph_token,
+            legacy=legacy,
+        )
+    _log_cfg_emit_path_check(pdb_id, receptor_pdbqt, variant, legacy)
+    return result
 
 
 def _emit_vina_config_skip_manifest(
@@ -477,18 +525,21 @@ def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
     token = _clean_mode_token(str(raw_value) if raw_value is not None else "")
 
     if token in {"", "none", "legacy", "null", "false", "0"}:
-        return "legacy", [None]
-    if token == "apo":
-        return "apo", ["APO"]
-    if token == "holo":
-        return "holo", ["HOLO"]
-    if token in {"apovsholo", "apoandholo", "both"}:
-        return "apo_vs_holo", ["APO", "HOLO"]
+        mode, variants = "legacy", [None]
+    elif token == "apo":
+        mode, variants = "apo", ["APO"]
+    elif token == "holo":
+        mode, variants = "holo", ["HOLO"]
+    elif token in {"apovsholo", "apoandholo", "both"}:
+        mode, variants = "apo_vs_holo", ["APO", "HOLO"]
+    else:
+        logging.warning(
+            "[apo-holo.debug] unknown_mode=%r defaulting=apo_vs_holo", raw_value
+        )
+        mode, variants = "apo_vs_holo", ["APO", "HOLO"]
 
-    logging.warning(
-        "[apo-holo.debug] unknown_mode=%r defaulting=apo_vs_holo", raw_value
-    )
-    return "apo_vs_holo", ["APO", "HOLO"]
+    logging.info("[apo-holo] mode=%s expanded=%s", mode, variants)
+    return mode, variants
 
 
 
@@ -525,13 +576,43 @@ def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
     holo = _variant_receptor_path(pdb_id, "HOLO", cfg)
     apo  = _variant_receptor_path(pdb_id, "APO",  cfg)
     if not holo or not apo:
+        logging.warning(
+            "[apo-vs-holo] pdb_id=%s stage=dedup action=skip reason=missing_paths apo=%s holo=%s",
+            pdb_id,
+            apo,
+            holo,
+        )
+        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "missing_paths")
         return
     try:
-        if file_sha1(holo) == file_sha1(apo):
-            logging.info("[apo-vs-holo] identical receptors for %s; deleting HOLO (keeping APO)", pdb_id)
-            delete_variant_trees(pdb_id, "HOLO", cfg)
+        holo_sha = file_sha1(holo)
+        apo_sha = file_sha1(apo)
     except Exception as e:
-        logging.warning("[apo-vs-holo] dedup check failed for %s: %s", pdb_id, e)
+        logging.warning(
+            "[apo-vs-holo] pdb_id=%s stage=dedup action=skip reason=sha_error err=%s",
+            pdb_id,
+            e,
+        )
+        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "sha_error")
+        return
+
+    if holo_sha == apo_sha:
+        logging.info(
+            "[apo-vs-holo] identical receptors for %s; deleting HOLO (keeping APO) apo_sha=%s holo_sha=%s",
+            pdb_id,
+            apo_sha,
+            holo_sha,
+        )
+        delete_variant_trees(pdb_id, "HOLO", cfg)
+        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "deleted_postrun")
+    else:
+        logging.info(
+            "[apo-vs-holo] pdb_id=%s stage=dedup action=keep reason=not_identical apo_sha=%s holo_sha=%s",
+            pdb_id,
+            apo_sha,
+            holo_sha,
+        )
+        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
 
     
     
@@ -1420,6 +1501,87 @@ def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
         pass
 
 
+def _audit_variant_key(variant: str | None) -> str:
+    return (variant or "LEGACY").upper()
+
+
+def _ensure_apo_holo_variant_entry(cfg: Dict, pdb_id: str, variant: str | None):
+    if not cfg.get("AUDIT_JSON", True):
+        return None
+    store = cfg.setdefault("_APO_HOLO_AUDIT", {})
+    per_pdb = store.setdefault(pdb_id.upper(), {})
+    key = _audit_variant_key(variant)
+    entry = per_pdb.setdefault(
+        key,
+        {
+            "variant": key,
+            "env_token": (os.environ.get("APO_HOLO_VARIANT", "") or ""),
+            "records": [],
+            "dedup_decision": "pending",
+        },
+    )
+    entry["env_token"] = (os.environ.get("APO_HOLO_VARIANT", "") or "")
+    entry.setdefault("records", [])
+    entry.setdefault("dedup_decision", "pending")
+    return entry
+
+
+def _flush_apo_holo_audit(cfg: Dict, pdb_id: str) -> None:
+    if not cfg.get("AUDIT_JSON", True):
+        return
+    store = cfg.get("_APO_HOLO_AUDIT")
+    if not store:
+        return
+    payload = store.get(pdb_id.upper())
+    if not payload:
+        return
+    try:
+        out_root = docked_dir(pdb_id, variant=None, ph_tag=None, legacy=False)
+        out_root.mkdir(parents=True, exist_ok=True)
+        (out_root / "apo_holo_audit.json").write_text(json.dumps(payload, indent=2))
+    except Exception:
+        pass
+
+
+def _record_apo_holo_usage(
+    cfg: Dict,
+    pdb_id: str,
+    variant: str | None,
+    ph_label: str | None,
+    receptor_path: str | Path,
+) -> None:
+    entry = _ensure_apo_holo_variant_entry(cfg, pdb_id, variant)
+    if entry is None:
+        return
+    rec_path = Path(receptor_path)
+    exists_flag = rec_path.exists()
+    record = {
+        "ph_label": None if ph_label is None else str(ph_label),
+        "receptor_path": str(rec_path),
+        "exists": exists_flag,
+    }
+    if exists_flag:
+        try:
+            record["sha1"] = file_sha1(str(rec_path))
+        except Exception as err:
+            record["sha1_error"] = str(err)
+    entry.setdefault("records", []).append(record)
+    _flush_apo_holo_audit(cfg, pdb_id)
+
+
+def _record_apo_holo_decision(cfg: Dict, pdb_id: str, variant: str | None, decision: str) -> None:
+    entry = _ensure_apo_holo_variant_entry(cfg, pdb_id, variant)
+    if entry is None:
+        return
+    current = entry.get("dedup_decision")
+    if current in {None, "", "pending"}:
+        entry["dedup_decision"] = decision
+    elif current != decision:
+        history = entry.setdefault("decision_history", [])
+        history.append(decision)
+    _flush_apo_holo_audit(cfg, pdb_id)
+
+
 def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
     try:
         atoms = 0
@@ -1762,7 +1924,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             log.info("[ph_ensemble.pick.center] center=(%.3f,%.3f,%.3f) radius=%.1f", center[0], center[1], center[2], radius_nominal)
         else:
             log.info("[ph_ensemble.pick.center] center=GLOBAL radius=ALL")
-        builder_id = paths.pdb_id if variant is None else f"{paths.pdb_id}_{variant}"
         log.info("[ph_ensemble.call] building pH ensemble for %s", paths.pdb_id)
         prev_cfg = getattr(automate_protein_prep, "config", None)
         try:
@@ -1772,12 +1933,14 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
         try:
             import ph_ensemble
             manifest_path = ph_ensemble.build_ph_ensemble(
-                pdb_id=builder_id,
+                pdb_id=paths.pdb_id,
                 cleaned_receptor_pdb=cleaned_path,
                 out_dir=str(Path(cfg["OUTPUT_DIR"])),
                 center=center,
                 radius=eff_radius,
                 ph_values=ph_values,
+                variant=variant,
+                legacy=bool(cfg.get("_ROUTER_LEGACY", False)),
             )
 
             log.info("[ph_ensemble.manifest] path=%s", manifest_path)
@@ -4250,6 +4413,48 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     pdb_id = re.sub(r'(?i)_cleaned$', '', base_id)
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=os.path.basename(pdb_file))
 
+    # [ions] summarizer for raw/clean histograms
+    def _summarize_ions_file(file_path: Path | str) -> dict[str, object]:
+        path = Path(file_path)
+        if not path.exists():
+            return {
+                "hist": "missing",
+                "counts": {},
+                "metals_present": False,
+                "salts_present": False,
+                "error": "missing",
+            }
+        counts = Counter()
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if not ln.startswith("HETATM"):
+                        continue
+                    res = ln[17:20].strip().upper()
+                    elem = (ln[76:78].strip() or res).upper()
+                    token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
+                    if token and token.isalpha() and len(token) <= 3:
+                        counts[token] += 1
+        except Exception as exc:  # pragma: no cover - diagnostics
+            return {
+                "hist": "error",
+                "counts": {},
+                "metals_present": False,
+                "salts_present": False,
+                "error": str(exc),
+            }
+
+        hist = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
+        metals_present = any(token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts)
+        salts_present = any(token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts)
+        return {
+            "hist": hist,
+            "counts": dict(counts),
+            "metals_present": metals_present,
+            "salts_present": salts_present,
+            "error": None,
+        }
+
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
     logger.info(f"[paths] base_id={base_id} -> pdb_id={pdb_id}")
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
@@ -4291,6 +4496,63 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     active_ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
 
+    # [ions] track per-protein ion audit
+    ion_audit_root: dict = cfg.setdefault("_ION_AUDIT", {})
+    pdb_audit: dict = ion_audit_root.setdefault(paths.pdb_id, {})
+    clean_audit: dict = pdb_audit.setdefault("clean_counts", {})
+
+    # [ions] raw input audit
+    input_summary = _summarize_ions_file(paths.input_pdb_path)
+    input_hist = str(input_summary.get("hist", "none"))
+    input_error = input_summary.get("error")
+    if input_error not in (None, "missing"):
+        logger.warning(
+            "[ions.input.counts] pdb=%s file=%s action=skip err=%s",
+            paths.pdb_id,
+            paths.input_pdb_path,
+            input_error,
+        )
+    else:
+        logger.info(
+            "[ions.input.counts] pdb=%s file=%s present_pdb=%s",
+            paths.pdb_id,
+            paths.input_pdb_path,
+            input_hist,
+        )
+    pdb_audit["input_counts"] = {
+        "hist": input_hist,
+        "counts": dict(input_summary.get("counts", {})),
+        "metals_present": bool(input_summary.get("metals_present", False)),
+        "salts_present": bool(input_summary.get("salts_present", False)),
+        "file": str(paths.input_pdb_path),
+        "error": input_error,
+    }
+
+    cfg["_CURRENT_VARIANT"] = variant_env
+    cleaned_target = paths.receptor_cleaned_pdb(variant_token)
+    receptor_target = paths.receptor_pdbqt(variant_token, None)
+    global _CLEAN_PROVENANCE_LOGGED
+    if not _CLEAN_PROVENANCE_LOGGED:
+        logging.info(
+            "[receptor.clean.provenance] cleaned_pdb_created_by=unknown source=%s",
+            cleaned_target,
+        )
+        _CLEAN_PROVENANCE_LOGGED = True
+    logger.info(
+        "[receptor.path] pdb=%s variant=%s cleaned_pdb=%s exists=%s",
+        paths.pdb_id,
+        variant_label,
+        cleaned_target,
+        cleaned_target.exists(),
+    )
+    logger.info(
+        "[receptor.path] pdb=%s variant=%s receptor_pdbqt=%s exists=%s",
+        paths.pdb_id,
+        variant_label,
+        receptor_target,
+        receptor_target.exists(),
+    )
+
     # 2) Protein prep (re-use if cached)
     logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
     cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
@@ -4298,14 +4560,136 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         logger.warning("Skipping protein due to prep failure.")
         return
 
+    cleaned_hist = "none"
+    if cleaned_pdb:
+        clean_summary = _summarize_ions_file(cleaned_pdb)
+        cleaned_hist = str(clean_summary.get("hist", "none"))
+        clean_error = clean_summary.get("error")
+        if clean_error not in (None, "missing"):
+            logger.warning(
+                "[ions.clean.counts] pdb=%s variant=%s action=skip err=%s",
+                paths.pdb_id,
+                variant_label,
+                clean_error,
+            )
+        else:
+            logger.info(
+                "[ions.clean.counts] pdb=%s variant=%s file=%s present_pdb=%s",
+                paths.pdb_id,
+                variant_label,
+                cleaned_pdb,
+                cleaned_hist,
+            )
+        clean_audit[variant_label] = {
+            "hist": cleaned_hist,
+            "counts": dict(clean_summary.get("counts", {})),
+            "metals_present": bool(clean_summary.get("metals_present", False)),
+            "salts_present": bool(clean_summary.get("salts_present", False)),
+            "file": str(cleaned_pdb),
+            "error": clean_error,
+        }
+    else:
+        clean_audit[variant_label] = {
+            "hist": "missing",
+            "counts": {},
+            "metals_present": False,
+            "salts_present": False,
+            "file": "",
+            "error": "missing",
+        }
 
-    # insert: strip monoatomic ions (Na+, K+, Cl-, etc.) before Meeko uses the PDB
-    try:
-        from automate_protein_prep import _strip_monoatomic_ions_inplace
-        _strip_monoatomic_ions_inplace(Path(cleaned_pdb))
-        logger.info("Stripped monoatomic ions from cleaned PDB before pocket detection/Meeko.")
-    except Exception as e:
-        logger.warning(f"Strip monoatomic ions skipped: {e}")
+    if cleaned_pdb:
+        if variant_env == "HOLO":
+            skip_reason = "variant"
+        elif not variant_env:
+            skip_reason = "legacy"
+        else:
+            skip_reason = "disabled"
+        logger.info(
+            "[ions.prep-early] pdb=%s variant=%s action=skip reason=%s file=%s",
+            paths.pdb_id,
+            variant_label,
+            skip_reason,
+            cleaned_pdb,
+        )
+
+    # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
+    resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
+    if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
+        apo_clean = _variant_receptor_path(pdb_id, "APO", cfg)
+        holo_clean = cleaned_pdb or _variant_receptor_path(pdb_id, "HOLO", cfg)
+        apo_path = Path(apo_clean) if apo_clean else None
+        holo_path = Path(holo_clean) if holo_clean else None
+        apo_exists = apo_path.exists() if apo_path else False
+        holo_exists = holo_path.exists() if holo_path else False
+
+        if not apo_exists or not holo_exists:
+            logger.warning(
+                "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=missing_paths apo=%s holo=%s",
+                pdb_id,
+                apo_clean,
+                holo_clean,
+            )
+            _record_apo_holo_decision(cfg, pdb_id, "HOLO", "missing_paths")
+        else:
+            try:
+                apo_sha = file_sha1(str(apo_path))
+                holo_sha = file_sha1(str(holo_path))
+            except Exception as hash_err:
+                logger.warning(
+                    "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=sha_error err=%s",
+                    pdb_id,
+                    hash_err,
+                )
+                _record_apo_holo_decision(cfg, pdb_id, "HOLO", "sha_error")
+            else:
+                if apo_sha == holo_sha:
+                    logger.info(
+                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=identical apo_sha=%s holo_sha=%s",
+                        pdb_id,
+                        apo_sha,
+                        holo_sha,
+                    )
+                    # [ions] dedup audit guard
+                    audit_root = cfg.get("_ION_AUDIT", {})
+                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(pdb_id)
+                    warn_needed = False
+                    if isinstance(pdb_entry, dict):
+                        input_info = pdb_entry.get("input_counts", {})
+                        clean_map = pdb_entry.get("clean_counts", {}) or {}
+                        holo_info = clean_map.get("HOLO") or clean_map.get(variant_label) or {}
+                        if input_info.get("metals_present") or input_info.get("salts_present"):
+                            warn_needed = True
+                        if holo_info.get("metals_present") or holo_info.get("salts_present"):
+                            warn_needed = True
+                    if warn_needed:
+                        logger.warning(
+                            "[apo-vs-holo] unexpected_identical_after_ion_policy pdb=%s apo_sha=%s holo_sha=%s",
+                            pdb_id,
+                            apo_sha,
+                            holo_sha,
+                        )
+                    if receptor_pdbqt:
+                        _record_apo_holo_usage(cfg, pdb_id, variant_token, None, receptor_pdbqt)
+                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "skipped_preflight")
+                    try:
+                        delete_variant_trees(pdb_id, "HOLO", cfg)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=cleanup_warn err=%s",
+                            pdb_id,
+                            cleanup_err,
+                        )
+                    return
+                else:
+                    logger.info(
+                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=not_identical apo_sha=%s holo_sha=%s",
+                        pdb_id,
+                        apo_sha,
+                        holo_sha,
+                    )
+                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
+
 
     # 3) Pocket detection
     center, box_size, center_source = None, None, "none"
@@ -4338,6 +4722,31 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             return
     if center is None:
         return
+
+    try:
+        import automate_protein_prep as _auto_prep_mod
+    except Exception as ions_err:
+        logger.warning("[ions] pocket_refine_skip err=%s", ions_err)
+    else:
+        if cleaned_pdb and variant_env == "HOLO":
+            logger.info(
+                "[ions.pocket-pass] pdb=%s variant=%s action=refine_with_center file=%s",
+                paths.pdb_id,
+                variant_label,
+                cleaned_pdb,
+            )
+            try:
+                _auto_prep_mod._maybe_strip_ions(
+                    Path(cleaned_pdb),
+                    cfg=cfg,
+                    variant=variant_token,
+                    pocket_center=center,
+                )
+            except Exception as pocket_err:
+                logger.warning(
+                    "[ions] pocket_refine_skip err=%s",
+                    pocket_err,
+                )
 
     # Override control-box size from config (keeps existing 24 A default)
     if center_source == "control":
@@ -4384,7 +4793,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 center=(0.0, 0.0, 0.0),
                 radius=1_000_000.0,
                 ph_values=ph_values,
-                member_index_start=0
+                member_index_start=0,
+                variant=variant_token,
+                legacy=legacy_mode,
             )
             logger.info("[ph_ensemble.manifest] path=%s", manifest_path)
 
@@ -4542,28 +4953,32 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
         out_root = docked_dir(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
         ph_print = ph_label or "(none)"
+        rec_exists = rec_path.exists()
         logger.info(
-            "[router] pdb=%s variant=%s ph=%s\n         receptor_file=%s\n         docked_dir=%s",
+            "[router] pdb=%s variant=%s ph=%s receptor_file=%s docked_dir=%s exists=%s",
             paths.pdb_id,
             variant_label,
             ph_print,
             str(rec_path),
             str(out_root),
+            rec_exists,
         )
 
         if plan_only:
             print(
                 f"pdb={paths.pdb_id} variant={variant_label} ph={ph_print} "
-                f"receptor_file={rec_path} docked_dir={out_root}"
+                f"receptor_file={rec_path} docked_dir={out_root} exists={rec_exists}"
             )
             continue
 
-        if ph_label and not rec_path.exists():
+        _record_apo_holo_usage(cfg, paths.pdb_id, variant_token, ph_label, rec_path)
+
+        if not rec_exists:
             ph_log.warning(
                 "[ph_ensemble.dock.stage] pdb_id=%s variant=%s ph=%s receptor_missing=%s",
                 paths.pdb_id,
                 variant_label,
-                ph_label,
+                ph_print,
                 str(rec_path),
             )
             continue
@@ -5273,21 +5688,22 @@ def main() -> None:
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
     cfg_raw_mode = cfg.get("APO_HOLO_MODE")
     logging.info(
-        "[apo-holo.debug] cfg.APO_HOLO_MODE_raw=%r -> resolved.mode=%s variants=%s",
+        "[apo-holo] cfg_token_raw=%r resolved_mode=%s variants=%s",
         cfg_raw_mode,
         mode,
         variants,
     )
     logging.info(
-        "[apo-holo.debug] router_legacy=%s ph_enabled=%s",
+        "[apo-holo] router_legacy=%s ph_enabled=%s",
         router_legacy,
         ph_enabled,
     )
     logging.info(
-        "[apo-holo.debug] normalized_mode_token=%s",
+        "[apo-holo] normalized_mode_token=%s",
         _debug_normalize_mode_token(cfg_raw_mode),
     )
     cfg["_ROUTER_LEGACY"] = router_legacy
+    cfg["_RESOLVED_APO_HOLO_MODE"] = mode
     logging.info(
         "[apo-holo] resolved mode=%s variants=%s cfg_token=%r",
         mode,
@@ -5300,6 +5716,12 @@ def main() -> None:
         # Make variant visible to any module still reading env (legacy compatibility)
         os.environ["APO_HOLO_VARIANT"] = "" if variant is None else str(variant).upper()
         label = "legacy" if variant is None else str(variant).lower()
+        logging.info(
+            "[apo-holo] start_variant mode=%s variant_label=%s env_token=%s",
+            mode,
+            label,
+            os.environ.get("APO_HOLO_VARIANT", ""),
+        )
         with _tqdm(
                 total=len(pdb_files),
                 desc=f"Processing Proteins ({label})",

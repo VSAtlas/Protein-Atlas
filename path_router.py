@@ -104,6 +104,32 @@ def _ph_manifest_candidates(pdb_id: str, variant: Optional[str]) -> list[Path]:
     out.append(base / "receptor" / "ph_ensemble" / "ensemble.json")
     return out
 
+
+# ---------------------------
+# pH ensemble public helper
+# ---------------------------
+
+def ph_ensemble_dir(
+    pdb_id: str,
+    variant: Optional[str] = None,
+    legacy: bool = False,
+) -> Path:
+    """
+    Return the canonical directory for pH ensemble artifacts.
+
+    If variant in {APO, HOLO}: processed_pdbs/<PDB>/<VARIANT>/receptor/ph_ensemble/
+    Else (legacy):             processed_pdbs/<PDB>/receptor/ph_ensemble/
+    """
+    roots = _ensure_router_roots()
+    token = _norm_pdb_id(pdb_id)
+    base = roots.processed / token
+    v = _norm_variant(variant)
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] ph_ensemble_dir variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
+    if v and not legacy:
+        base = base / v
+    return base / "receptor" / "ph_ensemble"
+
 # ---------------------------
 # Router roots & stateless helpers
 # ---------------------------
@@ -389,6 +415,8 @@ def print_pathmap(
     print(f"receptor_dir={rec_dir}")
     rec_file = receptor_file(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
     print(f"receptor_file={rec_file}")
+    ph_dir = ph_ensemble_dir(pdb_id, variant=variant, legacy=legacy)
+    print(f"ph_ensemble_dir={ph_dir}")
     dock_dir = docked_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
     print(f"docked_dir={dock_dir}")
 

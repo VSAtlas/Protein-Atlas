@@ -47,6 +47,7 @@ from propka_wire import pdb2pqr_protonate
 
 from installation import load_config
 from logger_setup import setup_logger
+import activesite as _activesite_mod
 from activesite import (
     fix_element_columns_in_file,
     scan_helium_counts,
@@ -90,6 +91,395 @@ _TWO     = _canonize_two_letter(_TWORAW)
 # All allowed element tokens
 _ELEM_CANON = _ONE | _TWO
 _MEEKO_DROP_IONS = set(_flatten_semicolons(RULES.get("meeko_drop_free_ions", []))) or {"NA", "K", "LI"}
+
+_SALT_RESNAMES = {"NA", "K", "CL", "BR", "I"}
+_METAL_RESNAMES = {"MG", "MN", "FE", "ZN", "CU", "CO", "NI", "CA"}
+_IONS_CFG_CACHE: tuple[set[str], str] | None = None
+_IONS_CFG_LOGGED = False
+
+
+def _resolve_variant_token(cfg: Optional[dict] = None, override: Optional[str] = None) -> Optional[str]:
+    token = (override or "").strip().upper() if override else ""
+    if token in {"APO", "HOLO"}:
+        return token
+    env_token = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
+    if env_token in {"APO", "HOLO"}:
+        return env_token
+    if cfg is not None:
+        cfg_token = str(cfg.get("_CURRENT_VARIANT", "")).strip().upper()
+        if cfg_token in {"APO", "HOLO"}:
+            return cfg_token
+    return None
+
+
+def _normalize_ion_policy(cfg: Optional[dict]) -> str:
+    raw = "by_variant"
+    if cfg is not None:
+        raw = str(cfg.get("ION_STRIP_POLICY", "by_variant")).strip().lower() or "by_variant"
+    if raw not in {"by_variant", "always_strip", "never_strip"}:
+        logging.warning("[ions.cfg] unsupported_policy=%s fallback=by_variant", raw)
+        return "by_variant"
+    return raw
+
+
+def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
+    global _IONS_CFG_CACHE, _IONS_CFG_LOGGED
+    if _IONS_CFG_CACHE is not None:
+        allow, source = _IONS_CFG_CACHE
+        if not _IONS_CFG_LOGGED:
+            logging.info("[ions.cfg] retain_in_receptor_resnames=%s source=%s", ",".join(sorted(allow)), source)
+            _IONS_CFG_LOGGED = True
+        return allow, source
+
+    candidate = None
+    if cfg and "retain_in_receptor_resnames" in cfg:
+        candidate = cfg.get("retain_in_receptor_resnames")
+    elif "retain_in_receptor_resnames" in config:
+        candidate = config.get("retain_in_receptor_resnames")
+
+    allow_items: Iterable[str] | None = None
+    source = "default"
+
+    if isinstance(candidate, (list, tuple, set)):
+        allow_items = list(candidate)
+        source = "inline"
+    elif isinstance(candidate, str) and candidate.strip():
+        text = candidate.strip()
+        parsed: Iterable[str] | None = None
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                loaded = json.loads(text)
+                if isinstance(loaded, list):
+                    parsed = loaded
+                    source = "inline"
+            except Exception as exc:
+                logging.warning("[ions.cfg] inline_json_parse_failed=%s err=%s", text[:40], exc)
+        if parsed is None:
+            yaml_path = Path(text).expanduser()
+            if yaml_path.is_file():
+                try:
+                    with open(yaml_path, "r", encoding="utf-8") as fh:
+                        data = _activesite_mod.yaml.safe_load(fh) or []
+                    if isinstance(data, dict):
+                        payload = data.get("retain_in_receptor_resnames")
+                        if isinstance(payload, list):
+                            data = payload
+                    if isinstance(data, list):
+                        parsed = data
+                        source = str(yaml_path)
+                    else:
+                        raise TypeError("yaml_payload_not_list")
+                except Exception as exc:
+                    logging.warning("[ions.cfg] yaml_load_failed path=%s err=%s", yaml_path, exc)
+            if parsed is None:
+                tokens = [tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()]
+                if tokens:
+                    parsed = tokens
+                    source = "inline"
+        allow_items = parsed
+
+    if allow_items is None:
+        allow_items = RULES.get("retain_in_receptor_resnames", [])
+        source = "default"
+
+    allow_set = {tok.upper() for tok in _flatten_semicolons(allow_items)}
+    _IONS_CFG_CACHE = (allow_set, source)
+    if not _IONS_CFG_LOGGED:
+        logging.info(
+            "[ions.cfg] retain_in_receptor_resnames=%s source=%s",
+            ",".join(sorted(allow_set)),
+            source,
+        )
+        _IONS_CFG_LOGGED = True
+    return allow_set, source
+
+
+def _bucket_counts(counter: Counter) -> dict[str, int]:
+    keys = ["ZN", "MG", "NA", "K", "CA", "MN", "FE", "CL"]
+    out = {k: 0 for k in keys}
+    other = 0
+    for resn, count in counter.items():
+        token = resn.upper()
+        if token in out:
+            out[token] += count
+        else:
+            other += count
+    out["OTHER"] = other
+    return out
+
+
+def _format_counts(counter: Counter) -> str:
+    bucketed = _bucket_counts(counter)
+    keys = ["ZN", "MG", "NA", "K", "CA", "MN", "FE", "CL", "OTHER"]
+    parts = [f"{k}={bucketed.get(k, 0)}" for k in keys]
+    return " ".join(parts)
+
+
+# [ions] monoatomic audit helpers
+def _collect_monoatomic_records(pdb_path: Union[str, Path]) -> tuple[Counter, Counter]:
+    path = Path(pdb_path)
+    counts: Counter[str] = Counter()
+    detail: Counter[tuple[str, str, str]] = Counter()
+    if not path.exists():
+        return counts, detail
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith("HETATM"):
+                    continue
+                resname = line[17:20].strip().upper()
+                elem = (line[76:78].strip() or resname).upper()
+                if not resname and not elem:
+                    continue
+                token = resname or elem
+                if (
+                    token in _METAL_RESNAMES
+                    or elem in _METAL_RESNAMES
+                    or token in _SALT_RESNAMES
+                    or elem in _SALT_RESNAMES
+                ):
+                    chain = (line[21] or "-").strip() or "-"
+                    resseq = (line[22:26] or "0").strip() or "0"
+                    counts[token] += 1
+                    detail[(token, chain, resseq)] += 1
+    except Exception as exc:  # logging-only helper
+        logging.warning("[ions.probe] file=%s err=%s", path, exc)
+    return counts, detail
+
+
+def _format_ion_hist(counter: Counter) -> str:
+    if not counter:
+        return "none"
+    parts = [f"{token}:{counter[token]}" for token in sorted(counter)]
+    return ",".join(parts)
+
+
+def _diff_detail_records(before: Counter, after: Counter) -> list[str]:
+    missing = before - after
+    out: list[str] = []
+    for (token, chain, resseq), count in sorted(missing.items()):
+        for _ in range(count):
+            out.append(f"{token}:{chain}:{resseq}")
+    return out
+
+
+def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
+    sorted_pairs = sorted(pairs)
+    if not sorted_pairs:
+        return "none"
+    return ",".join(f"{res}:{loc}" for res, loc in sorted_pairs)
+
+
+def _distance_from_center(line: str, center: Optional[tuple[float, float, float]]) -> float | None:
+    if center is None:
+        return None
+    try:
+        x = float(line[30:38])
+        y = float(line[38:46])
+        z = float(line[46:54])
+    except Exception:
+        return None
+    dx = x - center[0]
+    dy = y - center[1]
+    dz = z - center[2]
+    return sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def _maybe_strip_ions(
+    pdb_path: Union[str, Path],
+    cfg: Optional[dict] = None,
+    *,
+    variant: Optional[str] = None,
+    pocket_center: Optional[tuple[float, float, float]] = None,
+    extra_keep: Optional[Iterable[str]] = None,
+) -> int:
+    path = Path(pdb_path)
+    if not path.exists():
+        logging.warning("[ions] skip_missing file=%s", path)
+        return 0
+
+    allow_tokens, _ = _load_retain_allowlist(cfg)
+    allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
+    extra_set: set[str] = set()
+    if extra_keep:
+        for token in extra_keep:
+            if token:
+                extra_set.add(str(token).strip().upper())
+    holo_keep_tokens = allow_set | extra_set
+    apo_keep_tokens = set(extra_set)
+
+    policy = _normalize_ion_policy(cfg)
+    variant_token = _resolve_variant_token(cfg, variant)
+    variant_label = variant_token or "legacy"
+
+    radius_cfg = 6.0
+    if cfg is not None:
+        try:
+            radius_cfg = float(cfg.get("HOLO_SALT_STRIP_RADIUS", 6.0) or 0.0)
+        except Exception:
+            radius_cfg = 6.0
+    radius_cfg = max(0.0, radius_cfg)
+    radius = radius_cfg if (policy == "by_variant" and variant_token == "HOLO") else 0.0
+    radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
+
+    # [ions] stage=clean instrumentation
+    logging.info(
+        "[ions.policy] stage=clean variant=%s policy=%s salts_radius=%s allowlist=%d file=%s",
+        variant_label,
+        policy,
+        radius_term,
+        len(allow_set),
+        path,
+    )
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception as exc:
+        logging.warning("[ions] read_failed file=%s err=%s", path, exc)
+        return 0
+
+    residues: dict[tuple[str, str, str, str], list[tuple[int, str]]] = {}
+    for idx, line in enumerate(text):
+        if not line.startswith("HETATM"):
+            continue
+        resname = line[17:20].strip().upper()
+        key = (line[21], line[22:26], line[26], resname)
+        residues.setdefault(key, []).append((idx, line))
+
+    before = Counter()
+    stripped = Counter()
+    kept_counter = Counter()
+    category_totals: dict[str, dict[str, int]] = {
+        "metal": {"kept": 0, "stripped": 0},
+        "salt": {"kept": 0, "stripped": 0},
+        "other": {"kept": 0, "stripped": 0},
+    }
+
+    warn_missing_center = False
+    remove_indices: set[int] = set()
+
+    for key, atoms in residues.items():
+        if len(atoms) != 1:
+            continue
+        chain, resi, icode, resname = key
+        res_token = resname.upper()
+        line_idx, line = atoms[0]
+        before[res_token] += 1
+
+        remove = False
+        reason = ""
+        elem = (line[76:78].strip() or res_token).upper()
+
+        is_metal = res_token in _METAL_RESNAMES or elem in _METAL_RESNAMES
+        is_salt = res_token in _SALT_RESNAMES or elem in _SALT_RESNAMES
+        category = "metal" if is_metal else "salt" if is_salt else "other"
+
+        if policy == "never_strip":
+            remove = False
+        elif policy == "always_strip":
+            if res_token in holo_keep_tokens:
+                remove = False
+            else:
+                remove = True
+                reason = "policy_always_strip"
+        else:  # policy == by_variant
+            if variant_token == "HOLO":
+                if res_token in holo_keep_tokens or is_metal:
+                    remove = False
+                elif is_salt:
+                    if radius > 0.0:
+                        dist = _distance_from_center(line, pocket_center)
+                        if dist is None:
+                            warn_missing_center = True
+                            remove = False
+                        elif dist >= radius:
+                            remove = True
+                            reason = "salt_far"
+                        else:
+                            remove = False
+                    else:
+                        remove = False
+                else:
+                    remove = False
+            else:
+                if res_token in apo_keep_tokens:
+                    remove = False
+                    reason = "apo_keep_override"
+                else:
+                    if is_metal:
+                        remove = True
+                        reason = "apo_strip_metal"
+                    elif is_salt:
+                        remove = True
+                        reason = "apo_strip_salt"
+                    else:
+                        remove = True
+                        reason = "apo_strip_other"
+
+        if remove:
+            stripped[res_token] += 1
+            remove_indices.add(line_idx)
+            logging.debug(
+                "[ions.remove] elem=%s resname=%s serial=%s chain=%s resi=%s reason=%s",
+                elem,
+                res_token,
+                line[6:11].strip(),
+                chain.strip() or "-",
+                (resi or "0").strip() or "0",
+                reason,
+            )
+            category_totals[category]["stripped"] += 1
+        else:
+            kept_counter[res_token] += 1
+            category_totals[category]["kept"] += 1
+
+    logging.info(
+        "[ions.counts.before] stage=clean variant=%s file=%s detail=%s",
+        variant_label,
+        path,
+        _format_counts(before),
+    )
+    kept = before - stripped
+    logging.info(
+        "[ions.counts.after] stage=clean variant=%s file=%s detail=%s",
+        variant_label,
+        path,
+        _format_counts(kept),
+    )
+    total_kept = sum(kept_counter.values())
+    total_stripped = sum(stripped.values())
+    logging.info(
+        "[ions.summary] kept=%d stripped=%d metals_kept=%d metals_stripped=%d salts_kept=%d salts_stripped=%d",
+        total_kept,
+        total_stripped,
+        category_totals["metal"]["kept"],
+        category_totals["metal"]["stripped"],
+        category_totals["salt"]["kept"],
+        category_totals["salt"]["stripped"],
+    )
+
+    if warn_missing_center and radius > 0.0 and variant_token == "HOLO":
+        logging.warning(
+            "[ions] holo_salt_radius_set_but_no_center action=keep_salts radius=%.2f",
+            radius,
+        )
+
+    if not remove_indices:
+        logging.debug("[ions] no_monoatomic_hits remove=0")
+        return 0
+
+    for idx in sorted(remove_indices):
+        text[idx] = None  # type: ignore
+
+    rewritten = [ln for ln in text if ln is not None]
+    try:
+        path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    except Exception as exc:
+        logging.warning("[ions] write_failed file=%s err=%s", path, exc)
+        return 0
+
+    return len(remove_indices)
+
 
 def _is_element_token(sym):
     s = str(sym).strip().upper()
@@ -873,39 +1263,41 @@ def file_contains_hydrogens(pdb_path: Union[str, Path]) -> bool:
 
 
 
-def strip_monoatomic_ions_inplace(pdb_path: Union[str, Path],
-                                  keep_resnames: Optional[Set[str]] = None) -> int:
-    """
-    Remove single-atom HET residues that look like elemental ions (Na, Cl, Zn, ...),
-    UNLESS resname is in keep_resnames (e.g., YAML retain list).
-    Returns number of residues removed.
-    """
-    keep_resnames = set(keep_resnames or [])
-    by_res = {}
-    lines = []
-    with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if ln.startswith(("ATOM  ", "HETATM")):
-                resname = ln[17:20].strip().upper()
-                key = (ln[21], ln[22:26], ln[26], resname)
-                by_res.setdefault(key, []).append(ln)
-    # ...
-    removed = 0
-    for key, atms in by_res.items():
-        chain, resi, icode, resname = key
-        if resname in keep_resnames:
-            lines.extend(atms); continue
-        if len(atms) == 1 and _is_element_token(resname):
-            removed += 1
-            continue
-        lines.extend(atms)
+def strip_monoatomic_ions_inplace(
+    pdb_path: Union[str, Path],
+    keep_resnames: Optional[Set[str]] = None,
+    *,
+    cfg: Optional[dict] = None,
+    variant: Optional[str] = None,
+    pocket_center: Optional[tuple[float, float, float]] = None,
+    force_policy: Optional[str] = None,
+) -> int:
+    """Legacy wrapper that now delegates to the policy-aware ion stripping."""
 
-    with open(pdb_path, "w", encoding="utf-8") as w:
-        w.writelines(lines)
+    base_cfg = cfg if cfg is not None else config
+    if isinstance(base_cfg, dict):
+        cfg_obj: dict = dict(base_cfg)
+    else:
+        cfg_obj = {}
+
+    if force_policy:
+        cfg_obj = cfg_obj or {}
+        cfg_obj["ION_STRIP_POLICY"] = force_policy
+
+    extra_keep = set(keep_resnames or []) or None
+
+    removed = _maybe_strip_ions(
+        pdb_path,
+        cfg=cfg_obj,
+        variant=variant,
+        pocket_center=pocket_center,
+        extra_keep=extra_keep,
+    )
 
     if removed:
         logging.info("Stripped %d monoatomic ions from %s", removed, pdb_path)
-    return removed
+
+    return removed or 0
 
 # Compatibility alias for older callers
 def _strip_monoatomic_ions_inplace(*args, **kwargs):
@@ -1972,8 +2364,42 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     assert_no_metal_in_peptidic(reduced_pdb)
 
     # (10) Move to receptor and re-fix (post-step edits)
+    # [ions] receptor_write audit
+    variant_env = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
+    variant_label = variant_env if variant_env else "legacy"
+    before_counts, before_detail = _collect_monoatomic_records(reduced_pdb)
+    logging.info(
+        "[ions.policy] stage=receptor_write variant=%s source=%s target=%s reason=copy_reduced_to_cleaned",
+        variant_label,
+        reduced_pdb,
+        receptor_pdb,
+    )
+    logging.info(
+        "[ions.counts.before] stage=receptor_write file=%s metals=%s",
+        reduced_pdb,
+        _format_ion_hist(before_counts),
+    )
+
     shutil.copyfile(reduced_pdb, receptor_pdb)
     _helium_postwrite_counter("promote_receptor_copy", receptor_pdb)
+
+    after_counts, after_detail = _collect_monoatomic_records(receptor_pdb)
+    logging.info(
+        "[ions.counts.after] stage=receptor_write file=%s metals=%s",
+        receptor_pdb,
+        _format_ion_hist(after_counts),
+    )
+    diff_list = _diff_detail_records(before_detail, after_detail)
+    kept_total = sum(after_counts.values())
+    stripped_total = max(0, sum(before_counts.values()) - kept_total)
+    logging.info(
+        "[ions.summary] action=write_cleaned kept=%d stripped=%d changed=%d",
+        kept_total,
+        stripped_total,
+        len(diff_list),
+    )
+    if diff_list:
+        logging.info("[ions.diff.reduced→cleaned] lost=%s", ",".join(diff_list))
 
     fix_pdb_elements(receptor_pdb)
     _helium_postwrite_counter("elemfix_final_receptor", receptor_pdb)
@@ -2064,41 +2490,158 @@ def _rewrite_his_default(pdb_in: Union[str, Path], pdb_out: Union[str, Path], de
 # =============================
 # External Tools (Meeko/ADT, Phenix, OpenBabel, Reduce)
 # =============================
-def _drop_free_ions_for_meeko(pdb_in: str | Path, pdb_out: str | Path,
-                              banlist: set[str] | None = None) -> int:
+def _drop_free_ions_for_meeko(
+    pdb_in: str | Path,
+    pdb_out: str | Path,
+    banlist: set[str] | None = None,
+    *,
+    cfg: Optional[dict] = None,
+    variant: Optional[str] = None,
+    pocket_center: Optional[tuple[float, float, float]] = None,
+) -> int:
     """
     Remove HETATM entries for simple ions that Meeko chokes on (e.g., Na, K, Li).
     Writes to pdb_out. Returns #atoms dropped.
     Never drops ions explicitly retained by YAML (retain_in_receptor_resnames) that are elemental tokens.
     Set MEEKO_DROP_VERBOSE=1 to log each dropped residue position.
     """
-    # Compute retain_ions once: YAML retain list ∩ element tokens
+    cfg_obj: Optional[dict] = None
+    if isinstance(cfg, dict):
+        cfg_obj = cfg
+    elif isinstance(config, dict):
+        cfg_obj = config
+
+    allow_tokens, _ = _load_retain_allowlist(cfg_obj)
+    allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
     retain_ions = {r for r in _RETAIN if _is_element_token(r)}
     base_ban = set(banlist) if banlist else _MEEKO_DROP_IONS
-    # Do not drop any YAML-retained elemental ions
-    ban = base_ban - retain_ions
+
+    policy = _normalize_ion_policy(cfg_obj)
+    variant_token = _resolve_variant_token(cfg_obj, variant)
+    variant_label = variant_token or "legacy"
+
+    radius_cfg = 0.0
+    if cfg_obj is not None:
+        try:
+            radius_cfg = float(cfg_obj.get("HOLO_SALT_STRIP_RADIUS", 0.0) or 0.0)
+        except Exception:
+            radius_cfg = 0.0
+    radius_cfg = max(0.0, radius_cfg)
+    radius = radius_cfg if (policy == "by_variant" and variant_token == "HOLO") else 0.0
+    radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
+
+    drop_metals = False
+    drop_salts = False
+    if policy == "always_strip":
+        drop_metals = True
+        drop_salts = True
+    elif policy == "by_variant":
+        if variant_token == "HOLO":
+            drop_metals = False
+            drop_salts = radius > 0.0
+        else:
+            drop_metals = True
+            drop_salts = True
+    elif policy == "never_strip":
+        drop_metals = False
+        drop_salts = False
+
+    if drop_salts and radius > 0.0 and pocket_center is None and variant_token == "HOLO":
+        logging.warning(
+            "[ions] holo_salt_radius_set_but_no_center stage=meeko action=keep_salts radius=%.2f",
+            radius,
+        )
+        drop_salts = False
+
+    logging.info(
+        "[ions.policy] stage=meeko variant=%s drop_metals=%s drop_salts=%s radius=%s allowlist=%d",
+        variant_label,
+        drop_metals,
+        drop_salts,
+        radius_term,
+        len(allow_set),
+    )
 
     verbose = (os.environ.get("MEEKO_DROP_VERBOSE", "0") not in ("0", "false", "False"))
 
     dropped = 0
-    kept = []
-    with open(pdb_in, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if ln.startswith("HETATM"):
-                res = ln[17:20].strip().upper()
-                if res in ban:
-                    dropped += 1
-                    if verbose:
-                        resi = ln[22:26].strip()
-                        chain = ln[21]
-                        el = (ln[76:78].strip() or res)
-                        logging.info("[meeko drop] res=%s chain=%s resi=%s el=%s", res, chain, resi, el)
-                    continue
-            kept.append(ln)
-    Path(pdb_out).write_text("".join(kept), encoding="utf-8")
+    kept_lines: list[str] = []
+    warn_missing_center = False
+    with open(pdb_in, "r", encoding="utf-8", errors="ignore") as fh:
+        for ln in fh:
+            if not ln.startswith("HETATM"):
+                kept_lines.append(ln)
+                continue
+            res = ln[17:20].strip().upper()
+            elem = (ln[76:78].strip() or res).upper()
+            token = res or elem
+            if token in allow_set or elem in allow_set:
+                kept_lines.append(ln)
+                continue
+
+            is_metal = res in _METAL_RESNAMES or elem in _METAL_RESNAMES
+            is_salt = res in _SALT_RESNAMES or elem in _SALT_RESNAMES or res in base_ban or elem in base_ban
+
+            remove = False
+            reason = ""
+            if policy == "never_strip":
+                remove = False
+            elif is_metal and drop_metals and (token not in retain_ions):
+                remove = True
+                reason = "meeko_strip_metal"
+            elif is_salt and drop_salts:
+                if radius > 0.0:
+                    dist = _distance_from_center(ln, pocket_center)
+                    if dist is None:
+                        warn_missing_center = True
+                        remove = False
+                    elif dist >= radius:
+                        remove = True
+                        reason = "meeko_salt_far"
+                elif (res in base_ban or elem in base_ban) and policy != "never_strip":
+                    remove = True
+                    reason = "meeko_salt_policy"
+            elif (res in base_ban or elem in base_ban) and policy == "always_strip":
+                remove = True
+                reason = "meeko_policy"
+
+            if remove:
+                dropped += 1
+                if verbose:
+                    resi = ln[22:26].strip()
+                    chain = ln[21]
+                    logging.info(
+                        "[meeko drop] res=%s chain=%s resi=%s elem=%s reason=%s",
+                        res,
+                        chain,
+                        resi,
+                        elem or res,
+                        reason or "policy",
+                    )
+                continue
+
+            kept_lines.append(ln)
+
+    if warn_missing_center and radius > 0.0 and variant_token == "HOLO":
+        logging.warning(
+            "[ions] holo_salt_radius_set_but_no_center stage=meeko action=keep_salts radius=%.2f",
+            radius,
+        )
+
+    Path(pdb_out).write_text("".join(kept_lines), encoding="utf-8")
+    logging.info(
+        "[ions.touch] stage=meeko variant=%s dropped=%d kept=%d file=%s",
+        variant_label,
+        dropped,
+        len(kept_lines),
+        pdb_out,
+    )
     if dropped:
-        logging.warning("Meeko pre-sanitize: dropped %d free ions (%s).",
-                        dropped, ",".join(sorted(ban)))
+        logging.warning(
+            "Meeko pre-sanitize: dropped %d monoatomics (ban=%s).",
+            dropped,
+            ",".join(sorted(base_ban - retain_ions)),
+        )
     return dropped
 
 
@@ -2117,6 +2660,8 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
 
     input_pdb = str(input_pdb)
     output_pdbqt = str(output_pdbqt)
+    variant_token = _resolve_variant_token(cfg, cfg.get("_CURRENT_VARIANT"))
+    variant_label = variant_token or "legacy"
     # Persist all attempt logs here (processed_pdbs/<PDB>/work) NOTE DIFF FROM _WORK_DIR
     work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
     # --- Helium preflight on the EXACT file we’re about to feed into Meeko pipeline
@@ -2274,8 +2819,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         tmp1_path = input_pdb
 
     if _cfg_bool("MEEKO_DROP_FREE_IONS", True):
+        logging.info(
+            "[ions.touch] stage=meeko-pre variant=%s action=pre_sanitize file=%s",
+            variant_label,
+            tmp1_path,
+        )
         # Never drop YAML-retained elemental ions (banlist computed inside)
-        _drop_free_ions_for_meeko(tmp1_path, tmp1_path)
+        _drop_free_ions_for_meeko(
+            tmp1_path,
+            tmp1_path,
+            cfg=cfg,
+            variant=variant_token,
+            pocket_center=None,
+        )
 
     # Preflight again on the HIS-classified file we’re actually handing to Meeko now
     if not skip_meeko:
@@ -2317,6 +2873,14 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
     prepare_script = PREPARE_RECEPTOR_SCRIPT
     if (mgltools_python and Path(mgltools_python).is_file() and os.access(mgltools_python, os.X_OK)
             and prepare_script and Path(prepare_script).is_file()):
+        allow_tokens, _ = _load_retain_allowlist(cfg)
+        logging.info(
+            "[ions.policy] stage=adt variant=%s drop_metals=%s drop_salts=%s radius=none allowlist=%d",
+            variant_label,
+            False,
+            False,
+            len({str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}),
+        )
         adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt,
                    "-A", "none", "-U", "nphs_lps_nonstdres"]
         cp = subprocess.run(adt_cmd, capture_output=True, text=True)
@@ -2371,9 +2935,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             _pdb_ions = _ions_in_pdb(input_pdb)
             _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
             _missing = _pdb_ions - _pdbqt_ions
+            kept_pairs = _pdb_ions & _pdbqt_ions
+            logging.info(
+                "[ions.diff.pdb↔pdbqt.meeko] kept=%d stripped=%d detail=%s",
+                len(kept_pairs),
+                len(_missing),
+                _format_ion_pairs(_pdb_ions),
+            )
             if _pdb_ions or _missing:
-                logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                sorted(_pdb_ions), sorted(_missing))
+                logging.warning(
+                    "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                    sorted(_pdb_ions),
+                    sorted(_missing),
+                )
             # If any missing ion is YAML-retained, emit a targeted warning
             _retained = {r for r in _RETAIN if _is_element_token(r)}
             _lost_retained = sorted([x for x in _missing if x[0] in _retained])
@@ -2433,9 +3007,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _pdb_ions = _ions_in_pdb(input_pdb)
                 _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
                 _missing = _pdb_ions - _pdbqt_ions
+                kept_pairs = _pdb_ions & _pdbqt_ions
+                logging.info(
+                    "[ions.diff.pdb↔pdbqt.meeko_retry] kept=%d stripped=%d detail=%s",
+                    len(kept_pairs),
+                    len(_missing),
+                    _format_ion_pairs(_pdb_ions),
+                )
                 if _pdb_ions or _missing:
-                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                    sorted(_pdb_ions), sorted(_missing))
+                    logging.warning(
+                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                        sorted(_pdb_ions),
+                        sorted(_missing),
+                    )
                 _retained = {r for r in _RETAIN if _is_element_token(r)}
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
@@ -2493,9 +3077,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _pdb_ions = _ions_in_pdb(input_pdb)
                 _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
                 _missing = _pdb_ions - _pdbqt_ions
+                kept_pairs = _pdb_ions & _pdbqt_ions
+                logging.info(
+                    "[ions.diff.pdb↔pdbqt.meeko_allow_bad_res] kept=%d stripped=%d detail=%s",
+                    len(kept_pairs),
+                    len(_missing),
+                    _format_ion_pairs(_pdb_ions),
+                )
                 if _pdb_ions or _missing:
-                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                    sorted(_pdb_ions), sorted(_missing))
+                    logging.warning(
+                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                        sorted(_pdb_ions),
+                        sorted(_missing),
+                    )
                 _retained = {r for r in _RETAIN if _is_element_token(r)}
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
@@ -2541,9 +3135,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 _pdb_ions = _ions_in_pdb(input_pdb)
                 _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
                 _missing = _pdb_ions - _pdbqt_ions
+                kept_pairs = _pdb_ions & _pdbqt_ions
+                logging.info(
+                    "[ions.diff.pdb↔pdbqt.meeko_legacy] kept=%d stripped=%d detail=%s",
+                    len(kept_pairs),
+                    len(_missing),
+                    _format_ion_pairs(_pdb_ions),
+                )
                 if _pdb_ions or _missing:
-                    logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                    sorted(_pdb_ions), sorted(_missing))
+                    logging.warning(
+                        "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                        sorted(_pdb_ions),
+                        sorted(_missing),
+                    )
                 _retained = {r for r in _RETAIN if _is_element_token(r)}
                 _lost_retained = sorted([x for x in _missing if x[0] in _retained])
                 if _lost_retained:
@@ -2589,9 +3193,19 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             _pdb_ions = _ions_in_pdb(input_pdb)
             _pdbqt_ions = _ions_in_pdbqt(output_pdbqt)
             _missing = _pdb_ions - _pdbqt_ions
+            kept_pairs = _pdb_ions & _pdbqt_ions
+            logging.info(
+                "[ions.diff.pdb↔pdbqt.adt] kept=%d stripped=%d detail=%s",
+                len(kept_pairs),
+                len(_missing),
+                _format_ion_pairs(_pdb_ions),
+            )
             if _pdb_ions or _missing:
-                logging.warning("[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-                                sorted(_pdb_ions), sorted(_missing))
+                logging.warning(
+                    "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
+                    sorted(_pdb_ions),
+                    sorted(_missing),
+                )
             _retained = {r for r in _RETAIN if _is_element_token(r)}
             _lost_retained = sorted([x for x in _missing if x[0] in _retained])
             if _lost_retained:

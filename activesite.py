@@ -86,23 +86,63 @@ def get_atom_rules():
         return _rules_cache
 
     a  = _load_aliases_yaml() or {}
+    logging.info(
+        "[aliases.load] source=%s keys=%d",
+        ALIASES_PATH,
+        len(a),
+    )
     es = a.get("element_sets", {}) or {}
     ligand_sets = a.get("ligand_sets", {}) or {}
     meeko_cfg   = a.get("meeko", {}) or {}
 
-    # helpers
+    token_splitter = re.compile(r"[,\s]+")
+
     def _flatten(items):
-        out = []
         for x in (items or []):
             if isinstance(x, (list, tuple, set)):
-                out.extend(_flatten(x))
+                yield from _flatten(x)
             else:
-                parts = [p.strip() for p in str(x).split(";")]
-                out.extend([p for p in parts if p])
-        return out
+                text = "" if x is None else str(x)
+                if not text:
+                    continue
+                for semi in text.split(";"):
+                    segment = semi.strip()
+                    if not segment:
+                        continue
+                    for token in token_splitter.split(segment):
+                        tok = token.strip()
+                        if tok:
+                            yield tok
 
-    def _as_set(items, up=True):
-        return { (v.upper() if up else v) for v in _flatten(items) }
+    def _as_set(items, up=True, section=None):
+        tokens = list(_flatten(items))
+        normalized = []
+        ignored = []
+        for tok in tokens:
+            norm = tok.strip()
+            if not norm:
+                ignored.append(tok)
+                continue
+            normalized.append(norm.upper() if up else norm)
+        result = set(normalized)
+        if section:
+            sample = ",".join(sorted(result)[:5]) if result else "none"
+            logging.debug(
+                "[aliases.tokens] section=%s total=%d unique=%d sample=%s",
+                section,
+                len(normalized),
+                len(result),
+                sample,
+            )
+            if ignored:
+                filtered = sorted({t.strip() for t in ignored if t.strip()})[:5]
+                if filtered:
+                    logging.debug(
+                        "[aliases.ignored] section=%s tokens=%s",
+                        section,
+                        ",".join(filtered),
+                    )
+        return result
 
     # element/name logic
     peptide_like      = _as_set(es.get("peptide_like_names"))
@@ -118,11 +158,17 @@ def get_atom_rules():
 
     #  ligand & Meeko lists from YAML
     nucleotide_like_resnames = _as_set(ligand_sets.get("nucleotide_like_resnames"))
-    meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"))
+    meeko_drop_free_ions     = _as_set(meeko_cfg.get("drop_free_ions"), section="meeko.drop_free_ions")
 
     # retain list (and a compat copy)
     retain_raw = a.get("retain_in_receptor_resnames", []) or []
-    retain_res = _as_set(retain_raw)
+    retain_res = _as_set(retain_raw, section="retain_in_receptor_resnames")
+    retain_sample = ",".join(sorted(retain_res)[:10]) if retain_res else "none"
+    logging.info(
+        "[aliases.section] name=retain_in_receptor_resnames size=%d sample=%s",
+        len(retain_res),
+        retain_sample,
+    )
 
     # --- APO/HOLO mode (env or config) ---
     mode = str(os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "")).strip().lower()
@@ -132,6 +178,12 @@ def get_atom_rules():
 
     # element-token ions/metals: 1–2 letter tokens present in element sets
     elem_tokens = {t for t in retain_res if ((len(t) in (1, 2)) and (t in one_letter or t in two_letter))}
+    elem_sample = ",".join(sorted(elem_tokens)[:10]) if elem_tokens else "none"
+    logging.info(
+        "[aliases.section] name=retain_element_tokens size=%d sample=%s",
+        len(elem_tokens),
+        elem_sample,
+    )
 
     if mode == "apo":
         # apo keeps waters + ions only; drop other small-molecule cofactors
@@ -170,6 +222,27 @@ def get_atom_rules():
         element_sets=compat_element_sets,
         retain_in_receptor_resnames=compat_retain_list,
         ad4_types=ad4_types,
+    )
+
+    # [ions] audit breadcrumbs
+    metals_probe = ["ZN", "HG", "MG", "FE", "MN", "CA", "CU", "CO", "NI", "NA", "K", "CL"]
+    includes = {tok: (tok in retain_res) for tok in metals_probe}
+    detected_metals = sorted([tok for tok in retain_res if tok in metals_probe])
+    logging.info(
+        "[aliases.audit] metal_tokens_detected=%s",
+        ",".join(detected_metals) if detected_metals else "none",
+    )
+    logging.info(
+        "[aliases.audit] retain_in_receptor_resnames size=%d includes=%s",
+        len(retain_res),
+        includes,
+    )
+    variant_env = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper() or "legacy"
+    logging.info(
+        "[activesite.retention] variant=%s retain_resnames_size=%d contains=%s",
+        variant_env,
+        len(retain_res),
+        includes,
     )
     return _rules_cache
 
@@ -614,6 +687,12 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     ligand_coords = []  # collect all ligand atom coords for box calculation
     rules = get_atom_rules()
     retained_resnames = rules.retain_resnames  # already uppercased
+    # [ions] retention counters
+    metal_tokens = {"ZN", "MG", "MN", "FE", "CA", "CU", "CO", "NI", "HG"}
+    variant_label = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper() or "legacy"
+    kept_metals = 0
+    stripped_metals = 0
+    stripped_detail: List[str] = []
 
     # Do NOT retain common cryos/buffers: GOL/EDO/PG4/MPD/ACT/TRS/PO4/PEG → they’ll be extracted
 
@@ -624,6 +703,7 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
                 resname = resname_raw.strip().upper()  # normalize for set membership & filenames
                 chain = line[21]
                 resnum = line[22:26].strip()
+                elem = (line[76:78].strip() or resname).upper()
                 if resname not in retained_resnames:
                     ligands[(chain, resname, resnum)].append(line)
                     try:
@@ -633,7 +713,20 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
                         ligand_coords.append((x, y, z))
                     except ValueError:
                         logging.warning(f"Invalid ligand coordinates in line: {line.strip()}")
+                    if elem in metal_tokens or resname in metal_tokens:
+                        stripped_metals += 1
+                        stripped_detail.append(f"{resname}:{chain or '-'}:{resnum or '?'}")
+                        logging.info(
+                            "[ions.drop] reason=not_in_retain resname=%s chain=%s resSeq=%s element=%s variant=%s",
+                            resname,
+                            chain.strip() or "-",
+                            resnum or "?",
+                            elem or "?",
+                            variant_label,
+                        )
                     continue
+                if elem in metal_tokens or resname in metal_tokens:
+                    kept_metals += 1
             outfile.write(line)
 
     # Write separate ligand files (with element repair)
@@ -646,6 +739,17 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
 
 
     logging.info(f"Ligands extracted and removed from {pdb_path}.")
+    logging.info(
+        "[ions.summary] stage=extract_and_remove_ligands variant=%s kept=%d stripped=%d",
+        variant_label,
+        kept_metals,
+        stripped_metals,
+    )
+    logging.info(
+        "[ions.diff.input→cleaned] variant=%s lost=%s",
+        variant_label,
+        ",".join(stripped_detail) if stripped_detail else "none",
+    )
     return ligands, ligand_coords
 
 def compute_box_from_ligand_coords(coords):
