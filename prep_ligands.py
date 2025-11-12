@@ -2200,7 +2200,7 @@ def _prepare_one(
             logging.warning("[ligprep] ADT wrote fewer atoms (%d -> %d); invoking OBabel MOL2->PDBQT fallback",
                             _in_atoms, _out_atoms)
             if obabel_exe_short:
-                ok_ob = _pdbqt_from_mol2_via_obabel(mol2_for_mgl, pdbqt_path, obabel_exe_short)
+                ok_ob = _pdbqt_from_mol2_via_obabel(Path(proto_mol2), pdbqt_path, obabel_exe_short)
                 logging.info("[ligprep] ADT altpath (via OBabel) OK=%s", ok_ob)
                 writer_final = "obabel"
                 rescue_used = True
@@ -3079,27 +3079,47 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                 proto_mol2 = str(tmp_mol2)
                 h_strategy_label.append("no-extra-H (ADT adds)")
                 fallbacks_used.append("ADT/Meeko-rescue-possible")
-            # Choose protoA/protoB by explicit H count if either exists
+            # --- Choose protoA/protoB by explicit H count if either exists ---
             protoA_path = sanitized.with_suffix(".protoA.mol2")
             protoB_path = sanitized.with_suffix(".protoB.mol2")
-            if pdbqt_path.exists() and not _pdbqt_has_H(pdbqt_path) and obabel_exe_short:
-                logging.warning(f"[post] {pdbqt_path.name} has no H; re-writing via OBabel with -h")
-                _pdbqt_from_mol2_via_obabel(mol2_for_mgl, pdbqt_path, obabel_exe_short)
-                logging.info(f"[post] re-write complete; has_H={_pdbqt_has_H(pdbqt_path)}")
 
-            cands = [p for p in [protoA_path, protoB_path] if p and p.exists()]
+            # Collect existing candidates
+            cands: List[Path] = [p for p in (protoA_path, protoB_path) if p and p.exists()]
+
+            proto_mol2: str = ""  # string path we pass into RDKit/OBabel helpers
+            mol2_for_mgl_path: Path = None  # Path object used by downstream helpers
+            bestH: int = -1
+
             if cands:
+                # Pick the proto with the highest explicit-H count
                 counts = [(p, _count_explicit_H_in_mol2(p)) for p in cands]
                 mol2_for_mgl_path, bestH = max(counts, key=lambda t: t[1])
                 proto_mol2 = str(mol2_for_mgl_path)
-                logging.info(f"[choose-mol2] picked={mol2_for_mgl_path.name} H={bestH} "
-                             f"others={[(p.name, h) for p,h in counts]}")
+                logging.info(
+                    "[choose-mol2] picked=%s H=%s others=%s",
+                    mol2_for_mgl_path.name, bestH,
+                    [(p.name, h) for p, h in counts]
+                )
+            else:
+                # Fallback: if neither proto exists, use the baseline tmp_mol2 produced earlier
+                # (created as sanitized.with_suffix('.mol2') in the primary PDB→MOL2 step)
+                fallback = tmp_mol2 if 'tmp_mol2' in locals() and tmp_mol2.exists() else sanitized.with_suffix(".mol2")
+                mol2_for_mgl_path = Path(fallback)
+                proto_mol2 = str(mol2_for_mgl_path)
+                logging.warning(
+                    "[choose-mol2] no protoA/protoB found; falling back to %s (exists=%s size=%s)",
+                    mol2_for_mgl_path.name, mol2_for_mgl_path.exists(),
+                    (mol2_for_mgl_path.stat().st_size if mol2_for_mgl_path.exists() else -1),
+                )
+
+            mol2_for_mgl: Path = Path(proto_mol2)
 
             # Keep aromaticity consistent on proto_mol2 as well
             try:
-                _re_aromatize_mol2_in_place(Path(proto_mol2), obabel_exe_short)
+                _re_aromatize_mol2_in_place(mol2_for_mgl, obabel_exe_short)
             except Exception as e:
-                logging.error("[ligprep] re_arom crash for %s: %s", Path(proto_mol2).name, e)
+                logging.error("[ligprep] re_arom crash for %s: %s", mol2_for_mgl.name, e)
+
             # --- Enforce active-site standardization on extracted ligands (parity with bulk) ---
             try:
                 # Parse the chosen proto_mol2 safely
@@ -3121,35 +3141,30 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                     except Exception:
                         pass
                     if old_smiles and new_smiles and old_smiles != new_smiles:
-                        logging.warning("[std:audit][extracted] %s: SMILES changed %s -> %s",
-                                        Path(proto_mol2).name, old_smiles, new_smiles)
+                        logging.warning(
+                            "[std:audit][extracted] %s: SMILES changed %s -> %s",
+                            Path(proto_mol2).name, old_smiles, new_smiles
+                        )
                         _log_std_diff(prepped_ligands_dir, lig_id, "extracted", old_smiles, new_smiles)
-
-                    # Feed standardized MOL2 downstream
-                    std_path = Path(proto_mol2).with_suffix(".std.mol2")
-                    Chem.MolToMol2File(m_std, str(std_path))
-                    proto_mol2 = str(std_path)
             except Exception as e:
-                logging.warning("[std][extracted] skip for %s: %s", Path(proto_mol2).name, e)
-            # --- end standardization parity block ---
+                logging.warning("[std:extracted] standardization skipped due to error: %s", e)
 
-            # --- Unified writer (bulk parity): use existing _prepare_one signature (MOL2 -> PDBQT) ---
-            name, status = _prepare_one(
+
+            ok_write, status = _prepare_one(
                 mgltools_python_short, prepare_script_short,
                 Path(proto_mol2), pdbqt_path,
                 obabel_exe_short=obabel_exe_short,
                 status_log_dir=prepped_ligands_dir
             )
             ok_write = (status == "ok")
-            chosen_writer = "auto"     # compact label; _prepare_one chose the actual writer
+            chosen_writer = "auto"
             reason = status
-
 
             # Post-write guard (extracted path): ensure explicit H present; OBabel re-write if not
             if pdbqt_path.exists() and obabel_exe_short and not _pdbqt_has_H(pdbqt_path):
-                logging.warning(f"[post-extracted] {pdbqt_path.name} has no H; OBabel -h re-write")
-                _pdbqt_from_mol2_via_obabel(mol2_for_mgl, pdbqt_path, obabel_exe_short)
-                logging.info(f"[post-extracted] re-write complete; has_H={_pdbqt_has_H(pdbqt_path)}")
+                logging.warning("[post-extracted] %s has no H; OBabel -h re-write", pdbqt_path.name)
+                _pdbqt_from_mol2_via_obabel(Path(proto_mol2), pdbqt_path, obabel_exe_short)
+                logging.info("[post-extracted] re-write complete; has_H=%s", _pdbqt_has_H(pdbqt_path))
 
             # Post-write guards: helium + invariants (waters/ions/torsdof/charges/types)
             _he_ok, _he_fixes, _he_q = _helium_postwrite_guard(pdbqt_path, lig_id, prepped_ligands_dir)
