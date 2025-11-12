@@ -3115,137 +3115,57 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     """Run the full cleaning pipeline and return path to final cleaned PDB (receptor)."""
     logger = logging.getLogger(__name__)
 
-    # ==== Metal audit (local to clean_pdb) ===================================
-    _ION_TRACE = (str(os.environ.get("ION_TRACE", "0") or "0").strip().lower() not in {"0", "false", "no"})
-    _TRACE_BACKBONE = {"C", "N", "O", "H", "S", "P"}
-
-    def _ion_trace_tokens() -> set[str]:
-        tokens = {str(tok).strip().upper() for tok in _ELEM_CANON if str(tok).strip()}
-        filtered = {tok for tok in tokens if tok not in _TRACE_BACKBONE}
-        if not filtered:
-            filtered = tokens
-        if not filtered:
-            filtered = {"ZN", "MG", "MN", "FE", "CO", "NI", "CU", "CD", "HG", "CA"}
-        return filtered
-
-    _ION_TRACE_TOKENS = _ion_trace_tokens()
-    _ION_TRACE_ALIAS = dict(_ELEMENT_ALIAS_MAP)
-    _ion_trace_prev_path: Optional[Path] = None
-    _ion_trace_prev_hist: Dict[str, int] = {}
-
-    def _count_metals(path: Union[str, Path]) -> Tuple[Dict[str, int], int]:
-        if not path:
-            return {}, 0
-        try:
-            hist: Dict[str, int] = {}
-            total = 0
-            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-                for line in handle:
-                    if not line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    resn = line[17:20].strip().upper()
-                    elem = line[76:78].strip().upper()
-                    resn = _ION_TRACE_ALIAS.get(resn, resn)
-                    elem = _ION_TRACE_ALIAS.get(elem, elem)
-                    token = None
-                    if resn in _ION_TRACE_TOKENS:
-                        token = resn
-                    elif elem in _ION_TRACE_TOKENS:
-                        token = elem
-                    if token:
-                        hist[token] = hist.get(token, 0) + 1
-                        total += 1
-            return hist, total
-        except Exception:
-            return {}, 0
-
-    def _format_hist(hist: Dict[str, int]) -> str:
-        if not hist:
-            return "none"
-        return ",".join(f"{key}:{hist[key]}" for key in sorted(hist))
-
-    def _diff_hist(prev: Dict[str, int], curr: Dict[str, int]) -> Tuple[str, str, str]:
-        removed: List[str] = []
-        kept: List[str] = []
-        added: List[str] = []
-        for key in sorted(set(prev) | set(curr)):
-            p = prev.get(key, 0)
-            c = curr.get(key, 0)
-            if p and c:
-                kept.append(f"{key}:{min(p, c)}")
-            if p > c:
-                removed.append(f"{key}:{p - c}")
-            if c > p:
-                added.append(f"{key}:{c - p}")
-        return (
-            ",".join(removed) if removed else "none",
-            ",".join(kept) if kept else "none",
-            ",".join(added) if added else "none",
-        )
-
-    def _log_step(
-        step_no: str,
-        name: str,
-        path: Union[str, Path, None],
-        *,
-        diff_key: Optional[str] = None,
-        reason: Optional[str] = None,
-        prev_path: Union[str, Path, None] = None,
-        prev_hist: Optional[Dict[str, int]] = None,
-        update_prev: bool = True,
-    ) -> None:
-        nonlocal _ion_trace_prev_path, _ion_trace_prev_hist
-        if not _ION_TRACE:
-            return
-        if path and Path(path).exists():
-            hist, total = _count_metals(path)
-            logger.info(
-                "[ions.step] %s %s path=%s metals=%s total=%d",
-                step_no,
-                name,
-                path,
-                _format_hist(hist),
-                total,
-            )
-            if prev_hist is not None:
-                _prev_hist = dict(prev_hist)
-            elif prev_path:
-                prev_path_obj = Path(prev_path)
-                _prev_hist, _ = _count_metals(prev_path_obj) if prev_path_obj.exists() else ({}, 0)
-            elif _ion_trace_prev_path is not None:
-                _prev_hist = dict(_ion_trace_prev_hist)
-            else:
-                _prev_hist = {}
-
-            if (_ion_trace_prev_path is not None) or prev_path or prev_hist:
-                diff_label = diff_key or name
-                removed, kept, added = _diff_hist(_prev_hist, hist)
-                logger.info(
-                    "[ions.diff] %s %s.vs.prev removed=%s kept=%s added=%s",
-                    step_no,
-                    diff_label,
-                    removed,
-                    kept,
-                    added,
-                )
-            if update_prev:
-                _ion_trace_prev_path = Path(path)
-                _ion_trace_prev_hist = hist
-        else:
-            logger.info(
-                "[ions.step] %s %s skipped reason=%s",
-                step_no,
-                name,
-                reason or "unspecified",
-            )
-
-    strip_prev_for_log: Optional[Path] = None
-    strip_path_for_log: Optional[Path] = None
-    strip_reason_for_log: Optional[str] = None
-    water_policy_prev_for_log: Optional[Path] = None
-    water_policy_path_for_log: Optional[Path] = None
-    water_policy_reason_for_log: Optional[str] = None
-    # ========================================================================
+    ion_elements = {
+        "LI",
+        "NA",
+        "K",
+        "RB",
+        "CS",
+        "MG",
+        "CA",
+        "SR",
+        "BA",
+        "ZN",
+        "MN",
+        "FE",
+        "CO",
+        "NI",
+        "CU",
+        "AL",
+        "CD",
+        "HG",
+        "PB",
+        "AG",
+        "AU",
+        "PT",
+        "MO",
+        "RU",
+        "RH",
+        "PD",
+        "CL",
+        "BR",
+        "I",
+        "F",
+        "AT",
+        "LA",
+        "CE",
+        "PR",
+        "ND",
+        "PM",
+        "SM",
+        "EU",
+        "GD",
+        "TB",
+        "DY",
+        "HO",
+        "ER",
+        "TM",
+        "YB",
+        "LU",
+        "U",
+        "TH",
+    }
+    prepare_before_count: Optional[int] = None
 
     output_root = str(output_root)
     Path(output_root).mkdir(parents=True, exist_ok=True)
@@ -3270,7 +3190,31 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
 
     logging.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
-    _log_step("(0)", "input", pdb_file, diff_key="input")
+    input_path_for_metals = Path(pdb_file)
+    if os.path.exists(str(input_path_for_metals)):
+        elemfix_before_count = 0
+        with open(input_path_for_metals, "r", encoding="utf-8", errors="ignore") as _handle:
+            for _line in _handle:
+                if not _line.startswith(("ATOM  ", "HETATM")):
+                    continue
+                _element = _line[76:78].strip().upper()
+                if not _element:
+                    _name_field = _line[12:16].strip()
+                    _guess = []
+                    for _ch in _name_field:
+                        if _ch.isalpha():
+                            _guess.append(_ch)
+                        else:
+                            break
+                    _guess_text = "".join(_guess).upper()
+                    if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                        _element = _guess_text[:2]
+                    elif _guess_text[:1] in ion_elements:
+                        _element = _guess_text[:1]
+                if _element in ion_elements:
+                    elemfix_before_count += 1
+        # (1) elemfix BEFORE: metals=<elemfix_before_count>
+        logger.info(f"(1) elemfix BEFORE: metals={elemfix_before_count} file={str(input_path_for_metals)}")
 
     for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
         paths[d].mkdir(parents=True, exist_ok=True)
@@ -3295,26 +3239,21 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
         shutil.copyfile(str(pdb_file), working_pdb)
         _helium_postwrite_counter("copy_working", working_pdb)
-        _log_step("(1)", "copy_working", working_pdb, diff_key="copy_working")
         # (2) AltLoc filtering → raw/filtered.pdb
         filtered_pdb = paths["raw"] / f"{pdb_id}_filtered.pdb"
         filter_altlocs(working_pdb, filtered_pdb)
-        _log_step("(2)", "after_altloc", filtered_pdb, diff_key="filtered")
 
         # (2a) EARLY text-level element fix (YAML-driven), before any heavy tools
         try:
             fix_element_columns_in_file(filtered_pdb, filtered_pdb, rewrite_atoms=True)
             _helium_postwrite_counter("elemfix_filtered", filtered_pdb)
             logging.info("Early text-level element fix applied to %s", filtered_pdb)
-            _log_step("(2a)", "after_elemfix_early", filtered_pdb, diff_key="elemfix_early")
         except Exception as e:
             logging.warning("Early text-level element fix skipped for %s: %s", filtered_pdb, e)
-            _log_step("(2a)", "after_elemfix_early", None, reason="elemfix_failed")
 
         # (3) Extract ligands now (controls live here), with YAML element repair per-file
         _ = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
         _log_ions_probe(pdb_id, "extract_ligands", filtered_pdb)
-        _log_step("(3)", "after_extract_ligands", filtered_pdb, diff_key="extract")
 
         chain_pruned = False
         if os.environ.get("EARLY_CHAIN_PRUNE", "1").lower() not in {"0", "false", "no"}:
@@ -3348,42 +3287,72 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
             except Exception as e:
                 logging.warning("[chain_prune] skipped due to exception: %s", e)
 
-        if chain_pruned:
-            _log_step("(3b)", "after_chain_prune", source_for_strip, diff_key="chain_prune")
-        else:
-            _log_step("(3b)", "after_chain_prune", None, reason="no_chain_prune")
-
         # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
         stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
-        strip_prev_for_log = Path(source_for_strip) if source_for_strip else None
         ion_audit.probe("strip_nsr_before", source_for_strip)
         _emit_ion_breadcrumb("strip_nsr_before", source_for_strip)
         _log_ions_probe(pdb_id, "strip_nonstandard", source_for_strip, phase="before")
+        if source_for_strip and os.path.exists(str(source_for_strip)):
+            strip_nonstandard_before_count = 0
+            with open(source_for_strip, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        strip_nonstandard_before_count += 1
+            # (5) strip_nonstandard BEFORE: metals=<strip_nonstandard_before_count>
+            logger.info(
+                f"(5) strip_nonstandard BEFORE: metals={strip_nonstandard_before_count} file={str(source_for_strip)}"
+            )
         removed_count, _out = strip_nonstandard_residues(
             source_for_strip,
             stripped_pdb,
             variant=variant_token,
         )
-        strip_path_for_log = stripped_pdb
-        strip_reason_for_log = None
         _log_ions_probe(pdb_id, "strip_nonstandard", stripped_pdb, phase="after")
         ion_audit.probe("strip_nsr_after", stripped_pdb)
         _emit_ion_breadcrumb("strip_nsr_after", stripped_pdb)
         logging.info("Removed %d nonstandard residue lines.", removed_count)
-
-        nolig_candidate: Optional[Path] = None
-        if _ION_TRACE:
-            try:
-                for candidate in paths["nolig"].glob("*.pdb"):
-                    if pdb_id in candidate.stem.upper():
-                        nolig_candidate = candidate
-                        break
-            except Exception:
-                nolig_candidate = None
-        if nolig_candidate:
-            _log_step("(4)", "after_nolig_write", nolig_candidate, diff_key="nolig")
-        else:
-            _log_step("(4)", "after_nolig_write", None, reason="nolig_not_written")
+        if os.path.exists(str(stripped_pdb)):
+            strip_nonstandard_after_count = 0
+            with open(stripped_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        strip_nonstandard_after_count += 1
+            # (5) strip_nonstandard AFTER:  metals=<strip_nonstandard_after_count>
+            logger.info(
+                f"(5) strip_nonstandard AFTER:  metals={strip_nonstandard_after_count} file={str(stripped_pdb)}"
+            )
 
         # (5) Element fix → MODELLER → element fix again (PDB only)
         elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
@@ -3393,6 +3362,35 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "elemfix", elemfix_pdb)
         quick_element_histogram(elemfix_pdb)
         _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
+        if os.path.exists(str(elemfix_pdb)):
+            elemfix_after_count = 0
+            with open(elemfix_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        elemfix_after_count += 1
+            # (1) elemfix AFTER:  metals=<elemfix_after_count>
+            logger.info(f"(1) elemfix AFTER:  metals={elemfix_after_count} file={str(elemfix_pdb)}")
+            modeller_before_count = elemfix_after_count
+            # (2) modeller_fill BEFORE: metals=<modeller_before_count>
+            logger.info(
+                f"(2) modeller_fill BEFORE: metals={modeller_before_count} file={str(elemfix_pdb)}"
+            )
         loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
         fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
         ion_audit.probe("modeller", loop_fixed_pdb)
@@ -3400,6 +3398,32 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
         quick_element_histogram(loop_fixed_pdb)
         _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
+        if os.path.exists(str(loop_fixed_pdb)):
+            modeller_after_count = 0
+            with open(loop_fixed_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        modeller_after_count += 1
+            # (2) modeller_fill AFTER:  metals=<modeller_after_count>
+            logger.info(
+                f"(2) modeller_fill AFTER:  metals={modeller_after_count} file={str(loop_fixed_pdb)}"
+            )
 
         # MODELLER (detect whether a new file was actually produced)
         modeller_ok = (
@@ -3407,22 +3431,12 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 and os.path.isfile(loop_fixed_pdb)
         )
 
-        if modeller_ok:
-            _log_step("(5)", "after_modeller_fill", loop_fixed_pdb, diff_key="modeller")
-        else:
-            _log_step("(5)", "after_modeller_fill", None, reason="no_modeller")
-    
-    
         receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
         # (6) Optional external Phenix polish (non-fatal if missing)
         phenix_ok = False
-        water_policy_prev_for_log = None
-        water_policy_path_for_log = None
-        water_policy_reason_for_log = "phenix_disabled"
         _use_phenix = str(config.get("use_phenix", config.get("USE_PHENIX", "false"))).strip().lower() in ("1", "true",
                                                                                                            "yes")
         if _use_phenix:        # Water policy & radius
-            water_policy_reason_for_log = "policy_not_applied"
             _remove_waters = str(_cfg_env_or_default("REMOVE_WATERS", "true")).strip().lower() in ("1", "true", "yes")
             _policy = (_cfg_env_or_default("WATER_KEEP_POLICY", "none") or "none").strip().lower()
             _keep_R = float(_cfg_env_or_default("KEEP_WATERS_WITHIN_A", "6.0") or 6.0)
@@ -3443,15 +3457,37 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     kept = filter_waters_near_points(loop_fixed_pdb, _phenix_in, ref_pts, _keep_R)
                     logging.info("[waters] policy=%s kept=%d within %.1f Å of %d centers",
                                  _policy, kept, _keep_R, len(ref_pts))
-                    if Path(_phenix_in).exists():
-                        water_policy_prev_for_log = loop_fixed_pdb
-                        water_policy_path_for_log = _phenix_in
-                        water_policy_reason_for_log = None
                 else:
                     logging.info("[waters] policy=%s but no reference points found; skipping prefilter", _policy)
     
             # Blanket removal only when policy is 'none'
             _phenix_remove = bool(_remove_waters and _policy == "none")
+            if os.path.exists(str(_phenix_in)):
+                phenix_before_count = 0
+                with open(_phenix_in, "r", encoding="utf-8", errors="ignore") as _handle:
+                    for _line in _handle:
+                        if not _line.startswith(("ATOM  ", "HETATM")):
+                            continue
+                        _element = _line[76:78].strip().upper()
+                        if not _element:
+                            _name_field = _line[12:16].strip()
+                            _guess = []
+                            for _ch in _name_field:
+                                if _ch.isalpha():
+                                    _guess.append(_ch)
+                                else:
+                                    break
+                            _guess_text = "".join(_guess).upper()
+                            if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                                _element = _guess_text[:2]
+                            elif _guess_text[:1] in ion_elements:
+                                _element = _guess_text[:1]
+                        if _element in ion_elements:
+                            phenix_before_count += 1
+                # (6) phenix_clean BEFORE: metals=<phenix_before_count>
+                logger.info(
+                    f"(6) phenix_clean BEFORE: metals={phenix_before_count} file={str(_phenix_in)}"
+                )
             phenix_ok = run_phenix_pdbtools(input_pdb=_phenix_in, output_pdb=receptor_pdb, remove_waters=_phenix_remove)
     
             # (6b) Dry-run sanity: count HOH within 8 Å of control-centroid center in final receptor
@@ -3474,6 +3510,32 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         if not phenix_ok:
             shutil.copyfile(loop_fixed_pdb, receptor_pdb)
         _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
+        if os.path.exists(str(receptor_pdb)):
+            phenix_after_count = 0
+            with open(receptor_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        phenix_after_count += 1
+            # (6) phenix_clean AFTER:  metals=<phenix_after_count>
+            logger.info(
+                f"(6) phenix_clean AFTER:  metals={phenix_after_count} file={str(receptor_pdb)}"
+            )
 
         # choose the file to pass downstream
         pdb_for_reduce = loop_fixed_pdb if modeller_ok else elemfix_pdb
@@ -3500,11 +3562,62 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         debulked_pdb = paths["work"] / f"{pdb_id}_debulked.pdb"
         shutil.copyfile(receptor_pdb, debulked_pdb)
         clean_hydrogens(debulked_pdb, use_conect_if_reliable=True, conect_min_cov=0.6)
-    
+
         chain_validated_pdb = paths["work"] / f"{pdb_id}_validated.pdb"
+        if os.path.exists(str(debulked_pdb)):
+            validate_before_count = 0
+            with open(debulked_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        validate_before_count += 1
+            # (3) validate BEFORE: metals=<validate_before_count>
+            logger.info(f"(3) validate BEFORE: metals={validate_before_count} file={str(debulked_pdb)}")
         filter_invalid_chains(debulked_pdb, chain_validated_pdb)
         _helium_postwrite_counter("chain_validate", chain_validated_pdb)
         ion_audit.probe("altloc_validate", chain_validated_pdb)
+
+        if os.path.exists(str(chain_validated_pdb)):
+            validate_after_count = 0
+            with open(chain_validated_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        validate_after_count += 1
+            # (3) validate AFTER:  metals=<validate_after_count>
+            logger.info(
+                f"(3) validate AFTER:  metals={validate_after_count} file={str(chain_validated_pdb)}"
+            )
 
         try:
             _txt_before = Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore")
@@ -3563,8 +3676,35 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     
         if not use_reduce:
             logging.info("[protonation] Skipping Reduce due to detected nucleotides; using OpenBabel path.")
-    
+
         reduced_pdb = paths["work"] / f"{pdb_id}_reduced.pdb"
+        reduce_input_path = pdb_for_reduce if pdb_for_reduce else chain_validated_pdb
+        if reduce_input_path and os.path.exists(str(reduce_input_path)):
+            reduce_before_count = 0
+            with open(reduce_input_path, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        reduce_before_count += 1
+            # (4) reduce BEFORE: metals=<reduce_before_count>
+            logger.info(
+                f"(4) reduce BEFORE: metals={reduce_before_count} file={str(reduce_input_path)}"
+            )
         assign_protonation_states(
             pdb_for_reduce,
             reduced_pdb,
@@ -3575,41 +3715,30 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "reduce", reduced_pdb)
         ion_audit.probe("reduce", reduced_pdb)
         print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
-        _log_step("(6)", "after_reduce", reduced_pdb, diff_key="reduce")
-
-        if strip_path_for_log and Path(strip_path_for_log).exists():
-            _log_step(
-                "(6b)",
-                "after_strip_nonstandard",
-                strip_path_for_log,
-                diff_key="strip_nonstandard",
-                prev_path=strip_prev_for_log,
-                update_prev=False,
-            )
-        else:
-            _log_step(
-                "(6b)",
-                "after_strip_nonstandard",
-                None,
-                reason=strip_reason_for_log or "strip_missing",
-            )
-
-        if water_policy_path_for_log and Path(water_policy_path_for_log).exists():
-            _log_step(
-                "(6c)",
-                "after_water_cofactor_policy",
-                water_policy_path_for_log,
-                diff_key="water_policy",
-                prev_path=water_policy_prev_for_log,
-                update_prev=False,
-            )
-        else:
-            _log_step(
-                "(6c)",
-                "after_water_cofactor_policy",
-                None,
-                reason=water_policy_reason_for_log or "policy_not_applied",
-            )
+        if os.path.exists(str(reduced_pdb)):
+            reduce_after_count = 0
+            with open(reduced_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        reduce_after_count += 1
+            # (4) reduce AFTER:  metals=<reduce_after_count>
+            logger.info(f"(4) reduce AFTER:  metals={reduce_after_count} file={str(reduced_pdb)}")
 
         # (9) Final element fix and sanity on the protonated file
         fix_pdb_elements(reduced_pdb)
@@ -3666,7 +3795,36 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
         logging.info("Cleaned receptor: %s", receptor_pdb)
-        _log_step("(7)", "after_write_cleaned", receptor_pdb, diff_key="final_cleaned")
+        if os.path.exists(str(receptor_pdb)):
+            prepare_before_count = 0
+            with open(receptor_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        prepare_before_count += 1
+            # (7) prepare_receptor4 BEFORE: metals=<prepare_before_count>
+            logger.info(
+                f"(7) prepare_receptor4 BEFORE: metals={prepare_before_count} file={str(receptor_pdb)}"
+            )
+            # (7) prepare_receptor4 AFTER:  metals=<prepare_before_count>
+            logger.info(
+                f"(7) prepare_receptor4 AFTER:  metals={prepare_before_count} file={str(receptor_pdb)} (pdbqt not parsed)"
+            )
         try:
             router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
             receptor_pdbqt_path = router_paths.receptor_pdbqt(variant_token, ph_token=None)
@@ -3697,6 +3855,34 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 "[receptor.path.final] variant=%s action=skip reason=%s",
                 (variant_token or "NONE").upper(),
                 exc,
+            )
+        summary_count = prepare_before_count
+        if summary_count is None and os.path.exists(str(receptor_pdb)):
+            summary_count = 0
+            with open(receptor_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        summary_count += 1
+        if summary_count is not None:
+            summary_variant = variant_token or "legacy"
+            logger.info(
+                f"[ions.clean.counts] pdb={pdb_id} variant={summary_variant} file={str(receptor_pdb)} present_pdb=metals:{summary_count}"
             )
         print(f"[proteinprep] cleaned receptor exists={Path(receptor_pdb).is_file()} -> {receptor_pdb}")
         return str(receptor_pdb)
