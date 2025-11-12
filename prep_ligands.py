@@ -3876,13 +3876,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         if "clean_pdb" in globals():
             _orig_clean_pdb = clean_pdb  # type: ignore[misc]
 
-            def clean_pdb(pdb_file, output_root):
+            def clean_pdb(pdb_file, output_root, logger=None):
                 pdb_file = _as_path(pdb_file)
                 pdb_id = pdb_file.stem.upper()
                 # 1) Make sure any legacy dirs for this PDB are migrated before we proceed
                 fold_legacy_layout(pdb_id, output_root)
                 # 2) Run the original pipeline
-                out = _orig_clean_pdb(pdb_file, output_root)
+                try:
+                    out = _orig_clean_pdb(pdb_file, output_root, logger=logger)
+                except TypeError:
+                    out = _orig_clean_pdb(pdb_file, output_root)
                 fold_legacy_layout(pdb_id, output_root)
 
                 # 3) Expose intermediates via a symlink next to prepped_ligands/<PDB>
