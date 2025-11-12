@@ -1828,6 +1828,7 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     # >>> RECEPTOR PATHS PATCH START
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant = var if var else None
+    variant_label = variant if variant else "legacy"
     ph_token = None
     cleaned_pdb_path = paths.receptor_cleaned_pdb(variant)
     receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
@@ -2136,6 +2137,14 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
                 return None, None
     except Exception as _e:
         logger.warning(f"Receptor sanity check skipped due to error: {_e}")
+
+    # === Phase A: variant-scoped receptor comparisons ===
+    receptor_dir = paths.receptor_dir(variant)
+    receptor_pdb = str(receptor_dir / f"{paths.pdb_id}_cleaned.pdb")
+    receptor_pdbqt_final = str(paths.receptor_pdbqt(variant, None))
+    logger.info(
+        f"[compare.pdb↔pdbqt] variant={variant_label} pdb={receptor_pdb} pdbqt={receptor_pdbqt_final}"
+    )
 
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
@@ -4703,6 +4712,10 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
     resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
     if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
+        # === Phase A: variant-scoped APO↔HOLO dedup comparisons ===
+        apo_file = str(paths.receptor_cleaned_pdb("APO"))
+        holo_file = str(paths.receptor_cleaned_pdb("HOLO"))
+        logger.info(f"[apo-vs-holo] compare apo={apo_file} holo={holo_file}")
         apo_clean = _variant_receptor_path(pdb_id, "APO", cfg)
         holo_clean = cleaned_pdb or _variant_receptor_path(pdb_id, "HOLO", cfg)
         apo_path = Path(apo_clean) if apo_clean else None

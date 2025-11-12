@@ -3274,14 +3274,22 @@ def clean_pdb(
     }
     prepare_before_count: Optional[int] = None
 
-    output_root = str(output_root)
-    Path(output_root).mkdir(parents=True, exist_ok=True)
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
 
     raw_stem = os.path.splitext(os.path.basename(str(pdb_file)))[0]
     pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
+    log = logger or logging.getLogger(pdb_id)
+
+    # === Phase A: variant-scoped directories ===
+    variant = os.environ.get("VARIANT", None)
+    if variant in ("APO", "HOLO"):
+        output_root = output_root / variant
+        output_root.mkdir(parents=True, exist_ok=True)
+        log.info(f"[paths.variant] pdb={pdb_id} variant={variant} output_root={output_root}")
+
     _set_clean_provenance("automate_protein_prep.clean_pdb")
     _reset_ion_probe(pdb_id)
-    log = logger or logging.getLogger(pdb_id)
     log.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
     variant_token = _resolve_variant_token(config)
     variant_label = variant_token or "legacy"
