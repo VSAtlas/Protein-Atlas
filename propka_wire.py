@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Optional, Set
 import logging
 import warnings
+from activesite import fix_pdb_elements  # elemfix normalization helper
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 from Bio import BiopythonWarning
 
@@ -207,24 +208,32 @@ def pdb2pqr_protonate(
         "--titration-state-method=propka",
         # note: default is to keep waters; only add --drop-water if requested
     ]
-    keep_hetatoms_supported = False  # TODO: enable explicit --keep-hetero once verified on deployed pdb2pqr build.
-    if keep_hetatoms_supported:
+    # === Phase A: Keep metals (hetero atoms) through PDB2PQR ===
+    variant = (os.environ.get("VARIANT", "") or "").strip().upper()
+    if variant == "HOLO":
+        keep_hetero = True
+    else:
+        keep_hetero = False
+    if keep_hetero:
         cmd.append("--keep-hetero")
     if not keep_waters:
         cmd.append("--drop-water")
     cmd.extend([str(pdb_in), str(pqr_out)])
+    input_pdb = str(pdb_in)
+    output_pdb = str(pdb_out)
+    logger.info(
+        f"[pdb2pqr] keep_hetero={keep_hetero} in={input_pdb} out={output_pdb}"
+    )
 
     try:
         res = subprocess.run(cmd, check=True, text=True, capture_output=True, cwd=str(out_dir))
         _strip_pqr_to_pdb(pqr_out, pdb_out)
+        # Re-apply element column normalization for downstream readers.
+        fix_pdb_elements(output_pdb)
+        logger.info(f"[pdb2pqr.fix] applied elemfix to restore element fields in {output_pdb}")
         # Copy PROPKA table if it was emitted near the PQR (cwd was set to out_dir)
         pka_candidate = next((p for p in Path(out_dir).glob("*.propka*")), None)
         _copy_if_exists(pka_candidate, pk_log)
-        logger.info(
-            "[pdb2pqr] keep_hetatoms=%s out=%s",
-            str(bool(keep_hetatoms_supported)).lower(),
-            str(pdb_out),
-        )
         logger.info("[pdb2pqr] ph=%.2f out=%s pkas=%s", float(target_ph), str(pdb_out), str(pk_log.exists()))
         return str(pdb_out), (str(pk_log) if pk_log.exists() else None)
 
