@@ -72,9 +72,6 @@ def _flatten_semicolons(items):
         out.extend(parts)
     return out
 
-_RETAIN = set(_flatten_semicolons(RULES.get("retain_in_receptor_resnames", [])))
-_WATER_NAMES = {w for w in _RETAIN if w in {"HOH","WAT","DOD","H2O","TIP","TIP3","SOL"}}
-# --- Canonical element tokens (upper-cased 1�2 letter symbols) ---
 def _canonize_two_letter(xs) -> set[str]:
     out = set()
     for line in (xs or []):
@@ -84,12 +81,79 @@ def _canonize_two_letter(xs) -> set[str]:
                 out.add(t.upper())
     return out
 
+def _to_upper_set(values: Iterable[str] | None) -> set[str]:
+    out: set[str] = set()
+    for val in values or []:
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text:
+            out.add(text.upper())
+    return out
+
 _ES      = RULES.get("element_sets", {}) or {}
 _ONE     = {str(s).upper() for s in (_ES.get("one_letter_elements") or [])}
 _TWORAW  = _ES.get("two_letter_elements", []) or []
 _TWO     = _canonize_two_letter(_TWORAW)
-# All allowed element tokens
-_ELEM_CANON = _ONE | _TWO
+_ALIAS_SETS = getattr(ALIASES, "alias_sets", None)
+_ELEMENT_ALIAS_MAP = {
+    str(k).strip().upper(): str(v).strip().upper()
+    for k, v in (getattr(_ALIAS_SETS, "element_alias", {}) or {}).items()
+    if str(k).strip() and str(v).strip()
+}
+_NORMALIZE_RESNAME_FN = getattr(ALIASES, "normalize_resname", None)
+
+
+def _normalize_resname(token: str) -> str:
+    base = (token or "").strip().upper()
+    if not base:
+        return ""
+    if callable(_NORMALIZE_RESNAME_FN):
+        try:
+            normalized = _NORMALIZE_RESNAME_FN(token)
+            if normalized:
+                text = str(normalized).strip().upper()
+                if text:
+                    return text
+        except Exception:
+            pass
+    return _ELEMENT_ALIAS_MAP.get(base, base)
+
+
+_POLICY_MODE = getattr(ALIASES, "policy_mode", "LEGACY")
+
+_RETAIN_VARIANT = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
+_RETAIN_VARIANT_CANONICAL = {
+    _normalize_resname(tok)
+    for tok in getattr(ALIASES, "retain_resnames", [])
+    if _normalize_resname(tok)
+}
+
+_WATER_NAMES = _to_upper_set(
+    getattr(ALIASES, "waters", getattr(_ALIAS_SETS, "waters", set()))
+)
+
+_COFACTOR_NAMES = _to_upper_set(getattr(ALIASES, "cofactors", set()))
+_COFACTOR_CANONICAL = {
+    _normalize_resname(tok)
+    for tok in getattr(ALIASES, "cofactors", set())
+    if _normalize_resname(tok)
+}
+_COFACTOR_RAW_ALL = _to_upper_set(
+    getattr(ALIASES, "cofactors_all", getattr(_ALIAS_SETS, "cofactors", set()))
+)
+
+_ELEMENT_TOKENS_RAW = _to_upper_set(
+    getattr(ALIASES, "element_tokens", getattr(_ALIAS_SETS, "element_tokens", set()))
+)
+_ELEM_CANON = _to_upper_set(
+    getattr(ALIASES, "elem_tokens_canonical", getattr(_ALIAS_SETS, "elem_tokens_canonical", set()))
+)
+
+_ALIASES_BIND_LOGGED = False
+_ION_KEEP_LOGGED: set[str] = set()
+_COFACTOR_DROP_LOGGED: set[str] = set()
+
 _MEEKO_DROP_IONS = set(_flatten_semicolons(RULES.get("meeko_drop_free_ions", []))) or {"NA", "K", "LI"}
 
 _SALT_RESNAMES = {"NA", "K", "CL", "BR", "I"}
@@ -610,8 +674,16 @@ def _log_ion_diff(tag: str, pdb_ions: set[tuple[str, str]], pdbqt_ions: set[tupl
             sorted(pdb_ions),
             sorted(missing),
         )
-    retained = {r for r in _RETAIN if _is_element_token(r)}
-    lost_retained = sorted([item for item in missing if item[0] in retained])
+    retained = {
+        str(tok).strip().upper()
+        for tok in getattr(ALIASES, "elem_tokens_canonical", set())
+        if str(tok).strip()
+    }
+    if not retained:
+        retained = set(_ELEM_CANON)
+    lost_retained = sorted(
+        [item for item in missing if _normalize_resname(item[0]) in retained]
+    )
     if lost_retained:
         logging.warning("[ion lost] %s", lost_retained)
 
@@ -640,24 +712,21 @@ def _reset_ion_probe(pdb_id: str) -> None:
 
 def _ion_candidate_tokens(rules_obj=ALIASES) -> set[str]:
     tokens: set[str] = set()
-    for attr in ("one_letter", "two_letter"):
-        values = getattr(rules_obj, attr, None) or []
-        for tok in values:
+    canonical = getattr(rules_obj, "elem_tokens_canonical", None) or set()
+    for tok in canonical:
+        if tok is None:
+            continue
+        text = str(tok).strip()
+        if text:
+            tokens.add(text.upper())
+    alias_sets = getattr(rules_obj, "alias_sets", None)
+    if alias_sets and getattr(alias_sets, "elem_tokens_canonical", None):
+        for tok in getattr(alias_sets, "elem_tokens_canonical", set()):
             if tok is None:
                 continue
             text = str(tok).strip()
             if text:
                 tokens.add(text.upper())
-    retain_tokens: set[str] = set()
-    for attr in ("retain_resnames", "retain_in_receptor_resnames"):
-        values = getattr(rules_obj, attr, None) or []
-        for tok in values:
-            if tok is None:
-                continue
-            text = str(tok).strip()
-            if text:
-                retain_tokens.add(text.upper())
-    tokens.update({tok for tok in retain_tokens if len(tok) <= 3})
     return tokens
 
 
@@ -827,7 +896,7 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
     if _IONS_CFG_CACHE is not None:
         allow, source = _IONS_CFG_CACHE
         if not _IONS_CFG_LOGGED:
-            logging.info("[ions.cfg] retain_in_receptor_resnames=%s source=%s", ",".join(sorted(allow)), source)
+            logging.info("[ions.cfg] retain_tokens=%s source=%s", ",".join(sorted(allow)), source)
             _IONS_CFG_LOGGED = True
         return allow, source
 
@@ -837,12 +906,12 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
     elif "retain_in_receptor_resnames" in config:
         candidate = config.get("retain_in_receptor_resnames")
 
-    allow_items: Iterable[str] | None = None
-    source = "default"
+    allow_items: Iterable[str] | None = list(getattr(ALIASES, "retain_resnames", []))
+    source = "aliases"
 
     if isinstance(candidate, (list, tuple, set)):
         allow_items = list(candidate)
-        source = "inline"
+        source = "config"
     elif isinstance(candidate, str) and candidate.strip():
         text = candidate.strip()
         parsed: Iterable[str] | None = None
@@ -851,7 +920,7 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
                 loaded = json.loads(text)
                 if isinstance(loaded, list):
                     parsed = loaded
-                    source = "inline"
+                    source = "config"
             except Exception as exc:
                 logging.warning("[ions.cfg] inline_json_parse_failed=%s err=%s", text[:40], exc)
         if parsed is None:
@@ -871,25 +940,25 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
                         raise TypeError("yaml_payload_not_list")
                 except Exception as exc:
                     logging.warning("[ions.cfg] yaml_load_failed path=%s err=%s", yaml_path, exc)
-            if parsed is None:
-                tokens = [tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()]
-                if tokens:
-                    parsed = tokens
-                    source = "inline"
-        allow_items = parsed
+        if parsed is None:
+            tokens = [tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()]
+            if tokens:
+                parsed = tokens
+                source = "config"
+        if parsed is not None:
+            allow_items = parsed
 
-    if allow_items is None:
-        allow_items = RULES.get("retain_in_receptor_resnames", [])
-        source = "default"
+    base_tokens = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
+    merged_tokens = _to_upper_set(allow_items)
+    allow_set = set(base_tokens) | merged_tokens
+    if source != "aliases" and base_tokens:
+        source = f"aliases+{source}"
+    elif not source:
+        source = "aliases"
 
-    allow_set = {tok.upper() for tok in _flatten_semicolons(allow_items)}
     _IONS_CFG_CACHE = (allow_set, source)
     if not _IONS_CFG_LOGGED:
-        logging.info(
-            "[ions.cfg] retain_in_receptor_resnames=%s source=%s",
-            ",".join(sorted(allow_set)),
-            source,
-        )
+        logging.info("[ions.cfg] retain_tokens=%s source=%s", ",".join(sorted(allow_set)), source)
         _IONS_CFG_LOGGED = True
     return allow_set, source
 
@@ -929,14 +998,16 @@ def _collect_monoatomic_records(pdb_path: Union[str, Path]) -> tuple[Counter, Co
                     continue
                 resname = line[17:20].strip().upper()
                 elem = (line[76:78].strip() or resname).upper()
+                canonical_res = _normalize_resname(resname)
+                canonical_elem = _normalize_resname(elem)
                 if not resname and not elem:
                     continue
-                token = resname or elem
+                token = canonical_res or canonical_elem or resname or elem
                 if (
-                    token in _METAL_RESNAMES
-                    or elem in _METAL_RESNAMES
-                    or token in _SALT_RESNAMES
-                    or elem in _SALT_RESNAMES
+                    canonical_res in _METAL_RESNAMES
+                    or canonical_elem in _METAL_RESNAMES
+                    or canonical_res in _SALT_RESNAMES
+                    or canonical_elem in _SALT_RESNAMES
                 ):
                     chain = (line[21] or "-").strip() or "-"
                     resseq = (line[22:26] or "0").strip() or "0"
@@ -999,14 +1070,29 @@ def _maybe_strip_ions(
         return 0
 
     allow_tokens, _ = _load_retain_allowlist(cfg)
-    allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
-    extra_set: set[str] = set()
+    allow_canonical: set[str] = set()
+    for token in allow_tokens:
+        if not token:
+            continue
+        text = str(token).strip().upper()
+        if not text:
+            continue
+        canonical = _normalize_resname(text)
+        allow_canonical.add(canonical or text)
+
+    extra_canonical: set[str] = set()
     if extra_keep:
         for token in extra_keep:
-            if token:
-                extra_set.add(str(token).strip().upper())
-    holo_keep_tokens = allow_set | extra_set
-    apo_keep_tokens = set(extra_set)
+            if not token:
+                continue
+            text = str(token).strip().upper()
+            if not text:
+                continue
+            canonical = _normalize_resname(text)
+            extra_canonical.add(canonical or text)
+
+    holo_keep_tokens = allow_canonical | extra_canonical
+    apo_keep_tokens = set(extra_canonical)
 
     policy = _normalize_ion_policy(cfg)
     variant_token = _resolve_variant_token(cfg, variant)
@@ -1035,16 +1121,20 @@ def _maybe_strip_ions(
     drop_free_ions = policy != "never_strip"
     if variant_token == "HOLO":
         allow_display_set = holo_keep_tokens
-        block_candidates = {tok for tok in _SALT_RESNAMES if tok not in holo_keep_tokens}
+        block_candidates = {
+            tok
+            for tok in _SALT_RESNAMES
+            if _normalize_resname(tok) not in holo_keep_tokens
+        }
     elif variant_token == "APO":
         allow_display_set = apo_keep_tokens
         block_candidates = {
             tok
             for tok in (_METAL_RESNAMES | _SALT_RESNAMES)
-            if tok not in apo_keep_tokens
+            if _normalize_resname(tok) not in apo_keep_tokens
         }
     else:
-        allow_display_set = allow_set
+        allow_display_set = allow_canonical
         block_candidates = set()
 
     logging.info(
@@ -1089,28 +1179,30 @@ def _maybe_strip_ions(
             continue
         chain, resi, icode, resname = key
         res_token = resname.upper()
+        canonical_res = _normalize_resname(res_token)
         line_idx, line = atoms[0]
         before[res_token] += 1
 
         remove = False
         reason = ""
         elem = (line[76:78].strip() or res_token).upper()
+        canonical_elem = _normalize_resname(elem)
 
-        is_metal = res_token in _METAL_RESNAMES or elem in _METAL_RESNAMES
-        is_salt = res_token in _SALT_RESNAMES or elem in _SALT_RESNAMES
+        is_metal = (canonical_res in _METAL_RESNAMES) or (canonical_elem in _METAL_RESNAMES)
+        is_salt = (canonical_res in _SALT_RESNAMES) or (canonical_elem in _SALT_RESNAMES)
         category = "metal" if is_metal else "salt" if is_salt else "other"
 
         if policy == "never_strip":
             remove = False
         elif policy == "always_strip":
-            if res_token in holo_keep_tokens:
+            if canonical_res in holo_keep_tokens:
                 remove = False
             else:
                 remove = True
                 reason = "policy_always_strip"
         else:  # policy == by_variant
             if variant_token == "HOLO":
-                if res_token in holo_keep_tokens or is_metal:
+                if (canonical_res in holo_keep_tokens) or is_metal:
                     remove = False
                 elif is_salt:
                     if radius > 0.0:
@@ -1128,7 +1220,7 @@ def _maybe_strip_ions(
                 else:
                     remove = False
             else:
-                if res_token in apo_keep_tokens:
+                if canonical_res in apo_keep_tokens:
                     remove = False
                     reason = "apo_keep_override"
                 else:
@@ -1209,13 +1301,14 @@ def _maybe_strip_ions(
 
 
 def _is_element_token(sym):
-    s = str(sym).strip().upper()
-    return (len(s) in (1,2)) and (s in _ELEM_CANON)
+    canonical = _normalize_resname(sym)
+    return bool(canonical) and (canonical in _ELEM_CANON)
 
-# Treat as “ion-like” if it looks like an element token and is in the retain set
+
+# Treat as “ion-like” if it normalizes to a canonical element token retained by policy
 def _is_retained_ion(resname: str) -> bool:
-    r = (resname or "").upper()
-    return r in _RETAIN and _is_element_token(r)
+    canonical = _normalize_resname(resname)
+    return bool(canonical) and (canonical in _ELEM_CANON)
 
 
 # =============================
@@ -1883,7 +1976,16 @@ def extract_ligands_from_filtered(filtered_pdb: Union[str, Path], out_dir: Union
     candidate_resnames = {ln[17:20].strip().upper() for ln in lines if ln.startswith("HETATM") and ln[17:20].strip()}
     logging.info("[extract.check] file=%s candidate_resnames=%s", filtered_pdb, ",".join(sorted(candidate_resnames)) if candidate_resnames else "none")
     retain_allow = {tok.upper() for tok in getattr(ALIASES, "retain_resnames", [])}
-    overlap = sorted(candidate_resnames & retain_allow)
+    retain_allow_canonical = {
+        _normalize_resname(tok)
+        for tok in getattr(ALIASES, "retain_resnames", [])
+        if _normalize_resname(tok)
+    }
+    overlap = sorted(
+        res
+        for res in candidate_resnames
+        if (res in retain_allow) or (_normalize_resname(res) in retain_allow_canonical)
+    )
     if overlap:
         logging.warning("[extract.violation] file=%s will_extract_retain_list=%s", filtered_pdb, ",".join(overlap))
 
@@ -1893,7 +1995,8 @@ def extract_ligands_from_filtered(filtered_pdb: Union[str, Path], out_dir: Union
         resname = ln[17:20].strip().upper()
         if resname in _WATER_NAMES:
             continue  # never extract waters
-        if resname in _RETAIN:
+        canonical_res = _normalize_resname(resname)
+        if (resname in _RETAIN_VARIANT) or (canonical_res in _RETAIN_VARIANT_CANONICAL):
             continue  # don't extract cofactors/metals/ions you keep with protein
         chain = ln[21]
         resseq = ln[22:26].strip() or "0"
@@ -2064,12 +2167,7 @@ def detect_catalytic_metals(pdb_path: Union[str, Path]) -> Set[str]:
     Return the set of retained ion-like resnames present in the PDB (e.g., ZN, MG).
     Uses YAML retain list + element tokens. For diagnostics only.
     """
-    RETAIN = set()
-    for item in RULES.get("retain_in_receptor_resnames", []):
-        for t in str(item).split(";"):
-            tok = t.strip().upper()
-            if tok:
-                RETAIN.add(tok)
+    RETAIN = set(_RETAIN_VARIANT)
 
     ionic = set()
     with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -2408,9 +2506,9 @@ def clean_hydrogens(pdb_path: Union[str, Path], use_conect_if_reliable: bool = T
 # =============================
 
 def _is_metal(resname: str) -> bool:
-    """Treat as 'metal/ion' iff YAML retain list contains this resname AND it looks like an element token."""
-    rn = (resname or "").upper()
-    return (rn in _RETAIN) and _is_element_token(rn)
+    """Treat as 'metal/ion' iff the name normalizes to a canonical element token."""
+    canonical = _normalize_resname(resname)
+    return bool(canonical) and (canonical in _ELEM_CANON)
 
 def _cofactor_policy_keep(resname: str) -> bool:
     """
@@ -2420,12 +2518,15 @@ def _cofactor_policy_keep(resname: str) -> bool:
       • Water handling is done in strip_nonstandard_residues(), so return False here for waters.
       • Everything else → remove
     """
-    rn = (resname or "").upper()
-    if rn in _RETAIN:
-        return True
-    if rn in _WATER_NAMES:
+    rn_upper = (resname or "").strip().upper()
+    if not rn_upper:
         return False
-    return False
+    if rn_upper in _WATER_NAMES:
+        return False
+    canonical = _normalize_resname(rn_upper)
+    if canonical and canonical in _COFACTOR_CANONICAL:
+        return True
+    return rn_upper in _COFACTOR_NAMES
 
 
 def strip_nonstandard_residues(
@@ -2442,6 +2543,15 @@ def strip_nonstandard_residues(
     """
     variant_token = _resolve_variant_token(config, variant)
     variant_label = variant_token or "legacy"
+    global _ALIASES_BIND_LOGGED
+    if not _ALIASES_BIND_LOGGED:
+        logging.info(
+            "[aliases.bind] water_set=%d cofactor_set=%d elem_tokens=%d",
+            len(_WATER_NAMES),
+            len(_COFACTOR_NAMES),
+            len(_ELEM_CANON),
+        )
+        _ALIASES_BIND_LOGGED = True
     before_map = _scan_metal_map(input_pdb, ALIASES)
     before_summary = _summarize_ions_file(input_pdb)
     logging.info(
@@ -2469,7 +2579,8 @@ def strip_nonstandard_residues(
             if not line.startswith("HETATM"):
                 continue
             resname = line[17:20].strip().upper()
-            if resname in _RETAIN:
+            canonical_res = _normalize_resname(resname)
+            if (resname in _RETAIN_VARIANT) or (canonical_res in _RETAIN_VARIANT_CANONICAL):
                 xyz = _parse_xyz(line)
                 if xyz: cofm_xyz.append(xyz)
 
@@ -2482,6 +2593,11 @@ def strip_nonstandard_residues(
     water_policy = (config.get("WATER_POLICY", "site_only") or "site_only").lower()
     water_radius = float(config.get("WATER_SITE_RADIUS_ANG", 6.0))
     water_bmax   = float(config.get("WATER_MAX_BFACTOR", 60.0))
+    logging.info(
+        "[water.policy] mode=%s policy=%s waters_kept_rule_applied=true",
+        _POLICY_MODE,
+        water_policy,
+    )
 
     with open(input_pdb, 'r', encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -2499,6 +2615,8 @@ def strip_nonstandard_residues(
                 resseq = (line[22:26] or "0").strip() or "0"
                 elem_token = (line[76:78].strip() or resname).upper()
                 reason = None
+                canonical = _normalize_resname(resname)
+                canonical_token = canonical or resname
 
                 # Water names come from YAML (no hardcoded list here)
                 if resname in _WATER_NAMES:
@@ -2552,25 +2670,56 @@ def strip_nonstandard_residues(
                         )
                     continue
 
-                # Retain anything listed in YAML retain block (cofactors, metals, ions, etc.)
-                if resname in _RETAIN:
+                keep_line = False
+                if canonical_token and canonical_token in _ELEM_CANON:
+                    keep_line = True
+                    if canonical_token not in _ION_KEEP_LOGGED:
+                        logging.info(
+                            "[ion.keep] token=%s source=elem_tokens_canonical",
+                            canonical_token,
+                        )
+                        _ION_KEEP_LOGGED.add(canonical_token)
+                elif _cofactor_policy_keep(resname):
+                    keep_line = True
+                elif (
+                    resname in _RETAIN_VARIANT
+                    or (canonical and canonical in _RETAIN_VARIANT_CANONICAL)
+                ):
+                    keep_line = True
+
+                if keep_line:
                     kept_lines.append(line)
                 else:
                     removed.add(resname)
                     reason = "not_in_retain"
-                if reason and (
+                    if (
+                        _POLICY_MODE == "APO"
+                        and (
+                            resname in _COFACTOR_RAW_ALL
+                            or (canonical and canonical in _COFACTOR_RAW_ALL)
+                        )
+                    ):
+                        reason = "apo_policy"
+                        drop_key = canonical or resname
+                        if drop_key and drop_key not in _COFACTOR_DROP_LOGGED:
+                            logging.info(
+                                "[cofactor.drop] mode=APO resname=%s reason=apo_policy",
+                                drop_key,
+                            )
+                            _COFACTOR_DROP_LOGGED.add(drop_key)
+                if not keep_line and (
                     resname in _ION_AUDIT_METALS
                     or resname in _ION_AUDIT_SIMPLE_IONS
                     or elem_token in _ION_AUDIT_METALS
                     or elem_token in _ION_AUDIT_SIMPLE_IONS
                 ):
-                    removed_hits.append((resname, chain, resseq, reason))
+                    removed_hits.append((resname, chain, resseq, reason or "not_in_retain"))
                     logging.info(
                         "[stripnsr.hit] resname=%s chain=%s resSeq=%s reason=%s variant=%s",
                         resname,
                         chain,
                         resseq,
-                        reason,
+                        reason or "not_in_retain",
                         variant_label,
                     )
                 continue
@@ -2595,8 +2744,13 @@ def strip_nonstandard_residues(
     stripped_res = sorted({res for res, count in before_map.items() if after_map.get(res, 0) < count})
     logging.info("[stripnsr.diff] kept=%s stripped=%s", ",".join(kept_res) if kept_res else "none", ",".join(stripped_res) if stripped_res else "none")
     retain_targets = {tok.upper() for tok in getattr(ALIASES, "retain_resnames", [])}
+    retain_targets_canonical = {
+        _normalize_resname(tok)
+        for tok in getattr(ALIASES, "retain_resnames", [])
+        if _normalize_resname(tok)
+    }
     for res in stripped_res:
-        if res in retain_targets:
+        if (res in retain_targets) or (_normalize_resname(res) in retain_targets_canonical):
             logging.warning("[stripnsr.violation] resname=%s", res)
 
     logging.info("Removed nonstandard residues (YAML-driven): %s", sorted(removed))
@@ -2630,7 +2784,14 @@ def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
     ptm_resnames = ptm_yaml or {"PTR", "SEP", "TPO"}
 
     # Element tokens considered "ionic" from YAML context (retain + element list)
-    ionic_tokens = {r for r in _RETAIN if _is_element_token(r)}
+    rules_snapshot = get_atom_rules()
+    ionic_tokens = {
+        str(tok).strip().upper()
+        for tok in getattr(rules_snapshot, "elem_tokens_canonical", set())
+        if str(tok).strip()
+    }
+    if not ionic_tokens:
+        ionic_tokens = set(_ELEM_CANON)
 
     res_atoms = defaultdict(list)
     with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -2700,7 +2861,8 @@ def detect_pocket_center_from_ligands(filtered_pdb: Union[str, Path],
                 if not ln.startswith("HETATM"):
                     continue
                 resname = ln[17:20].strip().upper()
-                if resname in _RETAIN:
+                canonical_res = _normalize_resname(resname)
+                if (resname in _RETAIN_VARIANT) or (canonical_res in _RETAIN_VARIANT_CANONICAL):
                     try:
                         x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
                         pts.append((x,y,z))
@@ -2951,6 +3113,119 @@ def _protonate_with_pdb2pqr_if_available(nolig_pdb_path: str, out_dir: Path, log
 # =============================
 def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Optional[str]:
     """Run the full cleaning pipeline and return path to final cleaned PDB (receptor)."""
+    logger = logging.getLogger(__name__)
+
+    # ==== Metal audit (local to clean_pdb) ===================================
+    _ION_TRACE = (str(os.environ.get("ION_TRACE", "0") or "0").strip().lower() not in {"0", "false", "no"})
+    _TRACE_BACKBONE = {"C", "N", "O", "H", "S", "P"}
+
+    def _ion_trace_tokens() -> set[str]:
+        tokens = {str(tok).strip().upper() for tok in _ELEM_CANON if str(tok).strip()}
+        filtered = {tok for tok in tokens if tok not in _TRACE_BACKBONE}
+        if not filtered:
+            filtered = tokens
+        if not filtered:
+            filtered = {"ZN", "MG", "MN", "FE", "CO", "NI", "CU", "CD", "HG", "CA"}
+        return filtered
+
+    _ION_TRACE_TOKENS = _ion_trace_tokens()
+    _ION_TRACE_ALIAS = dict(_ELEMENT_ALIAS_MAP)
+    _ion_trace_prev_path: Optional[Path] = None
+    _ion_trace_prev_hist: Dict[str, int] = {}
+
+    def _count_metals(path: Union[str, Path]) -> Tuple[Dict[str, int], int]:
+        if not path:
+            return {}, 0
+        try:
+            hist: Dict[str, int] = {}
+            total = 0
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if not line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    resn = line[17:20].strip().upper()
+                    elem = line[76:78].strip().upper()
+                    resn = _ION_TRACE_ALIAS.get(resn, resn)
+                    elem = _ION_TRACE_ALIAS.get(elem, elem)
+                    token = None
+                    if resn in _ION_TRACE_TOKENS:
+                        token = resn
+                    elif elem in _ION_TRACE_TOKENS:
+                        token = elem
+                    if token:
+                        hist[token] = hist.get(token, 0) + 1
+                        total += 1
+            return hist, total
+        except Exception:
+            return {}, 0
+
+    def _format_hist(hist: Dict[str, int]) -> str:
+        if not hist:
+            return "none"
+        return ",".join(f"{key}:{hist[key]}" for key in sorted(hist))
+
+    def _diff_hist(prev: Dict[str, int], curr: Dict[str, int]) -> Tuple[str, str, str]:
+        removed: List[str] = []
+        kept: List[str] = []
+        added: List[str] = []
+        for key in sorted(set(prev) | set(curr)):
+            p = prev.get(key, 0)
+            c = curr.get(key, 0)
+            if p and c:
+                kept.append(f"{key}:{min(p, c)}")
+            if p > c:
+                removed.append(f"{key}:{p - c}")
+            if c > p:
+                added.append(f"{key}:{c - p}")
+        return (
+            ",".join(removed) if removed else "none",
+            ",".join(kept) if kept else "none",
+            ",".join(added) if added else "none",
+        )
+
+    def _log_step(
+        step_no: str,
+        name: str,
+        path: Union[str, Path, None],
+        *,
+        diff_key: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        nonlocal _ion_trace_prev_path, _ion_trace_prev_hist
+        if not _ION_TRACE:
+            return
+        if path and Path(path).exists():
+            hist, total = _count_metals(path)
+            logger.info(
+                "[ions.step] %s %s path=%s metals=%s total=%d",
+                step_no,
+                name,
+                path,
+                _format_hist(hist),
+                total,
+            )
+            if _ion_trace_prev_path is not None:
+                diff_label = diff_key or name
+                removed, kept, added = _diff_hist(_ion_trace_prev_hist, hist)
+                logger.info(
+                    "[ions.diff] %s %s.vs.prev removed=%s kept=%s added=%s",
+                    step_no,
+                    diff_label,
+                    removed,
+                    kept,
+                    added,
+                )
+            _ion_trace_prev_path = Path(path)
+            _ion_trace_prev_hist = hist
+        else:
+            logger.info(
+                "[ions.step] %s %s skipped reason=%s",
+                step_no,
+                name,
+                reason or "unspecified",
+            )
+    # ========================================================================
+
     output_root = str(output_root)
     Path(output_root).mkdir(parents=True, exist_ok=True)
 
@@ -2974,6 +3249,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
 
     logging.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
+    _log_step("(0)", "input", pdb_file, diff_key="input")
 
     for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
         paths[d].mkdir(parents=True, exist_ok=True)
@@ -2998,22 +3274,28 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
         shutil.copyfile(str(pdb_file), working_pdb)
         _helium_postwrite_counter("copy_working", working_pdb)
+        _log_step("(1)", "copy_working", working_pdb, diff_key="copy_working")
         # (2) AltLoc filtering → raw/filtered.pdb
         filtered_pdb = paths["raw"] / f"{pdb_id}_filtered.pdb"
         filter_altlocs(working_pdb, filtered_pdb)
-    
+        _log_step("(2)", "after_altloc", filtered_pdb, diff_key="filtered")
+
         # (2a) EARLY text-level element fix (YAML-driven), before any heavy tools
         try:
             fix_element_columns_in_file(filtered_pdb, filtered_pdb, rewrite_atoms=True)
             _helium_postwrite_counter("elemfix_filtered", filtered_pdb)
             logging.info("Early text-level element fix applied to %s", filtered_pdb)
+            _log_step("(2a)", "after_elemfix_early", filtered_pdb, diff_key="elemfix_early")
         except Exception as e:
             logging.warning("Early text-level element fix skipped for %s: %s", filtered_pdb, e)
-    
+            _log_step("(2a)", "after_elemfix_early", None, reason="elemfix_failed")
+
         # (3) Extract ligands now (controls live here), with YAML element repair per-file
         _ = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
         _log_ions_probe(pdb_id, "extract_ligands", filtered_pdb)
-    
+        _log_step("(3)", "after_extract_ligands", filtered_pdb, diff_key="extract")
+
+        chain_pruned = False
         if os.environ.get("EARLY_CHAIN_PRUNE", "1").lower() not in {"0", "false", "no"}:
             try:
                 with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as fh:
@@ -3026,6 +3308,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                         out.writelines(pruned)
                     logging.info("[chains] early-pruned chains keep=%s drop=%s", "".join(sorted(keep)),
                                  "".join(sorted(orig - keep)))
+                    chain_pruned = True
             except Exception as e:
                 logging.warning("[chains] early prune skipped: %s", e)
         # (3a) Optional early chain-prune (conservative, pocket-aware)
@@ -3038,11 +3321,17 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     prune_to_chains(filtered_pdb, kept, pruned_filtered)
                     logging.info("[chain_prune] using pruned source for step (4): %s", pruned_filtered)
                     source_for_strip = pruned_filtered
+                    chain_pruned = True
                 else:
                     logging.info("[chain_prune] not applied (kept empty or conservative_abort); using unpruned file")
             except Exception as e:
                 logging.warning("[chain_prune] skipped due to exception: %s", e)
-    
+
+        if chain_pruned:
+            _log_step("(3b)", "after_chain_prune", source_for_strip, diff_key="chain_prune")
+        else:
+            _log_step("(3b)", "after_chain_prune", None, reason="no_chain_prune")
+
         # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
         stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
         ion_audit.probe("strip_nsr_before", source_for_strip)
@@ -3057,10 +3346,25 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         ion_audit.probe("strip_nsr_after", stripped_pdb)
         _emit_ion_breadcrumb("strip_nsr_after", stripped_pdb)
         logging.info("Removed %d nonstandard residue lines.", removed_count)
-    
+
+        nolig_candidate: Optional[Path] = None
+        if _ION_TRACE:
+            try:
+                for candidate in paths["nolig"].glob("*.pdb"):
+                    if pdb_id in candidate.stem.upper():
+                        nolig_candidate = candidate
+                        break
+            except Exception:
+                nolig_candidate = None
+        if nolig_candidate:
+            _log_step("(4)", "after_nolig_write", nolig_candidate, diff_key="nolig")
+        else:
+            _log_step("(4)", "after_nolig_write", None, reason="nolig_not_written")
+        _log_step("(6b)", "after_strip_nonstandard", stripped_pdb, diff_key="strip_nonstandard")
+
         # (5) Element fix → MODELLER → element fix again (PDB only)
         elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
-    
+
         fix_pdb_elements(stripped_pdb, elemfix_pdb)
         ion_audit.probe("elemfix", elemfix_pdb)
         _log_ions_probe(pdb_id, "elemfix", elemfix_pdb)
@@ -3073,17 +3377,24 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
         quick_element_histogram(loop_fixed_pdb)
         _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
-    
+
         # MODELLER (detect whether a new file was actually produced)
         modeller_ok = (
                 os.path.basename(loop_fixed_pdb) == "modeller_filled.pdb"
                 and os.path.isfile(loop_fixed_pdb)
         )
+
+        if modeller_ok:
+            _log_step("(5)", "after_modeller_fill", loop_fixed_pdb, diff_key="modeller")
+        else:
+            _log_step("(5)", "after_modeller_fill", None, reason="no_modeller")
     
     
         receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
         # (6) Optional external Phenix polish (non-fatal if missing)
         phenix_ok = False
+        water_policy_applied = False
+        water_policy_path: Optional[Path] = None
         _use_phenix = str(config.get("use_phenix", config.get("USE_PHENIX", "false"))).strip().lower() in ("1", "true",
                                                                                                            "yes")
         if _use_phenix:        # Water policy & radius
@@ -3107,6 +3418,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     kept = filter_waters_near_points(loop_fixed_pdb, _phenix_in, ref_pts, _keep_R)
                     logging.info("[waters] policy=%s kept=%d within %.1f Å of %d centers",
                                  _policy, kept, _keep_R, len(ref_pts))
+                    if Path(_phenix_in).exists():
+                        water_policy_applied = True
+                        water_policy_path = _phenix_in
                 else:
                     logging.info("[waters] policy=%s but no reference points found; skipping prefilter", _policy)
     
@@ -3139,7 +3453,12 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     
     
         _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
-        
+
+        if water_policy_applied and water_policy_path and Path(water_policy_path).exists():
+            _log_step("(6c)", "after_water_cofactor_policy", water_policy_path, diff_key="water_policy")
+        else:
+            _log_step("(6c)", "after_water_cofactor_policy", None, reason="policy_not_applied")
+
         # choose the file to pass downstream
         pdb_for_reduce = loop_fixed_pdb if modeller_ok else elemfix_pdb
     
@@ -3170,7 +3489,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         filter_invalid_chains(debulked_pdb, chain_validated_pdb)
         _helium_postwrite_counter("chain_validate", chain_validated_pdb)
         ion_audit.probe("altloc_validate", chain_validated_pdb)
-    
+
         try:
             _txt_before = Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore")
         except Exception:
@@ -3235,11 +3554,12 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
             reduced_pdb,
             reduce_exe=REDUCE_EXE if use_reduce else None,  # skip Reduce for nucleotide cofactors
         )
-    
+
         _helium_postwrite_counter("reduce_or_fallback", reduced_pdb)
         _log_ions_probe(pdb_id, "reduce", reduced_pdb)
         ion_audit.probe("reduce", reduced_pdb)
         print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
+        _log_step("(6)", "after_reduce", reduced_pdb, diff_key="reduce")
     
         # (9) Final element fix and sanity on the protonated file
         fix_pdb_elements(reduced_pdb)
@@ -3269,7 +3589,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         shutil.copyfile(reduced_pdb, receptor_pdb)
         _helium_postwrite_counter("promote_receptor_copy", receptor_pdb)
         _log_ions_probe(pdb_id, "receptor_write", receptor_pdb)
-    
+
         after_counts, after_detail = _collect_monoatomic_records(receptor_pdb)
         logging.info(
             "[ions.counts.after] stage=receptor_write file=%s metals=%s",
@@ -3296,6 +3616,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
         logging.info("Cleaned receptor: %s", receptor_pdb)
+        _log_step("(7)", "after_write_cleaned", receptor_pdb, diff_key="final_cleaned")
         try:
             router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
             receptor_pdbqt_path = router_paths.receptor_pdbqt(variant_token, ph_token=None)
@@ -3434,7 +3755,7 @@ def _drop_free_ions_for_meeko(
 
     allow_tokens, _ = _load_retain_allowlist(cfg_obj)
     allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
-    retain_ions = {r for r in _RETAIN if _is_element_token(r)}
+    retain_ions = {r for r in _RETAIN_VARIANT if _is_element_token(r)}
     base_ban = set(banlist) if banlist else _MEEKO_DROP_IONS
 
     policy = _normalize_ion_policy(cfg_obj)

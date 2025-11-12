@@ -30,7 +30,7 @@ from input_and_export_functions import (
     extract_best_score, emit_vina_config as _emit_vina_config_impl, record_score, score_key, _to_bool, init_config_run_dir
 )
 from protein_functions import detect_active_site
-from activesite import extract_and_remove_ligands
+from activesite import extract_and_remove_ligands, get_atom_rules
 from prep_ligands import prep_ligands_from_pdb, is_valid_ligand
 from pose_validation import (
     validate_pose_pdbqt, extract_surface_atoms, attempt_fallback_recenter,
@@ -5478,6 +5478,21 @@ def main() -> None:
     print(f"[run] log_file={log_path} run_id={run_id}")
     cfg = ConfigDict(load_inputs())
     validate_config(cfg)
+
+    rules = get_atom_rules()
+    alias_sets = getattr(rules, "alias_sets", None)
+    waters_set = set(getattr(rules, "waters", set()))
+    if not waters_set and alias_sets is not None:
+        waters_set = {str(tok).strip().upper() for tok in getattr(alias_sets, "waters", set()) if str(tok).strip()}
+    cofactors_set = {str(tok).strip().upper() for tok in getattr(rules, "cofactors", set()) if str(tok).strip()}
+    elements_set = {str(tok).strip().upper() for tok in getattr(rules, "elem_tokens_canonical", set()) if str(tok).strip()}
+    logging.info(
+        "[aliases.summary] mode=%s keep={waters:%d, cofactors:%d, elements:%d}",
+        getattr(rules, "policy_mode", "LEGACY"),
+        len(waters_set),
+        len(cofactors_set),
+        len(elements_set),
+    )
 
     cfg.setdefault("PH_ENSEMBLE", False)
     cfg.setdefault("PH_RADIUS", 10.0)
