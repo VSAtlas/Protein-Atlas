@@ -1,29 +1,38 @@
 # FUNCTION: run_last_stage
 # Purpose:
-#   Final-stage docking + consensus with:
-#     Vina docking, GNINA docking, LeDock docking, GNINA CNN-rescore on Vina poses(this should actually be with the other rescoring functions)
-#     pose validation on all engines, SCORCH rescoring, optional MM-GBSA, optional FEP/QM/MM,
-#     rank-level consensus (RRF) with optional pose-agreement bonus.
+#   Final-stage screening with:
+#     A) Docking engines (pose generators): Vina, GNINA-dock, LeDock
+#     B) Rescoring modules (no new poses): GNINA CNN-rescore, SCORCH, MM-GBSA, FEP/QMMM
+#   Supports path topologies via path_router:
+#     - legacy (no variant, no pH)
+#     - single-variant (APO or HOLO)
+#     - apo_vs_holo (iterate APO & HOLO)
+#     - pH ensembles layered under receptor/docked (variant-aware when present)
 #
-# Inputs:
-#   cfg: Dict
-#   pdb_id: str
-#   receptor_pdbqt: str
-#   center: (float, float, float)
-#   box_size: (float, float, float)
-#   docking_mode: str  # "polypharmacology" | "discovery"
-#   ligands: List[str] # paths to ligands entering this stage
-#   logger: logging.Logger
-#   score_history: Dict[str, Dict[str, Dict]]  # mutated in-place
+# Inputs (key ones): note all paths fed here should be handled by path_router.py, trust me that will make life simpler
+#   cfg         : dict-like config (contains OVERALL_DIR, INPUT_DIR, OUTPUT_DIR, DOCKED_DIR, etc.)
+#   run_id      : string for the configs/<RUN> tree
+#   pdb_id      : PDB token (e.g., "1T46")
+#   pdb_file    : source file under input_pdbs/ (e.g., "1T46.pdb")
+#   ligands     : iterable of ligand ids
+#   docking_mode: flag or mode string to pick final stage name
+#   logger      : logger
+#   score_history : external audit map to append into
 #
-# Outputs:
-#   final_ranked_ligands: List[str]
-#   final_consensus_scores: Dict[str, float]
-#   score_history: Dict[...]  # updated
+# Returns: (final_ranked_ligands, final_consensus_scores, score_history)
 
-procedure run_last_stage(cfg, pdb_id, receptor_pdbqt, center, box_size, docking_mode, ligands, logger, score_history):
+procedure run_last_stage(cfg, run_id, pdb_id, pdb_file, ligands, docking_mode, logger, score_history):
 
-    # 0) Resolve final stage name from mode
+    # --- 0) Path router and mode expansion ---
+    paths := path_router.make_paths(cfg, base_id=pdb_id, pdb_file=pdb_file)
+
+    # Variants: [None] for legacy/single-run; ["APO"], ["HOLO"], or ["APO","HOLO"] for apo_vs_holo
+    variants := paths.expand_variants(cfg.get("APO_HOLO_MODE"))   # accepts "apo_vs_holo", "apo", "holo", "legacy"/None
+
+    # pH ensemble toggle; tags taken from ensemble.json (variant-aware fallback to legacy location)
+    ph_enabled := cfg.get("PH_ENSEMBLE_ENABLE", False)
+
+    # Stage name (unchanged behavior)
     if docking_mode or cfg["MODE"] == "polypharmacology":
         last_stage_name := cfg.get("FINAL_STAGE_POLY", "stage3")
     else:
@@ -33,189 +42,272 @@ procedure run_last_stage(cfg, pdb_id, receptor_pdbqt, center, box_size, docking_
         logger.warning("[last-stage] No ligands; skipping.")
         return [], {}, score_history
 
-    # Containers
-    vina_scores := {};              vina_pose_paths := {};              vina_invalids := {}
-    gnina_dock_scores := {};        gnina_dock_pose_paths := {};        gnina_dock_invalids := {}
-    gnina_rescore_probs := {}
-    ledock_scores := {};            ledock_pose_paths := {};            ledock_invalids := {}
-    scorch_probs := {}
+    # -----------------------------------------------------------
+    # Aggregators across all (variant, ph_tag) sub-runs
+    # -----------------------------------------------------------
+    all_docking_ranks   := {}   # engine_key -> lig -> rank
+    all_rescoring_ranks := {}   # engine_key -> lig -> rank
+    all_better_flags    := {}   # engine_key -> bool (True = higher is better)
+    fused_context_keys  := []   # track order of engines included in fusion
 
-    # ---------------------------
-    # 1) Vina DOCKING (pose gen)
-    # ---------------------------
-    if cfg.get("VINA_ENABLE", True):
-        # *needs rewrite: run_one_stage
-        # Change needed:
-        #   - Accept params: engine_tag, stage_name, exhaustiveness, num_modes, vina_scoring
-        #   - Write outputs under docked/<PDB_ID>/<stage_name>/vina/
-        #   - Return (scores:Dict[lig->float], validated_pose_paths:Dict[lig->str], invalids:Dict[lig->str])
-        # If not rewriting run_one_stage, call a new wrapper run_vina_stage (below).
-        vina_scores, vina_pose_paths, vina_invalids :=
-            run_vina_stage(
-                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
-                center=center, box_size=box_size, ligands=ligands,
-                last_stage_name=last_stage_name,
-                exhaustiveness=cfg.get("FINAL_EXHAUSTIVENESS", 12),
-                num_modes=cfg.get("FINAL_NUM_MODES", 5),
-                vina_scoring=cfg.get("VINA_SCORING", "vina"),
-                logger=logger
-            )
-        for lig in ligands:
-            record_score(score_history, last_stage_name + "_vina", lig, vina_scores.get(lig), lig in vina_pose_paths, vina_invalids.get(lig, ""))
-            record_le(score_history, last_stage_name + "_vina", lig, vina_scores.get(lig), heavy_atom_counts={})
+    # Iterate variants (legacy == [None])
+    for variant in variants:
 
-    # -----------------------------------------------
-    # 2) GNINA CNN RESCORE on Vina poses (no new dock)
-    # -----------------------------------------------
-    if cfg.get("GNINA_RESCORE_ENABLE", True) and vina_pose_paths is not empty:
-        gnina_rescore_probs :=
-            run_gnina_rescore_on_vina_poses(
-                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
-                vina_pose_paths=vina_pose_paths,
-                model_name=cfg.get("GNINA_MODEL_RESCORE", "crossdock_default2018"),
-                out_dir_tag=last_stage_name + "/gnina_rescore",
-                logger=logger
-            )
-        for lig, p in gnina_rescore_probs.items():
-            record_score(score_history, last_stage_name + "_gnina_rescore", lig, p, True, "prob")
+        # Gather pH tags for this variant (or just [None] if disabled or none found)
+        ph_tags := [None]
+        if ph_enabled:
+            tmp := path_router.load_ph_tags(pdb_id, variant=variant)
+            if tmp not empty:
+                ph_tags := tmp
 
-    # ------------------------------
-    # 3) GNINA DOCKING (new poses)
-    # ------------------------------
-    if cfg.get("GNINA_DOCK_ENABLE", True):
-        gnina_dock_scores, gnina_dock_pose_paths, gnina_dock_invalids :=
-            run_gnina_dock_stage(
-                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
-                center=center, box_size=box_size, ligands=ligands,
-                last_stage_name=last_stage_name,
-                model_name=cfg.get("GNINA_MODEL_DOCK", "crossdock_default2018"),
-                exhaustiveness=cfg.get("GNINA_EXHAUSTIVENESS", 8),
-                num_modes=cfg.get("GNINA_NUM_MODES", 5),
-                logger=logger
-            )
-        for lig in ligands:
-            record_score(score_history, last_stage_name + "_gnina_dock", lig, gnina_dock_scores.get(lig), lig in gnina_dock_pose_paths, gnina_dock_invalids.get(lig, ""))
-            record_le(score_history, last_stage_name + "_gnina_dock", lig, gnina_dock_scores.get(lig), heavy_atom_counts={})
+        # Iterate pH members (legacy == [None])
+        for ph_tag in ph_tags:
 
-    # -------------------------
-    # 4) LeDock DOCKING (poses)
-    # -------------------------
-    if cfg.get("LEDOCK_ENABLE", True):
-        ledock_scores, ledock_pose_paths, ledock_invalids :=
-            run_ledock_stage(
-                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
-                center=center, box_size=box_size, ligands=ligands,
-                last_stage_name=last_stage_name,
-                logger=logger
-            )
-        for lig in ligands:
-            record_score(score_history, last_stage_name + "_ledock", lig, ledock_scores.get(lig), lig in ledock_pose_paths, ledock_invalids.get(lig, ""))
-            record_le(score_history, last_stage_name + "_ledock", lig, ledock_scores.get(lig), heavy_atom_counts={})
+            # ---------- 1) Resolve receptor & stage/config directories via router ----------
+            receptor_pdbqt := paths.receptor_pdbqt(variant=variant, ph_token=ph_tag)
+            stage_dir      := paths.docked_stage_dir(variant=variant, stage=last_stage_name, ph_label=ph_tag)
+            cfg_dir        := paths.configs_stage_dir(run_id=run_id, variant=variant, stage=last_stage_name, ph_label=ph_tag)
 
-    # ----------------------------------------------------
-    # 5) SCORCH rescoring on AVAILABLE VALIDATED POSES
-    # ----------------------------------------------------
-    if cfg.get("SCORCH_ENABLE", True):
-        poses_for_scorch := {}
-        for lig in ligands:
-            if vina_pose_paths.get(lig):                poses_for_scorch[lig] := vina_pose_paths[lig]
-            else if gnina_dock_pose_paths.get(lig):     poses_for_scorch[lig] := gnina_dock_pose_paths[lig]
-            else if ledock_pose_paths.get(lig):         poses_for_scorch[lig] := ledock_pose_paths[lig]
-        if poses_for_scorch not empty:
-            scorch_probs :=
-                run_scorch_rescore(
-                    cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
-                    pose_map=poses_for_scorch,
-                    out_dir_tag=last_stage_name + "/scorch",
+            # Subfolders (keep engines vs. rescoring separated on disk)
+            vina_dir         := stage_dir / "vina" #note this is currently not set by default, currently just stage 1,2,3 etc
+            gnina_dock_dir   := stage_dir / "gnina_dock"
+            ledock_dir       := stage_dir / "ledock"
+            rescoring_root   := stage_dir / "rescoring"
+            gnina_rescore_dir:= rescoring_root / "gnina_rescore"
+            scorch_dir       := rescoring_root / "scorch"
+            physics_root     := rescoring_root / "physics"
+            mmgbsa_dir       := physics_root / "mmgbsa"
+            fep_qmmm_dir     := physics_root / "fep_qmmm"
+            mkdir -p all above
+
+            # ---------- 2) DOCKING ENGINES (pose generation only) ----------
+            vina_scores := {};       vina_dock_pose_paths := {};     vina_dock_invalids := {} #note all poses and scores are present in the outputted pdbqts for vina, Im not sure about GNINA and ledock
+            gnina_dock_scores := {};     gnina_dock_pose_paths := {};     gnina_dock_invalids := {}
+            ledock_scores := {};         ledock_pose_paths := {};         ledock_invalids := {}
+
+            if cfg.get("VINA_ENABLE", True):
+                (vina_scores, vina_pose_paths, vina_invalids) :=
+                    run_vina_stage(
+                        cfg=cfg, receptor_pdbqt=receptor_pdbqt, ligands=ligands,
+                        center= #handled in active site and main
+                        box_size= #somewhat handled in active site and main
+                        out_dir=vina_dir, configs_dir=cfg_dir,
+                        exhaustiveness=cfg.get("FINAL_EXHAUSTIVENESS", 24),
+                        num_modes=cfg.get("FINAL_NUM_MODES", 9),
+                        vina_scoring=cfg.get("VINA_SCORING", "vina"),
+                        logger=logger
+                    )
+                audit_stage_scores(score_history, last_stage_name, "vina", ligands, vina_scores, vina_pose_paths, vina_invalids)
+
+            if cfg.get("GNINA_DOCK_ENABLE", True):
+                (gnina_dock_scores, gnina_dock_pose_paths, gnina_dock_invalids) :=
+                    run_gnina_dock_stage(
+                        cfg=cfg, receptor_pdbqt=receptor_pdbqt, ligands=ligands,
+                        center= #handled in active site and main
+                        box_size= #somewhat handled in active site and main
+                        out_dir=gnina_dock_dir, configs_dir=cfg_dir,
+                        model_name=cfg.get("GNINA_MODEL_DOCK", "crossdock_default2018"), 
+                        exhaustiveness=cfg.get("GNINA_EXHAUSTIVENESS", _ choose a good value), #note for GNINA im not sure what the exhaustiveness and num modes are called 
+                        num_modes=cfg.get("GNINA_NUM_MODES", _ choose a good value),
+                        logger=logger
+                    )
+                audit_stage_scores(score_history, last_stage_name, "gnina_dock", ligands, gnina_dock_scores, gnina_dock_pose_paths, gnina_dock_invalids)
+
+            if cfg.get("LEDOCK_ENABLE", True):
+                (ledock_scores, ledock_pose_paths, ledock_invalids) :=
+                    run_ledock_stage(
+                        cfg=cfg, receptor_pdbqt=receptor_pdbqt, ligands=ligands,
+                        center= #handled in active site and main
+                        box_size= #somewhat handled in active site and main
+                        out_dir=ledock_dir, configs_dir=cfg_dir,
+                        logger=logger
+                    )
+                audit_stage_scores(score_history, last_stage_name, "ledock", ligands, ledock_scores, ledock_pose_paths, ledock_invalids)
+
+            # ---------- 3) Build canonical pose map for RESCORING ----------
+            rescore_pose_policy := cfg.get("RESCORING_POSE_POLICY", "prefer_vina_then_gnina_then_ledock")
+            canonical_pose_map :=
+                select_canonical_pose_map(
+                    ligands=ligands,
+                    vina=vina_pose_paths,
+                    gnina=gnina_dock_pose_paths,
+                    ledock=ledock_pose_paths,
+                    docking_scores_by_engine={
+                        "vina": vina_scores,
+                        "gnina_dock": gnina_dock_scores,
+                        "ledock": ledock_scores
+                    },
+                    policy=rescore_pose_policy
+                )
+
+            # ---------- 4) RESCORING MODULES (no new poses) ----------
+            gnina_rescore_probs := {}
+            scorch_probs := {}
+            mmgbsa_scores := {}
+            final_physics_scores := {}
+
+            if cfg.get("GNINA_RESCORE_ENABLE", True):
+                # default legacy parity: rescore Vina poses unless overridden
+                src := cfg.get("GNINA_RESCORE_SOURCE", "vina")   # "vina" | "canonical"
+                rescore_input_map := (vina_pose_paths if src == "vina" else canonical_pose_map)
+                if rescore_input_map not empty:
+                    gnina_rescore_probs :=
+			#not sure entirely what GNINA needs to be passed for rescoring 
+                        run_gnina_rescore_on_poses(
+                            cfg=cfg, receptor_pdbqt=receptor_pdbqt,
+                            out_dir=gnina_rescore_dir,
+                            model_name=cfg.get("GNINA_MODEL_RESCORE", "crossdock_default2018"),
+                            logger=logger
+                        )
+                    audit_rescore_probs(score_history, last_stage_name, "gnina_rescore", gnina_rescore_probs)
+
+            if cfg.get("SCORCH_ENABLE", True) and canonical_pose_map not empty:
+                scorch_probs :=
+			#not sure entirely what scorch needs to be passed for rescoring 
+                    run_scorch_rescore(
+                        cfg=cfg, receptor_pdbqt=receptor_pdbqt,
+                        pose_map=canonical_pose_map,
+                        out_dir=scorch_dir,
+                        logger=logger
+                    )
+                audit_rescore_probs(score_history, last_stage_name, "scorch", scorch_probs)
+
+
+	    #note dont yet have licenses for GBSA, FEP and QQMM so dont worry about this part yet 
+            if cfg.get("MM_GBSA_ENABLE", False) and canonical_pose_map not empty:
+                top_pct := cfg.get("MM_GBSA_TOP_PCT", 0.10)
+                n_top := max(1, int(len(ligands) * top_pct))
+                mmgbsa_candidates := top_n_by_any_docking_score(ligands, n_top, vina_scores, gnina_dock_scores, ledock_scores)
+                mmgbsa_pose_map := { lig: canonical_pose_map[lig] for lig in mmgbsa_candidates if canonical_pose_map.get(lig) }
+                if mmgbsa_pose_map not empty:
+                    mmgbsa_scores :=
+                        run_mmgbsa_rescore(
+                            cfg=cfg, receptor_pdbqt=receptor_pdbqt,
+                            pose_map=mmgbsa_pose_map,
+                            out_dir=mmgbsa_dir,
+                            logger=logger
+                        )
+                    audit_rescore_dG(score_history, last_stage_name, "mmgbsa", mmgbsa_scores)
+
+                    if cfg.get("FEP_QMMM_ENABLE", False):
+                        y_pct := cfg.get("FEP_QMMM_TOP_PCT", 0.20)
+                        mmgbsa_sorted := ligands in mmgbsa_scores sorted by ascending ?G
+                        n_y := max(1, int(len(mmgbsa_sorted) * y_pct))
+                        fep_set := first n_y of mmgbsa_sorted
+                        fep_pose_map := { lig: canonical_pose_map[lig] for lig in fep_set if canonical_pose_map.get(lig) }
+                        if fep_pose_map not empty:
+                            final_physics_scores :=
+                                run_fep_qmmm_final(
+                                    cfg=cfg, receptor_pdbqt=receptor_pdbqt,
+                                    pose_map=fep_pose_map,
+                                    out_dir=fep_qmmm_dir,
+                                    logger=logger
+                                )
+                            audit_rescore_dG(score_history, last_stage_name, "fep_qmmm", final_physics_scores)
+
+            # ---------- 5) Local consensus (per (variant, ph_tag)) ----------
+            # Build per-axis engine maps and convert to ranks. "higher_is_better" per engine:
+            docking_sources := {}
+            rescoring_sources := {}
+            better_flags := {}
+
+            if vina_scores:         docking_sources["vina"]       := vina_scores;        better_flags["vina"]       := False
+            if gnina_dock_scores:   docking_sources["gnina_dock"] := gnina_dock_scores;  better_flags["gnina_dock"] := True   # if GNINA dock score is CNNscore/hybrid (higher better), adjust if kcal/mol
+            if ledock_scores:       docking_sources["ledock"]     := ledock_scores;      better_flags["ledock"]     := False
+
+            if gnina_rescore_probs: rescoring_sources["gnina_rescore"] := gnina_rescore_probs; better_flags["gnina_rescore"] := True
+            if scorch_probs:        rescoring_sources["scorch"]        := scorch_probs;        better_flags["scorch"]        := True
+            if mmgbsa_scores:       rescoring_sources["mmgbsa"]        := mmgbsa_scores;       better_flags["mmgbsa"]        := False
+            if final_physics_scores:rescoring_sources["fep_qmmm"]      := final_physics_scores;better_flags["fep_qmmm"]      := False
+
+            docking_ranks_local   := build_engine_ranks(docking_sources,   subset_flags(better_flags, docking_sources.keys()))
+            rescoring_ranks_local := build_engine_ranks(rescoring_sources, subset_flags(better_flags, rescoring_sources.keys()))
+
+            docking_ranks_local :=
+                apply_pose_agreement_bonus(
+                    engine_ranks=docking_ranks_local,
+                    pose_paths_by_engine={
+                        "vina": vina_pose_paths,
+                        "gnina_dock": gnina_dock_pose_paths,
+                        "ledock": ledock_pose_paths
+                    },
+                    rmsd_cutoff=cfg.get("POSE_AGREEMENT_RMSD", 2.0),
                     logger=logger
                 )
-            for lig, pr in scorch_probs.items():
-                record_score(score_history, last_stage_name + "_scorch", lig, pr, True, "prob")
 
-    # -----------------------------------------------------------------
-    # 6) Build engine ranks (+ optional pose-agreement bonus) ? RRF
-    # -----------------------------------------------------------------
-    dict_of_scores := {};  better_flags := {}
-    if vina_scores:            dict_of_scores["vina"] := vina_scores;               better_flags["vina"] := False
-    if gnina_rescore_probs:    dict_of_scores["gnina_rescore"] := gnina_rescore_probs; better_flags["gnina_rescore"] := True
-    if gnina_dock_scores:      dict_of_scores["gnina_dock"] := gnina_dock_scores;   better_flags["gnina_dock"] := True
-    if ledock_scores:          dict_of_scores["ledock"] := ledock_scores;           better_flags["ledock"] := False
-    if scorch_probs:           dict_of_scores["scorch"] := scorch_probs;            better_flags["scorch"] := True
+            # Label engines with their context so we can fuse across (variant, pH) if desired
+            ctx_suffix := context_token(variant, ph_tag)  # e.g., "" | "[APO]" | "[HOLO]" | "[pH6_0]" | "[APO|pH6_0]"
+            for (ek, ranks) in docking_ranks_local.items():
+                key := ek + ctx_suffix
+                all_docking_ranks[key] := ranks
+                all_better_flags[key]  := (ek in {"gnina_dock"})   # adjust if you treat gnina_dock as higher-is-better
+                fused_context_keys.append(key)
 
-    engine_ranks :=
-        build_engine_ranks(dict_of_scores, better_flags)
+            for (ek, ranks) in rescoring_ranks_local.items():
+                key := ek + ctx_suffix
+                all_rescoring_ranks[key] := ranks
+                all_better_flags[key]    := True if ek in {"gnina_rescore","scorch"} else False
+                fused_context_keys.append(key)
 
-    engine_ranks :=
-        apply_pose_agreement_bonus(
-            engine_ranks=engine_ranks,
-            pose_paths_by_engine={
-                "vina": vina_pose_paths,
-                "gnina_dock": gnina_dock_pose_paths,
-                "ledock": ledock_pose_paths
-            },
-            rmsd_cutoff=cfg.get("POSE_AGREEMENT_RMSD", 2.0),
-            logger=logger
-        )
+    # ---------- 6) Global fusion across variants/pH (policy) ----------
+    fuse_policy := cfg.get("FUSE_ACROSS_VARIANTS_PH", "best_per_ligand")
+    # Options:
+    #   "stack"           : treat each context-suffixed engine independently in RRF (default robust)
+    #   "best_per_ligand" : reduce per-ligand across contexts before RRF (engine-wise best rank)
+    #   "mean_per_ligand" : mean rank across contexts per engine
 
-    fused := compute_rrf_consensus(engine_ranks, k=cfg.get("RRF_K", 60))
+    docking_ranks_global, rescoring_ranks_global :=
+        reduce_across_contexts(all_docking_ranks, all_rescoring_ranks, policy=fuse_policy)
+
+    all_ranks := merge_rank_maps(docking_ranks_global, rescoring_ranks_global)
+    fused := compute_rrf_consensus(all_ranks, k=cfg.get("RRF_K", 60))
     final_ranked_ligands := sort ligands by fused[lig] descending
     final_consensus_scores := fused
+
     for lig in final_ranked_ligands:
         record_score(score_history, last_stage_name + "_consensus_rrf", lig, final_consensus_scores[lig], True, "fused")
 
-    # ---------------------------------------
-    # 7) Optional physics: MM-GBSA ? FEP/QM/MM
-    # ---------------------------------------
-    if cfg.get("MM_GBSA_ENABLE", False):
-        top_pct := cfg.get("MM_GBSA_TOP_PCT", 0.10)
-        n_top := max(1, int(len(final_ranked_ligands) * top_pct))
-        mmgbsa_candidates := first n_top of final_ranked_ligands
-
-        mmgbsa_pose_map := {}
-        for lig in mmgbsa_candidates:
-            if vina_pose_paths.get(lig):                mmgbsa_pose_map[lig] := vina_pose_paths[lig]
-            else if gnina_dock_pose_paths.get(lig):     mmgbsa_pose_map[lig] := gnina_dock_pose_paths[lig]
-            else if ledock_pose_paths.get(lig):         mmgbsa_pose_map[lig] := ledock_pose_paths[lig]
-
-        mmgbsa_scores :=
-            run_mmgbsa_rescore(
-                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
-                pose_map=mmgbsa_pose_map,
-                out_dir_tag=last_stage_name + "/physics/mmgbsa",
-                logger=logger
-            )
-        for lig, dG in mmgbsa_scores.items():
-            record_score(score_history, last_stage_name + "_mmgbsa", lig, dG, True, "deltaG")
-
-        if cfg.get("FEP_QMMM_ENABLE", False):
-            y_pct := cfg.get("FEP_QMMM_TOP_PCT", 0.20)
-            mmgbsa_sorted := ligands in mmgbsa_scores sorted by ascending ?G
-            n_y := max(1, int(len(mmgbsa_sorted) * y_pct))
-            fep_set := first n_y of mmgbsa_sorted
-
-            fep_pose_map := {}
-            for lig in fep_set:
-                if vina_pose_paths.get(lig):            fep_pose_map[lig] := vina_pose_paths[lig]
-                else if gnina_dock_pose_paths.get(lig): fep_pose_map[lig] := gnina_dock_pose_paths[lig]
-                else if ledock_pose_paths.get(lig):     fep_pose_map[lig] := ledock_pose_paths[lig]
-
-            final_physics_scores :=
-                run_fep_qmmm_final(
-                    cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
-                    pose_map=fep_pose_map,
-                    out_dir_tag=last_stage_name + "/physics/fep_qmmm",
-                    logger=logger
-                )
-            for lig, dGf in final_physics_scores.items():
-                record_score(score_history, last_stage_name + "_fep_qmmm", lig, dGf, True, "deltaG_final")
-
-            if cfg.get("FINAL_SORT_BY_PHYSICS", True):
-                final_ranked_ligands :=
-                    reorder_by_physics_then_fused(final_ranked_ligands, final_physics_scores, fused)
-                for idx, lig in enumerate(final_ranked_ligands, start=1):
-                    record_score(score_history, last_stage_name + "_final", lig, float(idx), True, "rank_final")
+    if cfg.get("FINAL_SORT_BY_PHYSICS", True):
+        # If physics was run anywhere, prefer best physics value per ligand across contexts
+        physics_best := best_physics_per_ligand(all_rescoring_ranks)
+        if physics_best not empty:
+            final_ranked_ligands := reorder_by_physics_then_fused(final_ranked_ligands, physics_best, fused)
+            enumerate & record as _final
 
     return final_ranked_ligands, final_consensus_scores, score_history
+
+
+# --- tiny helpers used above (sketches) ---
+
+function context_token(variant, ph_tag):
+    pieces := []
+    if variant is not None: pieces.append(variant)         # "APO"/"HOLO"
+    if ph_tag is not None:  pieces.append(str(ph_tag))     # "pH6_0" or composite label
+    return "" if pieces empty else "[" + "|".join(pieces) + "]"
+
+function subset_flags(flags_map, keys):
+    return {k: flags_map[k] for k in keys}
+
+function reduce_across_contexts(docking_ranks_map, rescoring_ranks_map, policy):
+    if policy == "stack":
+        return docking_ranks_map, rescoring_ranks_map
+    elif policy == "best_per_ligand" or policy == "mean_per_ligand":
+        reducer := best_rank if policy == "best_per_ligand" else mean_rank
+        return reduce_engine_map(docking_ranks_map, reducer), reduce_engine_map(rescoring_ranks_map, reducer)
+
+function reduce_engine_map(engine_map, reducer):
+    # engine_map: engine_ctx_key -> lig -> rank
+    # returns: engine_base_key -> lig -> reduced_rank   (context removed)
+    out := {}
+    by_engine_base := group_keys_by_base(engine_map)   # strip ctx suffix
+    for base, ctx_keys in by_engine_base.items():
+        merged := {}
+        for lig in union_of_ligs(ctx_keys, engine_map):
+            ranks := [ engine_map[k][lig] for k in ctx_keys if lig in engine_map[k] ]
+            if ranks:
+                merged[lig] = reducer(ranks)
+        out[base] = merged
+    return out
 Pose validation (applied uniformly)
 text
 Copy code
