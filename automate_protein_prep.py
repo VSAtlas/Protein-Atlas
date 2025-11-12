@@ -3116,65 +3116,114 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     logger = logging.getLogger(__name__)
 
     # ==== Metal audit (local to clean_pdb) ===================================
-    def _metal_tokens_local():
-        """
-        Prefer canonical element tokens already loaded in this run;
-        otherwise fall back to a minimal curated set.
-        """
-        try:
-            # Prefer rules.elem_tokens_canonical if the run provided it
-            from typing import Iterable
-            tokens = set()
-            # Common namespaces seen in this codebase:
-            for ns in ("rules", "_RULES", "atom_rules", "_ATOM_RULES"):
-                if ns in globals():
-                    obj = globals()[ns]
-                    if hasattr(obj, "elem_tokens_canonical"):
-                        tokens = set(getattr(obj, "elem_tokens_canonical"))
-                        break
-                    if hasattr(obj, "ELEMENTS_CANON") and isinstance(obj.ELEMENTS_CANON, Iterable):
-                        tokens = set(obj.ELEMENTS_CANON)
-                        break
-            if tokens:
-                return {t.upper() for t in tokens}
-        except Exception:
-            pass
-        # Fallback: limit to typical monoatomic metals; do NOT include halides/waters here
-        return {"ZN", "MG", "MN", "FE", "CO", "NI", "CU", "CD", "HG", "CA"}
+    _ION_TRACE = (str(os.environ.get("ION_TRACE", "0") or "0").strip().lower() not in {"0", "false", "no"})
+    _TRACE_BACKBONE = {"C", "N", "O", "H", "S", "P"}
 
-    _METAL_TOKENS_AUDIT = _metal_tokens_local()
+    def _ion_trace_tokens() -> set[str]:
+        tokens = {str(tok).strip().upper() for tok in _ELEM_CANON if str(tok).strip()}
+        filtered = {tok for tok in tokens if tok not in _TRACE_BACKBONE}
+        if not filtered:
+            filtered = tokens
+        if not filtered:
+            filtered = {"ZN", "MG", "MN", "FE", "CO", "NI", "CU", "CD", "HG", "CA"}
+        return filtered
 
-    def _count_metals_in_pdb(pdb_path: str) -> int:
-        """
-        Count atoms belonging to 'metal' residues by either residue name OR element column.
-        Extremely defensive: never raises; returns 0 on any error/missing file.
-        """
+    _ION_TRACE_TOKENS = _ion_trace_tokens()
+    _ION_TRACE_ALIAS = dict(_ELEMENT_ALIAS_MAP)
+    _ion_trace_prev_path: Optional[Path] = None
+    _ion_trace_prev_hist: Dict[str, int] = {}
+
+    def _count_metals(path: Union[str, Path]) -> Tuple[Dict[str, int], int]:
+        if not path:
+            return {}, 0
         try:
-            cnt = 0
-            toks = _METAL_TOKENS_AUDIT
-            with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if not (line.startswith("HETATM") or line.startswith("ATOM  ")):
+            hist: Dict[str, int] = {}
+            total = 0
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if not line.startswith(("ATOM  ", "HETATM")):
                         continue
-                    # Residue name (cols 18-20 or 18-21 depending on format variability)
                     resn = line[17:20].strip().upper()
-                    if resn in toks:
-                        cnt += 1
-                        continue
-                    # Element symbol (right-aligned in cols 77-78 in PDB v3)
                     elem = line[76:78].strip().upper()
-                    if elem in toks:
-                        cnt += 1
-            return cnt
+                    resn = _ION_TRACE_ALIAS.get(resn, resn)
+                    elem = _ION_TRACE_ALIAS.get(elem, elem)
+                    token = None
+                    if resn in _ION_TRACE_TOKENS:
+                        token = resn
+                    elif elem in _ION_TRACE_TOKENS:
+                        token = elem
+                    if token:
+                        hist[token] = hist.get(token, 0) + 1
+                        total += 1
+            return hist, total
         except Exception:
-            return 0
+            return {}, 0
 
-    def _log_step(tag: str, path: str, note: str = ""):
-        try:
-            m = _count_metals_in_pdb(str(path))
-            logger.info("[ions.audit.step] %s metals=%d file=%s %s", tag, m, path, note)
-        except Exception:
-            logger.info("[ions.audit.step] %s metals=? file=%s note=audit_error", tag, path)
+    def _format_hist(hist: Dict[str, int]) -> str:
+        if not hist:
+            return "none"
+        return ",".join(f"{key}:{hist[key]}" for key in sorted(hist))
+
+    def _diff_hist(prev: Dict[str, int], curr: Dict[str, int]) -> Tuple[str, str, str]:
+        removed: List[str] = []
+        kept: List[str] = []
+        added: List[str] = []
+        for key in sorted(set(prev) | set(curr)):
+            p = prev.get(key, 0)
+            c = curr.get(key, 0)
+            if p and c:
+                kept.append(f"{key}:{min(p, c)}")
+            if p > c:
+                removed.append(f"{key}:{p - c}")
+            if c > p:
+                added.append(f"{key}:{c - p}")
+        return (
+            ",".join(removed) if removed else "none",
+            ",".join(kept) if kept else "none",
+            ",".join(added) if added else "none",
+        )
+
+    def _log_step(
+        step_no: str,
+        name: str,
+        path: Union[str, Path, None],
+        *,
+        diff_key: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        nonlocal _ion_trace_prev_path, _ion_trace_prev_hist
+        if not _ION_TRACE:
+            return
+        if path and Path(path).exists():
+            hist, total = _count_metals(path)
+            logger.info(
+                "[ions.step] %s %s path=%s metals=%s total=%d",
+                step_no,
+                name,
+                path,
+                _format_hist(hist),
+                total,
+            )
+            if _ion_trace_prev_path is not None:
+                diff_label = diff_key or name
+                removed, kept, added = _diff_hist(_ion_trace_prev_hist, hist)
+                logger.info(
+                    "[ions.diff] %s %s.vs.prev removed=%s kept=%s added=%s",
+                    step_no,
+                    diff_label,
+                    removed,
+                    kept,
+                    added,
+                )
+            _ion_trace_prev_path = Path(path)
+            _ion_trace_prev_hist = hist
+        else:
+            logger.info(
+                "[ions.step] %s %s skipped reason=%s",
+                step_no,
+                name,
+                reason or "unspecified",
+            )
     # ========================================================================
 
     output_root = str(output_root)
@@ -3200,7 +3249,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
 
 
     logging.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
-    _log_step("(0) input", pdb_file)
+    _log_step("(0)", "input", pdb_file, diff_key="input")
 
     for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
         paths[d].mkdir(parents=True, exist_ok=True)
@@ -3225,22 +3274,28 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
         shutil.copyfile(str(pdb_file), working_pdb)
         _helium_postwrite_counter("copy_working", working_pdb)
+        _log_step("(1)", "copy_working", working_pdb, diff_key="copy_working")
         # (2) AltLoc filtering → raw/filtered.pdb
         filtered_pdb = paths["raw"] / f"{pdb_id}_filtered.pdb"
         filter_altlocs(working_pdb, filtered_pdb)
-    
+        _log_step("(2)", "after_altloc", filtered_pdb, diff_key="filtered")
+
         # (2a) EARLY text-level element fix (YAML-driven), before any heavy tools
         try:
             fix_element_columns_in_file(filtered_pdb, filtered_pdb, rewrite_atoms=True)
             _helium_postwrite_counter("elemfix_filtered", filtered_pdb)
             logging.info("Early text-level element fix applied to %s", filtered_pdb)
+            _log_step("(2a)", "after_elemfix_early", filtered_pdb, diff_key="elemfix_early")
         except Exception as e:
             logging.warning("Early text-level element fix skipped for %s: %s", filtered_pdb, e)
-    
+            _log_step("(2a)", "after_elemfix_early", None, reason="elemfix_failed")
+
         # (3) Extract ligands now (controls live here), with YAML element repair per-file
         _ = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
         _log_ions_probe(pdb_id, "extract_ligands", filtered_pdb)
-    
+        _log_step("(3)", "after_extract_ligands", filtered_pdb, diff_key="extract")
+
+        chain_pruned = False
         if os.environ.get("EARLY_CHAIN_PRUNE", "1").lower() not in {"0", "false", "no"}:
             try:
                 with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as fh:
@@ -3253,6 +3308,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                         out.writelines(pruned)
                     logging.info("[chains] early-pruned chains keep=%s drop=%s", "".join(sorted(keep)),
                                  "".join(sorted(orig - keep)))
+                    chain_pruned = True
             except Exception as e:
                 logging.warning("[chains] early prune skipped: %s", e)
         # (3a) Optional early chain-prune (conservative, pocket-aware)
@@ -3265,17 +3321,22 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     prune_to_chains(filtered_pdb, kept, pruned_filtered)
                     logging.info("[chain_prune] using pruned source for step (4): %s", pruned_filtered)
                     source_for_strip = pruned_filtered
+                    chain_pruned = True
                 else:
                     logging.info("[chain_prune] not applied (kept empty or conservative_abort); using unpruned file")
             except Exception as e:
                 logging.warning("[chain_prune] skipped due to exception: %s", e)
-    
+
+        if chain_pruned:
+            _log_step("(3b)", "after_chain_prune", source_for_strip, diff_key="chain_prune")
+        else:
+            _log_step("(3b)", "after_chain_prune", None, reason="no_chain_prune")
+
         # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
         stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
         ion_audit.probe("strip_nsr_before", source_for_strip)
         _emit_ion_breadcrumb("strip_nsr_before", source_for_strip)
         _log_ions_probe(pdb_id, "strip_nonstandard", source_for_strip, phase="before")
-        _log_step("(5) before_strip_nonstandard", source_for_strip)
         removed_count, _out = strip_nonstandard_residues(
             source_for_strip,
             stripped_pdb,
@@ -3285,7 +3346,21 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         ion_audit.probe("strip_nsr_after", stripped_pdb)
         _emit_ion_breadcrumb("strip_nsr_after", stripped_pdb)
         logging.info("Removed %d nonstandard residue lines.", removed_count)
-        _log_step("(6) after_strip_nonstandard", stripped_pdb)
+
+        nolig_candidate: Optional[Path] = None
+        if _ION_TRACE:
+            try:
+                for candidate in paths["nolig"].glob("*.pdb"):
+                    if pdb_id in candidate.stem.upper():
+                        nolig_candidate = candidate
+                        break
+            except Exception:
+                nolig_candidate = None
+        if nolig_candidate:
+            _log_step("(4)", "after_nolig_write", nolig_candidate, diff_key="nolig")
+        else:
+            _log_step("(4)", "after_nolig_write", None, reason="nolig_not_written")
+        _log_step("(6b)", "after_strip_nonstandard", stripped_pdb, diff_key="strip_nonstandard")
 
         # (5) Element fix → MODELLER → element fix again (PDB only)
         elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
@@ -3295,7 +3370,6 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "elemfix", elemfix_pdb)
         quick_element_histogram(elemfix_pdb)
         _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
-        _log_step("(1) after_elemfix", elemfix_pdb)
         loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
         fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
         ion_audit.probe("modeller", loop_fixed_pdb)
@@ -3303,18 +3377,24 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
         quick_element_histogram(loop_fixed_pdb)
         _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
-        _log_step("(2) after_modeller", loop_fixed_pdb)
-    
+
         # MODELLER (detect whether a new file was actually produced)
         modeller_ok = (
                 os.path.basename(loop_fixed_pdb) == "modeller_filled.pdb"
                 and os.path.isfile(loop_fixed_pdb)
         )
+
+        if modeller_ok:
+            _log_step("(5)", "after_modeller_fill", loop_fixed_pdb, diff_key="modeller")
+        else:
+            _log_step("(5)", "after_modeller_fill", None, reason="no_modeller")
     
     
         receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
         # (6) Optional external Phenix polish (non-fatal if missing)
         phenix_ok = False
+        water_policy_applied = False
+        water_policy_path: Optional[Path] = None
         _use_phenix = str(config.get("use_phenix", config.get("USE_PHENIX", "false"))).strip().lower() in ("1", "true",
                                                                                                            "yes")
         if _use_phenix:        # Water policy & radius
@@ -3338,6 +3418,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     kept = filter_waters_near_points(loop_fixed_pdb, _phenix_in, ref_pts, _keep_R)
                     logging.info("[waters] policy=%s kept=%d within %.1f Å of %d centers",
                                  _policy, kept, _keep_R, len(ref_pts))
+                    if Path(_phenix_in).exists():
+                        water_policy_applied = True
+                        water_policy_path = _phenix_in
                 else:
                     logging.info("[waters] policy=%s but no reference points found; skipping prefilter", _policy)
     
@@ -3370,7 +3453,12 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     
     
         _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
-        
+
+        if water_policy_applied and water_policy_path and Path(water_policy_path).exists():
+            _log_step("(6c)", "after_water_cofactor_policy", water_policy_path, diff_key="water_policy")
+        else:
+            _log_step("(6c)", "after_water_cofactor_policy", None, reason="policy_not_applied")
+
         # choose the file to pass downstream
         pdb_for_reduce = loop_fixed_pdb if modeller_ok else elemfix_pdb
     
@@ -3401,7 +3489,6 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         filter_invalid_chains(debulked_pdb, chain_validated_pdb)
         _helium_postwrite_counter("chain_validate", chain_validated_pdb)
         ion_audit.probe("altloc_validate", chain_validated_pdb)
-        _log_step("(3) after_validate", chain_validated_pdb)
 
         try:
             _txt_before = Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore")
@@ -3472,7 +3559,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "reduce", reduced_pdb)
         ion_audit.probe("reduce", reduced_pdb)
         print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
-        _log_step("(4) after_reduce", reduced_pdb)
+        _log_step("(6)", "after_reduce", reduced_pdb, diff_key="reduce")
     
         # (9) Final element fix and sanity on the protonated file
         fix_pdb_elements(reduced_pdb)
@@ -3529,7 +3616,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
         logging.info("Cleaned receptor: %s", receptor_pdb)
-        _log_step("(7) final_cleaned", receptor_pdb)
+        _log_step("(7)", "after_write_cleaned", receptor_pdb, diff_key="final_cleaned")
         try:
             router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
             receptor_pdbqt_path = router_paths.receptor_pdbqt(variant_token, ph_token=None)
