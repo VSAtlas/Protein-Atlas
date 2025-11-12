@@ -1038,7 +1038,9 @@ def _fix_ligand_element_columns_in_memory(lines):
             # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
             if aname.strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
                 el = "H"
-            line = line[:76] + f"{el:>2}" + line[78:]
+            el_str = ("" if el is None else str(el).strip().upper())
+            el_str = el_str[:2]
+            line = line[:76] + f"{el_str:>2}" + line[78:]
 
         out.append(line)
     return out
@@ -1065,7 +1067,9 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
                 # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
                 if str(aname).strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
                     el = "H"
-                line = line[:76] + f"{el:>2}" + line[78:]
+                el_str = ("" if el is None else str(el).strip().upper())
+                el_str = el_str[:2]
+                line = line[:76] + f"{el_str:>2}" + line[78:]
 
             out_lines.append(line)
     with open(dst_path, "w", encoding="utf-8") as out:
