@@ -6,7 +6,6 @@ import logging
 import warnings
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 from Bio import BiopythonWarning
-from activesite import fix_pdb_elements
 
 #this filters out the occupancy messages, not  really relevant to us. occupancy from my understanding
 # is not used by reduce, vina or anything else here 
@@ -208,23 +207,13 @@ def pdb2pqr_protonate(
         "--titration-state-method=propka",
         # note: default is to keep waters; only add --drop-water if requested
     ]
-    variant = os.environ.get("VARIANT", None)
-    if variant == "HOLO":
-        keep_hetero = True
-    else:
-        keep_hetero = False
-    if keep_hetero:
-        cmd.append("--keep-hetero")
     if not keep_waters:
         cmd.append("--drop-water")
     cmd.extend([str(pdb_in), str(pqr_out)])
-    logger.info(f"[pdb2pqr] keep_hetero={keep_hetero} in={str(pdb_in)} out={str(pdb_out)}")
 
     try:
         res = subprocess.run(cmd, check=True, text=True, capture_output=True, cwd=str(out_dir))
         _strip_pqr_to_pdb(pqr_out, pdb_out)
-        fix_pdb_elements(str(pdb_out))
-        logger.info(f"[pdb2pqr.fix] applied elemfix to restore element fields in {str(pdb_out)}")
         # Copy PROPKA table if it was emitted near the PQR (cwd was set to out_dir)
         pka_candidate = next((p for p in Path(out_dir).glob("*.propka*")), None)
         _copy_if_exists(pka_candidate, pk_log)

@@ -730,110 +730,6 @@ def _ion_candidate_tokens(rules_obj=ALIASES) -> set[str]:
     return tokens
 
 
-def _metal_probe_counts(
-    path: Union[str, Path],
-    *,
-    tokens: set[str] | None = None,
-) -> tuple[int, Counter[str]]:
-    """Count metal-like records using explicit element/resname tokens."""
-    file_path = Path(path)
-    if not file_path.exists():
-        return 0, Counter()
-    allow = {tok for tok in (tokens or _ion_candidate_tokens(ALIASES)) if tok}
-    counts: Counter[str] = Counter()
-    total = 0
-    try:
-        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if not line.startswith(("HETATM", "ATOM  ")):
-                    continue
-                element = line[76:78].strip().upper()
-                resname = line[17:20].strip().upper()
-                token = ""
-                if element and element in allow:
-                    token = element
-                elif resname and resname in allow:
-                    token = resname
-                else:
-                    continue
-                counts[token] += 1
-                total += 1
-    except Exception as exc:
-        logging.warning("[ions.probe] stage=metal_count_fail file=%s err=%s", file_path, exc)
-    return total, counts
-
-
-def _rescue_metals_from_source(
-    source: Union[str, Path],
-    target: Union[str, Path],
-    *,
-    tokens: set[str] | None = None,
-) -> tuple[int, int]:
-    """Append metal HETATMs from source into target, avoiding serial clashes."""
-    src_path = Path(source)
-    dst_path = Path(target)
-    allow = {tok for tok in (tokens or _ion_candidate_tokens(ALIASES)) if tok}
-    if not src_path.exists() or not dst_path.exists():
-        total_after, _ = _metal_probe_counts(dst_path, tokens=allow)
-        logging.info(
-            "[p2pqr.rescue] reinserted=%d metals=%d file=%s",
-            0,
-            total_after,
-            dst_path,
-        )
-        return 0, total_after
-
-    existing_serials: set[str] = set()
-    try:
-        with dst_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if line.startswith(("ATOM  ", "HETATM")):
-                    existing_serials.add(line[6:11])
-    except Exception as exc:
-        logging.warning("[p2pqr.rescue] stage=scan_target_fail file=%s err=%s", dst_path, exc)
-
-    rescued: list[str] = []
-    try:
-        with src_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if not line.startswith("HETATM"):
-                    continue
-                element = line[76:78].strip().upper()
-                resname = line[17:20].strip().upper()
-                token = ""
-                if element and element in allow:
-                    token = element
-                elif resname and resname in allow:
-                    token = resname
-                else:
-                    continue
-                serial = line[6:11]
-                if serial in existing_serials:
-                    continue
-                rescued.append(line.rstrip("\n") + "\n")
-                existing_serials.add(serial)
-    except Exception as exc:
-        logging.warning("[p2pqr.rescue] stage=scan_source_fail file=%s err=%s", src_path, exc)
-
-    if rescued:
-        try:
-            with dst_path.open("a", encoding="utf-8") as handle:
-                for line in rescued:
-                    handle.write(line)
-        except Exception as exc:
-            logging.warning("[p2pqr.rescue] stage=append_fail file=%s err=%s", dst_path, exc)
-            rescued.clear()
-
-    total_after, _ = _metal_probe_counts(dst_path, tokens=allow)
-    logging.info(
-        "[p2pqr.rescue] reinserted=%d metals=%d file=%s",
-        len(rescued),
-        total_after,
-        dst_path,
-    )
-    return len(rescued), total_after
-
-
 def _scan_metal_map(path: Union[str, Path], rules=ALIASES) -> dict[str, int]:
     file_path = Path(path)
     if not file_path.exists():
@@ -2863,15 +2759,14 @@ def strip_nonstandard_residues(
     return len(removed), str(output_pdb)
 
 
-def quick_element_histogram(pdb_path: Union[str, Path]) -> Counter[str]:
-    cnt: Counter[str] = Counter()
+def quick_element_histogram(pdb_path: Union[str, Path]) -> None:
+    cnt = Counter()
     with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
         for ln in f:
             if ln.startswith(("ATOM","HETATM")):
                 el = ln[76:78].strip().upper()
                 cnt[el or ""] += 1
     logging.info("[Elem histogram %s] %s", os.path.basename(str(pdb_path)), dict(sorted(cnt.items())))
-    return cnt
 
     
 def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
@@ -3274,20 +3169,11 @@ def clean_pdb(
     }
     prepare_before_count: Optional[int] = None
 
-    output_root = Path(output_root)
+    output_root = str(output_root)
+    Path(output_root).mkdir(parents=True, exist_ok=True)
 
     raw_stem = os.path.splitext(os.path.basename(str(pdb_file)))[0]
     pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
-    logger = logger or logging.getLogger(pdb_id)
-    # === Phase A: variant-scoped directories ===
-    variant = os.environ.get("VARIANT", None)
-    if variant in ("APO", "HOLO"):
-        output_root = output_root / variant
-        output_root.mkdir(parents=True, exist_ok=True)
-        logger.info(f"[paths.variant] pdb={pdb_id} variant={variant} output_root={output_root}")
-    else:
-        output_root.mkdir(parents=True, exist_ok=True)
-    output_root = str(output_root)
     _set_clean_provenance("automate_protein_prep.clean_pdb")
     _reset_ion_probe(pdb_id)
     log = logger or logging.getLogger(pdb_id)
@@ -3681,19 +3567,57 @@ def clean_pdb(
         clean_hydrogens(debulked_pdb, use_conect_if_reliable=True, conect_min_cov=0.6)
 
         chain_validated_pdb = paths["work"] / f"{pdb_id}_validated.pdb"
-        validate_before_count = 0
         if os.path.exists(str(debulked_pdb)):
-            validate_before_count, _ = _metal_probe_counts(debulked_pdb)
-            log.info(
-                f"(3) validate BEFORE: metals={validate_before_count} file={str(debulked_pdb)}"
-            )
+            validate_before_count = 0
+            with open(debulked_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        validate_before_count += 1
+            # (3) validate BEFORE: metals=<validate_before_count>
+            log.info(f"(3) validate BEFORE: metals={validate_before_count} file={str(debulked_pdb)}")
         filter_invalid_chains(debulked_pdb, chain_validated_pdb)
         _helium_postwrite_counter("chain_validate", chain_validated_pdb)
         ion_audit.probe("altloc_validate", chain_validated_pdb)
 
-        validate_after_count = 0
         if os.path.exists(str(chain_validated_pdb)):
-            validate_after_count, _ = _metal_probe_counts(chain_validated_pdb)
+            validate_after_count = 0
+            with open(chain_validated_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        validate_after_count += 1
+            # (3) validate AFTER:  metals=<validate_after_count>
             log.info(
                 f"(3) validate AFTER:  metals={validate_after_count} file={str(chain_validated_pdb)}"
             )
@@ -3742,59 +3666,11 @@ def clean_pdb(
             str(paths["work"]),               # write PROPKA/PDB2PQR artifacts into the work directory
             logging
         )
-        metals_after_p2pqr_raw = validate_after_count
-        metals_after_p2pqr_elemfix = validate_after_count
-        rescue_attempted = False
         if used_pdb2pqr and pdb_for_reduce and Path(pdb_for_reduce).exists():
             _log_ions_probe(pdb_id, "pdb2pqr", pdb_for_reduce)
-            hist_raw = quick_element_histogram(pdb_for_reduce)
-            metals_after_p2pqr_raw, _ = _metal_probe_counts(pdb_for_reduce)
-            log.info(
-                f"(3b) p2pqr AFTER (raw): metals={metals_after_p2pqr_raw} file={str(pdb_for_reduce)}"
-            )
-            if hist_raw and set(hist_raw.keys()) == {""}:
-                try:
-                    fix_element_columns_in_file(pdb_for_reduce, pdb_for_reduce, rewrite_atoms=True)
-                except Exception as exc:
-                    logging.warning(
-                        "[p2pqr.elemfix] stage=apply_fail file=%s err=%s",
-                        pdb_for_reduce,
-                        exc,
-                    )
             quick_element_histogram(pdb_for_reduce)
-            metals_after_p2pqr_elemfix, _ = _metal_probe_counts(pdb_for_reduce)
-            log.info(
-                f"(3c) p2pqr AFTER (elemfix): metals={metals_after_p2pqr_elemfix} file={str(pdb_for_reduce)}"
-            )
-            if (
-                validate_after_count > 0
-                and metals_after_p2pqr_elemfix == 0
-            ):
-                rescue_attempted = True
-                _, metals_after_p2pqr_elemfix = _rescue_metals_from_source(
-                    chain_validated_pdb,
-                    pdb_for_reduce,
-                )
-        else:
-            hist_baseline = quick_element_histogram(chain_validated_pdb)
-            metals_after_p2pqr_raw, _ = _metal_probe_counts(chain_validated_pdb)
-            log.info(
-                f"(3b) p2pqr AFTER (raw): metals={metals_after_p2pqr_raw} file={str(chain_validated_pdb)}"
-            )
-            if hist_baseline and set(hist_baseline.keys()) == {""}:
-                try:
-                    fix_element_columns_in_file(chain_validated_pdb, chain_validated_pdb, rewrite_atoms=True)
-                except Exception as exc:
-                    logging.warning(
-                        "[p2pqr.elemfix] stage=apply_fail file=%s err=%s",
-                        chain_validated_pdb,
-                        exc,
-                    )
-            quick_element_histogram(chain_validated_pdb)
-            metals_after_p2pqr_elemfix, _ = _metal_probe_counts(chain_validated_pdb)
-            log.info(
-                f"(3c) p2pqr AFTER (elemfix): metals={metals_after_p2pqr_elemfix} file={str(chain_validated_pdb)}"
-            )
+    
+        validated_source = Path(pdb_for_reduce) if pdb_for_reduce else Path(chain_validated_pdb)
 
         # If PDB2PQR succeeded, pdb_for_reduce now has hydrogens and titration states.
         # assign_protonation_states() will detect H presence and run Reduce WITHOUT -BUILD,
@@ -3805,63 +3681,66 @@ def clean_pdb(
             log.info("[protonation] Skipping Reduce due to detected nucleotides; using OpenBabel path.")
 
         reduced_pdb = paths["work"] / f"{pdb_id}_reduced.pdb"
-        reduce_input_path = Path(pdb_for_reduce) if pdb_for_reduce else Path(chain_validated_pdb)
-        proceed_reduce = False
-        reduce_before_count = 0
+        reduce_input_path = pdb_for_reduce if pdb_for_reduce else chain_validated_pdb
         if reduce_input_path and os.path.exists(str(reduce_input_path)):
-            if validate_after_count > 0 and metals_after_p2pqr_elemfix == 0:
-                logging.warning(
-                    "[reduce.guard] metals disappeared after P2PQR; attempted rescue=%s",
-                    str(bool(rescue_attempted)).lower(),
-                )
-                if not rescue_attempted:
-                    rescue_attempted = True
-                    _, metals_after_p2pqr_elemfix = _rescue_metals_from_source(
-                        chain_validated_pdb,
-                        reduce_input_path,
-                    )
-            guard_count, _ = _metal_probe_counts(reduce_input_path)
-            metals_after_p2pqr_elemfix = guard_count
-            log.info(
-                f"(4a) reduce GUARD: metals={guard_count} file={str(reduce_input_path)}"
-            )
-            reduce_before_count = guard_count
+            reduce_before_count = 0
+            with open(reduce_input_path, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        reduce_before_count += 1
+            # (4) reduce BEFORE: metals=<reduce_before_count>
             log.info(
                 f"(4) reduce BEFORE: metals={reduce_before_count} file={str(reduce_input_path)}"
             )
-            proceed_reduce = bool(guard_count or validate_after_count == 0)
-        fallback_path = Path(chain_validated_pdb)
-        if not proceed_reduce and fallback_path.exists() and fallback_path != reduce_input_path:
-            guard_count, _ = _metal_probe_counts(fallback_path)
-            metals_after_p2pqr_elemfix = guard_count
-            log.info(
-                f"(4a) reduce GUARD: metals={guard_count} file={str(fallback_path)}"
-            )
-            reduce_before_count = guard_count
-            log.info(
-                f"(4) reduce BEFORE: metals={reduce_before_count} file={str(fallback_path)}"
-            )
-            reduce_input_path = fallback_path
-            proceed_reduce = bool(guard_count or validate_after_count == 0)
-        if not proceed_reduce:
-            logging.warning(
-                "[reduce.guard] aborting_reduce stage=metal_loss file=%s",
-                str(reduce_input_path),
-            )
-            shutil.copyfile(str(reduce_input_path), reduced_pdb)
-        else:
-            assign_protonation_states(
-                str(reduce_input_path),
-                reduced_pdb,
-                reduce_exe=REDUCE_EXE if use_reduce else None,  # skip Reduce for nucleotide cofactors
-            )
+        assign_protonation_states(
+            pdb_for_reduce,
+            reduced_pdb,
+            reduce_exe=REDUCE_EXE if use_reduce else None,  # skip Reduce for nucleotide cofactors
+        )
 
         _helium_postwrite_counter("reduce_or_fallback", reduced_pdb)
         _log_ions_probe(pdb_id, "reduce", reduced_pdb)
         ion_audit.probe("reduce", reduced_pdb)
         print(f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}")
         if os.path.exists(str(reduced_pdb)):
-            reduce_after_count, _ = _metal_probe_counts(reduced_pdb)
+            reduce_after_count = 0
+            with open(reduced_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
+                for _line in _handle:
+                    if not _line.startswith(("ATOM  ", "HETATM")):
+                        continue
+                    _element = _line[76:78].strip().upper()
+                    if not _element:
+                        _name_field = _line[12:16].strip()
+                        _guess = []
+                        for _ch in _name_field:
+                            if _ch.isalpha():
+                                _guess.append(_ch)
+                            else:
+                                break
+                        _guess_text = "".join(_guess).upper()
+                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
+                            _element = _guess_text[:2]
+                        elif _guess_text[:1] in ion_elements:
+                            _element = _guess_text[:1]
+                    if _element in ion_elements:
+                        reduce_after_count += 1
+            # (4) reduce AFTER:  metals=<reduce_after_count>
             log.info(f"(4) reduce AFTER:  metals={reduce_after_count} file={str(reduced_pdb)}")
 
         # (9) Final element fix and sanity on the protonated file

@@ -28,11 +28,6 @@ Primary focus: path-portable, variant-aware docking pipeline (APO vs HOLO, pH en
 - Never run `rm -rf` or destructive ops on: `input_pdbs/`, `raw/`, or global envs.
 - Keep secrets out of code/logs. Assume logs are reviewable.
 
-## Element/ion lists
-- Use aliases.yaml for any lists of elements or  ions
-- Do not remove past lists or edit any past lists in aliases.yaml
-- If you find a list that would be appropriate to move to aliases.yaml move the list there and then update activesite.py so that it can read the updated list of aliases
-
 ## Code Patch Style
 - Provide full replacement snippets (no diff markers like `+`/`-`).
 - Include a brief header in replies:

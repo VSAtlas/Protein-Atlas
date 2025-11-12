@@ -573,9 +573,19 @@ def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
     """
     holo = _variant_receptor_path(pdb_id, "HOLO", cfg)
     apo  = _variant_receptor_path(pdb_id, "APO",  cfg)
-    apo_file = f"processed_pdbs/{pdb_id}/APO/receptor/{pdb_id}_cleaned.pdb"
-    holo_file = f"processed_pdbs/{pdb_id}/HOLO/receptor/{pdb_id}_cleaned.pdb"
-    logging.info(f"[apo-vs-holo] compare apo={apo_file} holo={holo_file}")
+
+    # log actual resolved paths and existence flags up-front.
+    apo_p = Path(apo) if apo else None
+    holo_p = Path(holo) if holo else None
+    apo_exists = apo_p.exists() if apo_p else False
+    holo_exists = holo_p.exists() if holo_p else False
+    logger = logging.getLogger()
+    logger.info(
+        "[apo-vs-holo] compare.dedup apo=%s exists=%s holo=%s exists=%s",
+        (norm(apo_p) if apo_p else "None"), ("T" if apo_exists else "F"),
+        (norm(holo_p) if holo_p else "None"), ("T" if holo_exists else "F"),
+    )
+
     if not holo or not apo:
         logging.warning(
             "[apo-vs-holo] pdb_id=%s stage=dedup action=skip reason=missing_paths apo=%s holo=%s",
@@ -614,6 +624,7 @@ def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
             holo_sha,
         )
         _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
+
 
     
     
@@ -2140,10 +2151,6 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     except Exception as _e:
         logger.warning(f"Receptor sanity check skipped due to error: {_e}")
 
-    if cleaned_pdb and receptor_pdbqt:
-        logger.info(
-            f"[compare.pdb↔pdbqt] variant={variant} pdb={cleaned_pdb} pdbqt={receptor_pdbqt}"
-        )
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
 # ---- Multi-control center selection via crystallographic controls ----
@@ -4726,12 +4733,18 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             )
             _record_apo_holo_decision(cfg, pdb_id, "HOLO", "missing_paths")
         else:
+            # >>> path+exists breadcrumb just before SHA calculation <<<
+            logger.info(
+                "[apo-vs-holo] compare.preflight apo=%s exists=%s holo=%s exists=%s",
+                norm(apo_path), ("T" if apo_exists else "F"),
+                norm(holo_path), ("T" if holo_exists else "F"),
+            )
             try:
                 apo_sha = file_sha1(str(apo_path))
                 holo_sha = file_sha1(str(holo_path))
             except Exception as hash_err:
                 logger.warning(
-                    "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=sha_error err=%s",
+                    "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=sha_error err=%s",
                     pdb_id,
                     hash_err,
                 )
@@ -4783,7 +4796,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         holo_sha,
                     )
                     _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
-
 
     # 3) Pocket detection
     center, box_size, center_source = None, None, "none"
