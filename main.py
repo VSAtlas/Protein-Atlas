@@ -1347,6 +1347,69 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
     return logger
 
 
+def bootstrap_root_logging(cfg: Dict, run_log_path: str) -> logging.Logger:
+    """Ensure the root logger emits INFO-level records to the tee'd console."""
+    root = logging.getLogger()
+    if getattr(root, "_atlas_bootstrapped", False):
+        return root
+
+    def _coerce_level(name: str | None, default: int) -> int:
+        mapping = {
+            "CRITICAL": logging.CRITICAL,
+            "ERROR": logging.ERROR,
+            "WARN": logging.WARNING,
+            "WARNING": logging.WARNING,
+            "INFO": logging.INFO,
+            "DEBUG": logging.DEBUG,
+            "NOTSET": logging.NOTSET,
+        }
+        return mapping.get(str(name or "").strip().upper(), default)
+
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
+    configured_level = (
+        os.environ.get("LOG_LEVEL_CONSOLE")
+        or cfg.get("LOG_LEVEL_CONSOLE")
+        or "INFO"
+    )
+    level_value = _coerce_level(configured_level, logging.INFO)
+    if level_value < logging.INFO:
+        level_value = logging.INFO
+    stream_handler.setLevel(level_value)
+
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    stream_handler.setFormatter(formatter)
+
+    raw_topics = (
+        os.environ.get("LOG_TOPICS")
+        or str(cfg.get("LOG_TOPICS", ""))
+    ).replace(",", " ")
+    topics = {t.strip().lower() for t in raw_topics.split() if t.strip()}
+
+    class _TopicFilter(logging.Filter):
+        def __init__(self, allowed: set[str]):
+            super().__init__()
+            self.allowed = allowed
+
+        def filter(self, record: logging.LogRecord) -> bool:
+            if record.levelno >= logging.WARNING:
+                return True
+            message = record.getMessage()
+            if message.startswith("[") and ("]" in message):
+                tag = message[1:message.find("]")].strip().lower()
+                if not self.allowed or "all" in self.allowed:
+                    return True
+                return tag in self.allowed
+            return ("untagged" in self.allowed) or (not self.allowed)
+
+    if topics and ("all" not in topics):
+        stream_handler.addFilter(_TopicFilter(topics))
+
+    root.setLevel(logging.DEBUG)
+    root.addHandler(stream_handler)
+    root._atlas_bootstrapped = True  # type: ignore[attr-defined]
+    return root
+
+
 
 # >>> MAKE_PATHS SHIM START
 # make_paths is imported from path_router above (legacy helper removed).
@@ -2004,7 +2067,8 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     try:
         cleaned_pdb = automate_protein_prep.clean_pdb(
             pdb_file=str(paths.input_pdb_path),
-            output_root=str(Path(cfg["OUTPUT_DIR"]))  # processed_pdbs root; module lays out subdirs
+            output_root=str(Path(cfg["OUTPUT_DIR"])),  # processed_pdbs root; module lays out subdirs
+            logger=logger,
         )
     except Exception as e:
         logger.warning(f"Protein cleaning failed: {e}")
@@ -5475,8 +5539,10 @@ def main() -> None:
     log_path = _prepare_run_logfile(run_id)
     os.environ["ATLAS_LOG_FILE"] = log_path
     _tee_stdio_to(log_path)
-    print(f"[run] log_file={log_path} run_id={run_id}")
     cfg = ConfigDict(load_inputs())
+    bootstrap_root_logging(cfg, log_path)
+    logging.info("[probe.root] root-logger INFO now visible")
+    print(f"[run] log_file={log_path} run_id={run_id}")
     validate_config(cfg)
 
     rules = get_atom_rules()

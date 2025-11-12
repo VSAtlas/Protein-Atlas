@@ -3111,10 +3111,12 @@ def _protonate_with_pdb2pqr_if_available(nolig_pdb_path: str, out_dir: Path, log
 # ============================
 # End-to-end Cleaning Pipeline
 # =============================
-def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Optional[str]:
+def clean_pdb(
+    pdb_file: Union[str, Path],
+    output_root: Union[str, Path],
+    logger: Optional[logging.Logger] = None,
+) -> Optional[str]:
     """Run the full cleaning pipeline and return path to final cleaned PDB (receptor)."""
-    logger = logging.getLogger(__name__)
-
     ion_elements = {
         "LI",
         "NA",
@@ -3174,14 +3176,15 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
     _set_clean_provenance("automate_protein_prep.clean_pdb")
     _reset_ion_probe(pdb_id)
-    logging.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
+    log = logger or logging.getLogger(pdb_id)
+    log.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
     variant_token = _resolve_variant_token(config)
     variant_label = variant_token or "legacy"
     paths = canon_paths(pdb_id, output_root, variant=variant_token)
-    logging.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
+    log.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
                  paths["protein_root"], paths["receptor"], paths["nolig"], paths["work"])
     receptor_target = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
-    logging.info(
+    log.info(
         "[receptor.clean.location] path=%s variant=%s variant_scoped=%s",
         receptor_target,
         variant_label,
@@ -3189,7 +3192,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     )
 
 
-    logging.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
+    log.info("[proteinprep] entering clean_pdb pdb_file=%s output_root=%s", pdb_file, output_root)
     input_path_for_metals = Path(pdb_file)
     if os.path.exists(str(input_path_for_metals)):
         elemfix_before_count = 0
@@ -3214,7 +3217,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 if _element in ion_elements:
                     elemfix_before_count += 1
         # (1) elemfix BEFORE: metals=<elemfix_before_count>
-        logger.info(f"(1) elemfix BEFORE: metals={elemfix_before_count} file={str(input_path_for_metals)}")
+        log.info(f"(1) elemfix BEFORE: metals={elemfix_before_count} file={str(input_path_for_metals)}")
 
     for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
         paths[d].mkdir(parents=True, exist_ok=True)
@@ -3247,9 +3250,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         try:
             fix_element_columns_in_file(filtered_pdb, filtered_pdb, rewrite_atoms=True)
             _helium_postwrite_counter("elemfix_filtered", filtered_pdb)
-            logging.info("Early text-level element fix applied to %s", filtered_pdb)
+            log.info("Early text-level element fix applied to %s", filtered_pdb)
         except Exception as e:
-            logging.warning("Early text-level element fix skipped for %s: %s", filtered_pdb, e)
+            log.warning("Early text-level element fix skipped for %s: %s", filtered_pdb, e)
 
         # (3) Extract ligands now (controls live here), with YAML element repair per-file
         _ = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
@@ -3266,11 +3269,11 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     pruned = _prune_chains_conservative(lines, keep)
                     with open(filtered_pdb, "w", encoding="utf-8") as out:
                         out.writelines(pruned)
-                    logging.info("[chains] early-pruned chains keep=%s drop=%s", "".join(sorted(keep)),
+                    log.info("[chains] early-pruned chains keep=%s drop=%s", "".join(sorted(keep)),
                                  "".join(sorted(orig - keep)))
                     chain_pruned = True
             except Exception as e:
-                logging.warning("[chains] early prune skipped: %s", e)
+                log.warning("[chains] early prune skipped: %s", e)
         # (3a) Optional early chain-prune (conservative, pocket-aware)
         source_for_strip = filtered_pdb
         if _cfg_bool("CHAIN_PRUNE", False):
@@ -3279,13 +3282,13 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 if kept:
                     pruned_filtered = paths["raw"] / f"{pdb_id}_filtered_pruned.pdb"
                     prune_to_chains(filtered_pdb, kept, pruned_filtered)
-                    logging.info("[chain_prune] using pruned source for step (4): %s", pruned_filtered)
+                    log.info("[chain_prune] using pruned source for step (4): %s", pruned_filtered)
                     source_for_strip = pruned_filtered
                     chain_pruned = True
                 else:
-                    logging.info("[chain_prune] not applied (kept empty or conservative_abort); using unpruned file")
+                    log.info("[chain_prune] not applied (kept empty or conservative_abort); using unpruned file")
             except Exception as e:
-                logging.warning("[chain_prune] skipped due to exception: %s", e)
+                log.warning("[chain_prune] skipped due to exception: %s", e)
 
         # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
         stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
@@ -3315,7 +3318,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         strip_nonstandard_before_count += 1
             # (5) strip_nonstandard BEFORE: metals=<strip_nonstandard_before_count>
-            logger.info(
+            log.info(
                 f"(5) strip_nonstandard BEFORE: metals={strip_nonstandard_before_count} file={str(source_for_strip)}"
             )
         removed_count, _out = strip_nonstandard_residues(
@@ -3326,7 +3329,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "strip_nonstandard", stripped_pdb, phase="after")
         ion_audit.probe("strip_nsr_after", stripped_pdb)
         _emit_ion_breadcrumb("strip_nsr_after", stripped_pdb)
-        logging.info("Removed %d nonstandard residue lines.", removed_count)
+        log.info("Removed %d nonstandard residue lines.", removed_count)
         if os.path.exists(str(stripped_pdb)):
             strip_nonstandard_after_count = 0
             with open(stripped_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
@@ -3350,7 +3353,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         strip_nonstandard_after_count += 1
             # (5) strip_nonstandard AFTER:  metals=<strip_nonstandard_after_count>
-            logger.info(
+            log.info(
                 f"(5) strip_nonstandard AFTER:  metals={strip_nonstandard_after_count} file={str(stripped_pdb)}"
             )
 
@@ -3385,10 +3388,10 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         elemfix_after_count += 1
             # (1) elemfix AFTER:  metals=<elemfix_after_count>
-            logger.info(f"(1) elemfix AFTER:  metals={elemfix_after_count} file={str(elemfix_pdb)}")
+            log.info(f"(1) elemfix AFTER:  metals={elemfix_after_count} file={str(elemfix_pdb)}")
             modeller_before_count = elemfix_after_count
             # (2) modeller_fill BEFORE: metals=<modeller_before_count>
-            logger.info(
+            log.info(
                 f"(2) modeller_fill BEFORE: metals={modeller_before_count} file={str(elemfix_pdb)}"
             )
         loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
@@ -3421,7 +3424,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         modeller_after_count += 1
             # (2) modeller_fill AFTER:  metals=<modeller_after_count>
-            logger.info(
+            log.info(
                 f"(2) modeller_fill AFTER:  metals={modeller_after_count} file={str(loop_fixed_pdb)}"
             )
 
@@ -3455,10 +3458,10 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 if ref_pts:
                     _phenix_in = paths["work"] / f"{pdb_id}_prefiltered_waters.pdb"
                     kept = filter_waters_near_points(loop_fixed_pdb, _phenix_in, ref_pts, _keep_R)
-                    logging.info("[waters] policy=%s kept=%d within %.1f Å of %d centers",
+                    log.info("[waters] policy=%s kept=%d within %.1f Å of %d centers",
                                  _policy, kept, _keep_R, len(ref_pts))
                 else:
-                    logging.info("[waters] policy=%s but no reference points found; skipping prefilter", _policy)
+                    log.info("[waters] policy=%s but no reference points found; skipping prefilter", _policy)
     
             # Blanket removal only when policy is 'none'
             _phenix_remove = bool(_remove_waters and _policy == "none")
@@ -3485,7 +3488,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                         if _element in ion_elements:
                             phenix_before_count += 1
                 # (6) phenix_clean BEFORE: metals=<phenix_before_count>
-                logger.info(
+                log.info(
                     f"(6) phenix_clean BEFORE: metals={phenix_before_count} file={str(_phenix_in)}"
                 )
             phenix_ok = run_phenix_pdbtools(input_pdb=_phenix_in, output_pdb=receptor_pdb, remove_waters=_phenix_remove)
@@ -3502,10 +3505,10 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     center0 = (cx, cy, cz)
                 if center0:
                     kept8 = count_waters_within(receptor_pdb, center0, 8.0)
-                    logging.info("[waters] dry-run kept_within_8A=%d center=(%.2f,%.2f,%.2f) file=%s",
+                    log.info("[waters] dry-run kept_within_8A=%d center=(%.2f,%.2f,%.2f) file=%s",
                                  kept8, center0[0], center0[1], center0[2], receptor_pdb)
             except Exception as _e:
-                logging.debug("[waters] dry-run check skipped: %s", _e)
+                log.debug("[waters] dry-run check skipped: %s", _e)
     
         if not phenix_ok:
             shutil.copyfile(loop_fixed_pdb, receptor_pdb)
@@ -3533,7 +3536,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         phenix_after_count += 1
             # (6) phenix_clean AFTER:  metals=<phenix_after_count>
-            logger.info(
+            log.info(
                 f"(6) phenix_clean AFTER:  metals={phenix_after_count} file={str(receptor_pdb)}"
             )
 
@@ -3542,7 +3545,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
     
         reduce_deferred = True
     
-        logging.info(
+        log.info(
             "[proteinprep] steps: Reduce=%s Phenix=%s MODELLER=%s",
             "deferred" if reduce_deferred else "applied",
             str(phenix_ok),
@@ -3550,13 +3553,13 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         )
         if modeller_ok:
             sz = os.path.getsize(loop_fixed_pdb)
-            logging.info("[proteinprep] modeller_out=%s size=%d", loop_fixed_pdb, sz)
+            log.info("[proteinprep] modeller_out=%s size=%d", loop_fixed_pdb, sz)
         else:
-            logging.info("[proteinprep] modeller_out=none (kept %s)", elemfix_pdb)
+            log.info("[proteinprep] modeller_out=none (kept %s)", elemfix_pdb)
     
         if phenix_ok:
             sz = os.path.getsize(receptor_pdb)
-            logging.info("[proteinprep] phenix_applied_to=%s size=%d", receptor_pdb, sz)
+            log.info("[proteinprep] phenix_applied_to=%s size=%d", receptor_pdb, sz)
     
         # (7) Hydrogen cleanup & chain validation
         debulked_pdb = paths["work"] / f"{pdb_id}_debulked.pdb"
@@ -3587,7 +3590,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         validate_before_count += 1
             # (3) validate BEFORE: metals=<validate_before_count>
-            logger.info(f"(3) validate BEFORE: metals={validate_before_count} file={str(debulked_pdb)}")
+            log.info(f"(3) validate BEFORE: metals={validate_before_count} file={str(debulked_pdb)}")
         filter_invalid_chains(debulked_pdb, chain_validated_pdb)
         _helium_postwrite_counter("chain_validate", chain_validated_pdb)
         ion_audit.probe("altloc_validate", chain_validated_pdb)
@@ -3615,7 +3618,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         validate_after_count += 1
             # (3) validate AFTER:  metals=<validate_after_count>
-            logger.info(
+            log.info(
                 f"(3) validate AFTER:  metals={validate_after_count} file={str(chain_validated_pdb)}"
             )
 
@@ -3638,9 +3641,9 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
             _before = scan_helium_counts(_txt_before)
             _after = scan_helium_counts(Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore"))
             _delta = max(0, _before - _after)
-            logging.info(f"[elem-fix] file={Path(chain_validated_pdb).name} stage=preflight He->H={_delta}")
+            log.info(f"[elem-fix] file={Path(chain_validated_pdb).name} stage=preflight He->H={_delta}")
         except Exception as _e:
-            logging.warning(f"[elements] receptor preflight failed for {Path(chain_validated_pdb).name}: {_e}")
+            log.warning(f"[elements] receptor preflight failed for {Path(chain_validated_pdb).name}: {_e}")
     
         quick_element_histogram(chain_validated_pdb)
             
@@ -3675,7 +3678,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         # and Reduce will run with -BUILD as needed.
     
         if not use_reduce:
-            logging.info("[protonation] Skipping Reduce due to detected nucleotides; using OpenBabel path.")
+            log.info("[protonation] Skipping Reduce due to detected nucleotides; using OpenBabel path.")
 
         reduced_pdb = paths["work"] / f"{pdb_id}_reduced.pdb"
         reduce_input_path = pdb_for_reduce if pdb_for_reduce else chain_validated_pdb
@@ -3702,7 +3705,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         reduce_before_count += 1
             # (4) reduce BEFORE: metals=<reduce_before_count>
-            logger.info(
+            log.info(
                 f"(4) reduce BEFORE: metals={reduce_before_count} file={str(reduce_input_path)}"
             )
         assign_protonation_states(
@@ -3738,7 +3741,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         reduce_after_count += 1
             # (4) reduce AFTER:  metals=<reduce_after_count>
-            logger.info(f"(4) reduce AFTER:  metals={reduce_after_count} file={str(reduced_pdb)}")
+            log.info(f"(4) reduce AFTER:  metals={reduce_after_count} file={str(reduced_pdb)}")
 
         # (9) Final element fix and sanity on the protonated file
         fix_pdb_elements(reduced_pdb)
@@ -3753,13 +3756,13 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         variant_env = variant_token or (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
         variant_label = variant_env if variant_env else "legacy"
         before_counts, before_detail = _collect_monoatomic_records(reduced_pdb)
-        logging.info(
+        log.info(
             "[ions.policy] stage=receptor_write variant=%s source=%s target=%s reason=copy_reduced_to_cleaned",
             variant_label,
             reduced_pdb,
             receptor_pdb,
         )
-        logging.info(
+        log.info(
             "[ions.counts.before] stage=receptor_write file=%s metals=%s",
             reduced_pdb,
             _format_ion_hist(before_counts),
@@ -3770,7 +3773,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         _log_ions_probe(pdb_id, "receptor_write", receptor_pdb)
 
         after_counts, after_detail = _collect_monoatomic_records(receptor_pdb)
-        logging.info(
+        log.info(
             "[ions.counts.after] stage=receptor_write file=%s metals=%s",
             receptor_pdb,
             _format_ion_hist(after_counts),
@@ -3778,14 +3781,14 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         diff_list = _diff_detail_records(before_detail, after_detail)
         kept_total = sum(after_counts.values())
         stripped_total = max(0, sum(before_counts.values()) - kept_total)
-        logging.info(
+        log.info(
             "[ions.receptor.copy] action=write_cleaned kept=%d stripped=%d changed=%d",
             kept_total,
             stripped_total,
             len(diff_list),
         )
         if diff_list:
-            logging.info("[ions.diff.reduced→cleaned] lost=%s", ",".join(diff_list))
+            log.info("[ions.diff.reduced→cleaned] lost=%s", ",".join(diff_list))
     
         fix_pdb_elements(receptor_pdb)
         _helium_postwrite_counter("elemfix_final_receptor", receptor_pdb)
@@ -3794,7 +3797,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
         quick_element_histogram(receptor_pdb)
         assert file_contains_hydrogens(receptor_pdb), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
 
-        logging.info("Cleaned receptor: %s", receptor_pdb)
+        log.info("Cleaned receptor: %s", receptor_pdb)
         if os.path.exists(str(receptor_pdb)):
             prepare_before_count = 0
             with open(receptor_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
@@ -3818,11 +3821,11 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                     if _element in ion_elements:
                         prepare_before_count += 1
             # (7) prepare_receptor4 BEFORE: metals=<prepare_before_count>
-            logger.info(
+            log.info(
                 f"(7) prepare_receptor4 BEFORE: metals={prepare_before_count} file={str(receptor_pdb)}"
             )
             # (7) prepare_receptor4 AFTER:  metals=<prepare_before_count>
-            logger.info(
+            log.info(
                 f"(7) prepare_receptor4 AFTER:  metals={prepare_before_count} file={str(receptor_pdb)} (pdbqt not parsed)"
             )
         try:
@@ -3831,7 +3834,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
             receptor_dir_path = router_paths.receptor_dir(variant_token)
             ph_dir = receptor_dir_path / "ph_ensemble"
             variant_log = (variant_token or "NONE").upper()
-            logging.info(
+            log.info(
                 "[receptor.path.final] variant=%s receptor_pdbqt=%s",
                 variant_log,
                 receptor_pdbqt_path,
@@ -3845,13 +3848,13 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                 ph_enabled = 0
             except Exception:
                 ph_enabled = 1 if ph_dir.exists() else 0
-            logging.info(
+            log.info(
                 "[receptor.path.ensemble] enabled=%d dir=%s",
                 ph_enabled,
                 ph_dir,
             )
         except Exception as exc:
-            logging.warning(
+            log.warning(
                 "[receptor.path.final] variant=%s action=skip reason=%s",
                 (variant_token or "NONE").upper(),
                 exc,
@@ -3881,7 +3884,7 @@ def clean_pdb(pdb_file: Union[str, Path], output_root: Union[str, Path]) -> Opti
                         summary_count += 1
         if summary_count is not None:
             summary_variant = variant_token or "legacy"
-            logger.info(
+            log.info(
                 f"[ions.clean.counts] pdb={pdb_id} variant={summary_variant} file={str(receptor_pdb)} present_pdb=metals:{summary_count}"
             )
         print(f"[proteinprep] cleaned receptor exists={Path(receptor_pdb).is_file()} -> {receptor_pdb}")
