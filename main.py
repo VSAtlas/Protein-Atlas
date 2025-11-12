@@ -573,6 +573,9 @@ def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
     """
     holo = _variant_receptor_path(pdb_id, "HOLO", cfg)
     apo  = _variant_receptor_path(pdb_id, "APO",  cfg)
+    apo_file = f"processed_pdbs/{pdb_id}/APO/receptor/{pdb_id}_cleaned.pdb"
+    holo_file = f"processed_pdbs/{pdb_id}/HOLO/receptor/{pdb_id}_cleaned.pdb"
+    logging.info(f"[apo-vs-holo] compare apo={apo_file} holo={holo_file}")
     if not holo or not apo:
         logging.warning(
             "[apo-vs-holo] pdb_id=%s stage=dedup action=skip reason=missing_paths apo=%s holo=%s",
@@ -2137,6 +2140,10 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     except Exception as _e:
         logger.warning(f"Receptor sanity check skipped due to error: {_e}")
 
+    if cleaned_pdb and receptor_pdbqt:
+        logger.info(
+            f"[compare.pdb↔pdbqt] variant={variant} pdb={cleaned_pdb} pdbqt={receptor_pdbqt}"
+        )
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
 # ---- Multi-control center selection via crystallographic controls ----
