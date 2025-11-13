@@ -1622,9 +1622,26 @@ def _collect_alias_synonyms(alias_map: Any, canonical: Set[str]) -> Set[str]:
 
 
 def _resolve_alias_cfg(cfg: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    if cfg:
-        return cfg
+    """
+    Decide which mapping to treat as the alias config for canonical metals/cofactors/waters.
+
+    - If the caller passes a mapping that already looks like an aliases.yaml payload
+      (has canonical_* keys or element_sets), use it.
+    - Otherwise, fall back to the canonical chemdb/aliases.yaml on disk.
+    """
+    if isinstance(cfg, Mapping):
+        if any(
+            key in cfg
+            for key in (
+                "canonical_metals",
+                "canonical_cofactors",
+                "canonical_waters",
+                "element_sets",
+            )
+        ):
+            return cfg
     return _load_default_alias_cfg()
+
 
 
 # Public loaders --------------------------------------------------------------

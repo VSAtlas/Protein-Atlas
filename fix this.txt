@@ -1,0 +1,5 @@
+2025-11-12 16:54:00,003 - INFO - [holo.restore.call] invoking for pdb=1BN1
+INFO:root:[holo.restore] precheck pdb=1BN1
+2025-11-12 16:54:00,003 - INFO - root - [holo.restore] precheck pdb=1BN1
+WARNING:root:[holo.restore] skip reason=cannot_load_canonical_sets err=name 'load_canonical_metals' is not defined
+2025-11-12 16:54:00,005 - WARNING - root - [holo.restore] skip reason=cannot_load_canonical_sets err=name 'load_canonical_metals' is not defined

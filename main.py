@@ -2151,7 +2151,20 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
     except Exception as _e:
         logger.warning(f"Receptor sanity check skipped due to error: {_e}")
 
+    # HOLO-only stash & restore based on original input PDB
+    try:
+        logger.info("[holo.restore.call] invoking for pdb=%s", paths.pdb_id)
+        _m_add, _c_add, _regen = automate_protein_prep._holo_restore_from_input_if_needed(
+            pdb_id=paths.pdb_id,
+            cleaned_pdb=cleaned_pdb,
+            output_pdbqt=str(receptor_pdbqt),
+            config=cfg,
+        )
+    except Exception as _restore_err:
+        logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
+
     return norm(cleaned_pdb), norm(receptor_pdbqt)
+
 
 # ---- Multi-control center selection via crystallographic controls ----
 

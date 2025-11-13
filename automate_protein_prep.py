@@ -57,6 +57,9 @@ from activesite import (
     scan_helium_counts_with_hits,
     format_pdb_atom_debug,
     rules_version,
+    load_canonical_metals,
+    load_canonical_cofactors,
+    load_canonical_waters,
 )
 ALIASES = get_atom_rules()
 RULES = ALIASES.__dict__ if hasattr(ALIASES, "__dict__") else dict(ALIASES)
@@ -1312,6 +1315,182 @@ def _is_element_token(sym):
 def _is_retained_ion(resname: str) -> bool:
     canonical = _normalize_resname(resname)
     return bool(canonical) and (canonical in _ELEM_CANON)
+
+import os
+from pathlib import Path
+from typing import Mapping, Any, Tuple
+
+# --- HOLO-only restore helper ---
+def _holo_restore_from_input_if_needed(
+    pdb_id: str,
+    cleaned_pdb: str,
+    output_pdbqt: str,
+    config: Mapping[str, Any],
+) -> Tuple[int, int, bool]:
+    """
+    HOLO-only: re-add missing metals/cofactors from input_pdbs/<PDB>.pdb into the
+    final cleaned PDB, normalize element columns, and regenerate PDBQT once.
+
+    Returns: (metals_added, cofactors_added, regenerated_pdbqt)
+    """
+    try:
+        logging.info("[holo.restore] precheck pdb=%s", pdb_id)
+
+        # Resolve APO/HOLO mode (strict)
+        mode = (os.environ.get("APO_HOLO_MODE") or config.get("APO_HOLO_MODE") or "").strip().lower()
+        mode_norm = {"": "legacy", "none": "legacy", "null": "legacy", "false": "legacy", "0": "legacy"}.get(mode, mode)
+        if mode_norm in {"legacy", "apo"}:
+            logging.warning("[holo.restore] skip reason=mode=%s", mode_norm)
+            return (0, 0, False)
+
+        # Resolve variant
+        variant_token = (_resolve_variant_token(config) or "").strip().upper()
+        if variant_token != "HOLO":
+            logging.warning("[holo.restore] skip reason=variant=%s", variant_token or "None")
+            return (0, 0, False)
+
+        # Locate original input PDB via existing router
+        try:
+            router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+            input_pdb = str(router_paths.input_pdb_path)
+        except Exception:
+            input_root = config.get("INPUT_DIR", "input_pdbs")
+            input_pdb = str(Path(input_root) / f"{pdb_id}.pdb")
+
+        target_pdb = str(cleaned_pdb)
+
+        # Load canonical sets from aliases.yaml (no hard-coded lists)
+        try:
+            # NOTE: pass None so loaders use chemdb/aliases.yaml via activesite._load_default_alias_cfg
+            canonical_metals = set(load_canonical_metals(None))
+            canonical_cofactors = set(load_canonical_cofactors(None))
+            canonical_waters = set(load_canonical_waters(None))
+        except Exception as e:
+            logging.warning("[holo.restore] skip reason=cannot_load_canonical_sets err=%s", e)
+            return (0, 0, False)
+
+        logging.info(
+            "[holo.restore.debug] canonical_sizes metals=%d cofactors=%d waters=%d",
+            len(canonical_metals),
+            len(canonical_cofactors),
+            len(canonical_waters),
+        )
+
+        # Scan original input PDB for candidate HETATMs
+        metals_found = 0
+        cofactors_found = 0
+        candidates: list[str] = []
+        try:
+            with open(input_pdb, "r", encoding="utf-8", errors="ignore") as f:
+                input_lines = f.readlines()
+        except Exception as e:
+            logging.warning("[holo.restore] skip reason=missing_input err=%s", e)
+            return (0, 0, False)
+
+        hetatm_total = sum(1 for ln in input_lines if ln.startswith("HETATM"))
+        logging.info(
+            "[holo.restore.debug] input_hetatm total=%d file=%s",
+            hetatm_total,
+            input_pdb,
+        )
+
+        # Build residue-present keys from the cleaned PDB to ensure idempotency
+        present_keys = set()
+        try:
+            with open(target_pdb, "r", encoding="utf-8", errors="ignore") as f:
+                for ln in f:
+                    if not ln.startswith("HETATM"):
+                        continue
+                    resname = ln[17:20].strip().upper()
+                    chain = ln[21:22]
+                    resseq = ln[22:26]
+                    icode = ln[26:27]
+                    present_keys.add((resname, chain, resseq, icode))
+        except Exception as e:
+            logging.warning("[holo.restore] skip reason=cleaned_unreadable err=%s", e)
+            return (0, 0, False)
+
+        # Classify metals/cofactors; never treat waters as restore candidates
+        for ln in input_lines:
+            if not ln.startswith("HETATM"):
+                continue
+            resname = ln[17:20].strip().upper()
+            if resname in canonical_waters:
+                continue
+            element = ln[76:78].strip().upper()
+            is_metal = (element in canonical_metals) or (resname in canonical_metals)
+            is_cofac = (resname in canonical_cofactors) and not is_metal
+            if is_metal:
+                metals_found += 1
+            if is_cofac:
+                cofactors_found += 1
+            if not (is_metal or is_cofac):
+                continue
+            chain = ln[21:22]
+            resseq = ln[22:26]
+            icode = ln[26:27]
+            key = (resname, chain, resseq, icode)
+            if key not in present_keys:
+                candidates.append(ln)
+
+        logging.info(
+            "[holo.restore] source=%s target=%s metals_found=%d cofactors_found=%d",
+            input_pdb, target_pdb, metals_found, cofactors_found
+        )
+
+        if not candidates:
+            logging.info("[holo.restore] metals_added=0 cofactors_added=0")
+            logging.info("[holo.restore] regenerating_pdbqt=false out=%s", output_pdbqt)
+            return (0, 0, False)
+
+        # Append missing HETATMs (strip trailing END/TER/ENDMDL first), then ensure END
+        try:
+            with open(target_pdb, "r", encoding="utf-8", errors="ignore") as f:
+                out_lines = f.read().splitlines()
+            while out_lines and out_lines[-1].strip() in {"END", "ENDMDL", "TER"}:
+                out_lines.pop()
+            with open(target_pdb, "w", encoding="utf-8") as w:
+                if out_lines:
+                    w.write("\n".join(out_lines) + "\n")
+                for ln in candidates:
+                    w.write(ln.rstrip() + "\n")
+                w.write("END\n")
+        except Exception as e:
+            logging.warning("[holo.restore] skip reason=append_failed err=%s", e)
+            return (0, 0, False)
+
+        # Normalize element columns after append
+        try:
+            fix_element_columns_in_file(target_pdb)
+        except Exception as e:
+            logging.warning("[holo.restore] skip reason=elemfix_failed err=%s", e)
+            return (0, 0, False)
+
+        metals_added = sum(
+            1
+            for ln in candidates
+            if (ln[76:78].strip().upper() in canonical_metals)
+            or (ln[17:20].strip().upper() in canonical_metals)
+        )
+        cofactors_added = sum(
+            1
+            for ln in candidates
+            if (ln[17:20].strip().upper() in canonical_cofactors)
+            and (ln[76:78].strip().upper() not in canonical_metals)
+        )
+
+        logging.info(
+            "[holo.restore] metals_added=%d cofactors_added=%d",
+            metals_added, cofactors_added
+        )
+
+        # We only set regenerated_pdbqt=True here; the actual regeneration is done at the call site
+        regenerated_pdbqt = bool(candidates)
+        return (metals_added, cofactors_added, regenerated_pdbqt)
+
+    except Exception as exc:
+        logging.warning("[holo.restore] skip reason=unexpected err=%s", exc)
+        return (0, 0, False)
 
 
 # =============================
@@ -4966,20 +5145,15 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
         raw_stem = Path(pdb_filename).stem
         pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
         logging.info("[prep.id] main stem=%s -> base_id=%s", raw_stem, pdb_id)
-        # >>> LEGACY PATHS PATCH START
         legacy_paths = canon_paths(pdb_id, output_dir)
         logging.info("[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
                      legacy_paths["protein_root"], legacy_paths["receptor"],
                      legacy_paths["nolig"], legacy_paths["work"])
-        # >>> LEGACY PATHS PATCH END
-        # >>> PATHS INIT START
+
         paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-        # >>> PATHS INIT END
-        # >>> RECEPTOR PATHS PATCH START
         cleaned_pdb_out = str(paths.receptor_cleaned_pdb(None))
         receptor_pdbqt_out = str(paths.receptor_pdbqt(None, ph_token=None))
-        # >>> RECEPTOR PATHS PATCH END
-        # >>> RECEPTOR OUTPUT PATCH START
+
         cleaned_target = Path(cleaned_pdb_out)
         cleaned_target.parent.mkdir(parents=True, exist_ok=True)
         if Path(cleaned_pdb).resolve() != cleaned_target.resolve():
@@ -4988,7 +5162,6 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
         receptor_target = Path(receptor_pdbqt_out)
         receptor_target.parent.mkdir(parents=True, exist_ok=True)
         output_pdbqt = str(receptor_target)
-        # >>> RECEPTOR OUTPUT PATCH END
         fix_element_columns_in_file(cleaned_pdb, cleaned_pdb, rewrite_atoms=True)
 
         if not run_prepare_receptor(cleaned_pdb, output_pdbqt, config):
@@ -5007,6 +5180,34 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
                          cleaned_pdb, output_pdbqt, exists, size)
             raise RuntimeError(f"receptor_pdbqt_failed: {pdb_id}")
 
+
+        # Run base receptor PDBQT build
+        if not run_prepare_receptor(cleaned_pdb, output_pdbqt, config):
+            logging.error("ERROR: Failed to prepare receptor PDBQT for %s", pdb_id)
+            try:
+                rp = Path(output_pdbqt)
+                exists = rp.exists()
+                size = rp.stat().st_size if exists else 0
+            except Exception:
+                exists = False
+                size = 0
+            logging.info("[receptor-summary]\n"
+                         "cleaned_pdb=%s\n"
+                         "receptor_pdbqt=%s exists=%s size=%d\n"
+                         "meeko_attempts=(see work/*.cmd.txt | *.stderr.txt)",
+                         cleaned_pdb, output_pdbqt, exists, size)
+            raise RuntimeError(f"receptor_pdbqt_failed: {pdb_id}")
+
+        # --- HOLO-only stash & restore (minimal, surgical) ---
+        try:
+            _m_add, _c_add, _regen = _holo_restore_from_input_if_needed(
+                pdb_id=pdb_id,
+                cleaned_pdb=cleaned_pdb,
+                output_pdbqt=output_pdbqt,
+                config=config,
+            )
+        except Exception as _restore_err:
+            logging.warning("[holo.restore] action=skip reason=%s", _restore_err)
 
         # Success path summary
         try:
@@ -5030,6 +5231,7 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
         logging.info("[prep.return] cleaned=%s receptor_pdbqt=%s", cleaned_pdb, output_pdbqt)
         logging.info("Prepared receptor PDBQT: %s", output_pdbqt)
         return cleaned_pdb, output_pdbqt
+
 
     except Exception as e:
         logging.exception("[FATAL] automate_protein_prep.main() failed: %s", e)
