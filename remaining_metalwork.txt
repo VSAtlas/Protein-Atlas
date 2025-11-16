@@ -1,0 +1,44 @@
+HOLO restore basics
+
+
+restore first-shell donors (waters) if they were fully removed.
+
+Log what was restored per metal.
+
+
+
+
+Docking box sanity around metals
+
+Ensure metals that define the binding site end up inside the docking box.
+
+Log e.g. metal_in_box and dist_to_center for each metal.
+
+Simple pose validation around metals
+
+For each metal-critical target, per pose:
+
+Check for at least one ligand N/O/S in ~1.8–2.8 Å of the metal.
+
+Flag poses with no metal contact or clash distances (<1.7 Å).
+
+
+
+
+
+
+Add simple annotations like metal_contacts_count, metal_contacts_min_dist, metal_coordination_flag ? {OK, NO_CONTACT, CLASH}.
+
+Cross-target QA counts
+
+Per run, log:
+
+n_metals_total
+
+n_metals_with_=2_donors_before
+
+n_metals_with_=2_donors_after_cleaning
+
+n_metals_flagged_broken
+
+Enough to see if you’re systematically destroying sites.

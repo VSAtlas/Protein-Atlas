@@ -4895,6 +4895,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         holo_sha,
                     )
                     _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
+                    #this is a little bit of a workaround, holo restore only adds to pdbs and its just not worth it to do this perfectly yet
+                    logger.info("[post_holo] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
+                    cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
+
+
+
 
     # >>> PH ENSEMBLE (GLOBAL) START
     if bool(cfg.get("PH_ENSEMBLE", False)):
