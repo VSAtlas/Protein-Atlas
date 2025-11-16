@@ -1403,6 +1403,8 @@ def _holo_restore_from_input_if_needed(
         # --- Begin metal coordination JSON audit (input PDB) ---
         parsed_atoms: list[dict[str, object]] = []
         metal_atoms: list[dict[str, object]] = []
+        donor_icode_lookup: dict[tuple[str, str, str, str], str] = {}
+        coord_ligand_residues: set[tuple[str, str, str, str]] = set()
         for ln in input_lines:
             if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
                 continue
@@ -1416,6 +1418,7 @@ def _holo_restore_from_input_if_needed(
             resname = ln[17:20].strip().upper()
             chain = ln[21:22]
             resseq = ln[22:26].strip()
+            icode = ln[26:27].strip()
             atom_name = ln[12:16].strip()
             element = ln[76:78].strip().upper()
             atom_info = {
@@ -1423,6 +1426,7 @@ def _holo_restore_from_input_if_needed(
                 "resname": resname,
                 "chain": chain,
                 "resseq": resseq,
+                "icode": icode,
                 "atom_name": atom_name,
                 "coords": (x, y, z),
                 "element": element,
@@ -1431,6 +1435,7 @@ def _holo_restore_from_input_if_needed(
             is_metal = (element in canonical_metals) or (resname in canonical_metals)
             if record == "HETATM" and is_metal:
                 metal_atoms.append(atom_info)
+            donor_icode_lookup[(resname, chain, resseq, atom_name)] = icode
 
         if metal_atoms:
             docked_holo_dir = None
@@ -1498,6 +1503,15 @@ def _holo_restore_from_input_if_needed(
                             "distance": round(dist, 3),
                         }
                     )
+                for donor in donors:
+                    if donor.get("category") != "ligand":
+                        continue
+                    resname = str(donor.get("resname", "")).upper()
+                    chain = str(donor.get("chain", ""))
+                    resseq = str(donor.get("resseq", ""))
+                    atom_name = str(donor.get("atom_name", ""))
+                    icode = donor_icode_lookup.get((resname, chain, resseq, atom_name), "")
+                    coord_ligand_residues.add((resname, chain, resseq, icode))
 
                 if not docked_holo_dir:
                     continue
@@ -1557,7 +1571,8 @@ def _holo_restore_from_input_if_needed(
                 and abs(z - cz) <= sz / 2.0
             )
 
-        residue_atoms: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+        ligand_box_class: dict[tuple[str, str, str, str], str] = {}
+        residue_atoms: dict[tuple[str, str, str, str], list[dict[str, object]]] = defaultdict(list)
         for atom in parsed_atoms:
             if str(atom.get("record", "")).upper() != "HETATM":
                 continue
@@ -1565,10 +1580,11 @@ def _holo_restore_from_input_if_needed(
                 str(atom.get("resname", "")).upper(),
                 str(atom.get("chain", "")),
                 str(atom.get("resseq", "")),
+                str(atom.get("icode", "")),
             )
             residue_atoms[key].append(atom)
 
-        for (resname, chain_id, resseq), residue_atoms_list in residue_atoms.items():
+        for (resname, chain_id, resseq, icode), residue_atoms_list in residue_atoms.items():
             if resname in canonical_metals or resname in canonical_waters or resname in canonical_cofactors:
                 continue
             classification = "out_of_box"
@@ -1587,6 +1603,7 @@ def _holo_restore_from_input_if_needed(
                     break
             if classification == "out_of_box" and not has_box_info:
                 classification = "no_box"
+            ligand_box_class[(resname, chain_id, resseq, icode)] = classification
             logging.info(
                 "[holo.ligand.box] pdb=%s resname=%s chain=%s resseq=%s classification=%s num_atoms=%d",
                 pdb_id,
@@ -1606,8 +1623,8 @@ def _holo_restore_from_input_if_needed(
                         continue
                     resname = ln[17:20].strip().upper()
                     chain = ln[21:22]
-                    resseq = ln[22:26]
-                    icode = ln[26:27]
+                    resseq = ln[22:26].strip()
+                    icode = ln[26:27].strip()
                     present_keys.add((resname, chain, resseq, icode))
         except Exception as e:
             logging.warning("[holo.restore] skip reason=cleaned_unreadable err=%s", e)
@@ -1621,20 +1638,44 @@ def _holo_restore_from_input_if_needed(
             if resname in canonical_waters:
                 continue
             element = ln[76:78].strip().upper()
+            chain = ln[21:22]
+            resseq = ln[22:26].strip()
+            icode = ln[26:27].strip()
+            key = (resname, chain, resseq, icode)
+            classification = ligand_box_class.get(key, "no_box")
             is_metal = (element in canonical_metals) or (resname in canonical_metals)
             is_cofac = (resname in canonical_cofactors) and not is_metal
+            is_coord_ligand = (key in coord_ligand_residues) or is_cofac
             if is_metal:
                 metals_found += 1
             if is_cofac:
                 cofactors_found += 1
-            if not (is_metal or is_cofac):
+            if is_metal:
+                if key not in present_keys:
+                    candidates.append(ln)
                 continue
-            chain = ln[21:22]
-            resseq = ln[22:26]
-            icode = ln[26:27]
-            key = (resname, chain, resseq, icode)
+            if not is_coord_ligand:
+                continue
+            if classification == "in_box":
+                logging.info(
+                    "[holo.ligand.restore.skip] pdb=%s resname=%s chain=%s resseq=%s classification=%s reason=in_box",
+                    pdb_id,
+                    resname,
+                    chain,
+                    resseq,
+                    classification,
+                )
+                continue
             if key not in present_keys:
                 candidates.append(ln)
+                logging.info(
+                    "[holo.ligand.restore.add] pdb=%s resname=%s chain=%s resseq=%s classification=%s",
+                    pdb_id,
+                    resname,
+                    chain,
+                    resseq,
+                    classification,
+                )
 
         logging.info(
             "[holo.restore] source=%s target=%s metals_found=%d cofactors_found=%d",
