@@ -1394,6 +1394,126 @@ def _holo_restore_from_input_if_needed(
             input_pdb,
         )
 
+        # --- Begin metal coordination JSON audit (input PDB) ---
+        parsed_atoms: list[dict[str, object]] = []
+        metal_atoms: list[dict[str, object]] = []
+        for ln in input_lines:
+            if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
+                continue
+            try:
+                x = float(ln[30:38])
+                y = float(ln[38:46])
+                z = float(ln[46:54])
+            except Exception:
+                continue
+            record = ln[:6].strip().upper()
+            resname = ln[17:20].strip().upper()
+            chain = ln[21:22]
+            resseq = ln[22:26].strip()
+            atom_name = ln[12:16].strip()
+            element = ln[76:78].strip().upper()
+            atom_info = {
+                "record": record,
+                "resname": resname,
+                "chain": chain,
+                "resseq": resseq,
+                "atom_name": atom_name,
+                "coords": (x, y, z),
+                "element": element,
+            }
+            parsed_atoms.append(atom_info)
+            is_metal = (element in canonical_metals) or (resname in canonical_metals)
+            if record == "HETATM" and is_metal:
+                metal_atoms.append(atom_info)
+
+        if metal_atoms:
+            docked_holo_dir = None
+            try:
+                docked_holo_dir = router_paths.docked_variant_root("HOLO", ph_label=None)
+                docked_holo_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                logging.warning("[holo.metal_audit] skip reason=path_resolve_failed err=%s", exc)
+                docked_holo_dir = None
+
+            for metal in metal_atoms:
+                donors = []
+                mx, my, mz = metal["coords"]  # type: ignore[index]
+                for atom in parsed_atoms:
+                    element = str(atom.get("element", "")).upper()
+                    if element not in {"N", "O", "S"}:
+                        continue
+                    ax, ay, az = atom["coords"]  # type: ignore[index]
+                    dx = mx - ax
+                    dy = my - ay
+                    dz = mz - az
+                    dist = sqrt(dx * dx + dy * dy + dz * dz)
+                    if dist > 3.2:
+                        continue
+                    record = str(atom.get("record", "")).upper()
+                    resname = str(atom.get("resname", "")).upper()
+                    chain = str(atom.get("chain", ""))
+                    resseq = str(atom.get("resseq", ""))
+                    atom_name = str(atom.get("atom_name", ""))
+                    if record == "ATOM":
+                        category = "protein"
+                    elif resname in canonical_waters:
+                        category = "water"
+                    else:
+                        category = "ligand"
+                    donors.append(
+                        {
+                            "category": category,
+                            "resname": resname,
+                            "chain": chain,
+                            "resseq": resseq,
+                            "atom_name": atom_name,
+                            "distance": round(dist, 3),
+                        }
+                    )
+
+                if not docked_holo_dir:
+                    continue
+
+                payload = {
+                    "pdb_id": pdb_id,
+                    "metal": {
+                        "element": metal.get("element"),
+                        "resname": metal.get("resname"),
+                        "chain": metal.get("chain"),
+                        "resseq": metal.get("resseq"),
+                        "atom_name": metal.get("atom_name"),
+                        "coords": list(metal.get("coords", ())),
+                    },
+                    "donors": donors,
+                }
+
+                json_name = "metal_{elem}_{chain}{resseq}_{atom}.json".format(
+                    elem=metal.get("element", ""),
+                    chain=metal.get("chain", ""),
+                    resseq=metal.get("resseq", ""),
+                    atom=metal.get("atom_name", ""),
+                )
+                json_path = docked_holo_dir / json_name
+                try:
+                    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                    logging.info(
+                        "[holo.metal_audit] pdb=%s metal=%s chain=%s resseq=%s donors=%d file=%s",
+                        pdb_id,
+                        metal.get("element", ""),
+                        metal.get("chain", ""),
+                        metal.get("resseq", ""),
+                        len(donors),
+                        json_path,
+                    )
+                except Exception as exc:
+                    logging.warning(
+                        "[holo.metal_audit] write_failed pdb=%s file=%s err=%s",
+                        pdb_id,
+                        json_path,
+                        exc,
+                    )
+        # --- End metal coordination JSON audit ---
+
         # Build residue-present keys from the cleaned PDB to ensure idempotency
         present_keys = set()
         try:
