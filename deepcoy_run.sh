@@ -19,6 +19,11 @@ DEEPCOY_DIR="${DEEPCOY_DIR:-"${ATLAS_ROOT}/tools/DeepCoy"}"
 # - Override: export DEEPCOY_ENV=my_deepcoy_env
 DEEPCOY_ENV="${DEEPCOY_ENV:-deepcoy-env}"
 
+# Micromamba command:
+# - Default: "micromamba" (whatever your PATH / shell provides)
+# - Override: export MICROMAMBA_BIN=/full/path/to/micromamba
+MM_BIN="${MICROMAMBA_BIN:-micromamba}"
+
 if [[ ! -d "$DEEPCOY_DIR" ]]; then
   echo "Error: DeepCoy directory not found at '$DEEPCOY_DIR'." >&2
   echo "Set ATLAS_ROOT or DEEPCOY_DIR to the correct path before running." >&2
@@ -28,4 +33,4 @@ fi
 cd "$DEEPCOY_DIR"
 
 # Forward all arguments to DeepCoy.py inside the DeepCoy env
-exec micromamba run -n "$DEEPCOY_ENV" python DeepCoy.py "$@"
+exec "$MM_BIN" run -n "$DEEPCOY_ENV" python DeepCoy.py "$@"

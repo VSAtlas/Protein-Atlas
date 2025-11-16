@@ -4809,46 +4809,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             center=center,
             box_size=box_size,
         )
-        logger.info(
-            "[holo.regen.debug] pdb=%s variant=%s metals_added=%d cofactors_added=%d regen=%s cleaned_pdb=%s pdbqt=%s",
-            paths.pdb_id,
-            variant_label,
-            metals_added,
-            cofactors_added,
-            regen,
-            cleaned_pdb,
-            receptor_pdbqt,
-        )
 
-        if regen:
-            try:
-                logger.info(
-                    "[holo.regen.reprep] action=rebuild_receptor_pdbqt pdb=%s source_pdb=%s target_pdbqt=%s",
-                    paths.pdb_id,
-                    cleaned_pdb,
-                    receptor_pdbqt,
-                )
-                protein_prep.run_prepare_receptor(
-                    str(cleaned_pdb),
-                    str(receptor_pdbqt),
-                    cfg,
-                )
-                logger.info(
-                    "[holo.regen.reprep] status=ok pdb=%s target_pdbqt=%s",
-                    paths.pdb_id,
-                    receptor_pdbqt,
-                )
-            except Exception as e:
-                logger.warning(
-                    "[holo.regen.reprep] status=error pdb=%s reason=%s",
-                    paths.pdb_id,
-                    e,
-                )
-        else:
-            logger.info(
-                "[holo.regen.reprep] action=skip pdb=%s reason=no_changes",
-                paths.pdb_id,
-            )
     except Exception as _restore_err:
         logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
 
@@ -4937,7 +4898,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
                     #this is a little bit of a workaround, holo restore only adds to pdbs and its just not worth it to do this perfectly yet
                     logger.info("[post_holo] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
-                    cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
+                    receptor_pdbqt = protein_prep.run_prepare_receptor(input_pdb=cleaned_pdb,
+                                                                       output_pdbqt=str(receptor_pdbqt_path),
+                                                                       cfg=cfg)
 
 
 
@@ -5952,7 +5915,7 @@ def main() -> None:
                     exc_type = type(exc).__name__
                     exc_msg = str(exc)
 
-                    fail_log_path = os.path.join(failed_root, f"{pdb_id}.{label}.log")
+                    fail_log_path = Path(failed_root) / f"{pdb_id}.{label}.log"
 
                     # Write a dedicated failure log for this PDB+variant
                     with fail_log_path.open("w", encoding="utf-8") as fh:
@@ -5964,6 +5927,7 @@ def main() -> None:
                             f"  pdb_file      = {pdb_file}\n"
                             f"  exception     = {exc_type}: {exc_msg}\n\n"
                             f"[TRACEBACK]\n"
+                            f"{traceback_str}\n"
                         )
                         traceback.print_exc(file=fh)
 
