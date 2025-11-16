@@ -4801,7 +4801,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     # HOLO-only restore of metals/cofactors, now that center/box_size are known
     try:
         logger.info("[holo.restore.call] invoking for pdb=%s", paths.pdb_id)
-        _m_add, _c_add, _regen = protein_prep._holo_restore_from_input_if_needed(
+        metals_added, cofactors_added, regen = protein_prep._holo_restore_from_input_if_needed(
             pdb_id=paths.pdb_id,
             cleaned_pdb=cleaned_pdb,
             output_pdbqt=receptor_pdbqt,
@@ -4809,6 +4809,46 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             center=center,
             box_size=box_size,
         )
+        logger.info(
+            "[holo.regen.debug] pdb=%s variant=%s metals_added=%d cofactors_added=%d regen=%s cleaned_pdb=%s pdbqt=%s",
+            paths.pdb_id,
+            variant_label,
+            metals_added,
+            cofactors_added,
+            regen,
+            cleaned_pdb,
+            receptor_pdbqt,
+        )
+
+        if regen:
+            try:
+                logger.info(
+                    "[holo.regen.reprep] action=rebuild_receptor_pdbqt pdb=%s source_pdb=%s target_pdbqt=%s",
+                    paths.pdb_id,
+                    cleaned_pdb,
+                    receptor_pdbqt,
+                )
+                protein_prep.run_prepare_receptor(
+                    str(cleaned_pdb),
+                    str(receptor_pdbqt),
+                    cfg,
+                )
+                logger.info(
+                    "[holo.regen.reprep] status=ok pdb=%s target_pdbqt=%s",
+                    paths.pdb_id,
+                    receptor_pdbqt,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[holo.regen.reprep] status=error pdb=%s reason=%s",
+                    paths.pdb_id,
+                    e,
+                )
+        else:
+            logger.info(
+                "[holo.regen.reprep] action=skip pdb=%s reason=no_changes",
+                paths.pdb_id,
+            )
     except Exception as _restore_err:
         logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
 
