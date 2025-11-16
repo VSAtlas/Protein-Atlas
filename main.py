@@ -4799,6 +4799,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         pass
 
     # HOLO-only restore of metals/cofactors, now that center/box_size are known
+    metals_added = 0
+    cofactors_added = 0
+    regen = False
     try:
         logger.info("[holo.restore.call] invoking for pdb=%s", paths.pdb_id)
         metals_added, cofactors_added, regen = protein_prep._holo_restore_from_input_if_needed(
@@ -4812,6 +4815,57 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
     except Exception as _restore_err:
         logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
+
+    if variant_env == "HOLO":
+        logger.info(
+            "[holo.restore.summary] pdb=%s variant=%s metals_added=%d cofactors_added=%d regen=%s",
+            paths.pdb_id,
+            variant_env,
+            metals_added,
+            cofactors_added,
+            regen,
+        )
+
+        if regen:
+            logger.warning(
+                "[holo.restore.regen] pdb=%s variant=%s regen=True; rebuilding receptor PDBQT from %s -> %s",
+                paths.pdb_id,
+                variant_env,
+                cleaned_pdb,
+                receptor_target,
+            )
+            try:
+                ok_after = protein_prep.run_prepare_receptor(
+                    input_pdb=cleaned_pdb,
+                    output_pdbqt=str(receptor_target),
+                    cfg=cfg,
+                )
+                if not ok_after or not receptor_target.exists():
+                    logger.warning(
+                        "[holo.restore.regen] status=failed pdb=%s; keeping previous receptor PDBQT=%s",
+                        paths.pdb_id,
+                        receptor_pdbqt,
+                    )
+                else:
+                    receptor_pdbqt = str(receptor_target)
+                    logger.info(
+                        "[holo.restore.regen] status=ok pdb=%s receptor_pdbqt=%s",
+                        paths.pdb_id,
+                        receptor_pdbqt,
+                    )
+            except Exception as regen_err:
+                logger.warning(
+                    "[holo.restore.regen] status=error pdb=%s err=%s; keeping previous receptor PDBQT=%s",
+                    paths.pdb_id,
+                    regen_err,
+                    receptor_pdbqt,
+                )
+        else:
+            logger.info(
+                "[holo.restore.regen] pdb=%s variant=%s regen=False; skipping receptor PDBQT rebuild",
+                paths.pdb_id,
+                variant_env,
+            )
 
 
     # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
@@ -4896,11 +4950,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         holo_sha,
                     )
                     _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
-                    #this is a little bit of a workaround, holo restore only adds to pdbs and its just not worth it to do this perfectly yet
-                    logger.info("[post_holo] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
-                    receptor_pdbqt = protein_prep.run_prepare_receptor(input_pdb=cleaned_pdb,
-                                                                       output_pdbqt=str(receptor_pdbqt_path),
-                                                                       cfg=cfg)
+                    # (regen-aware rebuild happens earlier when HOLO restore requests it)
 
 
 
