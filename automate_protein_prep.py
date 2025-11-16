@@ -4126,6 +4126,169 @@ def _drop_free_ions_for_meeko(
     return dropped
 
 
+def _holo_restore_from_input_if_needed(
+    pdb_id: str,
+    cleaned_pdb: str,
+    output_pdbqt: str,
+    config: Mapping[str, Any],
+) -> Tuple[int, int, bool]:
+    """Restore HOLO cofactors/metals/waters while skipping ligands inside the docking box."""
+
+    variant_token = _resolve_variant_token(config)
+    if variant_token != "HOLO":
+        return 0, 0, False
+
+    try:
+        router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    except Exception:
+        router_paths = None
+
+    input_dir = Path(config.get("INPUT_DIR", "")).expanduser()
+    input_pdb = None
+    if router_paths and getattr(router_paths, "input_pdb_path", None):
+        if router_paths.input_pdb_path.exists():
+            input_pdb = router_paths.input_pdb_path
+    if input_pdb is None:
+        candidate = input_dir / f"{pdb_id}.pdb"
+        if candidate.exists():
+            input_pdb = candidate
+    if input_pdb is None or not Path(input_pdb).exists():
+        return 0, 0, False
+
+    try:
+        rules = _activesite_mod.get_atom_rules()
+        canonical_metals = set(getattr(rules, "elem_tokens_canonical", set()))
+        canonical_cofactors = set(getattr(rules, "cofactors", set())) or set(_COFACTOR_NAMES)
+        canonical_waters = set(getattr(rules, "waters", set())) or set(_WATER_NAMES)
+    except Exception:
+        canonical_metals = set(_ELEM_CANON)
+        canonical_cofactors = set(_COFACTOR_NAMES)
+        canonical_waters = set(_WATER_NAMES)
+
+    def _box_from_config(cfg: Mapping[str, Any]) -> Tuple[Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float]]]:
+        center_keys = [
+            "_HOLO_BOX_CENTER",
+            "_DOCK_BOX_CENTER",
+            "_BOX_CENTER",
+            "DOCK_BOX_CENTER",
+            "BOX_CENTER",
+            "center",
+        ]
+        size_keys = [
+            "_HOLO_BOX_SIZE",
+            "_DOCK_BOX_SIZE",
+            "_BOX_SIZE",
+            "DOCK_BOX_SIZE",
+            "BOX_SIZE",
+            "box_size",
+        ]
+
+        def _tuple3(val) -> Optional[Tuple[float, float, float]]:
+            try:
+                if isinstance(val, (list, tuple)) and len(val) == 3:
+                    return tuple(float(x) for x in val)
+            except Exception:
+                return None
+            return None
+
+        center = None
+        for k in center_keys:
+            if k in cfg:
+                center = _tuple3(cfg[k])
+            if center:
+                break
+        size = None
+        for k in size_keys:
+            if k in cfg:
+                size = _tuple3(cfg[k])
+            if size:
+                break
+        return center, size
+
+    center, box_size = _box_from_config(config)
+
+    def _inside_box(x: float, y: float, z: float) -> bool:
+        if not center or not box_size:
+            return False
+        cx, cy, cz = center
+        sx, sy, sz = box_size
+        return (abs(x - cx) <= sx / 2.0) and (abs(y - cy) <= sy / 2.0) and (abs(z - cz) <= sz / 2.0)
+
+    het_groups: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+    parsed_atoms: dict[tuple[str, str, str], list[tuple[float, float, float]]] = defaultdict(list)
+    with open(input_pdb, "r", encoding="utf-8", errors="ignore") as fh:
+        for ln in fh:
+            if not ln.startswith("HETATM"):
+                continue
+            resname = ln[17:20].strip().upper()
+            chain = (ln[21] or "-").strip() or "-"
+            resseq = (ln[22:26] or "0").strip() or "0"
+            key = (resname, chain, resseq)
+            het_groups[key].append(ln)
+            try:
+                x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                parsed_atoms[key].append((x, y, z))
+            except Exception:
+                continue
+
+    present_keys: set[tuple[str, str, str, str]] = set()
+    with open(cleaned_pdb, "r", encoding="utf-8", errors="ignore") as fh:
+        for ln in fh:
+            if not ln.startswith(("ATOM  ", "HETATM")):
+                continue
+            resname = ln[17:20].strip().upper()
+            chain = (ln[21] or "-").strip() or "-"
+            resseq = (ln[22:26] or "0").strip() or "0"
+            atom = ln[12:16].strip().upper()
+            present_keys.add((resname, chain, resseq, atom))
+
+    candidates: list[str] = []
+    metals_added = 0
+    cofactors_added = 0
+    regenerated_pdbqt = False
+
+    for key, lines in het_groups.items():
+        resname, chain_id, resseq = key
+        res_upper = resname.upper()
+        is_metal = res_upper in canonical_metals
+        is_water = res_upper in canonical_waters
+        is_cofactor = res_upper in canonical_cofactors
+        is_ligand = not (is_metal or is_water or is_cofactor)
+
+        atoms = parsed_atoms.get(key, [])
+        ligand_in_box = is_ligand and any(_inside_box(x, y, z) for x, y, z in atoms)
+        if ligand_in_box:
+            logging.info(
+                "[holo.restore] skip_ligand_in_box pdb=%s res=%s chain=%s resseq=%s",
+                pdb_id,
+                resname,
+                chain_id,
+                resseq,
+            )
+            continue
+
+        for ln in lines:
+            atom = ln[12:16].strip().upper()
+            if (resname, chain_id, resseq, atom) in present_keys:
+                continue
+            candidates.append(ln)
+
+        if is_metal and lines:
+            metals_added += 1
+        if (is_cofactor or is_water) and lines:
+            cofactors_added += 1
+
+    if candidates:
+        with open(cleaned_pdb, "a", encoding="utf-8") as fh:
+            fh.writelines(candidates)
+        try:
+            fix_element_columns_in_file(cleaned_pdb, cleaned_pdb, rewrite_atoms=True)
+        except Exception:
+            pass
+        regenerated_pdbqt = False
+
+    return metals_added, cofactors_added, regenerated_pdbqt
+
 
 def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, Path], cfg: dict) -> bool:
     """

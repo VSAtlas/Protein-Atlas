@@ -4845,6 +4845,30 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     box_size = tuple(min(box_cap, float(s)) for s in box_size)
     logger.info(f"Initial box clamped to {box_size} (cap={box_cap} A)")
 
+    # Persist box geometry for downstream HOLO restore logic
+    try:
+        cfg["_HOLO_BOX_CENTER"] = tuple(center)
+        cfg["_HOLO_BOX_SIZE"] = tuple(box_size)
+    except Exception:
+        pass
+
+    if variant_env == "HOLO" and cleaned_pdb and receptor_pdbqt:
+        try:
+            metals_added, cofactors_added, _ = automate_protein_prep._holo_restore_from_input_if_needed(
+                paths.pdb_id,
+                cleaned_pdb,
+                receptor_pdbqt,
+                cfg,
+            )
+            logger.info(
+                "[holo.restore] pdb=%s metals_added=%d cofactors_added=%d",
+                paths.pdb_id,
+                metals_added,
+                cofactors_added,
+            )
+        except Exception as exc:
+            logger.warning("[holo.restore] pdb=%s action=skip err=%s", paths.pdb_id, exc)
+
     # explicit console breadcrumb so you don't need to open logs
     try:
         c_print = tuple(round(float(x), 3) for x in center)
