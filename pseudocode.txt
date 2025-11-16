@@ -1,0 +1,325 @@
+# FUNCTION: run_last_stage
+# Purpose:
+#   Final-stage docking + CONSENSUS (docking engines only, Vina, Smina, LeDock and AD4 ),
+#   followed by RESCORING (SCORCH, MM-GBSA, FEP/QMMM).
+
+#     NOTE * use  path_router.py to write and ready file paths, this will make writing this much easier and more robust
+#
+
+#    Also use the config  writer in main.py named emit_vina_config as a reference for the configs written 
+#     for consensus scoring,  in main this is called using the active  site coordinates, box size, stage, and ligand path
+#     the config is written to specify where and what ligands should be docked in the docking engine 
+#   Phase A: Docking engines
+#     - Vina docking (poses + scores)
+#     - Smina docking (poses + scores)
+#     - LeDock docking (poses + scores)
+#     - AD4 docking (poses + scores)
+#     - Pose validation on each docking engine, based  on  pose_validation.py
+#     - Rank-level consensus (RRF) using docking engines only
+#
+#   Phase B: Rescoring engines (after docking consensus is built), 
+#    dont yet  have  MMGBSA, FEP or QQMM yet, scorch is  open source and CNN-based rescoring will be  fairly trivial, but yall should focus on the  docking portion for now
+#     - CNN-style / ML rescore on best poses (future)
+#     - SCORCH rescoring on best available poses
+#     - Optional MM-GBSA on top X% of docking-consensus hits
+#     - Optional FEP/QMMM on MM-GBSA-enriched subset
+#     - Optional final sort that uses physics + docking consensus
+
+def run_last_stage(cfg, pdb_id, receptor_pdbqt, center, box_size, docking_mode, ligands, logger, score_history):
+
+    # ------------------------------------
+    # 0) Resolve final stage configuration
+    # ------------------------------------
+    if docking_mode or cfg["DOCKING_MODE"] == "polypharmacology":
+        last_stage_name := cfg.get("FINAL_STAGE_POLY", "stage3")
+    else:
+        last_stage_name := cfg.get("FINAL_STAGE_DISC", "stage5")
+
+    if ligands is empty:
+        logger.warning("[last-stage] No ligands; skipping.")
+        return [], {}, score_history
+
+    # Containers shared across phases
+    vina_scores := {};            vina_pose_paths := {};            vina_invalids := {}
+    smina_scores := {};           smina_pose_paths := {};           smina_invalids := {}
+    ledock_scores := {};          ledock_pose_paths := {};          ledock_invalids := {}
+    ad4_scores := {};             ad4_pose_paths := {};             ad4_invalids := {}
+
+    scorch_probs := {}           # RESCORING
+
+    # ============================================================
+    # PHASE A: DOCKING ENGINES (pose generation + docking scores)
+    # ============================================================
+
+    # ---------------------------
+    # A1) Vina DOCKING (pose gen), note these config lines are not currently in the config
+    # ---------------------------
+    if cfg.get("VINA_ENABLE", True):
+        vina_scores, vina_pose_paths, vina_invalids :=
+            run_vina_stage(
+                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+                center=center, box_size=box_size, ligands=ligands,
+                last_stage_name=last_stage_name,
+                exhaustiveness=cfg.get("FINAL_EXHAUSTIVENESS", 24),
+                num_modes=cfg.get("FINAL_NUM_MODES", 9),
+                vina_scoring=cfg.get("VINA_SCORING", "vina"),
+                logger=logger
+            )
+        for lig in ligands:
+            record_score(score_history, last_stage_name + "_vina",
+                         lig, vina_scores.get(lig),
+                         lig in vina_pose_paths,
+                         vina_invalids.get(lig, ""))
+            record_le(score_history, last_stage_name + "_vina",
+                      lig, vina_scores.get(lig),
+                      heavy_atom_counts={})
+
+    # ------------------------------
+    # A2) Smina DOCKING (new poses), note here I dont actually know  what the equivalent exhaustiveness and num modes are, num modes is number of poses   generated and exhuastiveness is basically accuracy. 
+    # these values should both be the max Smina allows for 
+    # ------------------------------
+    if cfg.get("SMINA_ENABLE", True):
+        smina_scores, smina_pose_paths, smina_invalids :=
+            run_smina_stage(
+                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+                center=center, box_size=box_size, ligands=ligands,
+                last_stage_name=last_stage_name,
+                exhaustiveness=cfg.get("SMINA_EXHAUSTIVENESS", 24),
+                num_modes=cfg.get("SMINA_NUM_MODES", 9),
+                logger=logger
+            )
+        for lig in ligands:
+            record_score(score_history, last_stage_name + "_smina",
+                         lig, smina_scores.get(lig),
+                         lig in smina_pose_paths,
+                         smina_invalids.get(lig, ""))
+            record_le(score_history, last_stage_name + "_smina",
+                      lig, smina_scores.get(lig),
+                      heavy_atom_counts={})
+
+    # -------------------------
+    # A3) LeDock DOCKING (poses)note here I dont actually know  what the equivalent exhaustiveness and num modes are, num modes is number of poses   generated and exhuastiveness is basically accuracy. 
+    # these values should both be the max ledock allows for 
+    # -------------------------
+    if cfg.get("LEDOCK_ENABLE", True):
+        ledock_scores, ledock_pose_paths, ledock_invalids :=
+            run_ledock_stage(
+                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+                center=center, box_size=box_size, ligands=ligands,
+                last_stage_name=last_stage_name,
+                logger=logger
+            )
+        for lig in ligands:
+            record_score(score_history, last_stage_name + "_ledock",
+                         lig, ledock_scores.get(lig),
+                         lig in ledock_pose_paths,
+                         ledock_invalids.get(lig, ""))
+            record_le(score_history, last_stage_name + "_ledock",
+                      lig, ledock_scores.get(lig),
+                      heavy_atom_counts={})
+
+    # -------------------------
+    # A4) AD4 DOCKING (poses)note here I dont actually know  what the equivalent exhaustiveness and num modes are, num modes is number of poses   generated and exhuastiveness is basically accuracy. 
+    # these values should both be the max AD4 allows for 
+    # -------------------------
+    if cfg.get("AD4_ENABLE", True):
+        ad4_scores, ad4_pose_paths, ad4_invalids :=
+            run_ad4_stage(
+                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+                center=center, box_size=box_size, ligands=ligands,
+                last_stage_name=last_stage_name,
+                logger=logger
+            )
+        for lig in ligands:
+            record_score(score_history, last_stage_name + "_ad4",
+                         lig, ad4_scores.get(lig),
+                         lig in ad4_pose_paths,
+                         ad4_invalids.get(lig, ""))
+            record_le(score_history, last_stage_name + "_ad4",
+                      lig, ad4_scores.get(lig),
+                      heavy_atom_counts={})
+
+    # ------------------------------------------------------------
+    # A5) DOCKING-ONLY CONSENSUS 
+    # ------------------------------------------------------------
+    dict_of_docking_scores := {}
+    docking_better_flags := {}
+
+    if vina_scores:
+        dict_of_docking_scores["vina"] := vina_scores
+        docking_better_flags["vina"] := False    # lower (kcal/mol) is better
+
+    if smina_scores:
+        dict_of_docking_scores["smina"] := smina_scores
+        docking_better_flags["smina"] := False   # lower (kcal/mol) is better
+
+    if ledock_scores:
+        dict_of_docking_scores["ledock"] := ledock_scores
+        docking_better_flags["ledock"] := False  # lower score better (if kcal/mol-like)
+
+    if ad4_scores:
+        dict_of_docking_scores["ad4"] := ad4_scores
+        docking_better_flags["ad4"] := False     # lower score better (if kcal/mol-like)
+
+    docking_engine_ranks :=
+        build_engine_ranks(dict_of_docking_scores, docking_better_flags)
+
+    docking_engine_ranks :=
+        apply_pose_agreement_bonus( #needs to be written
+            engine_ranks=docking_engine_ranks,
+            pose_paths_by_engine={
+                "vina": vina_pose_paths,
+                "smina": smina_pose_paths,
+                "ledock": ledock_pose_paths,
+                "ad4": ad4_pose_paths
+            },
+            rmsd_cutoff=cfg.get("POSE_AGREEMENT_RMSD", 2.0),
+            logger=logger
+        )
+
+    docking_fused := compute_rrf_consensus(docking_engine_ranks,  #also needs to be written, I will write this soon but this is the general idea of where these should be able  to plug in
+                                           k=cfg.get("RRF_K", 60))
+
+    # Primary docking-based ranking (before any rescoring/physics)
+    docking_ranked_ligands := sort ligands by docking_fused[lig] descending
+
+    for lig in docking_ranked_ligands:
+        record_score(score_history, last_stage_name + "_consensus_rrf_docking",
+                     lig, docking_fused[lig], True, "fused_docking")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # Expose docking consensus as initial "final" ordering;
+    # Phase B may refine or re-order this list.
+    final_ranked_ligands := docking_ranked_ligands
+    final_consensus_scores := docking_fused
+
+    # ======================================================
+    # PHASE B: RESCORING (AFTER docking consensus is known)  ignore this part for  now 
+    # ======================================================
+
+    # ------------------------------------------------
+    # B1) CNN-style rescore on Vina/Smina poses (no docking)  # placeholder for future ML rescoring
+    # ------------------------------------------------
+    # NOTE: This block is a placeholder for future CNN / ML rescoring and can be wired
+    #       to use Vina/Smina-generated poses as input. For now, focus on docking + SCORCH.
+    # if cfg.get("ML_RESCORE_ENABLE", False) and vina_pose_paths is not empty:
+    #     ml_rescore_probs :=
+    #         run_ml_rescore_on_vina_poses(
+    #             cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+    #             vina_pose_paths=vina_pose_paths,
+    #             out_dir_tag=last_stage_name + "/ml_rescore",
+    #             logger=logger
+    #         )
+    #     for lig, p in ml_rescore_probs.items():
+    #         record_score(score_history, last_stage_name + "_ml_rescore",
+    #                      lig, p, True, "prob")
+
+    # ----------------------------------------------------
+    # B2) SCORCH rescoring on AVAILABLE VALIDATED POSES
+    # ----------------------------------------------------
+    if cfg.get("SCORCH_ENABLE", True):
+        poses_for_scorch := {}
+        for lig in ligands:
+            if vina_pose_paths.get(lig):                 poses_for_scorch[lig] := vina_pose_paths[lig]
+            else if smina_pose_paths.get(lig):           poses_for_scorch[lig] := smina_pose_paths[lig]
+            else if ledock_pose_paths.get(lig):          poses_for_scorch[lig] := ledock_pose_paths[lig]
+            else if ad4_pose_paths.get(lig):             poses_for_scorch[lig] := ad4_pose_paths[lig]
+
+        if poses_for_scorch not empty:
+            scorch_probs :=
+                run_scorch_rescore(
+                    cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+                    pose_map=poses_for_scorch,
+                    out_dir_tag=last_stage_name + "/scorch",
+                    logger=logger
+                )
+            for lig, pr in scorch_probs.items():
+                record_score(score_history, last_stage_name + "_scorch",
+                             lig, pr, True, "prob")
+
+    # -----------------------------------------------------------
+    # B3) Optional physics: MM-GBSA and FEP/QMMM (refinement)
+    # -----------------------------------------------------------
+    if cfg.get("MM_GBSA_ENABLE", False):
+        # Work from docking-consensus top fraction
+        top_pct := cfg.get("MM_GBSA_TOP_PCT", 0.10)
+        n_top := max(1, int(len(final_ranked_ligands) * top_pct))
+        mmgbsa_candidates := first n_top of final_ranked_ligands
+
+        mmgbsa_pose_map := {}
+        for lig in mmgbsa_candidates:
+            if vina_pose_paths.get(lig):                 mmgbsa_pose_map[lig] := vina_pose_paths[lig]
+            else if smina_pose_paths.get(lig):           mmgbsa_pose_map[lig] := smina_pose_paths[lig]
+            else if ledock_pose_paths.get(lig):          mmgbsa_pose_map[lig] := ledock_pose_paths[lig]
+            else if ad4_pose_paths.get(lig):             mmgbsa_pose_map[lig] := ad4_pose_paths[lig]
+
+        mmgbsa_scores :=
+            run_mmgbsa_rescore(
+                cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+                pose_map=mmgbsa_pose_map,
+                out_dir_tag=last_stage_name + "/physics/mmgbsa",
+                logger=logger
+            )
+        for lig, dG in mmgbsa_scores.items():
+            record_score(score_history, last_stage_name + "_mmgbsa",
+                         lig, dG, True, "deltaG")
+
+        final_physics_scores := {}  # may be populated by FEP/QMMM
+
+        if cfg.get("FEP_QMMM_ENABLE", False):
+            y_pct := cfg.get("FEP_QMMM_TOP_PCT", 0.20)
+            mmgbsa_sorted := ligands in mmgbsa_scores sorted by ascending dG
+            n_y := max(1, int(len(mmgbsa_sorted) * y_pct))
+            fep_set := first n_y of mmgbsa_sorted
+
+            fep_pose_map := {}
+            for lig in fep_set:
+                if vina_pose_paths.get(lig):             fep_pose_map[lig] := vina_pose_paths[lig]
+                else if smina_pose_paths.get(lig):       fep_pose_map[lig] := smina_pose_paths[lig]
+                else if ledock_pose_paths.get(lig):      fep_pose_map[lig] := ledock_pose_paths[lig]
+                else if ad4_pose_paths.get(lig):         fep_pose_map[lig] := ad4_pose_paths[lig]
+
+            final_physics_scores :=
+                run_fep_qmmm_final(
+                    cfg=cfg, pdb_id=pdb_id, receptor_pdbqt=receptor_pdbqt,
+                    pose_map=fep_pose_map,
+                    out_dir_tag=last_stage_name + "/physics/fep_qmmm",
+                    logger=logger
+                )
+            for lig, dGf in final_physics_scores.items():
+                record_score(score_history, last_stage_name + "_fep_qmmm",
+                             lig, dGf, True, "deltaG_final")
+
+        # Optional: final sort that prefers physics but falls back to docking consensus
+        if cfg.get("FINAL_SORT_BY_PHYSICS", True):
+            # physics_scores can be MM-GBSA only, or FEP/QMMM if present
+            physics_scores := final_physics_scores if final_physics_scores else mmgbsa_scores
+
+            final_ranked_ligands :=
+                reorder_by_physics_then_fused(
+                    ranked_ligands=final_ranked_ligands,
+                    physics_scores=physics_scores,
+                    fused_scores=final_consensus_scores  # docking_fused by default
+                )
+            for idx, lig in enumerate(final_ranked_ligands, start=1):
+                record_score(score_history, last_stage_name + "_final",
+                             lig, float(idx), True, "rank_final")
+
+    # At this point:
+    #   - final_ranked_ligands: possibly refined by physics
+    #   - final_consensus_scores: docking consensus (RRF) unless overridden upstream
+    return final_ranked_ligands, final_consensus_scores, score_history

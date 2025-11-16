@@ -46,6 +46,8 @@ CPU=128
 MAX_PARALLEL_JOBS=128
 FORCE_REPROCESS=True
 DOCKING_MODE=polypharmacology
+FINAL_STAGE_POLY = stage3
+FINAL_STAGE_DISC = stage5
 QUIET_CONSOLE=False
 
 EARLY_RECENTER_RATIO=0.70
@@ -70,7 +72,7 @@ WATER_KEEP_POLICY = "near_controls"
 #CURRENTLY this value actually does nothing, but it will
 APO_HOLO_MODE = apo_vs_holo
 # apo | holo | apo_vs_holo | None 
-PH_ENSEMBLE=True
+PH_ENSEMBLE=true
 
 CTRL_REDOCK_EXHAUSTIVENESS = 24
 #run at  64 for more accuracy
@@ -195,7 +197,7 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
-TEST_MODE_ENABLE = false
+TEST_MODE_ENABLE = true
 TEST_LIBRARY_MAP = {
     "1T46": "kit",
     "2GQG": "abl1",

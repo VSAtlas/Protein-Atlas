@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
+import traceback
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -3412,8 +3414,7 @@ def run_one_stage(
                 futures[pool.submit(run_docking_task, cfg["VINA_EXE"], conf_path, lig, out_path)] = (lig_n, out_n)
 
             processed = 0
-            from tqdm import tqdm as _tqdm
-            with _tqdm(
+            with tqdm(
                 total=len(futures),
                 desc=f"Docking ({stage['name']})",
                 unit="ligand",
@@ -5628,6 +5629,7 @@ def main() -> None:
     cfg.setdefault("CONFIGS_DIR", str(Path(cfg["OVERALL_DIR"]) / "configs"))
     cfg.setdefault("RESET_CONFIGS", True)
 
+
     # CLI > ENV > CFG
     cli_cfg_dir = _cli_val(sys.argv, "--configs-dir")
     cli_no_reset = _cli_has(sys.argv, "--no-reset-configs")
@@ -5847,7 +5849,16 @@ def main() -> None:
         cfg_raw_mode,
     )
 
-    from tqdm import tqdm as _tqdm
+
+
+    # Where to write per-PDB failure logs
+    overall_dir = cfg.get("OVERALL_DIR", ".")
+    failed_root = os.path.join(overall_dir, "failed")
+    os.makedirs(failed_root, exist_ok=True)
+    logging.info("[apo-holo] failed log directory: %s", failed_root)
+
+    failed_entries = []  # (pdb_id, variant_label, log_path, exc_type, exc_msg)
+
     for variant in variants:
         # Make variant visible to any module still reading env (legacy compatibility)
         os.environ["APO_HOLO_VARIANT"] = "" if variant is None else str(variant).upper()
@@ -5858,7 +5869,8 @@ def main() -> None:
             label,
             os.environ.get("APO_HOLO_VARIANT", ""),
         )
-        with _tqdm(
+
+        with tqdm(
                 total=len(pdb_files),
                 desc=f"Processing Proteins ({label})",
                 unit="protein",
@@ -5866,27 +5878,171 @@ def main() -> None:
                 dynamic_ncols=True,
                 mininterval=0.2,
                 leave=True,
-                file=sys.stdout
+                file=sys.stdout,
         ) as bar:
             cfg_v = cfg  # no per-variant mutation; variant is propagated via APO_HOLO_VARIANT env
+
             for pdb_file in pdb_files:
-                process_one_protein(cfg_v, pdb_file, stages, params)
-                # Keep APO, delete HOLO if byte-identical (run after both variants exist)
-                if (not plan_only) and mode == "apo_vs_holo" and (variant == "HOLO"):
-                    pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
-                    try:
-                        dedup_identical_variants(pdb_id, cfg_v)
-                    except Exception as _e:
-                        logging.warning(f"[apo-vs-holo] dedup skipped for {pdb_id}: {_e}")
-                bar.update(1)
+                pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
+
+                try:
+                    # Main per-PDB work
+                    process_one_protein(cfg_v, pdb_file, stages, params)
+
+                    # Keep APO, delete HOLO if byte-identical (run after both variants exist)
+                    if (not plan_only) and mode == "apo_vs_holo" and (variant == "HOLO"):
+                        try:
+                            dedup_identical_variants(pdb_id, cfg_v)
+                        except Exception as _e:
+                            logging.warning(
+                                "[apo-vs-holo] dedup skipped for %s (variant=%s): %s",
+                                pdb_id,
+                                label,
+                                _e,
+                            )
+
+                except Exception as exc:
+                    # Per-PDB failure handling
+                    exc_type = type(exc).__name__
+                    exc_msg = str(exc)
+
+                    fail_log_path = os.path.join(failed_root, f"{pdb_id}.{label}.log")
+
+                    # Write a dedicated failure log for this PDB+variant
+                    with fail_log_path.open("w", encoding="utf-8") as fh:
+                        fh.write(
+                            f"[FAILED PDB]\n"
+                            f"  pdb_id        = {pdb_id}\n"
+                            f"  variant_label = {label}\n"
+                            f"  mode          = {mode}\n"
+                            f"  pdb_file      = {pdb_file}\n"
+                            f"  exception     = {exc_type}: {exc_msg}\n\n"
+                            f"[TRACEBACK]\n"
+                        )
+                        traceback.print_exc(file=fh)
+
+                    logging.error(
+                        "[apo-holo] FAILED pdb_id=%s variant_label=%s; "
+                        "see failure log at %s",
+                        pdb_id,
+                        label,
+                        fail_log_path,
+                    )
+
+                    failed_entries.append(
+                        (pdb_id, label, str(fail_log_path), exc_type, exc_msg)
+                    )
+
+                finally:
+                    # Always advance the progress bar, even if this PDB failed
+                    bar.update(1)
 
     elapsed_min = (time.time() - start) / 60.0
     print(f"\nAll proteins processed in {elapsed_min:.2f} minutes.")
+
+    if failed_entries:
+        print("\nThe following proteins failed. See per-PDB logs under:", failed_root)
+        for pdb_id, label, log_path, exc_type, exc_msg in failed_entries:
+            print(
+                f"  - {pdb_id} ({label}): {exc_type} — {exc_msg}\n"
+                f"      log: {log_path}"
+            )
+    else:
+        print("\nNo proteins recorded as failed.")
 
     if plan_only:
         sys.exit(0)
 
 
+def _send_run_email(status: int, start_time: str, end_time: str) -> None:
+    """
+    Best-effort email notification using the system `mail` command.
+    Must never raise, so it is safe to call from finally blocks.
+    """
+    try:
+        # Hostname: use uname if available (Linux/Unix), else fall back.
+        try:
+            host = os.uname().nodename
+        except AttributeError:
+            host = "unknown-host"
+
+        subject = f"Atlas run exited with status {status} on {host}"
+
+        # Mirror your shell script body as closely as possible
+        cmd_line = "python main.py " + " ".join(sys.argv[1:])
+        body_lines = [
+            f"Atlas run finished on host: {host}",
+            f"Start time: {start_time}",
+            f"End time:   {end_time}",
+            f"Exit status: {status}",
+            "",
+            "Command:",
+            cmd_line,
+            "",
+        ]
+        body = "\n".join(body_lines)
+
+        # Use the same `mail` CLI you already tested in your bash wrapper
+        try:
+            pipe = os.popen(f'mail -s "{subject}" mpg2352@utexas.edu', "w")
+            try:
+                pipe.write(body)
+            finally:
+                pipe.close()
+        except Exception:
+            # If mail fails, log it but never break the run
+            try:
+                logging.exception("[notify] failed to send mail notification")
+            except Exception:
+                # Logging itself should not be able to kill the run
+                pass
+
+    except Exception:
+        # Absolute last-resort guard: never let notification kill the process
+        try:
+            logging.exception("[notify] unexpected error while building notification email")
+        except Exception:
+            pass
+
+
+def _run_with_email_notification() -> None:
+    """
+    Wrapper used ONLY when main.py is invoked as a script.
+
+    - Calls _smoke_emit_config_demo() and main() in the same order as before.
+    - Preserves all exit codes (SystemExit, unhandled exceptions).
+    - Always attempts to send an email in a finally block.
+    """
+    # Import-time already brought in `time`, `os`, `sys`, `logging`, etc.
+    start_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    status: int = 0
+
+    try:
+        _smoke_emit_config_demo()
+        main()
+        # If main returns normally, status 0
+        status = 0
+    except SystemExit as exc:
+        # Preserve the original exit code from sys.exit()
+        code = exc.code
+        status = code if isinstance(code, int) else 1
+        raise
+    except BaseException:
+        # KeyboardInterrupt and other errors → non-zero status
+        status = 1
+        raise
+    finally:
+        end_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            _send_run_email(status=status, start_time=start_time, end_time=end_time)
+        except Exception:
+            # Never let notification interfere with the original exit behavior
+            try:
+                logging.exception("[notify] email wrapper raised unexpectedly")
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
-    _smoke_emit_config_demo()
-    main()
+    _run_with_email_notification()
+
