@@ -4893,6 +4893,20 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         print(f"[CENTER] source={center_source} center={c_print} box={b_print}")
     except Exception:
         pass
+
+    # HOLO-only restore of metals/cofactors, now that center/box_size are known
+    try:
+        logger.info("[holo.restore.call] invoking for pdb=%s", paths.pdb_id)
+        _m_add, _c_add, _regen = protein_prep._holo_restore_from_input_if_needed(
+            pdb_id=paths.pdb_id,
+            cleaned_pdb=cleaned_pdb,
+            output_pdbqt=receptor_pdbqt,
+            config=cfg,
+            center=center,
+            box_size=box_size,
+        )
+    except Exception as _restore_err:
+        logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
     # >>> PH ENSEMBLE (GLOBAL) START
     if bool(cfg.get("PH_ENSEMBLE", False)):
         try:

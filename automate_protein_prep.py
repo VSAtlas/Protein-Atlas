@@ -5351,18 +5351,10 @@ def main(
                          cleaned_pdb, output_pdbqt, exists, size)
             raise RuntimeError(f"receptor_pdbqt_failed: {pdb_id}")
 
-        # --- HOLO-only stash & restore (minimal, surgical) ---
-        try:
-            _m_add, _c_add, _regen = _holo_restore_from_input_if_needed(
-                pdb_id=pdb_id,
-                cleaned_pdb=cleaned_pdb,
-                output_pdbqt=output_pdbqt,
-                config=config,
-                center=center,
-                box_size=box_size,
-            )
-        except Exception as _restore_err:
-            logging.warning("[holo.restore] action=skip reason=%s", _restore_err)
+        # --- HOLO-only stash & restore (moved to process_one_protein) ---
+        # NOTE: _holo_restore_from_input_if_needed is now invoked from main.process_one_protein
+        # after pocket detection, once the docking box center/size are known.
+        # This block is intentionally left as a no-op to avoid double-restore.
 
         # Success path summary
         try:
