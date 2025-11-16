@@ -197,7 +197,7 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
-TEST_MODE_ENABLE = true
+TEST_MODE_ENABLE = false
 TEST_LIBRARY_MAP = {
     "1T46": "kit",
     "2GQG": "abl1",
