@@ -944,17 +944,27 @@ def _resolve_run_label(pdb_id: str,
                        meta: Optional[TargetEvaluation],
                        cli_run_id: Optional[str],
                        active_run_id: Optional[str]) -> str:
+    # Primary: mirror the metrics row's run_id, if it exists.
+    if meta is not None and meta.metrics is not None:
+        if "run_id" in meta.metrics.index:
+            return str(meta.metrics["run_id"])
+
+    # Fallback: previous behaviour, but never join multiple IDs.
     if cli_run_id:
         if meta and meta.has_run_id_column:
             return str(cli_run_id)
         return "(none)"
+
     if meta and meta.has_run_id_column:
         if meta.run_ids:
             ordered = sorted(str(x) for x in meta.run_ids if x)
             if not ordered:
                 return ""
-            return ordered[0] if len(ordered) == 1 else ",".join(ordered)
+            if active_run_id and active_run_id in ordered:
+                return active_run_id
+            return ordered[0]
         return ""
+
     if active_run_id:
         return str(active_run_id)
     return "(none)"
@@ -1010,11 +1020,15 @@ def _candidate_protein_logs(pdb_id: str,
     return selected, candidates
 
 
-def _build_control_records(pdb_id: str,
-                           run_id_label: str,
-                           target_name: str,
-                           library_name: str,
-                           log_path: Optional[Path]) -> Tuple[List[Dict], Dict, Dict[str, int]]:
+def _build_control_records(
+    pdb_id: str,
+    run_id_label: str,
+    target_name: str,
+    library_name: str,
+    log_path: Optional[Path],
+    variant: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+) -> Tuple[List[Dict], Dict, Dict[str, int]]:
     long_rows: List[Dict] = []
     controls_found = 0
     max_spread: Optional[float] = None
@@ -1023,6 +1037,8 @@ def _build_control_records(pdb_id: str,
 
     if not log_path or not log_path.exists():
         summary_row = {
+            "variant": variant,
+            "pH": ph_tag,
             "pdb_id": pdb_id,
             "run_id": run_id_label,
             "target_name": target_name,
@@ -1070,6 +1086,8 @@ def _build_control_records(pdb_id: str,
                 except Exception:
                     score = float("nan")
                 long_rows.append({
+                    "variant": variant,
+                    "pH": ph_tag,
                     "pdb_id": pdb_id,
                     "run_id": run_id_label,
                     "target_name": target_name,
@@ -1130,6 +1148,8 @@ def _build_control_records(pdb_id: str,
             )
 
     summary_row = {
+        "variant": variant,
+        "pH": ph_tag,
         "pdb_id": pdb_id,
         "run_id": run_id_label,
         "target_name": target_name,
@@ -1222,6 +1242,42 @@ def main():
     analysis_root.mkdir(parents=True, exist_ok=True)
     dbg("DEBUG", "paths", f"docked_root={docked_root} out_root={out_root} analysis_root={analysis_root} pdb_root={pdb_root_override or 'none'} prepped_root={prepped_root_override or 'none'}")
 
+    variant_by_target: Dict[str, Optional[str]] = {}
+    ph_by_target: Dict[str, Optional[str]] = {}
+
+    def _infer_variant_ph_from_csv_path(pdb_id: str, csv_path: Path) -> tuple[Optional[str], Optional[str]]:
+        """
+        Infer (variant, pH_tag) from the chosen docking_score_long.csv path.
+
+        We treat 'docked/<PDB>/' from path_router as the root and look at
+        the extra directory segments between that root and the CSV's parent.
+        Any 'APO'/'HOLO' segment becomes the variant, any segment starting
+        with 'pH'/'ph' becomes the pH tag.
+        """
+        try:
+            paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+            base = paths.docked_pdb_root()  # docked/<PDB>/
+        except Exception:
+            base = docked_root / pdb_id
+
+        try:
+            rel = csv_path.parent.relative_to(base)
+            parts = [p for p in rel.parts if p]
+        except Exception:
+            parts = []
+
+        variant: Optional[str] = None
+        ph_tag: Optional[str] = None
+        for part in parts:
+            up = part.upper()
+            if variant is None and up in {"APO", "HOLO"}:
+                variant = up
+                continue
+            low = part.lower()
+            if ph_tag is None and low.startswith("ph"):
+                ph_tag = part
+        return variant, ph_tag
+
     def _resolve_docking_csv(pdb_id: str, fallback_dir: Path) -> Optional[Path]:
         candidates_tried: List[str] = []
         picked: Optional[Path] = None
@@ -1280,6 +1336,11 @@ def main():
         if picked is not None:
             dbg("DEBUG", "resolve", f"pdb={pdb_id} tried={len(candidates_tried)} candidates={candidates_tried}")
             dbg("INFO", "resolve", f"pdb={pdb_id} picked={picked}")
+
+            variant, ph_tag = _infer_variant_ph_from_csv_path(pdb_id, picked)
+            variant_by_target[pdb_id] = variant
+            ph_by_target[pdb_id] = ph_tag
+
             return picked
 
         dbg("WARN", "resolve", f"pdb={pdb_id} no_csv_found tried={candidates_tried or ['<none>']} search_root={fallback_dir}")
@@ -1346,6 +1407,30 @@ def main():
         raise SystemExit(3)
 
     df_all = pd.DataFrame(rows).sort_values("pdb_id")
+
+    # Optional variant / pH columns derived from the chosen docking CSV path
+    existing_variant = df_all["variant"] if "variant" in df_all.columns else None
+    if "variant" in df_all.columns:
+        df_all = df_all.drop(columns=["variant"])
+    if "pH" in df_all.columns:
+        df_all = df_all.drop(columns=["pH"])
+
+    variant_series = df_all["pdb_id"].map(variant_by_target).fillna("")
+    if existing_variant is not None:
+        variant_series = variant_series.where(
+            variant_series.astype(str).str.strip().ne(""),
+            existing_variant.reindex(df_all.index).fillna(""),
+        )
+    ph_series = df_all["pdb_id"].map(ph_by_target).fillna("")
+
+    has_variant = variant_series.astype(str).str.strip().ne("").any()
+    has_ph = ph_series.astype(str).str.strip().ne("").any()
+
+    if has_variant:
+        df_all.insert(0, "variant", variant_series)
+    if has_ph:
+        idx = 1 if has_variant else 0
+        df_all.insert(idx, "pH", ph_series)
 
     control_targets = [pdb for pdb, _ in targets if pdb in target_eval_results]
 
@@ -1443,6 +1528,8 @@ def main():
             csv_path = csv_paths_by_target.get(pdb_id)
             if csv_path is None:
                 continue
+            variant_label = variant_by_target.get(pdb_id)
+            ph_label = ph_by_target.get(pdb_id)
             parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
             selected_log, candidates = _candidate_protein_logs(
                 pdb_id,
@@ -1470,6 +1557,8 @@ def main():
                 target_label,
                 library_label,
                 selected_log,
+                variant_label,
+                ph_label,
             )
             if pdb_id not in parsed_counts:
                 parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
@@ -1506,12 +1595,12 @@ def main():
     holo_mask = (variant_upper == "HOLO") if variant_col_present else None
     has_sections = bool(variant_col_present and ((apo_mask is not None and apo_mask.any()) or (holo_mask is not None and holo_mask.any())))
 
-    preferred_cols = ("run_id", "target_name", "library_name", "pdb_id")
-    excluded_cols = {"run_id", "target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant"}
+    preferred_cols = ("variant", "pH", "run_id", "target_name", "library_name", "pdb_id")
+    excluded_cols = {"run_id", "target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant", "pH"}
 
     with open(summary_path, "w", newline="") as fh:
         if has_sections:
-            _df = df.drop(columns=["variant"], errors="ignore")
+            _df = df.copy()
             cols = [c for c in preferred_cols if c in _df.columns] \
                    + [c for c in _df.columns if c not in preferred_cols]
             apo_rows = df.loc[apo_mask].sort_values("pdb_id") if apo_mask is not None else pd.DataFrame()
@@ -1522,7 +1611,7 @@ def main():
             sections = []
             leftover_rows = pd.DataFrame()
             if n_apo:
-                apo_out = apo_rows.drop(columns=["variant"], errors="ignore")
+                apo_out = apo_rows
                 a_cols = [c for c in preferred_cols if c in apo_out.columns] \
                          + [c for c in apo_out.columns if c not in preferred_cols]
                 fh.write("Apo\n");
@@ -1531,7 +1620,7 @@ def main():
 
             if n_holo:
                 if n_apo: fh.write("\n")
-                holo_out = holo_rows.drop(columns=["variant"], errors="ignore")
+                holo_out = holo_rows
                 h_cols = [c for c in preferred_cols if c in holo_out.columns] \
                          + [c for c in holo_out.columns if c not in preferred_cols]
                 fh.write("Holo\n");
@@ -1543,7 +1632,7 @@ def main():
             if not leftover_rows.empty:
                 if n_apo or n_holo:
                     fh.write("\n")
-                lo_base = leftover_rows.drop(columns=["variant"], errors="ignore")
+                lo_base = leftover_rows
                 l_cols = [c for c in preferred_cols if c in lo_base.columns] \
                          + [c for c in lo_base.columns if c not in preferred_cols]
                 lo_base[l_cols].to_csv(fh, sep="\t", index=False)
@@ -1556,7 +1645,7 @@ def main():
                 _write_pretty_summary(sections, pretty_name)
                 print(f"[eval] pretty_summary_out={pretty_name}")
         else:
-            _df = df.drop(columns=["variant"], errors="ignore")
+            _df = df.copy()
             cols = [c for c in preferred_cols if c in _df.columns] \
                    + [c for c in _df.columns if c not in preferred_cols]
             _df[cols].to_csv(fh, sep="\t", index=False)
@@ -1573,6 +1662,8 @@ def main():
 
     if getattr(args, "emit_control_report", False):
         long_columns = [
+            "variant",
+            "pH",
             "pdb_id",
             "run_id",
             "target_name",
@@ -1590,6 +1681,11 @@ def main():
         report_df.to_csv(control_report_path, sep="\t", index=False)
 
         control_summary_df = pd.DataFrame(control_summary_records, columns=long_columns)
+        for col in ("variant", "pH"):
+            if col in control_summary_df.columns:
+                s = control_summary_df[col]
+                if s.isna().all() or (s.astype(str).str.strip() == "").all():
+                    control_summary_df.drop(columns=[col], inplace=True)
         control_summary_path = analysis_root / "control_redock_summary.tsv"
         control_summary_df.to_csv(control_summary_path, sep="\t", index=False)
 
