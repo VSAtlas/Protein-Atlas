@@ -4772,7 +4772,8 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
                 skip_meeko = True
             else:
                 raise
-    # define once near the top of run_prepare_receptor, right after output_pdbqt:
+
+
     work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
 
     # Build explicit commands for each attempt
@@ -4811,7 +4812,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             len({str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}),
         )
         adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt,
-                   "-A", "none", "-U", "nphs_lps_nonstdres"]
+                   "-A", "none",      "-U", "nphs_lps",]  
         cp = subprocess.run(adt_cmd, capture_output=True, text=True)
         _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
         if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
