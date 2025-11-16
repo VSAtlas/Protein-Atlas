@@ -1542,6 +1542,61 @@ def _holo_restore_from_input_if_needed(
                     )
         # --- End metal coordination JSON audit ---
 
+        def _point_in_box(pt, center_val, box_val):
+            if center_val is None or box_val is None:
+                return None
+            try:
+                cx, cy, cz = center_val
+                sx, sy, sz = box_val
+            except Exception:
+                return None
+            x, y, z = pt
+            return (
+                abs(x - cx) <= sx / 2.0
+                and abs(y - cy) <= sy / 2.0
+                and abs(z - cz) <= sz / 2.0
+            )
+
+        residue_atoms: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+        for atom in parsed_atoms:
+            if str(atom.get("record", "")).upper() != "HETATM":
+                continue
+            key = (
+                str(atom.get("resname", "")).upper(),
+                str(atom.get("chain", "")),
+                str(atom.get("resseq", "")),
+            )
+            residue_atoms[key].append(atom)
+
+        for (resname, chain_id, resseq), residue_atoms_list in residue_atoms.items():
+            if resname in canonical_metals or resname in canonical_waters or resname in canonical_cofactors:
+                continue
+            classification = "out_of_box"
+            has_box_info = False
+            for atom in residue_atoms_list:
+                coords = atom.get("coords")
+                if not coords:
+                    continue
+                inside = _point_in_box(coords, center, box_size)
+                if inside is None:
+                    classification = "no_box"
+                    break
+                has_box_info = True
+                if inside:
+                    classification = "in_box"
+                    break
+            if classification == "out_of_box" and not has_box_info:
+                classification = "no_box"
+            logging.info(
+                "[holo.ligand.box] pdb=%s resname=%s chain=%s resseq=%s classification=%s num_atoms=%d",
+                pdb_id,
+                resname,
+                chain_id,
+                resseq,
+                classification,
+                len(residue_atoms_list),
+            )
+
         # Build residue-present keys from the cleaned PDB to ensure idempotency
         present_keys = set()
         try:
