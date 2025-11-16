@@ -1326,6 +1326,8 @@ def _holo_restore_from_input_if_needed(
     cleaned_pdb: str,
     output_pdbqt: str,
     config: Mapping[str, Any],
+    center: Optional[Tuple[float, float, float]] = None,
+    box_size: Optional[Tuple[float, float, float]] = None,
 ) -> Tuple[int, int, bool]:
     """
     HOLO-only: re-add missing metals/cofactors from input_pdbs/<PDB>.pdb into the
@@ -1333,6 +1335,10 @@ def _holo_restore_from_input_if_needed(
 
     Returns: (metals_added, cofactors_added, regenerated_pdbqt)
     """
+    logging.info(
+        "[holo.box.debug] pdb=%s center=%s box_size=%s",
+        pdb_id, center, box_size,
+    )
     try:
         logging.info("[holo.restore] precheck pdb=%s", pdb_id)
 
@@ -1438,6 +1444,28 @@ def _holo_restore_from_input_if_needed(
             for metal in metal_atoms:
                 donors = []
                 mx, my, mz = metal["coords"]  # type: ignore[index]
+                if center is not None and len(center) == 3:
+                    cx, cy, cz = center
+                    dx = mx - cx
+                    dy = my - cy
+                    dz = mz - cz
+                    m_dist = sqrt(dx * dx + dy * dy + dz * dz)
+                    logging.info(
+                        "[holo.box.metal] pdb=%s metal=%s chain=%s resseq=%s center_dist=%.3f",
+                        pdb_id,
+                        metal.get("element", ""),
+                        metal.get("chain", ""),
+                        metal.get("resseq", ""),
+                        m_dist,
+                    )
+                else:
+                    logging.info(
+                        "[holo.box.metal] pdb=%s metal=%s chain=%s resseq=%s center_dist=none",
+                        pdb_id,
+                        metal.get("element", ""),
+                        metal.get("chain", ""),
+                        metal.get("resseq", ""),
+                    )
                 for atom in parsed_atoms:
                     element = str(atom.get("element", "")).upper()
                     if element not in {"N", "O", "S"}:
@@ -5233,7 +5261,12 @@ def run_molprobity_validate(pdb_path: Union[str, Path], work_dir: Optional[Union
 # Module Entrypoint
 # =============================
 
-def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
+def main(
+    pdb_filename: str,
+    output_dir: Union[str, Path] = r"./processed_pdbs",
+    center: Optional[Tuple[float, float, float]] = None,
+    box_size: Optional[Tuple[float, float, float]] = None,
+):
     """High-level wrapper: clean a PDB and prepare the receptor PDBQT."""
     try:
         # Resolve input path robustly:
@@ -5325,6 +5358,8 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
                 cleaned_pdb=cleaned_pdb,
                 output_pdbqt=output_pdbqt,
                 config=config,
+                center=center,
+                box_size=box_size,
             )
         except Exception as _restore_err:
             logging.warning("[holo.restore] action=skip reason=%s", _restore_err)

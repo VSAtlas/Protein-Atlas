@@ -1834,7 +1834,13 @@ def _ph_values_from_context(pdb_path: str) -> list[float]:
 
 
 
-def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
+def prepare_receptor(
+    cfg: Dict,
+    paths: Paths,
+    logger: logging.Logger,
+    center: Optional[Tuple[float, float, float]] = None,
+    box_size: Optional[Tuple[float, float, float]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     import automate_protein_prep
     from distutils.util import strtobool
 
@@ -2161,6 +2167,8 @@ def prepare_receptor(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[O
             cleaned_pdb=cleaned_pdb,
             output_pdbqt=str(receptor_pdbqt),
             config=cfg,
+            center=center,
+            box_size=box_size,
         )
     except Exception as _restore_err:
         logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
