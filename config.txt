@@ -72,7 +72,7 @@ WATER_KEEP_POLICY = "near_controls"
 #CURRENTLY this value actually does nothing, but it will
 APO_HOLO_MODE = apo_vs_holo
 # apo | holo | apo_vs_holo | None 
-PH_ENSEMBLE=true
+PH_ENSEMBLE=false
 
 CTRL_REDOCK_EXHAUSTIVENESS = 24
 #run at  64 for more accuracy

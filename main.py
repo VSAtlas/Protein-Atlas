@@ -2159,19 +2159,6 @@ def prepare_receptor(
     except Exception as _e:
         logger.warning(f"Receptor sanity check skipped due to error: {_e}")
 
-    # HOLO-only stash & restore based on original input PDB
-    try:
-        logger.info("[holo.restore.call] invoking for pdb=%s", paths.pdb_id)
-        _m_add, _c_add, _regen = automate_protein_prep._holo_restore_from_input_if_needed(
-            pdb_id=paths.pdb_id,
-            cleaned_pdb=cleaned_pdb,
-            output_pdbqt=str(receptor_pdbqt),
-            config=cfg,
-            center=center,
-            box_size=box_size,
-        )
-    except Exception as _restore_err:
-        logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
 
     return norm(cleaned_pdb), norm(receptor_pdbqt)
 
@@ -4736,89 +4723,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             cleaned_pdb,
         )
 
-    # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
-    resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
-    if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
-        apo_clean = _variant_receptor_path(pdb_id, "APO", cfg)
-        holo_clean = cleaned_pdb or _variant_receptor_path(pdb_id, "HOLO", cfg)
-        apo_path = Path(apo_clean) if apo_clean else None
-        holo_path = Path(holo_clean) if holo_clean else None
-        apo_exists = apo_path.exists() if apo_path else False
-        holo_exists = holo_path.exists() if holo_path else False
-
-        if not apo_exists or not holo_exists:
-            logger.warning(
-                "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=missing_paths apo=%s holo=%s",
-                pdb_id,
-                apo_clean,
-                holo_clean,
-            )
-            _record_apo_holo_decision(cfg, pdb_id, "HOLO", "missing_paths")
-        else:
-            # >>> path+exists breadcrumb just before SHA calculation <<<
-            logger.info(
-                "[apo-vs-holo] compare.preflight apo=%s exists=%s holo=%s exists=%s",
-                norm(apo_path), ("T" if apo_exists else "F"),
-                norm(holo_path), ("T" if holo_exists else "F"),
-            )
-            try:
-                apo_sha = file_sha1(str(apo_path))
-                holo_sha = file_sha1(str(holo_path))
-            except Exception as hash_err:
-                logger.warning(
-                    "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=sha_error err=%s",
-                    pdb_id,
-                    hash_err,
-                )
-                _record_apo_holo_decision(cfg, pdb_id, "HOLO", "sha_error")
-            else:
-                if apo_sha == holo_sha:
-                    logger.info(
-                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=identical apo_sha=%s holo_sha=%s",
-                        pdb_id,
-                        apo_sha,
-                        holo_sha,
-                    )
-                    # [ions] dedup audit guard
-                    audit_root = cfg.get("_ION_AUDIT", {})
-                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(pdb_id)
-                    warn_needed = False
-                    if isinstance(pdb_entry, dict):
-                        input_info = pdb_entry.get("input_counts", {})
-                        clean_map = pdb_entry.get("clean_counts", {}) or {}
-                        holo_info = clean_map.get("HOLO") or clean_map.get(variant_label) or {}
-                        if input_info.get("metals_present") or input_info.get("salts_present"):
-                            warn_needed = True
-                        if holo_info.get("metals_present") or holo_info.get("salts_present"):
-                            warn_needed = True
-                    if warn_needed:
-                        logger.warning(
-                            "[apo-vs-holo] unexpected_identical_after_ion_policy pdb=%s apo_sha=%s holo_sha=%s",
-                            pdb_id,
-                            apo_sha,
-                            holo_sha,
-                        )
-                    if receptor_pdbqt:
-                        _record_apo_holo_usage(cfg, pdb_id, variant_token, None, receptor_pdbqt)
-                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "skipped_preflight")
-                    try:
-                        delete_variant_trees(pdb_id, "HOLO", cfg)
-                    except Exception as cleanup_err:
-                        logger.warning(
-                            "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=cleanup_warn err=%s",
-                            pdb_id,
-                            cleanup_err,
-                        )
-                    return
-                else:
-                    logger.info(
-                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=not_identical apo_sha=%s holo_sha=%s",
-                        pdb_id,
-                        apo_sha,
-                        holo_sha,
-                    )
-                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
-
     # 3) Pocket detection
     center, box_size, center_source = None, None, "none"
     try:
@@ -4907,6 +4811,91 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         )
     except Exception as _restore_err:
         logger.warning("[holo.restore] action=skip reason=%s", _restore_err)
+
+
+    # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
+    resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
+    if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
+        apo_clean = _variant_receptor_path(pdb_id, "APO", cfg)
+        holo_clean = cleaned_pdb or _variant_receptor_path(pdb_id, "HOLO", cfg)
+        apo_path = Path(apo_clean) if apo_clean else None
+        holo_path = Path(holo_clean) if holo_clean else None
+        apo_exists = apo_path.exists() if apo_path else False
+        holo_exists = holo_path.exists() if holo_path else False
+
+        if not apo_exists or not holo_exists:
+            logger.warning(
+                "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=missing_paths apo=%s holo=%s",
+                pdb_id,
+                apo_clean,
+                holo_clean,
+            )
+            _record_apo_holo_decision(cfg, pdb_id, "HOLO", "missing_paths")
+        else:
+            # >>> path+exists breadcrumb just before SHA calculation <<<
+            logger.info(
+                "[apo-vs-holo] compare.preflight apo=%s exists=%s holo=%s exists=%s",
+                norm(apo_path), ("T" if apo_exists else "F"),
+                norm(holo_path), ("T" if holo_exists else "F"),
+            )
+            try:
+                apo_sha = file_sha1(str(apo_path))
+                holo_sha = file_sha1(str(holo_path))
+            except Exception as hash_err:
+                logger.warning(
+                    "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=sha_error err=%s",
+                    pdb_id,
+                    hash_err,
+                )
+                _record_apo_holo_decision(cfg, pdb_id, "HOLO", "sha_error")
+            else:
+                if apo_sha == holo_sha:
+                    logger.info(
+                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=identical apo_sha=%s holo_sha=%s",
+                        pdb_id,
+                        apo_sha,
+                        holo_sha,
+                    )
+                    # [ions] dedup audit guard
+                    audit_root = cfg.get("_ION_AUDIT", {})
+                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(pdb_id)
+                    warn_needed = False
+                    if isinstance(pdb_entry, dict):
+                        input_info = pdb_entry.get("input_counts", {})
+                        clean_map = pdb_entry.get("clean_counts", {}) or {}
+                        holo_info = clean_map.get("HOLO") or clean_map.get(variant_label) or {}
+                        if input_info.get("metals_present") or input_info.get("salts_present"):
+                            warn_needed = True
+                        if holo_info.get("metals_present") or holo_info.get("salts_present"):
+                            warn_needed = True
+                    if warn_needed:
+                        logger.warning(
+                            "[apo-vs-holo] unexpected_identical_after_ion_policy pdb=%s apo_sha=%s holo_sha=%s",
+                            pdb_id,
+                            apo_sha,
+                            holo_sha,
+                        )
+                    if receptor_pdbqt:
+                        _record_apo_holo_usage(cfg, pdb_id, variant_token, None, receptor_pdbqt)
+                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "skipped_preflight")
+                    try:
+                        delete_variant_trees(pdb_id, "HOLO", cfg)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=cleanup_warn err=%s",
+                            pdb_id,
+                            cleanup_err,
+                        )
+                    return
+                else:
+                    logger.info(
+                        "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=not_identical apo_sha=%s holo_sha=%s",
+                        pdb_id,
+                        apo_sha,
+                        holo_sha,
+                    )
+                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
+
     # >>> PH ENSEMBLE (GLOBAL) START
     if bool(cfg.get("PH_ENSEMBLE", False)):
         try:
@@ -5911,17 +5900,6 @@ def main() -> None:
                     # Main per-PDB work
                     process_one_protein(cfg_v, pdb_file, stages, params)
 
-                    # Keep APO, delete HOLO if byte-identical (run after both variants exist)
-                    if (not plan_only) and mode == "apo_vs_holo" and (variant == "HOLO"):
-                        try:
-                            dedup_identical_variants(pdb_id, cfg_v)
-                        except Exception as _e:
-                            logging.warning(
-                                "[apo-vs-holo] dedup skipped for %s (variant=%s): %s",
-                                pdb_id,
-                                label,
-                                _e,
-                            )
 
                 except Exception as exc:
                     # Per-PDB failure handling
