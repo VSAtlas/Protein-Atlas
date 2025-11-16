@@ -1326,6 +1326,8 @@ def _holo_restore_from_input_if_needed(
     cleaned_pdb: str,
     output_pdbqt: str,
     config: Mapping[str, Any],
+    center: Optional[Tuple[float, float, float]] = None,
+    box_size: Optional[Tuple[float, float, float]] = None,
 ) -> Tuple[int, int, bool]:
     """
     HOLO-only: re-add missing metals/cofactors from input_pdbs/<PDB>.pdb into the
@@ -1333,6 +1335,10 @@ def _holo_restore_from_input_if_needed(
 
     Returns: (metals_added, cofactors_added, regenerated_pdbqt)
     """
+    logging.info(
+        "[holo.box.debug] pdb=%s center=%s box_size=%s",
+        pdb_id, center, box_size,
+    )
     try:
         logging.info("[holo.restore] precheck pdb=%s", pdb_id)
 
@@ -1438,6 +1444,28 @@ def _holo_restore_from_input_if_needed(
             for metal in metal_atoms:
                 donors = []
                 mx, my, mz = metal["coords"]  # type: ignore[index]
+                if center is not None and len(center) == 3:
+                    cx, cy, cz = center
+                    dx = mx - cx
+                    dy = my - cy
+                    dz = mz - cz
+                    m_dist = sqrt(dx * dx + dy * dy + dz * dz)
+                    logging.info(
+                        "[holo.box.metal] pdb=%s metal=%s chain=%s resseq=%s center_dist=%.3f",
+                        pdb_id,
+                        metal.get("element", ""),
+                        metal.get("chain", ""),
+                        metal.get("resseq", ""),
+                        m_dist,
+                    )
+                else:
+                    logging.info(
+                        "[holo.box.metal] pdb=%s metal=%s chain=%s resseq=%s center_dist=none",
+                        pdb_id,
+                        metal.get("element", ""),
+                        metal.get("chain", ""),
+                        metal.get("resseq", ""),
+                    )
                 for atom in parsed_atoms:
                     element = str(atom.get("element", "")).upper()
                     if element not in {"N", "O", "S"}:
@@ -1513,6 +1541,61 @@ def _holo_restore_from_input_if_needed(
                         exc,
                     )
         # --- End metal coordination JSON audit ---
+
+        def _point_in_box(pt, center_val, box_val):
+            if center_val is None or box_val is None:
+                return None
+            try:
+                cx, cy, cz = center_val
+                sx, sy, sz = box_val
+            except Exception:
+                return None
+            x, y, z = pt
+            return (
+                abs(x - cx) <= sx / 2.0
+                and abs(y - cy) <= sy / 2.0
+                and abs(z - cz) <= sz / 2.0
+            )
+
+        residue_atoms: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+        for atom in parsed_atoms:
+            if str(atom.get("record", "")).upper() != "HETATM":
+                continue
+            key = (
+                str(atom.get("resname", "")).upper(),
+                str(atom.get("chain", "")),
+                str(atom.get("resseq", "")),
+            )
+            residue_atoms[key].append(atom)
+
+        for (resname, chain_id, resseq), residue_atoms_list in residue_atoms.items():
+            if resname in canonical_metals or resname in canonical_waters or resname in canonical_cofactors:
+                continue
+            classification = "out_of_box"
+            has_box_info = False
+            for atom in residue_atoms_list:
+                coords = atom.get("coords")
+                if not coords:
+                    continue
+                inside = _point_in_box(coords, center, box_size)
+                if inside is None:
+                    classification = "no_box"
+                    break
+                has_box_info = True
+                if inside:
+                    classification = "in_box"
+                    break
+            if classification == "out_of_box" and not has_box_info:
+                classification = "no_box"
+            logging.info(
+                "[holo.ligand.box] pdb=%s resname=%s chain=%s resseq=%s classification=%s num_atoms=%d",
+                pdb_id,
+                resname,
+                chain_id,
+                resseq,
+                classification,
+                len(residue_atoms_list),
+            )
 
         # Build residue-present keys from the cleaned PDB to ensure idempotency
         present_keys = set()
@@ -5233,7 +5316,12 @@ def run_molprobity_validate(pdb_path: Union[str, Path], work_dir: Optional[Union
 # Module Entrypoint
 # =============================
 
-def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
+def main(
+    pdb_filename: str,
+    output_dir: Union[str, Path] = r"./processed_pdbs",
+    center: Optional[Tuple[float, float, float]] = None,
+    box_size: Optional[Tuple[float, float, float]] = None,
+):
     """High-level wrapper: clean a PDB and prepare the receptor PDBQT."""
     try:
         # Resolve input path robustly:
@@ -5318,16 +5406,10 @@ def main(pdb_filename: str, output_dir: Union[str, Path] = r"./processed_pdbs"):
                          cleaned_pdb, output_pdbqt, exists, size)
             raise RuntimeError(f"receptor_pdbqt_failed: {pdb_id}")
 
-        # --- HOLO-only stash & restore (minimal, surgical) ---
-        try:
-            _m_add, _c_add, _regen = _holo_restore_from_input_if_needed(
-                pdb_id=pdb_id,
-                cleaned_pdb=cleaned_pdb,
-                output_pdbqt=output_pdbqt,
-                config=config,
-            )
-        except Exception as _restore_err:
-            logging.warning("[holo.restore] action=skip reason=%s", _restore_err)
+        # --- HOLO-only stash & restore (moved to process_one_protein) ---
+        # NOTE: _holo_restore_from_input_if_needed is now invoked from main.process_one_protein
+        # after pocket detection, once the docking box center/size are known.
+        # This block is intentionally left as a no-op to avoid double-restore.
 
         # Success path summary
         try:
