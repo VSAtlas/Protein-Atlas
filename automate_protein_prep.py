@@ -1733,6 +1733,7 @@ def _holo_restore_from_input_if_needed(
             donor_icode_lookup[(resname, chain, resseq, atom_name)] = icode
 
         coord_ligand_residues: set[tuple[str, str, str, str]] = set()
+        core_water_residues: set[tuple[str, str, str]] = set()
         for metal in metal_atoms_pre:
             donors = _find_metal_donors(metal, parsed_atoms_pre, canonical_waters)
             coords_val = metal.get("coords")
@@ -1758,13 +1759,16 @@ def _holo_restore_from_input_if_needed(
                 dist_term,
             )
             for donor in donors:
-                if donor.get("category") != "ligand":
-                    continue
                 resname = str(donor.get("resname", "")).upper()
                 chain = str(donor.get("chain", ""))
                 resseq = str(donor.get("resseq", ""))
                 atom_name = str(donor.get("atom_name", ""))
                 icode = donor_icode_lookup.get((resname, chain, resseq, atom_name), "")
+                if donor.get("category") == "water":
+                    core_water_residues.add((chain, resseq, icode))
+                    continue
+                if donor.get("category") != "ligand":
+                    continue
                 coord_ligand_residues.add((resname, chain, resseq, icode))
 
         def _point_in_box(pt, center_val, box_val):
@@ -1841,18 +1845,30 @@ def _holo_restore_from_input_if_needed(
             logging.warning("[holo.restore] skip reason=cleaned_unreadable err=%s", e)
             return (0, 0, False)
 
-        # Classify metals/cofactors; never treat waters as restore candidates
+        # Classify metals/cofactors; treat water donors separately
         for ln in input_lines:
             if not ln.startswith("HETATM"):
                 continue
             resname = ln[17:20].strip().upper()
-            if resname in canonical_waters:
-                continue
             element = ln[76:78].strip().upper()
             chain = ln[21:22]
             resseq = ln[22:26].strip()
             icode = ln[26:27].strip()
             key = (resname, chain, resseq, icode)
+            water_key = (chain, resseq, icode)
+            if resname in canonical_waters:
+                if water_key not in core_water_residues:
+                    continue
+                if key not in present_keys:
+                    candidates.append(ln)
+                    logging.info(
+                        "[holo.water.restore] pdb=%s resname=%s chain=%s resseq=%s reason=metal_donor",
+                        pdb_id,
+                        resname,
+                        chain,
+                        resseq,
+                    )
+                continue
             classification = ligand_box_class.get(key, "no_box")
             is_metal = (element in canonical_metals) or (resname in canonical_metals)
             is_cofac = (resname in canonical_cofactors) and not is_metal
