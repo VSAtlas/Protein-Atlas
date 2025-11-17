@@ -70,9 +70,10 @@ WATER_KEEP_POLICY = "near_controls"
 #NOTE near center = center of active site, keep in mind
 # with active site recentering, this may not retain the exact waters you want if the site moves too much!!!!
 #CURRENTLY this value actually does nothing, but it will
-APO_HOLO_MODE = holo
+APO_HOLO_MODE = apo_vs_holo
 # apo | holo | apo_vs_holo | None 
-PH_ENSEMBLE=false
+PH_ENSEMBLE=true
+
 
 CTRL_REDOCK_EXHAUSTIVENESS = 24
 #run at  64 for more accuracy
