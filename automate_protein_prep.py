@@ -903,20 +903,44 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
             _IONS_CFG_LOGGED = True
         return allow, source
 
+    def _tokens_from_attr(value: object) -> set[str]:
+        if value is None:
+            return set()
+        if isinstance(value, Mapping):
+            return _to_upper_set(value.keys())
+        if isinstance(value, str):
+            return _to_upper_set([value])
+        return _to_upper_set(value)
+
+    def _load_canonical_attr(name: str, loader) -> set[str]:
+        tokens = _tokens_from_attr(getattr(ALIASES, name, None))
+        if tokens:
+            return tokens
+        try:
+            loaded = loader(None)
+        except Exception as exc:
+            logging.warning("[ions.cfg] canonical_load_failed attr=%s err=%s", name, exc)
+            return set()
+        return _to_upper_set(loaded)
+
+    canonical_metals = _load_canonical_attr("canonical_metals", load_canonical_metals)
+    canonical_cofactors = _load_canonical_attr("canonical_cofactors", load_canonical_cofactors)
+    canonical_waters = _load_canonical_attr("canonical_waters", load_canonical_waters)
+    legacy_tokens = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
+
+    base_tokens = (
+        canonical_metals | canonical_cofactors | canonical_waters | legacy_tokens
+    )
+
     candidate = None
     if cfg and "retain_in_receptor_resnames" in cfg:
-        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
         candidate = cfg.get("retain_in_receptor_resnames")
     elif "retain_in_receptor_resnames" in config:
-        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
         candidate = config.get("retain_in_receptor_resnames")
 
-    allow_items: Iterable[str] | None = list(getattr(ALIASES, "retain_resnames", []))
-    source = "aliases"
-
+    config_tokens: set[str] = set()
     if isinstance(candidate, (list, tuple, set)):
-        allow_items = list(candidate)
-        source = "config"
+        config_tokens = _to_upper_set(candidate)
     elif isinstance(candidate, str) and candidate.strip():
         text = candidate.strip()
         parsed: Iterable[str] | None = None
@@ -925,41 +949,24 @@ def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
                 loaded = json.loads(text)
                 if isinstance(loaded, list):
                     parsed = loaded
-                    source = "config"
             except Exception as exc:
-                logging.warning("[ions.cfg] inline_json_parse_failed=%s err=%s", text[:40], exc)
-        if parsed is None:
-            yaml_path = Path(text).expanduser()
-            if yaml_path.is_file():
-                try:
-                    with open(yaml_path, "r", encoding="utf-8") as fh:
-                        data = _activesite_mod.yaml.safe_load(fh) or []
-                    if isinstance(data, dict):
-                        # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
-                        payload = data.get("retain_in_receptor_resnames")
-                        if isinstance(payload, list):
-                            data = payload
-                    if isinstance(data, list):
-                        parsed = data
-                        source = str(yaml_path)
-                    else:
-                        raise TypeError("yaml_payload_not_list")
-                except Exception as exc:
-                    logging.warning("[ions.cfg] yaml_load_failed path=%s err=%s", yaml_path, exc)
+                logging.warning(
+                    "[ions.cfg] inline_json_parse_failed=%s err=%s", text[:40], exc
+                )
         if parsed is None:
             tokens = [tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()]
             if tokens:
                 parsed = tokens
-                source = "config"
         if parsed is not None:
-            allow_items = parsed
+            config_tokens = _to_upper_set(parsed)
 
-    base_tokens = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
-    merged_tokens = _to_upper_set(allow_items)
-    allow_set = set(base_tokens) | merged_tokens
-    if source != "aliases" and base_tokens:
-        source = f"aliases+{source}"
-    elif not source:
+    allow_set = set(base_tokens) | set(config_tokens)
+    source = "aliases"
+    if config_tokens and base_tokens:
+        source = "aliases+config"
+    elif config_tokens and not base_tokens:
+        source = "config"
+    elif not base_tokens:
         source = "aliases"
 
     _IONS_CFG_CACHE = (allow_set, source)
