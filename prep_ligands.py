@@ -926,13 +926,26 @@ def collapse_sanitized_once(p: Path) -> Path:
     return p.with_name(_SANITIZED_RE.sub('.sanitized', p.name))
 
 
-def add_hydrogens_mol2(in_path: Path, out_path: Path, obabel_exe: str) -> tuple[bool, str]:
+def _ph_label(ph: float) -> str:
+    """Canonical label for ligand pH subdirectories, e.g. 7.0 -> 'pH7_0'."""
+    return f"pH{ph:.1f}".replace('.', '_')
+
+
+def add_hydrogens_mol2(
+    in_path: Path,
+    out_path: Path,
+    obabel_exe: str,
+    ph: Optional[float] = None,
+) -> tuple[bool, str]:
     """
     Ensure explicit H before MGLTools. Returns (ok, stderr_text).
     Uses obabel -h to add hydrogens *without* changing atom order more than necessary.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [obabel_exe, "-imol2", str(in_path), "-omol2", "-O", str(out_path), "-h"]
+    cmd = [obabel_exe, "-imol2", str(in_path), "-omol2", "-O", str(out_path)]
+    if ph is not None:
+        cmd.extend(["-p", str(ph)])
+    cmd.append("-h")
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return True, (res.stderr or "").strip()
@@ -1900,7 +1913,8 @@ def _prepare_one(
         pdbqt_path: Path,
         obabel_exe_short: Optional[str] = None,
         *,
-        status_log_dir: Path
+        status_log_dir: Path,
+        ph: Optional[float] = None,
 ) -> Tuple[str, str]:
     # use the H-enriched input
 
@@ -1908,6 +1922,13 @@ def _prepare_one(
     writer_final = "mgltools"
     rescue_used = False
     torsion_rule_label = "adt_default"
+
+    def _relpath_for_status(target: Path) -> str:
+        try:
+            return str(target.relative_to(status_log_dir))
+        except Exception:
+            return target.name
+
     logging.info("[debug] _prepare_one lig=%s mol2=%s out=%s obabel=%s",
                  lig_id, mol2_file.name, pdbqt_path.name, bool(obabel_exe_short))
 
@@ -1928,7 +1949,7 @@ def _prepare_one(
 
             if pre_H > 0 and post_H == 0:
                 logging.warning(f"[re-arom] LOST all explicit H! Will re-add via obabel -h.")
-                add_hydrogens_mol2(mol2_in, mol2_in, obabel_exe_short)  # in-place re-add
+                add_hydrogens_mol2(mol2_in, mol2_in, obabel_exe_short, ph=ph)  # in-place re-add
                 post2_H = _count_explicit_H_in_mol2(mol2_in)
                 logging.info(f"[re-arom] after re-add: H={post2_H}")
 
@@ -1952,7 +1973,7 @@ def _prepare_one(
     mol2_h = mol2_in.with_name(mol2_in.stem + ".withH.mol2")
 
     preH0 = _count_explicit_H_in_mol2(mol2_in)
-    okH, hstderr = add_hydrogens_mol2(mol2_in, mol2_h, obabel_exe_short)
+    okH, hstderr = add_hydrogens_mol2(mol2_in, mol2_h, obabel_exe_short, ph=ph)
     postH0 = _count_explicit_H_in_mol2(mol2_h) if mol2_h.exists() else -1
 
     logging.info("[ligprep] addHs stage=primary in=%s ok=%s preH=%s postH=%s",
@@ -2077,7 +2098,7 @@ def _prepare_one(
 
     if H_in == 0:
         logging.warning("[ADT] No explicit H in input MOL2; forcing obabel -h first.")
-        add_hydrogens_mol2(mol2_for_mgl, mol2_for_mgl, obabel_exe_short)
+        add_hydrogens_mol2(mol2_for_mgl, mol2_for_mgl, obabel_exe_short, ph=ph)
 
     # use the H-enriched file for MGLTools (cwd is mol2_file.parent)
     mol2_short = mol2_for_mgl.name
@@ -2092,7 +2113,7 @@ def _prepare_one(
     if H_in == 0 and obabel_exe_short:
         logging.warning("[ADT] No explicit H in input MOL2; forcing obabel -h first.")
         # in-place enrich (safe because we immediately read it)
-        add_hydrogens_mol2(mol2_for_mgl, mol2_for_mgl, obabel_exe_short)
+        add_hydrogens_mol2(mol2_for_mgl, mol2_for_mgl, obabel_exe_short, ph=ph)
 
     cmd = [
         mgltools_python_short, prepare_script_short,
@@ -2329,7 +2350,7 @@ def _prepare_one(
                     ligand_name=lig_id,
                     status="quarantined",
                     reason="adt_helium_inconsistent",
-                    relpath=str(qpath.name),
+                    relpath=_relpath_for_status(qpath),
                     stage="validate_pdbqt",
                     failure_code="adt_helium_inconsistent",
                     failure_detail=q_reason,
@@ -2347,7 +2368,7 @@ def _prepare_one(
                     ligand_name=lig_id,
                     status="ok",
                     reason="",
-                    relpath=str(pdbqt_path.name),
+                    relpath=_relpath_for_status(pdbqt_path),
                     stage="write_pdbqt",
                     failure_code="",
                     failure_detail="",
@@ -2362,7 +2383,7 @@ def _prepare_one(
                     ligand_name=lig_id,
                     status="ok",
                     reason="",
-                    relpath=str(pdbqt_path.name),
+                    relpath=_relpath_for_status(pdbqt_path),
                     stage="write_pdbqt",
                     failure_code="",
                     failure_detail="",
@@ -2392,7 +2413,7 @@ def _prepare_one(
                 ligand_name=mol2_file.stem,
                 status="quarantined",
                 reason="invalid_pdbqt_postwrite",
-                relpath=str(qpath.name if qpath.exists() else ""),
+                relpath=_relpath_for_status(qpath if qpath.exists() else pdbqt_path),
                 stage="validate_pdbqt",
                 failure_code="invalid_pdbqt_postwrite",
                 failure_detail=whyV,
@@ -2482,7 +2503,7 @@ def _prepare_one(
                 ligand_name=lig_id,
                 status="quarantined",
                 reason="FAIL_CLOSED",
-                relpath=str(qpath.name),
+                relpath=_relpath_for_status(qpath),
                 stage="validate_invariants",
                 failure_code="FAIL_CLOSED",
                 failure_detail=",".join(inv_fail),
@@ -2505,7 +2526,7 @@ def _prepare_one(
                 ligand_name=lig_id,
                 status="ok",
                 reason="",
-                relpath=str(pdbqt_path.name),
+                relpath=_relpath_for_status(pdbqt_path),
                 stage="write_pdbqt",
                 failure_code="",
                 failure_detail="",
@@ -3279,7 +3300,8 @@ def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
     return path.exists() and path.stat().st_size > 100 and is_valid_ligand(path, log_dir=log_dir)
 
 
-def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None):
+def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None,
+                               ph_values: Optional[List[float]] = None):
     # also honor an env var as a fallback (useful in batch/HPC)
     if not force:
         env_force = os.environ.get("LIGPREP_FORCE", "").strip().lower()
@@ -3366,6 +3388,17 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     MAX_HEAVY_ATOMS = _env_int("MAX_HEAVY_ATOMS", cfg.get("MAX_HEAVY_ATOMS", 1200))
     MIN_ATOMS_FOR_DOCKING = _env_int("MIN_ATOMS_FOR_DOCKING", cfg.get("MIN_ATOMS_FOR_DOCKING", 5))
     MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
+
+    if ph_values is not None and len(ph_values) > 0:
+        eff_ph_values = [float(x) for x in ph_values]
+    else:
+        eff_ph_values = [float(LIGPREP_PH)]
+
+    multiple_ph = ph_values is not None and len(eff_ph_values) > 1
+    use_ph_subdirs = ph_values is not None
+    ph_source = "python" if ph_values is not None else "config"
+    ph_summary = ",".join(f"{ph:.1f}" for ph in eff_ph_values)
+    print(f"[ligprep] ph_schedule source={ph_source} values={ph_summary} multiple={multiple_ph}")
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     # If someone pointed MOL2s at 'prepped_ligands', redirect to 'ligands_mol2' (compat warning).
     if "prepped_ligands" in str(ligands_mol2_dir):
@@ -3374,6 +3407,13 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         ligands_mol2_dir = suggested
 
     ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
+
+    def _relative_to_output(path: Path) -> str:
+        try:
+            return str(path.relative_to(output_ligands_dir))
+        except Exception:
+            return path.name
+
     # Banner: show exactly where things will land for this run
     print(f"[ligprep] sdf_dir={ligands_mol2_dir / '_rdkit_embedded_sdf'} "
           f"mol2_dir={ligands_mol2_dir} "
@@ -3490,8 +3530,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         print(f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) into {output_ligands_dir}")
         max_workers = max(1, int(os.environ.get("CPU", "8")))
         futures = []
+        future_relpaths: Dict[Any, str] = {}
         ok_count = 0
         fail_count = 0
+        resume_skips = 0
+        resume_examples: List[str] = []
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for mol2_file in mol2_files:
                 norm_mol2 = collapse_sanitized_once(Path(mol2_file))
@@ -3503,29 +3546,14 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     except Exception as e:
                         logging.warning("[tidy] unable to normalize %s: %s", mol2_file, e)
 
-                pdbqt_path = output_ligands_dir / f"{Path(mol2_file).stem}.pdbqt"
+                lig_stem = Path(mol2_file).stem
+                mol2_for_submit = Path(mol2_file)
 
-                resume_skip = (
-                        not force
-                        and pdbqt_path.exists()
-                        and pdbqt_path.stat().st_size > 100
-                        and is_valid_ligand(pdbqt_path, log_dir=output_ligands_dir)
-                )
-                if resume_skip:
-                    logging.info("[resume] Valid PDBQT exists, skipping: %s", pdbqt_path.name)
-                    resume_skips = (resume_skips + 1) if 'resume_skips' in locals() else 1
-                    if 'resume_examples' not in locals(): resume_examples = []
-                    if len(resume_examples) < 10: resume_examples.append(pdbqt_path.name)
-                    continue
-
-                if force and pdbqt_path.exists():
-                    logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_path.name)
-                # --- Enforce active-site standardization on bulk MOL2s (explicit, before _prepare_one) ---
                 try:
-                    m_raw = Chem.MolFromMol2File(str(mol2_file), sanitize=False, removeHs=False)
+                    m_raw = Chem.MolFromMol2File(str(mol2_for_submit), sanitize=False, removeHs=False)
                     old_smiles = ""
                     try:
-                        m_old = Chem.MolFromMol2File(str(mol2_file), sanitize=True, removeHs=False)
+                        m_old = Chem.MolFromMol2File(str(mol2_for_submit), sanitize=True, removeHs=False)
                         if m_old:
                             old_smiles = Chem.MolToSmiles(m_old, isomericSmiles=True)
                     except Exception:
@@ -3539,47 +3567,82 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         except Exception:
                             pass
                         if old_smiles and new_smiles and old_smiles != new_smiles:
-                            logging.warning("[std:audit][bulk] %s: SMILES changed %s -> %s",
-                                            Path(mol2_file).name, old_smiles, new_smiles)
-                            _log_std_diff(output_ligands_dir, Path(mol2_file).stem, "bulk", old_smiles, new_smiles)
+                            logging.warning(
+                                "[std:audit][bulk] %s: SMILES changed %s -> %s",
+                                Path(mol2_for_submit).name, old_smiles, new_smiles,
+                            )
+                            _log_std_diff(output_ligands_dir, lig_stem, "bulk", old_smiles, new_smiles)
 
-                        std_path = Path(mol2_file).with_suffix(".std.mol2")
+                        std_path = Path(mol2_for_submit).with_suffix(".std.mol2")
                         Chem.MolToMol2File(m_std, str(std_path))
-                        mol2_file = std_path  # pass standardized path downstream
+                        mol2_for_submit = std_path  # pass standardized path downstream
                 except Exception as e:
-                    logging.warning("[std][bulk] skip for %s: %s", Path(mol2_file).name, e)
+                    logging.warning("[std][bulk] skip for %s: %s", Path(mol2_for_submit).name, e)
                 # --- end standardization parity block ---
 
-                futures.append(ex.submit(
-                    _prepare_one,
-                    mgltools_python_short, prepare_script_short,
-                    Path(mol2_file), pdbqt_path,
-                    obabel_exe_short=obabel_exe_short,
-                    status_log_dir=output_ligands_dir
-                ))
+                for ph_value in eff_ph_values:
+                    ph_label = _ph_label(ph_value) if use_ph_subdirs else None
+                    ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
+                    ph_out_dir.mkdir(parents=True, exist_ok=True)
+                    pdbqt_path = ph_out_dir / f"{lig_stem}.pdbqt"
+                    try:
+                        pdbqt_rel = _relative_to_output(pdbqt_path)
+                    except Exception:
+                        pdbqt_rel = pdbqt_path.name
+
+                    resume_skip = (
+                        not force
+                        and pdbqt_path.exists()
+                        and pdbqt_path.stat().st_size > 100
+                        and is_valid_ligand(pdbqt_path, log_dir=output_ligands_dir)
+                    )
+                    if resume_skip:
+                        logging.info(
+                            "[resume] Valid PDBQT exists, skipping: %s ph=%.2f",
+                            pdbqt_path, ph_value
+                        )
+                        resume_skips += 1
+                        if len(resume_examples) < 10:
+                            resume_examples.append(pdbqt_rel)
+                        continue
+
+                    if force and pdbqt_path.exists():
+                        logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_rel)
+                    fut = ex.submit(
+                        _prepare_one,
+                        mgltools_python_short, prepare_script_short,
+                        mol2_for_submit, pdbqt_path,
+                        obabel_exe_short=obabel_exe_short,
+                        status_log_dir=output_ligands_dir,
+                        ph=ph_value,
+                    )
+                    futures.append(fut)
+                    future_relpaths[fut] = pdbqt_rel
 
             total = len(futures)
             for i, fut in enumerate(as_completed(futures), 1):
                 name, status = fut.result()
                 lig_stem = Path(name).stem
+                relpath = future_relpaths.get(fut, f"{lig_stem}.pdbqt")
                 if status == "ok":
                     ok_count += 1
                     try:
-                        _append_prep_status(status_log, lig_stem, "OK", "", f"{lig_stem}.pdbqt")
+                        _append_prep_status(status_log, lig_stem, "OK", "", relpath)
                     except Exception:
                         pass
                 else:
                     fail_count += 1
                     try:
-                        _append_prep_status(status_log, lig_stem, "FAIL", status, f"{lig_stem}.pdbqt")
+                        _append_prep_status(status_log, lig_stem, "FAIL", status, relpath)
                     except Exception:
                         pass
                 if i % 100 == 0 or status != "ok":
                     print(f"[{i}/{total}] {name}: {status}")
             try:
                 print(
-                    f"[ligprep] scheduled={len(futures)} resume_skips={resume_skips if 'resume_skips' in locals() else 0}"
-                    f" force={force} examples_skipped={(resume_examples if 'resume_examples' in locals() else [])[:5]}")
+                    f"[ligprep] scheduled={len(futures)} resume_skips={resume_skips} force={force} "
+                    f"examples_skipped={resume_examples[:5]}"
+                )
             except Exception:
                 pass
 
@@ -3679,8 +3742,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         print(f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) into {output_ligands_dir}")
         max_workers = max(1, int(os.environ.get("CPU", "8")))
         futures = []
+        future_relpaths: Dict[Any, str] = {}
         ok_count = 0
         fail_count = 0
+        resume_skips = 0
+        resume_examples: List[str] = []
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for mol2_file in mol2_files:
                 norm_mol2 = collapse_sanitized_once(Path(mol2_file))
@@ -3692,55 +3758,73 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     except Exception as e:
                         logging.warning("[tidy] unable to normalize %s: %s", mol2_file, e)
 
-                # ← now back at the for-loop level
-                pdbqt_path = output_ligands_dir / f"{mol2_file.stem}.pdbqt"
+                mol2_input = Path(mol2_file)
+                lig_stem = mol2_input.stem
 
-                resume_skip = (
+                for ph_value in eff_ph_values:
+                    ph_label = _ph_label(ph_value) if use_ph_subdirs else None
+                    ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
+                    ph_out_dir.mkdir(parents=True, exist_ok=True)
+                    pdbqt_path = ph_out_dir / f"{lig_stem}.pdbqt"
+                    try:
+                        pdbqt_rel = _relative_to_output(pdbqt_path)
+                    except Exception:
+                        pdbqt_rel = pdbqt_path.name
+
+                    resume_skip = (
                         not force
                         and pdbqt_path.exists()
                         and pdbqt_path.stat().st_size > 100
                         and is_valid_ligand(pdbqt_path, log_dir=output_ligands_dir)
-                )
-                if resume_skip:
-                    logging.info("[resume] Valid PDBQT exists, skipping: %s", pdbqt_path.name)
-                    resume_skips = (resume_skips + 1) if 'resume_skips' in locals() else 1
-                    if 'resume_examples' not in locals(): resume_examples = []
-                    if len(resume_examples) < 10: resume_examples.append(pdbqt_path.name)
-                    continue
+                    )
+                    if resume_skip:
+                        logging.info(
+                            "[resume] Valid PDBQT exists, skipping: %s ph=%.2f",
+                            pdbqt_path, ph_value,
+                        )
+                        resume_skips += 1
+                        if len(resume_examples) < 10:
+                            resume_examples.append(pdbqt_rel)
+                        continue
 
-                if force and pdbqt_path.exists():
-                    logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_path.name)
+                    if force and pdbqt_path.exists():
+                        logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_rel)
 
-                futures.append(ex.submit(
-                    _prepare_one,
-                    mgltools_python_short, prepare_script_short,
-                    mol2_file, pdbqt_path,
-                    obabel_exe_short=obabel_exe_short,
-                    status_log_dir=output_ligands_dir
-                ))
+                    fut = ex.submit(
+                        _prepare_one,
+                        mgltools_python_short, prepare_script_short,
+                        mol2_input, pdbqt_path,
+                        obabel_exe_short=obabel_exe_short,
+                        status_log_dir=output_ligands_dir,
+                        ph=ph_value,
+                    )
+                    futures.append(fut)
+                    future_relpaths[fut] = pdbqt_rel
 
             total = len(futures)
             for i, fut in enumerate(as_completed(futures), 1):
                 name, status = fut.result()
                 lig_stem = Path(name).stem
+                relpath = future_relpaths.get(fut, f"{lig_stem}.pdbqt")
                 if status == "ok":
                     ok_count += 1
                     try:
-                        _append_prep_status(status_log, lig_stem, "OK", "", f"{lig_stem}.pdbqt")
+                        _append_prep_status(status_log, lig_stem, "OK", "", relpath)
                     except Exception:
                         pass
                 else:
                     fail_count += 1
                     try:
-                        _append_prep_status(status_log, lig_stem, "FAIL", status, f"{lig_stem}.pdbqt")
+                        _append_prep_status(status_log, lig_stem, "FAIL", status, relpath)
                     except Exception:
                         pass
                 if i % 100 == 0 or status != "ok":
                     print(f"[{i}/{total}] {name}: {status}")
             try:
                 print(
-                    f"[ligprep] scheduled={len(futures)} resume_skips={resume_skips if 'resume_skips' in locals() else 0}"
-                    f" force={force} examples_skipped={(resume_examples if 'resume_examples' in locals() else [])[:5]}")
+                    f"[ligprep] scheduled={len(futures)} resume_skips={resume_skips} force={force} "
+                    f"examples_skipped={resume_examples[:5]}"
+                )
             except Exception:
                 pass
 
