@@ -4867,6 +4867,25 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 variant_env,
             )
 
+        if receptor_pdbqt:
+            try:
+                protein_prep.run_metal_site_audit(
+                    pdb_id=paths.pdb_id,
+                    router_paths=paths,
+                    input_pdb_path=str(paths.input_pdb_path),
+                    receptor_pdb_path=cleaned_pdb,
+                    receptor_pdbqt_path=receptor_pdbqt,
+                    center=center,
+                    variant_label=variant_label,
+                    ph_label=active_ph_label,
+                )
+            except Exception as audit_err:
+                logger.warning(
+                    "[holo.metal_audit] action=skip pdb=%s reason=%s",
+                    paths.pdb_id,
+                    audit_err,
+                )
+
 
     # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
     resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
