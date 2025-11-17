@@ -1158,6 +1158,200 @@ def _find_metal_donors(
     return donors
 
 
+def run_metal_site_audit(
+    *,
+    pdb_id: str,
+    router_paths,
+    input_pdb_path: str,
+    receptor_pdb_path: str | None,
+    receptor_pdbqt_path: str | None,
+    center: Optional[tuple[float, float, float]] = None,
+    variant_label: str | None = None,
+    ph_label: str | None = None,
+) -> None:
+    """Build a single metal_site_audit.json comparing input vs receptor donors."""
+
+    try:
+        canonical_metals = set(load_canonical_metals(None))
+        canonical_waters = set(load_canonical_waters(None))
+    except Exception as exc:
+        logging.warning(
+            "[holo.metal_audit] skip reason=canonical_load_failed pdb=%s err=%s",
+            pdb_id,
+            exc,
+        )
+        return
+
+    try:
+        input_lines = Path(input_pdb_path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception as exc:
+        logging.warning(
+            "[holo.metal_audit] skip reason=input_read_failed pdb=%s err=%s",
+            pdb_id,
+            exc,
+        )
+        return
+
+    parsed_atoms_pre, metal_atoms_pre = _parse_atoms_from_pdb_like_lines(
+        input_lines, canonical_metals
+    )
+
+    def _metal_key(atom: Mapping[str, object]) -> tuple[str, str, str, str]:
+        return (
+            str(atom.get("element", "")).upper(),
+            str(atom.get("chain", "")),
+            str(atom.get("resseq", "")),
+            str(atom.get("atom_name", "")),
+        )
+
+    def _coords_list(atom: Mapping[str, object] | None) -> list[float] | None:
+        if not atom:
+            return None
+        coords = atom.get("coords")
+        if not coords:
+            return None
+        try:
+            ax, ay, az = coords  # type: ignore[misc]
+        except Exception:
+            return None
+        return [float(ax), float(ay), float(az)]
+
+    metal_pre_by_key: dict[tuple[str, str, str, str], Mapping[str, object]] = {}
+    donors_input_map: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
+    for metal in metal_atoms_pre:
+        key = _metal_key(metal)
+        metal_pre_by_key[key] = metal
+        donors_input_map[key] = _find_metal_donors(metal, parsed_atoms_pre, canonical_waters)
+
+    donors_receptor_map: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
+    metal_post_by_key: dict[tuple[str, str, str, str], Mapping[str, object]] = {}
+    if receptor_pdbqt_path:
+        pdbqt_lines: list[str] = []
+        try:
+            pdbqt_lines = Path(receptor_pdbqt_path).read_text(
+                encoding="utf-8", errors="ignore"
+            ).splitlines()
+        except Exception as exc:
+            logging.warning(
+                "[holo.metal_audit] skip reason=receptor_read_failed pdb=%s file=%s err=%s",
+                pdb_id,
+                receptor_pdbqt_path,
+                exc,
+            )
+        if pdbqt_lines:
+            parsed_atoms_post, metal_atoms_post = _parse_atoms_from_pdb_like_lines(
+                pdbqt_lines, canonical_metals
+            )
+            for metal in metal_atoms_post:
+                key = _metal_key(metal)
+                metal_post_by_key[key] = metal
+                donors_receptor_map[key] = _find_metal_donors(
+                    metal, parsed_atoms_post, canonical_waters
+                )
+
+    all_keys = sorted(set(metal_pre_by_key) | set(metal_post_by_key))
+
+    def _donor_key(entry: Mapping[str, object]) -> tuple[str, str, str, str, str]:
+        return (
+            str(entry.get("category", "")),
+            str(entry.get("resname", "")),
+            str(entry.get("chain", "")),
+            str(entry.get("resseq", "")),
+            str(entry.get("atom_name", "")),
+        )
+
+    metals_payload: list[dict[str, object]] = []
+    for key in all_keys:
+        donors_input = donors_input_map.get(key, [])
+        donors_receptor = donors_receptor_map.get(key, [])
+        input_set = {_donor_key(d) for d in donors_input}
+        receptor_set = {_donor_key(d) for d in donors_receptor}
+        lost_keys = input_set - receptor_set
+        gained_keys = receptor_set - input_set
+        lost_donors = [d for d in donors_input if _donor_key(d) in lost_keys]
+        gained_donors = [d for d in donors_receptor if _donor_key(d) in gained_keys]
+
+        metal_source = metal_pre_by_key.get(key) or metal_post_by_key.get(key) or {}
+        resname = str(metal_source.get("resname", ""))
+        chain = str(metal_source.get("chain", ""))
+        resseq = str(metal_source.get("resseq", ""))
+        icode = str(metal_source.get("icode", ""))
+        atom_name = str(metal_source.get("atom_name", ""))
+        element = str(metal_source.get("element", key[0] if key else ""))
+        coords_input = _coords_list(metal_pre_by_key.get(key))
+        coords_receptor = _coords_list(metal_post_by_key.get(key))
+        metals_payload.append(
+            {
+                "id": f"{element or 'UNK'}_{chain or '-'}_{resseq or '-'}_{atom_name or '-'}",
+                "element": element,
+                "resname": resname,
+                "chain": chain,
+                "resseq": resseq,
+                "icode": icode,
+                "atom_name": atom_name,
+                "coords_input": coords_input,
+                "coords_receptor": coords_receptor,
+                "donors_input": donors_input,
+                "donors_receptor": donors_receptor,
+                "lost_donors": lost_donors,
+                "gained_donors": gained_donors,
+            }
+        )
+
+    variant_for_path = variant_label or "HOLO"
+    if router_paths is None:
+        logging.warning(
+            "[holo.metal_audit] skip reason=router_missing pdb=%s variant=%s",
+            pdb_id,
+            variant_for_path,
+        )
+        return
+
+    try:
+        docked_variant_dir = router_paths.docked_variant_root(
+            variant_for_path, ph_label=ph_label
+        )
+        docked_variant_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        logging.warning(
+            "[holo.metal_audit] skip reason=path_resolve_failed pdb=%s err=%s",
+            pdb_id,
+            exc,
+        )
+        return
+
+    payload = {
+        "pdb_id": pdb_id,
+        "variant": variant_label or variant_for_path,
+        "ph_label": ph_label,
+        "source_files": {
+            "input_pdb": input_pdb_path,
+            "receptor_pdb": receptor_pdb_path,
+            "receptor_pdbqt": receptor_pdbqt_path,
+        },
+        "metals": metals_payload,
+    }
+
+    json_path = docked_variant_dir / "metal_site_audit.json"
+    tmp_path = json_path.with_suffix(".part")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp_path, json_path)
+        logging.info(
+            "[holo.metal_audit] pdb=%s metals=%d file=%s",
+            pdb_id,
+            len(metals_payload),
+            json_path,
+        )
+    except Exception as exc:
+        logging.warning(
+            "[holo.metal_audit] write_failed pdb=%s file=%s err=%s",
+            pdb_id,
+            json_path,
+            exc,
+        )
+
+
 def _maybe_strip_ions(
     pdb_path: Union[str, Path],
     cfg: Optional[dict] = None,
@@ -1497,7 +1691,7 @@ def _holo_restore_from_input_if_needed(
             input_pdb,
         )
 
-        # --- Begin metal coordination JSON audit (input vs receptor) ---
+        # --- Metal coordination scan for ligand restoration (JSON emitted later) ---
         parsed_atoms_pre, metal_atoms_pre = _parse_atoms_from_pdb_like_lines(
             input_lines, canonical_metals
         )
@@ -1512,34 +1706,8 @@ def _holo_restore_from_input_if_needed(
             donor_icode_lookup[(resname, chain, resseq, atom_name)] = icode
 
         coord_ligand_residues: set[tuple[str, str, str, str]] = set()
-
-        def _metal_key(atom: Mapping[str, object]) -> tuple[str, str, str, str]:
-            return (
-                str(atom.get("element", "")).upper(),
-                str(atom.get("chain", "")),
-                str(atom.get("resseq", "")),
-                str(atom.get("atom_name", "")),
-            )
-
-        def _coords_list(atom: Mapping[str, object] | None) -> list[float] | None:
-            if not atom:
-                return None
-            coords = atom.get("coords")
-            if not coords:
-                return None
-            try:
-                ax, ay, az = coords  # type: ignore[misc]
-            except Exception:
-                return None
-            return [float(ax), float(ay), float(az)]
-
-        donors_input_map: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
-        metal_pre_by_key: dict[tuple[str, str, str, str], Mapping[str, object]] = {}
         for metal in metal_atoms_pre:
-            key = _metal_key(metal)
-            metal_pre_by_key[key] = metal
             donors = _find_metal_donors(metal, parsed_atoms_pre, canonical_waters)
-            donors_input_map[key] = donors
             coords_val = metal.get("coords")
             if coords_val and center is not None and len(center) == 3:
                 try:
@@ -1571,127 +1739,6 @@ def _holo_restore_from_input_if_needed(
                 atom_name = str(donor.get("atom_name", ""))
                 icode = donor_icode_lookup.get((resname, chain, resseq, atom_name), "")
                 coord_ligand_residues.add((resname, chain, resseq, icode))
-
-        receptor_pdbqt_path = str(output_pdbqt)
-        pdbqt_lines: list[str] = []
-        try:
-            with open(receptor_pdbqt_path, "r", encoding="utf-8", errors="ignore") as f:
-                pdbqt_lines = f.readlines()
-        except Exception as exc:
-            logging.warning(
-                "[holo.metal_audit] skip_post reason=receptor_unreadable file=%s err=%s",
-                receptor_pdbqt_path,
-                exc,
-            )
-        parsed_atoms_post, metal_atoms_post = _parse_atoms_from_pdb_like_lines(
-            pdbqt_lines, canonical_metals
-        )
-        metal_post_by_key: dict[tuple[str, str, str, str], Mapping[str, object]] = {}
-        donors_receptor_map: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
-        for metal in metal_atoms_post:
-            key = _metal_key(metal)
-            metal_post_by_key[key] = metal
-            donors_receptor_map[key] = _find_metal_donors(
-                metal, parsed_atoms_post, canonical_waters
-            )
-
-        all_keys = sorted(set(metal_pre_by_key) | set(metal_post_by_key))
-
-        def _donor_key(entry: Mapping[str, object]) -> tuple[str, str, str, str, str]:
-            return (
-                str(entry.get("category", "")),
-                str(entry.get("resname", "")),
-                str(entry.get("chain", "")),
-                str(entry.get("resseq", "")),
-                str(entry.get("atom_name", "")),
-            )
-
-        metals_payload: list[dict[str, object]] = []
-        for key in all_keys:
-            donors_input = donors_input_map.get(key, [])
-            donors_receptor = donors_receptor_map.get(key, [])
-            input_set = {_donor_key(d) for d in donors_input}
-            post_set = {_donor_key(d) for d in donors_receptor}
-            lost_keys = input_set - post_set
-            gained_keys = post_set - input_set
-            lost_donors = [d for d in donors_input if _donor_key(d) in lost_keys]
-            gained_donors = [d for d in donors_receptor if _donor_key(d) in gained_keys]
-
-            metal_source = metal_pre_by_key.get(key) or metal_post_by_key.get(key) or {}
-            resname = str(metal_source.get("resname", ""))
-            chain = str(metal_source.get("chain", ""))
-            resseq = str(metal_source.get("resseq", ""))
-            icode = str(metal_source.get("icode", ""))
-            atom_name = str(metal_source.get("atom_name", ""))
-            element = str(metal_source.get("element", key[0] if key else ""))
-            coords_input = _coords_list(metal_pre_by_key.get(key))
-            coords_receptor = _coords_list(metal_post_by_key.get(key))
-            metal_id = f"{element or 'UNK'}_{chain or '-'}_{resseq or '-'}_{atom_name or '-'}"
-            metals_payload.append(
-                {
-                    "id": metal_id,
-                    "element": element,
-                    "resname": resname,
-                    "chain": chain,
-                    "resseq": resseq,
-                    "icode": icode,
-                    "atom_name": atom_name,
-                    "coords_input": coords_input,
-                    "coords_receptor": coords_receptor,
-                    "donors_input": donors_input,
-                    "donors_receptor": donors_receptor,
-                    "lost_donors": lost_donors,
-                    "gained_donors": gained_donors,
-                }
-            )
-
-        variant_label = variant_token or "legacy"
-        ph_label = None
-        docked_variant_dir = None
-        if router_paths is not None:
-            try:
-                docked_variant_dir = router_paths.docked_variant_root(
-                    variant_token, ph_label=ph_label
-                )
-                docked_variant_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as exc:
-                logging.warning(
-                    "[holo.metal_audit] skip reason=path_resolve_failed err=%s", exc
-                )
-                docked_variant_dir = None
-        else:
-            logging.warning("[holo.metal_audit] skip reason=router_paths_missing")
-
-        if docked_variant_dir is not None:
-            json_path = docked_variant_dir / "metal_site_audit.json"
-            payload = {
-                "pdb_id": pdb_id,
-                "variant": variant_label,
-                "ph_label": ph_label,
-                "source_files": {
-                    "input_pdb": input_pdb,
-                    "receptor_pdbqt": receptor_pdbqt_path,
-                },
-                "metals": metals_payload,
-            }
-            tmp_path = json_path.with_suffix(".part")
-            try:
-                tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-                os.replace(tmp_path, json_path)
-                logging.info(
-                    "[holo.metal_audit] pdb=%s metals=%d file=%s",
-                    pdb_id,
-                    len(metals_payload),
-                    json_path,
-                )
-            except Exception as exc:
-                logging.warning(
-                    "[holo.metal_audit] write_failed pdb=%s file=%s err=%s",
-                    pdb_id,
-                    json_path,
-                    exc,
-                )
-        # --- End metal coordination JSON audit ---
 
         def _point_in_box(pt, center_val, box_val):
             if center_val is None or box_val is None:
