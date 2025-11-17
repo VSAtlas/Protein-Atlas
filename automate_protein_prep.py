@@ -1298,6 +1298,32 @@ def run_metal_site_audit(
             }
         )
 
+    total_input = 0
+    total_receptor = 0
+    per_metal_summary: list[dict[str, object]] = []
+    for metal in metals_payload:
+        donors_input = metal.get("donors_input", []) or []
+        donors_receptor = metal.get("donors_receptor", []) or []
+        input_count = len(donors_input)
+        receptor_count = len(donors_receptor)
+        total_input += input_count
+        total_receptor += receptor_count
+        per_metal_summary.append(
+            {
+                "id": metal.get("id"),
+                "input_count": input_count,
+                "receptor_count": receptor_count,
+                "delta": input_count - receptor_count,
+            }
+        )
+
+    coordination_summary = {
+        "total_input_count": total_input,
+        "total_receptor_count": total_receptor,
+        "total_delta": total_input - total_receptor,
+        "per_metal": per_metal_summary,
+    }
+
     variant_for_path = variant_label or "HOLO"
     if router_paths is None:
         logging.warning(
@@ -1330,6 +1356,7 @@ def run_metal_site_audit(
             "receptor_pdbqt": receptor_pdbqt_path,
         },
         "metals": metals_payload,
+        "coordination_summary": coordination_summary,
     }
 
     json_path = docked_variant_dir / "metal_site_audit.json"
