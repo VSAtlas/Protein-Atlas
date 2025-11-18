@@ -1519,6 +1519,19 @@ def rdkit_embed_sdf_to_mol2(
     mols = [(i, m) for i, m in enumerate(suppl) if m is not None]
     print(f"RDKit: loaded {len(mols)} molecules from {sdf_in.name}")
 
+    parent_names: List[str] = []
+    if mols:
+        max_idx = max(i for i, _ in mols)
+        parent_names = ["" for _ in range(max_idx + 1)]
+        for idx, mol in mols:
+            name_val = ""
+            try:
+                if mol is not None and mol.HasProp("_Name"):
+                    name_val = mol.GetProp("_Name")
+            except Exception:
+                name_val = ""
+            parent_names[idx] = name_val
+
     sdf_tmp_dir = mol2_out_dir / "_rdkit_embedded_sdf"
     sdf_tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1577,7 +1590,12 @@ def rdkit_embed_sdf_to_mol2(
             out = sdf_tmp_dir / f"rdk_{i:07d}.sdf"
             if _write_obabel_friendly_sdf(m, out):
                 logging.info("[paths] sdf_out=%s", str(out.resolve()))
-
+                name_path = out.with_suffix(".name")
+                try:
+                    name_val = parent_names[i] if 0 <= i < len(parent_names) else ""
+                    name_path.write_text((name_val or "").rstrip("\r\n"), encoding="utf-8")
+                except Exception:
+                    pass
                 return out
 
             else:
@@ -3735,13 +3753,12 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 mol2_input = Path(mol2_file)
                 lig_stem = mol2_input.stem
                 if not is_fda_library:
+                    name_path = mol2_input.with_suffix(".name")
                     try:
-                        m_for_name = Chem.MolFromMol2File(str(mol2_input), sanitize=False, removeHs=False)
-                        parent_name = ""
-                        if m_for_name is not None and m_for_name.HasProp("_Name"):
-                            parent_name = m_for_name.GetProp("_Name")
-                        if parent_name:
-                            lig_stem = _sanitize_ligand_name_for_filename(parent_name)
+                        if name_path.exists():
+                            parent_name = name_path.read_text(encoding="utf-8", errors="ignore").strip()
+                            if parent_name:
+                                lig_stem = _sanitize_ligand_name_for_filename(parent_name)
                     except Exception:
                         # If anything goes wrong, fall back to the original stem (rdk_*, mol2_chunk_*, etc.)
                         pass
