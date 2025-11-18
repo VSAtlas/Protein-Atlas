@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Optional: first arg can be "-j N" or "--jobs N" to run N instances in parallel
+JOBS=1
+if [[ $# -ge 2 && ( "${1:-}" == "-j" || "${1:-}" == "--jobs" ) ]]; then
+    JOBS="$2"
+    shift 2
+fi
+
 # Directory where this script lives
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Atlas root:
-# - Default: two levels up from this script (…/atlas2)
-# - Override: export ATLAS_ROOT=/path/to/atlas2
+# - Default: two levels up from this script (…/atlas2 or …/atlas)
+# - Override: export ATLAS_ROOT=/path/to/atlas_root
 ATLAS_ROOT="${ATLAS_ROOT:-"$(cd "$SCRIPT_DIR/../.." && pwd)"}"
 
 # DeepCoy install location:
@@ -20,7 +27,7 @@ DEEPCOY_DIR="${DEEPCOY_DIR:-"${ATLAS_ROOT}/tools/DeepCoy"}"
 DEEPCOY_ENV="${DEEPCOY_ENV:-deepcoy-env}"
 
 # Micromamba command:
-# - Default: "micromamba" (whatever your PATH / shell provides)
+# - Default: "micromamba" (whatever your PATH provides)
 # - Override: export MICROMAMBA_BIN=/full/path/to/micromamba
 MM_BIN="${MICROMAMBA_BIN:-micromamba}"
 
@@ -32,5 +39,15 @@ fi
 
 cd "$DEEPCOY_DIR"
 
-# Forward all arguments to DeepCoy.py inside the DeepCoy env
-exec "$MM_BIN" run -n "$DEEPCOY_ENV" python DeepCoy.py "$@"
+if [[ "$JOBS" -le 1 ]]; then
+  # Single DeepCoy run (original behavior)
+  exec "$MM_BIN" run -n "$DEEPCOY_ENV" python DeepCoy.py "$@"
+else
+  echo "Launching ${JOBS} DeepCoy jobs in parallel..."
+  for i in $(seq 1 "$JOBS"); do
+    echo "  -> DeepCoy job $i"
+    "$MM_BIN" run -n "$DEEPCOY_ENV" python DeepCoy.py "$@" &
+  done
+  wait
+  echo "All DeepCoy jobs finished."
+fi

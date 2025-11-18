@@ -73,8 +73,8 @@ RESUME_SKIP = False
 
 
 MAX_HEAVY_ATOMS = 1200
-MIN_ATOMS_FOR_DOCKING = 5
-MIN_PARENT_HEAVY = 8
+MIN_ATOMS_FOR_DOCKING = 3
+MIN_PARENT_HEAVY = 4
 
 # ----------- tuning switches -----------
 USE_RDKIT_FOR_3D = True
@@ -2732,6 +2732,12 @@ def _resolve_prepare_ligand4(mgltools_path: str, cfg: Dict[str, str]) -> Path:
     return lin_probe
 
 
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.+-]+")
+
+
+
+
+
 def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepped_ligands_dir: Path):
     """
     Crystal-safe path to prepare ligands that were extracted from PDBs (processed_pdbs/*/ligands_raw/*.pdb).
@@ -3321,14 +3327,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         or ""
     )
     pdb_id = Path(str(pdb_token)).stem.upper() if pdb_token else "LIGPREP"
-    # >>> PATHS INIT START
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    # >>> PATHS INIT END
-    # ---------- resolve numeric/env knobs you already had ----------
-    MIN_TORS_DOF = _env_int("MIN_TORS_DOF", cfg.get("MIN_TORS_DOF", 0))
-    MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
+    #
 
-    # ---------- NEW: resolve overrideable effective paths ----------
+
+    # ---------- resolve overrideable effective paths ----------
     # read ENV once here; CLI (if used) will populate these env vars in __main__
     in_sdf_env = (os.environ.get("LIGPREP_IN_SDF", "") or "").strip() or None
     in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
@@ -3338,22 +3341,24 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     status_log_env = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
 
     # default to config when not overridden
-    # >>> LIGAND PATHS PATCH START
     ligands_raw_dir  = paths.ligand_output_dir
     prepped_lig_dir  = paths.prepped_ligands_dir
     ligands_mol2_dir = paths.ligands_mol2_dir
-    # >>> LIGAND PATHS PATCH END
 
     ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
     ligands_mol2_dir = Path(mol2_dir_env).resolve() if mol2_dir_env else ligands_mol2_dir
     output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
     prepped_ligands_dir = output_ligands_dir
+    library_hint = prepped_ligands_dir.name.lower()
+    is_fda_library = (library_hint == "fda")
     # direct all malformed logs for this protein to its prepped_ligands dir
     global MALFORMED_DIR
+
     MALFORMED_DIR = prepped_ligands_dir
     # create working/output dirs
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
+
 
     # emit a compact audit banner (single line)
     print(
@@ -3379,6 +3384,12 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         v = os.environ.get(name)
         return float(v) if v not in (None, "") else float(default)
 
+    def _sanitize_ligand_name_for_filename(name: str) -> str:
+        name = name.strip()
+        name = name.replace(" ", "_")
+        name = re.sub(r"[^A-Za-z0-9_.+-]+", "_", name)
+        return name[:80] or "ligand"
+
     USE_RDKIT_FOR_3D = _env_bool("USE_RDKIT_FOR_3D", cfg.get("USE_RDKIT_FOR_3D", True))
     OBABEL_THREADS = _env_int("OBABEL_THREADS", cfg.get("OBABEL_THREADS", 50))
     OBABEL_TIMEOUT_S = _env_int("OBABEL_TIMEOUT_S", cfg.get("OBABEL_TIMEOUT_S", 900))
@@ -3388,7 +3399,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     MAX_HEAVY_ATOMS = _env_int("MAX_HEAVY_ATOMS", cfg.get("MAX_HEAVY_ATOMS", 1200))
     MIN_ATOMS_FOR_DOCKING = _env_int("MIN_ATOMS_FOR_DOCKING", cfg.get("MIN_ATOMS_FOR_DOCKING", 5))
     MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
+    # ---------- resolve numeric/env knobs you already had ----------
+    MIN_TORS_DOF = _env_int("MIN_TORS_DOF", cfg.get("MIN_TORS_DOF", 0))
+    MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
 
+    
     if ph_values is not None and len(ph_values) > 0:
         eff_ph_values = [float(x) for x in ph_values]
     else:
@@ -3463,7 +3478,10 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     rdkit_unit_sdf_dir = ligands_mol2_dir / "_rdkit_embedded_sdf"
     unit_sdfs = sorted(rdkit_unit_sdf_dir.glob("*.sdf")) if rdkit_unit_sdf_dir.is_dir() else []
 
-    if unit_sdfs:
+    # Only allow “true test-mode” when NO explicit SDF or PDB input was specified.
+    test_mode_allowed = (in_sdf_env is None) and (in_pdb_dir_env is None)
+
+    if unit_sdfs and test_mode_allowed:
         print(f"[test-mode] per-ligand SDFs detected dir={rdkit_unit_sdf_dir}")
         # Build the candidate SDF list
         selected_sdfs: List[Path]
@@ -3471,23 +3489,44 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             # only is already normalized to canonical rdk_{7d} by _collect_only_from_env_and_cli
             requested_ids = sorted(only)
             # map requested ids to files (only those that exist)
-            selected_sdfs = [rdkit_unit_sdf_dir / f"{rid}.sdf" for rid in requested_ids if
-                             (rdkit_unit_sdf_dir / f"{rid}.sdf").exists()]
-            missing = [rid for rid in requested_ids if not (rdkit_unit_sdf_dir / f"{rid}.sdf").exists()]
+            selected_sdfs = [
+                rdkit_unit_sdf_dir / f"{rid}.sdf"
+                for rid in requested_ids
+                if (rdkit_unit_sdf_dir / f"{rid}.sdf").exists()
+            ]
+            missing = [
+                rid
+                for rid in requested_ids
+                if not (rdkit_unit_sdf_dir / f"{rid}.sdf").exists()
+            ]
 
             # diagnostics (bounded)
-            print(f"[test-mode] enabled only_count={len(requested_ids)} sample={','.join(requested_ids[:10])}")
-            print(f"[test-mode] selected_sdf_count={len(selected_sdfs)} missing={len(missing)}"
-                  + (f" first_missing={','.join(missing[:10])}" if missing else ""))
+            print(
+                f"[test-mode] enabled only_count={len(requested_ids)} "
+                f"sample={','.join(requested_ids[:10])}"
+            )
+            print(
+                f"[test-mode] selected_sdf_count={len(selected_sdfs)} missing={len(missing)}"
+                + (f" first_missing={','.join(missing[:10])}" if missing else "")
+            )
 
             if len(selected_sdfs) == 0:
-                print("[test-mode] No requested per-ligand SDFs found. Nothing to do; exiting cleanly.")
+                print(
+                    "[test-mode] No requested per-ligand SDFs found. "
+                    "Nothing to do; exiting cleanly."
+                )
                 return
         else:
             # ONLY not set: prefer all per-ligand SDFs instead of bulk
             selected_sdfs = unit_sdfs
+
         # Optional cleanup of existing PDBQTs for the selected subset (before scheduling)
-        clean_env = os.environ.get("LIGPREP_CLEAN", "").strip().lower() in {"1", "true", "yes", "y"}
+        clean_env = os.environ.get("LIGPREP_CLEAN", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+        }
         if clean_env and selected_sdfs:
             cleaned = []
             for sdf_in in selected_sdfs:
@@ -3499,158 +3538,93 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     except Exception:
                         pass
             if cleaned:
-                logging.info("[clean] removed_existing=%d sample=%s", len(cleaned), ",".join(cleaned[:5]))
-                print(f"[clean] removed={len(cleaned)} sample={','.join(cleaned[:5])}")
+                logging.info(
+                    "[clean] removed %d existing PDBQTs: %s",
+                    len(cleaned),
+                    ",".join(cleaned[:20]),
+                )
 
-        # Convert each selected per-ligand SDF → MOL2 (idempotent unless --force)
+        # Convert the selected SDFs to MOL2 using Open Babel
         mol2_files: List[Path] = []
         for sdf_in in selected_sdfs:
-            out_mol2 = ligands_mol2_dir / (sdf_in.stem + ".mol2")
-            if out_mol2.exists() and out_mol2.stat().st_size > 100 and not force:
-                mol2_files.append(out_mol2)
+            sdf_name = sdf_in.name
+            mol2_out = ligands_mol2_dir / (sdf_in.stem + ".mol2")
+            print(
+                f"[ligprep] pre-MOL2-write: per-ligand sdf={sdf_name} -> mol2={mol2_out.name}"
+            )
+            ok, stderr_text = _sdf_to_mol2(
+                sdf_in,
+                mol2_out,
+                obabel_exe_short,
+                timeout_sec=max(60, LIGPREP_OBABEL_TIMEOUT_SEC),
+            )
+            if not ok:
+                print(
+                    f"[ligprep] WARNING: Open Babel SDF->MOL2 failed for {sdf_name}: {stderr_text[:200]}"
+                )
                 continue
-
-            cmd = [obabel_exe_short, "-isdf", get_short_path_name(str(sdf_in.resolve())), "-omol2",
-                   "-O", get_short_path_name(str(out_mol2.resolve()))]
-            print(f"[ligprep] pre-MOL2-write: per-ligand sdf={sdf_in.name} -> mol2={out_mol2.name}")
-            ok = _run_obabel(cmd, timeout_sec=600)
-            if ok and out_mol2.exists() and out_mol2.stat().st_size > 100:
-                mol2_files.append(out_mol2)
-
-        if not mol2_files:
-            print("[test-mode] No MOL2 files produced from per-ligand SDFs; exiting.")
-            return
+            mol2_files.append(mol2_out)
 
         # If ONLY set, show concise banner of the subset that will be scheduled
         if only:
             sample = ",".join(sorted({Path(p).stem for p in mol2_files})[:10])
-            print(f"[test-mode] scheduling_only={len(mol2_files)} sample={sample}")
+            print(
+                f"[test-mode] scheduling_only={len(mol2_files)} sample={sample}"
+            )
 
         # ===== Schedule only the selected MOL2s for PDBQT (same logic as bulk path) =====
-        print(f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) into {output_ligands_dir}")
+        print(
+            f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) "
+            f"into {output_ligands_dir}"
+        )
         max_workers = max(1, int(os.environ.get("CPU", "8")))
         futures = []
-        future_relpaths: Dict[Any, str] = {}
         ok_count = 0
         fail_count = 0
-        resume_skips = 0
-        resume_examples: List[str] = []
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for mol2_file in mol2_files:
-                norm_mol2 = collapse_sanitized_once(Path(mol2_file))
-                if norm_mol2 != mol2_file:
-                    try:
-                        norm_mol2.write_bytes(Path(mol2_file).read_bytes())
-                        mol2_file = norm_mol2
-                        logging.info("[tidy] normalized double-sanitized -> %s", mol2_file.name)
-                    except Exception as e:
-                        logging.warning("[tidy] unable to normalize %s: %s", mol2_file, e)
-
-                lig_stem = Path(mol2_file).stem
-                mol2_for_submit = Path(mol2_file)
-
-                try:
-                    m_raw = Chem.MolFromMol2File(str(mol2_for_submit), sanitize=False, removeHs=False)
-                    old_smiles = ""
-                    try:
-                        m_old = Chem.MolFromMol2File(str(mol2_for_submit), sanitize=True, removeHs=False)
-                        if m_old:
-                            old_smiles = Chem.MolToSmiles(m_old, isomericSmiles=True)
-                    except Exception:
-                        pass
-
-                    m_std = standardize_mol_with_activesite(m_raw)
-                    if m_std is not None:
-                        new_smiles = ""
-                        try:
-                            new_smiles = Chem.MolToSmiles(m_std, isomericSmiles=True)
-                        except Exception:
-                            pass
-                        if old_smiles and new_smiles and old_smiles != new_smiles:
-                            logging.warning(
-                                "[std:audit][bulk] %s: SMILES changed %s -> %s",
-                                Path(mol2_for_submit).name, old_smiles, new_smiles,
-                            )
-                            _log_std_diff(output_ligands_dir, lig_stem, "bulk", old_smiles, new_smiles)
-
-                        std_path = Path(mol2_for_submit).with_suffix(".std.mol2")
-                        Chem.MolToMol2File(m_std, str(std_path))
-                        mol2_for_submit = std_path  # pass standardized path downstream
-                except Exception as e:
-                    logging.warning("[std][bulk] skip for %s: %s", Path(mol2_for_submit).name, e)
-                # --- end standardization parity block ---
-
-                for ph_value in eff_ph_values:
-                    ph_label = _ph_label(ph_value) if use_ph_subdirs else None
-                    ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
-                    ph_out_dir.mkdir(parents=True, exist_ok=True)
-                    pdbqt_path = ph_out_dir / f"{lig_stem}.pdbqt"
-                    try:
-                        pdbqt_rel = _relative_to_output(pdbqt_path)
-                    except Exception:
-                        pdbqt_rel = pdbqt_path.name
-
-                    resume_skip = (
-                        not force
-                        and pdbqt_path.exists()
-                        and pdbqt_path.stat().st_size > 100
-                        and is_valid_ligand(pdbqt_path, log_dir=output_ligands_dir)
-                    )
-                    if resume_skip:
-                        logging.info(
-                            "[resume] Valid PDBQT exists, skipping: %s ph=%.2f",
-                            pdbqt_path, ph_value
-                        )
-                        resume_skips += 1
-                        if len(resume_examples) < 10:
-                            resume_examples.append(pdbqt_rel)
-                        continue
-
-                    if force and pdbqt_path.exists():
-                        logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_rel)
-                    fut = ex.submit(
+                pdbqt_path = output_ligands_dir / f"{mol2_file.stem}.pdbqt"
+                futures.append(
+                    ex.submit(
                         _prepare_one,
-                        mgltools_python_short, prepare_script_short,
-                        mol2_for_submit, pdbqt_path,
+                        mgltools_python_short,
+                        prepare_script_short,
+                        mol2_file,
+                        pdbqt_path,
                         obabel_exe_short=obabel_exe_short,
                         status_log_dir=output_ligands_dir,
-                        ph=ph_value,
+                        ph=eff_ph_values[0],  # or whatever you’re using for test-mode
                     )
-                    futures.append(fut)
-                    future_relpaths[fut] = pdbqt_rel
-
-            total = len(futures)
-            for i, fut in enumerate(as_completed(futures), 1):
-                name, status = fut.result()
-                lig_stem = Path(name).stem
-                relpath = future_relpaths.get(fut, f"{lig_stem}.pdbqt")
-                if status == "ok":
-                    ok_count += 1
-                    try:
-                        _append_prep_status(status_log, lig_stem, "OK", "", relpath)
-                    except Exception:
-                        pass
-                else:
-                    fail_count += 1
-                    try:
-                        _append_prep_status(status_log, lig_stem, "FAIL", status, relpath)
-                    except Exception:
-                        pass
-                if i % 100 == 0 or status != "ok":
-                    print(f"[{i}/{total}] {name}: {status}")
-            try:
-                print(
-                    f"[ligprep] scheduled={len(futures)} resume_skips={resume_skips} force={force} "
-                    f"examples_skipped={resume_examples[:5]}"
                 )
-            except Exception:
-                pass
+
+            for fut in as_completed(futures):
+                try:
+                    _, status = fut.result()
+                    if status == "ok":
+                        ok_count += 1
+                    else:
+                        fail_count += 1
+                except Exception:
+                    fail_count += 1
+        print(
+            f"[test-mode] finished: ok={ok_count} fail={fail_count} "
+            f"scheduled={len(futures)}"
+        )
 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
         return
+
+    elif unit_sdfs and not test_mode_allowed:
+        # Helpful breadcrumb so you know why test-mode was skipped.
+        print(
+            "[test-mode] per-ligand SDFs present at "
+            f"{rdkit_unit_sdf_dir} but skipping because explicit input was provided: "
+            f"in_sdf={in_sdf_env!r}, in_pdb_dir={in_pdb_dir_env!r}"
+        )
     # =========================
     # END test-mode, fall back to legacy bulk-SDF path below
     # =========================
+
 
     # : crystal-safe dispatch (takes precedence over bulk scan when in_sdf not set)
     if in_pdb_dir_env and not in_sdf_env:
@@ -3760,12 +3734,24 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
                 mol2_input = Path(mol2_file)
                 lig_stem = mol2_input.stem
+                if not is_fda_library:
+                    try:
+                        m_for_name = Chem.MolFromMol2File(str(mol2_input), sanitize=False, removeHs=False)
+                        parent_name = ""
+                        if m_for_name is not None and m_for_name.HasProp("_Name"):
+                            parent_name = m_for_name.GetProp("_Name")
+                        if parent_name:
+                            lig_stem = _sanitize_ligand_name_for_filename(parent_name)
+                    except Exception:
+                        # If anything goes wrong, fall back to the original stem (rdk_*, mol2_chunk_*, etc.)
+                        pass
 
                 for ph_value in eff_ph_values:
                     ph_label = _ph_label(ph_value) if use_ph_subdirs else None
                     ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
                     ph_out_dir.mkdir(parents=True, exist_ok=True)
                     pdbqt_path = ph_out_dir / f"{lig_stem}.pdbqt"
+
                     try:
                         pdbqt_rel = _relative_to_output(pdbqt_path)
                     except Exception:
