@@ -1515,6 +1515,29 @@ def rdkit_embed_sdf_to_mol2(
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
+    library_env = os.environ.get("LIGPREP_LIBRARY", "").strip()
+    library_base: str
+    if library_env:
+        library_base = library_env.lower()
+    else:
+        in_sdf_env = os.environ.get("LIGPREP_IN_SDF", "").strip()
+        library_base = ""
+        if in_sdf_env:
+            try:
+                in_sdf_path = Path(in_sdf_env).resolve()
+                parts = list(in_sdf_path.parts)
+                for idx, part in enumerate(parts):
+                    if part == "extracted_ligands" and idx + 1 < len(parts):
+                        library_base = parts[idx + 1]
+                        break
+                if not library_base:
+                    library_base = in_sdf_path.stem
+            except Exception:
+                library_base = sdf_in.stem
+        else:
+            library_base = sdf_in.stem
+        library_base = (library_base or "").lower()
+
     suppl = Chem.SDMolSupplier(str(sdf_in), removeHs=False, sanitize=False)
     mols = [(i, m) for i, m in enumerate(suppl) if m is not None]
     print(f"RDKit: loaded {len(mols)} molecules from {sdf_in.name}")
@@ -1527,25 +1550,21 @@ def rdkit_embed_sdf_to_mol2(
         for idx, mol in mols:
             parent_name = ""
             raw_name = ""
-            has_name_prop = False
             try:
                 if mol is not None and mol.HasProp("_Name"):
-                    has_name_prop = True
                     raw_name = mol.GetProp("_Name")
-                    parent_name = raw_name.strip()
             except Exception:
                 raw_name = ""
-            if not parent_name and mol is not None:
-                try:
-                    if mol.HasProp("ID"):
-                        parent_name = mol.GetProp("ID").strip()
-                except Exception:
-                    pass
+            raw_name = (raw_name or "").strip()
+            if raw_name:
+                parent_name = raw_name
+            else:
+                parent_name = f"{library_base}_{idx + 1:05d}"
             parent_names[idx] = parent_name
             if idx < debug_limit:
                 print(
-                    f"[rdkit-debug] idx={idx} has__Name={has_name_prop} "
-                    f"raw_name={raw_name!r} stored_parent={parent_name!r}"
+                    f"[rdkit-debug] idx={idx} raw_name={raw_name!r} "
+                    f"fallback_base={library_base!r} stored_parent={parent_name!r}"
                 )
 
     sdf_tmp_dir = mol2_out_dir / "_rdkit_embedded_sdf"
@@ -1655,6 +1674,8 @@ def rdkit_embed_sdf_to_mol2(
                 f"[rdkit-debug] mol2={out.name} name_path={name_path.name} "
                 f"exists={exists} contents={contents!r}"
             )
+        if idx is not None and idx < debug_limit:
+            print(f"[rdkit-debug] writing .name for {out.name}: parent_name={parent_name!r}")
 
         if out.exists() and out.stat().st_size > 100:
             out_files.append(out)
@@ -3641,6 +3662,12 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for mol2_file in mol2_files:
                 pdbqt_path = output_ligands_dir / f"{mol2_file.stem}.pdbqt"
+                if pdbqt_path.exists():
+                    try:
+                        pdbqt_path.unlink()
+                        logging.info("[test-mode] overwriting existing PDBQT: %s", pdbqt_path.name)
+                    except Exception as e:
+                        logging.warning("[test-mode] unable to remove existing PDBQT %s: %s", pdbqt_path.name, e)
                 futures.append(
                     ex.submit(
                         _prepare_one,
@@ -3795,7 +3822,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 if not is_fda_library:
                     name_path = mol2_input.with_suffix(".name")
                     name_exists = name_path.exists()
-                    parent_name_raw: Optional[str] = None
+                    parent_name_raw: str = ""
                     try:
                         if name_exists:
                             parent_name_raw = name_path.read_text(encoding="utf-8", errors="ignore").strip()
