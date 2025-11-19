@@ -1515,9 +1515,57 @@ def rdkit_embed_sdf_to_mol2(
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
+    library_env = os.environ.get("LIGPREP_LIBRARY", "").strip()
+    library_base: str
+    if library_env:
+        library_base = library_env.lower()
+    else:
+        in_sdf_env = os.environ.get("LIGPREP_IN_SDF", "").strip()
+        library_base = ""
+        if in_sdf_env:
+            try:
+                in_sdf_path = Path(in_sdf_env).resolve()
+                parts = list(in_sdf_path.parts)
+                for idx, part in enumerate(parts):
+                    if part == "extracted_ligands" and idx + 1 < len(parts):
+                        library_base = parts[idx + 1]
+                        break
+                if not library_base:
+                    library_base = in_sdf_path.stem
+            except Exception:
+                library_base = sdf_in.stem
+        else:
+            library_base = sdf_in.stem
+        library_base = (library_base or "").lower()
+
     suppl = Chem.SDMolSupplier(str(sdf_in), removeHs=False, sanitize=False)
     mols = [(i, m) for i, m in enumerate(suppl) if m is not None]
     print(f"RDKit: loaded {len(mols)} molecules from {sdf_in.name}")
+
+    parent_names: List[str] = []
+    debug_limit = 5
+    if mols:
+        max_idx = max(i for i, _ in mols)
+        parent_names = ["" for _ in range(max_idx + 1)]
+        for idx, mol in mols:
+            parent_name = ""
+            raw_name = ""
+            try:
+                if mol is not None and mol.HasProp("_Name"):
+                    raw_name = mol.GetProp("_Name")
+            except Exception:
+                raw_name = ""
+            raw_name = (raw_name or "").strip()
+            if raw_name:
+                parent_name = raw_name
+            else:
+                parent_name = f"{library_base}_{idx + 1:05d}"
+            parent_names[idx] = parent_name
+            if idx < debug_limit:
+                print(
+                    f"[rdkit-debug] idx={idx} raw_name={raw_name!r} "
+                    f"fallback_base={library_base!r} stored_parent={parent_name!r}"
+                )
 
     sdf_tmp_dir = mol2_out_dir / "_rdkit_embedded_sdf"
     sdf_tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -1577,7 +1625,6 @@ def rdkit_embed_sdf_to_mol2(
             out = sdf_tmp_dir / f"rdk_{i:07d}.sdf"
             if _write_obabel_friendly_sdf(m, out):
                 logging.info("[paths] sdf_out=%s", str(out.resolve()))
-
                 return out
 
             else:
@@ -1594,10 +1641,41 @@ def rdkit_embed_sdf_to_mol2(
 
     print(f"RDKit: embedded {len(paths)} molecules; converting to MOL2")
     out_files: List[Path] = []
+
+    def _stem_to_rdk_index(stem: str) -> Optional[int]:
+        if stem.startswith("rdk_"):
+            try:
+                return int(stem.split("_", 1)[1])
+            except Exception:
+                return None
+        return None
+
     for pth in paths:
         out = mol2_out_dir / (pth.stem + ".mol2")
         print(f"[ligprep] pre-MOL2-write: rdkit_embed sdf={pth.name} -> mol2={out.name}")
         logging.info("[bulkSDF] write.mol2 ligand=%s via=obabel out=%s", pth.stem, str(out.resolve()))
+        parent_name = ""
+        idx = _stem_to_rdk_index(pth.stem)
+        if idx is not None and 0 <= idx < len(parent_names):
+            parent_name = parent_names[idx]
+        name_path = out.with_suffix(".name")
+        try:
+            to_write = (parent_name or "").rstrip("\r\n")
+            name_path.write_text(to_write + "\n", encoding="utf-8")
+        except Exception as e:
+            logging.warning("[bulkSDF] name_write_failed stem=%s err=%s", pth.stem, e)
+        if idx is not None and idx < debug_limit:
+            exists = name_path.exists()
+            try:
+                contents = name_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                contents = "<unreadable>"
+            print(
+                f"[rdkit-debug] mol2={out.name} name_path={name_path.name} "
+                f"exists={exists} contents={contents!r}"
+            )
+        if idx is not None and idx < debug_limit:
+            print(f"[rdkit-debug] writing .name for {out.name}: parent_name={parent_name!r}")
 
         if out.exists() and out.stat().st_size > 100:
             out_files.append(out)
@@ -3341,15 +3419,44 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     status_log_env = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
 
     # default to config when not overridden
-    ligands_raw_dir  = paths.ligand_output_dir
-    prepped_lig_dir  = paths.prepped_ligands_dir
-    ligands_mol2_dir = paths.ligands_mol2_dir
+    ligands_raw_dir = paths.ligand_output_dir
+    prepped_lig_dir = paths.prepped_ligands_dir
+    ligands_mol2_root = paths.ligands_mol2_dir
 
     ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
-    ligands_mol2_dir = Path(mol2_dir_env).resolve() if mol2_dir_env else ligands_mol2_dir
     output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
     prepped_ligands_dir = output_ligands_dir
     library_hint = prepped_ligands_dir.name.lower()
+
+    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    if library_env:
+        library_base = library_env.lower()
+    elif in_sdf_env:
+        try:
+            in_sdf_path = Path(in_sdf_env).resolve()
+            detected = ""
+            parts = list(in_sdf_path.parts)
+            for idx, part in enumerate(parts):
+                if part == "extracted_ligands" and idx + 1 < len(parts):
+                    detected = parts[idx + 1]
+                    break
+            library_base = (detected or in_sdf_path.stem).lower()
+        except Exception:
+            library_base = ""
+    else:
+        library_base = library_hint
+    library_base = (library_base or library_hint or "ligprep").lower()
+
+    # align downstream helpers (rdkit embed) with the chosen base when not explicitly set
+    if not library_env:
+        os.environ["LIGPREP_LIBRARY"] = library_base
+
+    # honor explicit mol2 dir override; otherwise scope under per-library subdir
+    if mol2_dir_env:
+        ligands_mol2_dir = Path(mol2_dir_env).resolve()
+    else:
+        ligands_mol2_dir = Path(ligands_mol2_root) / library_base
+
     is_fda_library = (library_hint == "fda")
     # direct all malformed logs for this protein to its prepped_ligands dir
     global MALFORMED_DIR
@@ -3584,6 +3691,12 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for mol2_file in mol2_files:
                 pdbqt_path = output_ligands_dir / f"{mol2_file.stem}.pdbqt"
+                if pdbqt_path.exists():
+                    try:
+                        pdbqt_path.unlink()
+                        logging.info("[test-mode] overwriting existing PDBQT: %s", pdbqt_path.name)
+                    except Exception as e:
+                        logging.warning("[test-mode] unable to remove existing PDBQT %s: %s", pdbqt_path.name, e)
                 futures.append(
                     ex.submit(
                         _prepare_one,
@@ -3721,6 +3834,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         fail_count = 0
         resume_skips = 0
         resume_examples: List[str] = []
+        ligprep_debug_seen = 0
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for mol2_file in mol2_files:
                 norm_mol2 = collapse_sanitized_once(Path(mol2_file))
@@ -3735,16 +3849,23 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 mol2_input = Path(mol2_file)
                 lig_stem = mol2_input.stem
                 if not is_fda_library:
+                    name_path = mol2_input.with_suffix(".name")
+                    name_exists = name_path.exists()
+                    parent_name_raw: str = ""
                     try:
-                        m_for_name = Chem.MolFromMol2File(str(mol2_input), sanitize=False, removeHs=False)
-                        parent_name = ""
-                        if m_for_name is not None and m_for_name.HasProp("_Name"):
-                            parent_name = m_for_name.GetProp("_Name")
-                        if parent_name:
-                            lig_stem = _sanitize_ligand_name_for_filename(parent_name)
-                    except Exception:
-                        # If anything goes wrong, fall back to the original stem (rdk_*, mol2_chunk_*, etc.)
-                        pass
+                        if name_exists:
+                            parent_name_raw = name_path.read_text(encoding="utf-8", errors="ignore").strip()
+                            if parent_name_raw:
+                                lig_stem = _sanitize_ligand_name_for_filename(parent_name_raw)
+                    except Exception as e:
+                        logging.warning("[ligprep] unable to read .name for %s: %s", mol2_input.name, e)
+                    if ligprep_debug_seen < 5:
+                        print(
+                            f"[ligprep-debug] mol2={mol2_input.name} is_fda={is_fda_library} "
+                            f"name_path_exists={name_exists} parent_name_raw={parent_name_raw!r} "
+                            f"lig_stem={lig_stem}"
+                        )
+                        ligprep_debug_seen += 1
 
                 for ph_value in eff_ph_values:
                     ph_label = _ph_label(ph_value) if use_ph_subdirs else None
