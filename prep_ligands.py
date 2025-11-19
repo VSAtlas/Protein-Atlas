@@ -3419,15 +3419,44 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     status_log_env = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
 
     # default to config when not overridden
-    ligands_raw_dir  = paths.ligand_output_dir
-    prepped_lig_dir  = paths.prepped_ligands_dir
-    ligands_mol2_dir = paths.ligands_mol2_dir
+    ligands_raw_dir = paths.ligand_output_dir
+    prepped_lig_dir = paths.prepped_ligands_dir
+    ligands_mol2_root = paths.ligands_mol2_dir
 
     ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
-    ligands_mol2_dir = Path(mol2_dir_env).resolve() if mol2_dir_env else ligands_mol2_dir
     output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
     prepped_ligands_dir = output_ligands_dir
     library_hint = prepped_ligands_dir.name.lower()
+
+    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    if library_env:
+        library_base = library_env.lower()
+    elif in_sdf_env:
+        try:
+            in_sdf_path = Path(in_sdf_env).resolve()
+            detected = ""
+            parts = list(in_sdf_path.parts)
+            for idx, part in enumerate(parts):
+                if part == "extracted_ligands" and idx + 1 < len(parts):
+                    detected = parts[idx + 1]
+                    break
+            library_base = (detected or in_sdf_path.stem).lower()
+        except Exception:
+            library_base = ""
+    else:
+        library_base = library_hint
+    library_base = (library_base or library_hint or "ligprep").lower()
+
+    # align downstream helpers (rdkit embed) with the chosen base when not explicitly set
+    if not library_env:
+        os.environ["LIGPREP_LIBRARY"] = library_base
+
+    # honor explicit mol2 dir override; otherwise scope under per-library subdir
+    if mol2_dir_env:
+        ligands_mol2_dir = Path(mol2_dir_env).resolve()
+    else:
+        ligands_mol2_dir = Path(ligands_mol2_root) / library_base
+
     is_fda_library = (library_hint == "fda")
     # direct all malformed logs for this protein to its prepped_ligands dir
     global MALFORMED_DIR
