@@ -5,6 +5,7 @@ from ctypes import wintypes, create_unicode_buffer
 from pathlib import Path
 import subprocess
 import logging
+import hashlib
 logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Dict, Set, Any, Union
@@ -190,6 +191,20 @@ _init_alias_rules_cache()
 # =========================
 # Utility / logging helpers
 # =========================
+
+def compute_microstate_id(mol: Chem.Mol) -> str:
+    """
+    Compute a microstate identifier for an RDKit Mol.
+    The ID should capture protonation, tautomer, formal charge, and stereochemistry,
+    but be independent of 3D coordinates.
+    """
+    mol_H = Chem.AddHs(mol, addCoords=False)
+    smiles = Chem.MolToSmiles(mol_H, canonical=True)
+    h = hashlib.sha1(smiles.encode("utf-8")).hexdigest()
+    microstate_id = h[:16]
+    logger.debug("compute_microstate_id: smiles=%s id=%s", smiles[:80], microstate_id)
+    return microstate_id
+
 
 def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
     atom_lines = [ln for ln in lines if ln.startswith(("ATOM", "HETATM"))]
