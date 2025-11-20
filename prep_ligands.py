@@ -9,7 +9,7 @@ import logging
 import hashlib
 logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple, Dict, Set, Any, Union
+from typing import Collection, List, Optional, Tuple, Dict, Set, Any, Union
 import re
 from datetime import datetime
 import shutil
@@ -253,6 +253,176 @@ def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
     payload = json.dumps(registry, indent=2, sort_keys=True)
     tmp_path.write_text(payload, encoding="utf-8")
     os.replace(tmp_path, final_path)
+
+
+def enumerate_ligands_for_docking(
+    requested_ph_values: Optional[Collection[float]] = None,
+) -> List[Path]:
+    """
+    Enumerate canonical ligand PDBQTs for docking, deduplicated at the microstate level.
+
+    Parameters
+    ----------
+    requested_ph_values : Optional[Collection[float]]
+        If None or empty, return canonical ligands for *all* microstates in the registry.
+        If provided, only include microstates that have at least one alias whose ph_value
+        falls in the requested set.
+
+    Returns
+    -------
+    List[Path]
+        Sorted list of canonical PDBQT paths (one per microstate) under the current
+        library's prepped_ligands directory.
+    """
+
+    cfg = load_config("config.txt")
+    validate_config(cfg)
+    pdb_token = (
+        os.environ.get("PDB_ID")
+        or cfg.get("PDB_ID")
+        or cfg.get("TARGET_PDB")
+        or cfg.get("PDB")
+        or cfg.get("INPUT_PDB")
+        or cfg.get("PDB_FILE")
+        or ""
+    )
+    pdb_id = Path(str(pdb_token)).stem.upper() if pdb_token else "LIGPREP"
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+
+    in_sdf_env = (os.environ.get("LIGPREP_IN_SDF", "") or "").strip() or None
+    in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
+    out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
+
+    output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
+    library_hint = output_ligands_dir.name.lower()
+
+    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    if library_env:
+        library_base = library_env.lower()
+    elif in_sdf_env:
+        try:
+            in_sdf_path = Path(in_sdf_env).resolve()
+            detected = ""
+            parts = list(in_sdf_path.parts)
+            for idx, part in enumerate(parts):
+                if part == "extracted_ligands" and idx + 1 < len(parts):
+                    detected = parts[idx + 1]
+                    break
+            library_base = (detected or in_sdf_path.stem).lower()
+        except Exception:
+            library_base = ""
+    else:
+        library_base = library_hint
+    library_base = (library_base or library_hint or "ligprep").lower()
+    library_name = library_base
+
+    library_out_dir = output_ligands_dir
+    registry_path = library_out_dir / "microstates.json"
+
+    requested_set: Optional[Set[float]] = None
+    if requested_ph_values:
+        requested_set = {float(ph) for ph in requested_ph_values}
+
+    def _run_microstate_prep_for_phs(ph_values: Collection[float]) -> None:
+        if not ph_values:
+            return
+        logger.info(
+            "enumerate_ligands_for_docking: running microstate prep for missing pH values: %s",
+            ",".join(f"{ph:.2f}" for ph in sorted(set(ph_values))),
+        )
+        prep_ligands_with_mgltools(
+            force=False,
+            only=None,
+            ph_values=sorted(set(float(ph) for ph in ph_values)),
+            microstate_dedup=True,
+        )
+
+    if requested_set is not None:
+        if not registry_path.exists():
+            _run_microstate_prep_for_phs(requested_set)
+        registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+        existing_ph_values: Set[float] = set()
+        for entry in registry.get("microstates", []) or []:
+            for alias in entry.get("aliases", []) or []:
+                ph_value = alias.get("ph_value")
+                if ph_value is None:
+                    continue
+                try:
+                    existing_ph_values.add(float(ph_value))
+                except Exception:
+                    continue
+
+        missing = requested_set - existing_ph_values
+        if missing:
+            logger.info(
+                "enumerate_ligands_for_docking: requested_ph=%s missing_ph=%s",
+                sorted(requested_set),
+                sorted(missing),
+            )
+            _run_microstate_prep_for_phs(missing)
+            registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+    else:
+        registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+    if (not registry_path.exists()) or not (registry.get("microstates") or []):
+        logger.warning(
+            "enumerate_ligands_for_docking: no microstate registry found at %s; returning empty list",
+            registry_path,
+        )
+        return []
+
+    result: Set[Path] = set()
+    total_microstates = len(registry.get("microstates", []) or [])
+
+    for entry in registry.get("microstates", []) or []:
+        rel_path = entry.get("pdbqt_path")
+        if not rel_path:
+            continue
+
+        aliases = entry.get("aliases", []) or []
+        canonical_path = library_out_dir / rel_path
+
+        include = requested_set is None
+        if requested_set is not None:
+            for alias in aliases:
+                ph_value = alias.get("ph_value")
+                if ph_value is None:
+                    continue
+                try:
+                    pv = float(ph_value)
+                except Exception:
+                    continue
+                if pv in requested_set:
+                    include = True
+                    break
+
+        if not include:
+            continue
+
+        if "_valid_pdbqt" in globals():
+            is_valid = _valid_pdbqt(canonical_path, library_out_dir)
+        else:
+            is_valid = canonical_path.exists() and canonical_path.stat().st_size > 100
+
+        if is_valid:
+            result.add(canonical_path)
+
+    if requested_set is None:
+        logger.info(
+            "enumerate_ligands_for_docking: mode=all_ph microstates=%d included=%d",
+            total_microstates,
+            len(result),
+        )
+    else:
+        logger.info(
+            "enumerate_ligands_for_docking: mode=filtered ph_values=%s microstates=%d included=%d",
+            sorted(requested_set),
+            total_microstates,
+            len(result),
+        )
+
+    return sorted(result, key=lambda p: p.name)
 
 
 def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
