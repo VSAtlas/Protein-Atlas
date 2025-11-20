@@ -3584,7 +3584,17 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     ph_label = _ph_label(ph_value) if use_ph_subdirs else None
                     ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
                     ph_out_dir.mkdir(parents=True, exist_ok=True)
-                    pdbqt_path = ph_out_dir / f"{lig_stem}.pdbqt"
+                    if use_ph_subdirs and ph_label:
+                        base, _, rest = lig_stem.partition("_")
+                        if rest:
+                            lig_stem_ph = f"{base}{ph_label}_{rest}"
+                        else:
+                            lig_stem_ph = f"{lig_stem}{ph_label}"
+                        pdbqt_name = f"{lig_stem_ph}.pdbqt"
+                    else:
+                        pdbqt_name = f"{lig_stem}.pdbqt"
+
+                    pdbqt_path = ph_out_dir / pdbqt_name
                     try:
                         pdbqt_rel = _relative_to_output(pdbqt_path)
                     except Exception:
@@ -3765,7 +3775,17 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     ph_label = _ph_label(ph_value) if use_ph_subdirs else None
                     ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
                     ph_out_dir.mkdir(parents=True, exist_ok=True)
-                    pdbqt_path = ph_out_dir / f"{lig_stem}.pdbqt"
+                    if use_ph_subdirs and ph_label:
+                        base, _, rest = lig_stem.partition("_")
+                        if rest:
+                            lig_stem_ph = f"{base}{ph_label}_{rest}"
+                        else:
+                            lig_stem_ph = f"{lig_stem}{ph_label}"
+                        pdbqt_name = f"{lig_stem_ph}.pdbqt"
+                    else:
+                        pdbqt_name = f"{lig_stem}.pdbqt"
+
+                    pdbqt_path = ph_out_dir / pdbqt_name
                     try:
                         pdbqt_rel = _relative_to_output(pdbqt_path)
                     except Exception:
