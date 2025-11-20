@@ -5,6 +5,7 @@ from ctypes import wintypes, create_unicode_buffer
 from pathlib import Path
 import subprocess
 import logging
+logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Dict, Set, Any, Union
 import re
@@ -3385,13 +3386,17 @@ def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
 
 
 def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None,
-                               ph_values: Optional[List[float]] = None):
+                               ph_values: Optional[List[float]] = None,
+                               microstate_dedup: bool = False):
     # also honor an env var as a fallback (useful in batch/HPC)
     if not force:
         env_force = os.environ.get("LIGPREP_FORCE", "").strip().lower()
         force = env_force in {"1", "true", "yes", "y"}
 
     print("Starting ligand preparation")
+
+    if microstate_dedup:
+        logger.info("prep_ligands: microstate_dedup=True (stage 1: no-op wiring only)")
 
     cfg = load_config("config.txt")
     validate_config(cfg)
