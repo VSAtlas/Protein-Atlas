@@ -1,6 +1,7 @@
 import sys
 import ctypes
 import os
+import json
 from ctypes import wintypes, create_unicode_buffer
 from pathlib import Path
 import subprocess
@@ -204,6 +205,54 @@ def compute_microstate_id(mol: Chem.Mol) -> str:
     microstate_id = h[:16]
     logger.debug("compute_microstate_id: smiles=%s id=%s", smiles[:80], microstate_id)
     return microstate_id
+
+
+def load_microstate_registry(library_out_dir: Path, library_name: str) -> tuple[dict, dict]:
+    """
+    Load or initialize the microstate registry for a given library.
+    Returns a dict with keys: version, library, microstates (list) and an index mapping microstate_id -> entry.
+    """
+    registry_path = library_out_dir / "microstates.json"
+    default_registry = {
+        "version": 1,
+        "library": library_name,
+        "microstates": [],
+    }
+
+    registry = default_registry.copy()
+    if registry_path.exists():
+        try:
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logging.warning("[microstate] registry_load_failed path=%s err=%s", registry_path, e)
+            registry = default_registry.copy()
+        else:
+            if registry.get("library") and registry["library"] != library_name:
+                logging.warning(
+                    "[microstate] registry_library_mismatch path=%s expected=%s found=%s",
+                    registry_path,
+                    library_name,
+                    registry.get("library"),
+                )
+
+    microstate_index: Dict[str, dict] = {}
+    for entry in registry.get("microstates", []) or []:
+        microstate_id = entry.get("microstate_id")
+        if microstate_id:
+            microstate_index[microstate_id] = entry
+
+    return registry, microstate_index
+
+
+def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
+    """
+    Save the microstate registry to microstates.json atomically.
+    """
+    tmp_path = library_out_dir / "microstates.json.tmp"
+    final_path = library_out_dir / "microstates.json"
+    payload = json.dumps(registry, indent=2, sort_keys=True)
+    tmp_path.write_text(payload, encoding="utf-8")
+    os.replace(tmp_path, final_path)
 
 
 def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
@@ -3403,6 +3452,10 @@ def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
 def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None,
                                ph_values: Optional[List[float]] = None,
                                microstate_dedup: bool = False):
+    microstate_registry: Dict[str, Any] | None = None
+    microstate_index: Dict[str, dict] | None = None
+    library_out_dir: Path | None = None
+
     # also honor an env var as a fallback (useful in batch/HPC)
     if not force:
         env_force = os.environ.get("LIGPREP_FORCE", "").strip().lower()
@@ -3411,7 +3464,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     print("Starting ligand preparation")
 
     if microstate_dedup:
-        logger.info("prep_ligands: microstate_dedup=True (stage 1: no-op wiring only)")
+        logger.info("prep_ligands: microstate_dedup=True (stage 3: registry shadow mode)")
 
     cfg = load_config("config.txt")
     validate_config(cfg)
@@ -3466,6 +3519,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     else:
         library_base = library_hint
     library_base = (library_base or library_hint or "ligprep").lower()
+    library_name = library_base
 
     # align downstream helpers (rdkit embed) with the chosen base when not explicitly set
     if not library_env:
@@ -3485,6 +3539,15 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     # create working/output dirs
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
+
+    library_out_dir = output_ligands_dir
+
+    if microstate_dedup:
+        microstate_registry, microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+    def _maybe_save_microstate_registry() -> None:
+        if microstate_dedup and microstate_registry is not None and library_out_dir is not None:
+            save_microstate_registry(library_out_dir, microstate_registry)
 
 
     # emit a compact audit banner (single line)
@@ -3745,6 +3808,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         )
 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
+        _maybe_save_microstate_registry()
         return
 
     elif unit_sdfs and not test_mode_allowed:
@@ -3761,13 +3825,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     # : crystal-safe dispatch (takes precedence over bulk scan when in_sdf not set)
     if in_pdb_dir_env and not in_sdf_env:
-        return prep_ligands_from_pdb(Path(in_pdb_dir_env).resolve(), ligands_mol2_dir, output_ligands_dir)
+        result = prep_ligands_from_pdb(Path(in_pdb_dir_env).resolve(), ligands_mol2_dir, output_ligands_dir)
+        _maybe_save_microstate_registry()
+        return result
 
     #  single-file override; else scan directory as before
     sdf_files = [Path(in_sdf_env).resolve()] if in_sdf_env else list(ligand_extracted_dir.glob("*.sdf"))
     print(f"Found {len(sdf_files)} SDF file(s)")
 
     if not sdf_files:
+        _maybe_save_microstate_registry()
         return
 
     for sdf_file in sdf_files:
@@ -3842,6 +3909,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             # Early exit if nothing remains
             if not mol2_files:
                 print("[test-mode] No requested ligands were found. Nothing to do; exiting cleanly.")
+                _maybe_save_microstate_registry()
                 return
 
 
@@ -3965,6 +4033,8 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 )
             except Exception:
                 pass
+
+        _maybe_save_microstate_registry()
 
         def _as_path(p) -> Path:
             return p if isinstance(p, Path) else Path(p)
