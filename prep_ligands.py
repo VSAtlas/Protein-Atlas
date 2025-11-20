@@ -3465,7 +3465,6 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                microstate_dedup: bool = False):
     microstate_registry: Dict[str, Any] | None = None
     microstate_index: Dict[str, dict] | None = None
-    alias_index: Dict[tuple[str, str, float], dict] | None = None
     library_out_dir: Path | None = None
     microstates_dir: Path | None = None
 
@@ -3559,18 +3558,6 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         microstates_dir = library_out_dir / "microstates"
         microstates_dir.mkdir(parents=True, exist_ok=True)
         microstate_registry, microstate_index = load_microstate_registry(library_out_dir, library_name)
-        alias_index = {}
-        for entry in microstate_registry.get("microstates", []) or []:
-            for alias in entry.get("aliases", []) or []:
-                try:
-                    key = (
-                        alias.get("ligand_stem", ""),
-                        alias.get("ph_label", ""),
-                        float(alias.get("ph_value", 0.0)),
-                    )
-                    alias_index[key] = entry
-                except Exception:
-                    continue
 
     def _maybe_save_microstate_registry() -> None:
         if microstate_dedup and microstate_registry is not None and library_out_dir is not None:
@@ -4010,7 +3997,6 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         and ph_values is not None
                         and microstate_registry is not None
                         and microstate_index is not None
-                        and alias_index is not None
                         and microstates_dir is not None
                     )
 
@@ -4021,43 +4007,35 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     copy_targets: List[Path] = []
 
                     if dedup_active and rdkit_mol_for_microstate is not None:
-                        alias_key = (lig_stem, ph_label or "", float(ph_value))
-                        microstate_entry = alias_index.get(alias_key)
-                        if microstate_entry is not None:
+                        microstate_id = compute_microstate_id(rdkit_mol_for_microstate)
+                        microstate_entry = microstate_index.get(microstate_id)
+                        if microstate_entry is None:
+                            canonical_name = f"{lig_stem}__ms_{microstate_id}.pdbqt"
+                            canonical_rel_path = f"microstates/{canonical_name}"
+                            canonical_path = microstates_dir / canonical_name
+                            microstate_entry = {
+                                "microstate_id": microstate_id,
+                                "pdbqt_path": canonical_rel_path,
+                                "aliases": [],
+                            }
+                            microstate_registry["microstates"].append(microstate_entry)
+                            microstate_index[microstate_id] = microstate_entry
+                            use_canonical_as_primary = True
+                        else:
                             canonical_rel = microstate_entry.get("pdbqt_path")
                             if canonical_rel:
                                 canonical_path = library_out_dir / canonical_rel
                                 if not canonical_path.exists():
                                     use_canonical_as_primary = True
-                        else:
-                            microstate_id = compute_microstate_id(rdkit_mol_for_microstate)
-                            microstate_entry = microstate_index.get(microstate_id)
-                            if microstate_entry is None:
-                                canonical_name = f"{lig_stem}__ms_{microstate_id}.pdbqt"
-                                canonical_rel_path = f"microstates/{canonical_name}"
-                                canonical_path = microstates_dir / canonical_name
-                                microstate_entry = {
-                                    "microstate_id": microstate_id,
-                                    "pdbqt_path": canonical_rel_path,
-                                    "aliases": [],
-                                }
-                                microstate_registry["microstates"].append(microstate_entry)
-                                microstate_index[microstate_id] = microstate_entry
-                                use_canonical_as_primary = True
-                            else:
-                                canonical_rel = microstate_entry.get("pdbqt_path")
-                                if canonical_rel:
-                                    canonical_path = library_out_dir / canonical_rel
-                                    if not canonical_path.exists():
-                                        use_canonical_as_primary = True
 
+                        if microstate_entry is not None:
                             alias = {
                                 "ligand_stem": lig_stem,
                                 "ph_label": ph_label or "",
                                 "ph_value": float(ph_value),
                             }
-                            microstate_entry.setdefault("aliases", []).append(alias)
-                            alias_index[alias_key] = microstate_entry
+                            if alias not in microstate_entry.get("aliases", []):
+                                microstate_entry.setdefault("aliases", []).append(alias)
 
                     if use_ph_subdirs and ph_label:
                         base, _, rest = lig_stem.partition("_")
