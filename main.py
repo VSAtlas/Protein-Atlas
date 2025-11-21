@@ -3161,6 +3161,97 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
     cfg["_TEST_MODE_EFFECTIVE"] = test_mode
 
+    per_index_roots: list[Path] = []
+    if paths.prepped_ligands_dir:
+        per_index_roots.append(paths.prepped_ligands_dir)
+
+    index_library_roots: list[Path] = _dedup_index_roots(allowed_noncontrol_roots)
+    per_index_roots = _dedup_index_roots(per_index_roots)
+    index_roots = _dedup_index_roots(per_index_roots + index_library_roots)
+
+    manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+    lib_index = cfg.get("_LIB_INDEX")
+    if not isinstance(lib_index, LibraryIndex):
+        lib_index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
+        cfg["_LIB_INDEX"] = lib_index
+    if index_roots:
+        lib_index.load(index_roots)
+    cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_index_roots]
+    cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in index_library_roots]
+
+    def _under(p: Path, root: Path) -> bool:
+        try:
+            p.resolve().relative_to(root.resolve())
+            return True
+        except Exception:
+            return False
+
+    def _enumerate_noncontrol_candidates_via_index(
+        cfg: Dict,
+        allowed_roots: list[Path],
+        logger: logging.Logger,
+    ) -> list[Path]:
+        resolved_roots = _dedup_index_roots([Path(r) for r in allowed_roots if r])
+        resolved_existing = [r for r in resolved_roots if r.exists()]
+        logger.info(
+            "[lib-roots] non-control roots = %s",
+            [str(p) for p in resolved_existing],
+        )
+
+        candidates: list[Path] = []
+        microstate_roots = [r for r in resolved_existing if (r / "microstates.json").exists()]
+        if microstate_roots:
+            try:
+                ms_paths = enumerate_ligands_for_docking()
+                ms_filtered = [p for p in ms_paths if any(_under(p, root) for root in resolved_existing)]
+                candidates.extend(ms_filtered)
+                logger.info(
+                    "[lib-index.microstate] roots=%d ligands=%d",
+                    len(microstate_roots),
+                    len(ms_filtered),
+                )
+            except Exception as exc:
+                logger.warning("[lib-index.microstate] error=%s", exc)
+
+        manifest_candidates: list[Path] = []
+        if isinstance(cfg.get("_LIB_INDEX"), LibraryIndex):
+            index_obj: LibraryIndex = cfg["_LIB_INDEX"]
+            for root in resolved_existing:
+                manifest = getattr(index_obj, "_cache", {}).get(Path(root))
+                if not manifest:
+                    continue
+                for rel in manifest.entries.values():
+                    manifest_candidates.append(Path(root) / rel)
+        if manifest_candidates:
+            candidates.extend(manifest_candidates)
+            logger.info(
+                "[lib-index.manifest] roots=%d ligands=%d",
+                len(resolved_existing),
+                len(manifest_candidates),
+            )
+
+        if not candidates:
+            logger.warning(
+                "[lib-index] no usable index detected; falling back to filesystem scan under %d roots (this is slow)",
+                len(resolved_existing),
+            )
+            seen: set[str] = set()
+            for root in resolved_existing:
+                for p in _iter_pdbqt_dirfirst(root):
+                    pn = norm(p)
+                    if pn not in seen:
+                        seen.add(pn)
+                        candidates.append(p)
+
+        deduped: list[Path] = []
+        seen_keys: set[str] = set()
+        for p in candidates:
+            key = norm(p)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(Path(p))
+        return deduped
+
     scan_roots: list[Path] = []
     prepped_lig_root = paths.prepped_ligands_dir
     if prepped_lig_root and prepped_lig_root.exists():
@@ -3179,30 +3270,26 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     )
 
     seen: set[str] = set()
-    all_pdbqt_paths: list[Path] = []
+    controls: list[Path] = []
     per_protein_allow = {"controls", "reference"}
-
-    for root in scan_roots:
-        if not root.exists():
-            logger.warning("[ligands.scan] root_missing=%s", root)
-            continue
-
-        allowed_subdirs = None
-        if prepped_lig_root and root == prepped_lig_root:
-            allowed_subdirs = per_protein_allow
-
+    if prepped_lig_root and prepped_lig_root.exists():
         logger.info(
             "[ligands.scan.root] root=%s allowed_subdirs=%s crawl=%s",
-            root,
-            allowed_subdirs,
+            prepped_lig_root,
+            per_protein_allow,
             crawl_allowed,
         )
-
-        for p in _iter_pdbqt_dirfirst(root, allowed_subdirs=allowed_subdirs):
+        for p in _iter_pdbqt_dirfirst(prepped_lig_root, allowed_subdirs=per_protein_allow):
             pn = norm(p)
             if pn not in seen:
                 seen.add(pn)
-                all_pdbqt_paths.append(p)
+                controls.append(p)
+
+    noncontrol_candidates = _enumerate_noncontrol_candidates_via_index(cfg, allowed_noncontrol_roots, logger)
+
+    all_pdbqt_paths: list[Path] = []
+    all_pdbqt_paths.extend(controls)
+    all_pdbqt_paths.extend(noncontrol_candidates)
 
     logger.info("[ligands.scan] roots=%d found=%d", len(scan_roots), len(all_pdbqt_paths))
     cfg["ALL_LIGAND_PATHS"] = [str(p) for p in all_pdbqt_paths]
@@ -3227,49 +3314,14 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     cfg["ALL_LIGAND_PATHS_VALID"] = [str(p) for p in valid_pdbqt.values()]
     logger.info("[ligands.valid] count=%d", len(valid_pdbqt))
 
-    per_index_roots: list[Path] = []
-    if paths.prepped_ligands_dir:
-        per_index_roots.append(paths.prepped_ligands_dir)
-
-    index_library_roots: list[Path] = []
-    mapped_value = test_map.get(pdb_id) if test_mode != "off" else None
-    if test_mode != "off" and mapped_value is not None and cfg.get("OUTPUT_LIGANDS_DIR"):
-        base_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
-        tokens = [tok.strip() for tok in str(mapped_value).split(",") if tok.strip()]
-        index_library_roots.extend(base_root / tok for tok in tokens)
-    else:
-        index_library_roots.extend(allowed_noncontrol_roots)
-
-    per_index_roots = _dedup_index_roots(per_index_roots)
-    index_library_roots = _dedup_index_roots(index_library_roots)
-    index_roots = _dedup_index_roots(per_index_roots + index_library_roots)
-
-    manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
-    lib_index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
-    lib_index.load(index_roots)
-    cfg["_LIB_INDEX"] = lib_index
-    cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_index_roots]
-    cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in index_library_roots]
-
-
-    # Helper: path under root?
-    def _under(p: Path, root: Path) -> bool:
-        try:
-            p.resolve().relative_to(root.resolve())
-            return True
-        except Exception:
-            return False
-
-    # Separate controls vs non-controls by location
-    controls: list[Path] = []
+    controls_valid: list[Path] = []
     noncontrols: list[Path] = []
     for p in valid_pdbqt.values():
-        if _under(p, paths.prepped_ligands_dir):
-            controls.append(p)
+        if prepped_lig_root and _under(p, prepped_lig_root):
+            controls_valid.append(p)
         else:
             noncontrols.append(p)
 
-    # Filter non-controls to the allowed roots
     filtered_noncontrols: list[Path] = []
     for p in noncontrols:
         keep = False
@@ -3283,11 +3335,11 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     # Merge back: controls (unaltered) + filtered non-controls
     if cfg.get("_EFFECTIVE_SINGLE_LIGAND") and cfg.get("_SINGLE_RESOLVED_PATH"):
         resolved_path = Path(cfg["_SINGLE_RESOLVED_PATH"])
-        final_paths = controls + [resolved_path]
+        final_paths = controls_valid + [resolved_path]
         filtered_noncontrols = [resolved_path]
-        logger.info("[single.fuel] resolved=%s controls=%d (blocking non-control pool)", cfg["_SINGLE_RESOLVED_PATH"], len(controls))
+        logger.info("[single.fuel] resolved=%s controls=%d (blocking non-control pool)", cfg["_SINGLE_RESOLVED_PATH"], len(controls_valid))
     else:
-        final_paths = controls + filtered_noncontrols
+        final_paths = controls_valid + filtered_noncontrols
 
     # --- PAINS flags (keep as before; default to {}) ---
     pains_flags: Dict[str, bool] = {}
