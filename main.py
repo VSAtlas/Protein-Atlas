@@ -3002,13 +3002,67 @@ params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
 pains_catalog = FilterCatalog.FilterCatalog(params)
 
 
+def _coerce_test_map(m) -> Dict[str, str]:
+    import json as _json, ast as _ast
+
+    if isinstance(m, dict):
+        return {str(k).upper(): str(v) for k, v in m.items()}
+    s = str(m).strip()
+    if not s:
+        return {}
+    parsed = None
+    try:
+        parsed = _json.loads(s)
+    except Exception:
+        try:
+            parsed = _ast.literal_eval(s)
+        except Exception:
+            parsed = {}
+    return {str(k).upper(): str(v) for k, v in (parsed if isinstance(parsed, dict) else {}).items()}
+
+
+def _resolve_test_mode(cfg) -> str:
+    """
+    Normalize TEST_MODE_ENABLE to one of: "off", "dud", "fda+dud".
+
+    Accepts:
+      - Booleans / bool-like strings for backwards compatibility:
+          True  / "true" / "yes" / "on" / "1"  -> "fda+dud"
+          False / "false" / "no"  / "off" / "0" / "" / None -> "off"
+      - Explicit string modes:
+          "off"        -> "off"
+          "dud"        -> "dud"
+          "fda+dud"    -> "fda+dud"
+          "both"       -> "fda+dud"
+          "fda_dud"    -> "fda+dud"
+    Any unrecognized string should log a warning and fall back to "off".
+    """
+    raw = cfg.get("TEST_MODE_ENABLE", "off")
+    if isinstance(raw, bool):
+        return "fda+dud" if raw else "off"
+
+    s = str(raw).strip().lower()
+    if s in ("", "0", "false", "no", "off", "none", "null"):
+        return "off"
+    if s in ("true", "yes", "on", "1"):
+        return "fda+dud"
+    if s in ("dud", "dud-only", "dud_only"):
+        return "dud"
+    if s in ("fda+dud", "dud+fda", "both", "fda_and_dud", "fda_dud"):
+        return "fda+dud"
+
+    print(f"[test-mode] WARNING: Unknown TEST_MODE_ENABLE={raw!r}; treating as 'off'.")
+    return "off"
+
+
 def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
     """
     Gathers candidate ligands, keeps existing validation/PAINS logic, and
     filters the *non-control* pool to allowed library roots:
 
-      - TEST_MODE_ENABLE & TEST_LIBRARY_MAP (by pdb_id) -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
-      - else -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+      - TEST_MODE_ENABLE="off"      -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+      - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
+      - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
 
     Controls are *never* filtered out here.
     LIBRARY_EXTRA_DIRS remain included (unchanged).
@@ -3090,29 +3144,11 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     # --- per-protein subfolder selection for non-controls only ----------
     pdb_id = paths.pdb_id.upper()
     subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
-    test_enable = _to_bool(str(cfg.get("TEST_MODE_ENABLE", "false")))
+    test_mode = _resolve_test_mode(cfg)
 
     # Robust parse of TEST_LIBRARY_MAP (dict, JSON, or Python-literal string)
     maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
     test_map: Dict[str, str] = {}
-
-    def _coerce_test_map(m) -> Dict[str, str]:
-        import json as _json, ast as _ast
-        if isinstance(m, dict):
-            return {str(k).upper(): str(v) for k, v in m.items()}
-        # try string or "dict-like" objects
-        s = str(m).strip()
-        if not s:
-            return {}
-        parsed = None
-        try:
-            parsed = _json.loads(s)
-        except Exception:
-            try:
-                parsed = _ast.literal_eval(s)
-            except Exception:
-                parsed = {}
-        return {str(k).upper(): str(v) for k, v in (parsed if isinstance(parsed, dict) else {}).items()}
 
     test_map = _coerce_test_map(maybe_map)
     logger.info(f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}")
@@ -3124,10 +3160,20 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     if cfg.get("OUTPUT_LIGANDS_DIR"):
         base_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
         default_root = base_root / subdir_default
-        roots = [default_root]
-        if test_enable and pdb_id in test_map:
-            test_root = base_root / test_map[pdb_id]
-            roots.insert(0, test_root)
+
+        if test_mode == "off" or not mapped_subdir:
+            roots = [default_root]
+            if test_mode in ("dud", "fda+dud") and not mapped_subdir:
+                logger.warning(
+                    "[test-mode] pdb_id=%s mode=%s but no TEST_LIBRARY_MAP entry; falling back to default %s",
+                    pdb_id, test_mode, default_root
+                )
+        elif test_mode == "fda+dud":
+            test_root = base_root / mapped_subdir
+            roots = [test_root, default_root]
+        elif test_mode == "dud":
+            test_root = base_root / mapped_subdir
+            roots = [test_root]
 
     deduped_roots: list[Path] = []
     seen_keys: set[str] = set()
@@ -3142,7 +3188,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     logger.info(
         "[fuel] pdb_id=%s test_mode=%s mapped_subdir=%s roots=%s",
         pdb_id,
-        str(test_enable).lower(),
+        test_mode,
         mapped_subdir or "default",
         ",".join(str(r.resolve()) for r in deduped_roots) or "none",
     )
@@ -3177,8 +3223,8 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         per_index_roots.append(paths.prepped_ligands_dir)
 
     index_library_roots: list[Path] = []
-    mapped_value = test_map.get(pdb_id) if test_enable else None
-    if test_enable and mapped_value is not None and cfg.get("OUTPUT_LIGANDS_DIR"):
+    mapped_value = test_map.get(pdb_id) if test_mode != "off" else None
+    if test_mode != "off" and mapped_value is not None and cfg.get("OUTPUT_LIGANDS_DIR"):
         base_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
         tokens = [tok.strip() for tok in str(mapped_value).split(",") if tok.strip()]
         index_library_roots.extend(base_root / tok for tok in tokens)
@@ -5972,7 +6018,7 @@ def main() -> None:
 
     # --- Library subfolder selection -----------------------------------
     cfg.setdefault("LIBRARY_SUBDIR_DEFAULT", "fda_library")
-    cfg.setdefault("TEST_MODE_ENABLE", False)
+    cfg.setdefault("TEST_MODE_ENABLE", "off")
     # Accept dict or JSON-ish string
     if "TEST_LIBRARY_MAP" not in cfg:
         cfg["TEST_LIBRARY_MAP"] = {}
@@ -6084,38 +6130,25 @@ def main() -> None:
 
 
     # --- Test-mode protein filter: keep only PDBs listed in TEST_LIBRARY_MAP ---
-    if _to_bool(str(cfg.get("TEST_MODE_ENABLE", "false"))):
+    test_mode = _resolve_test_mode(cfg)
+    if test_mode != "off":
         raw_map = cfg.get("TEST_LIBRARY_MAP", {})
-        test_keys = set()
-        if isinstance(raw_map, dict):
-            test_keys = {str(k).upper()[:4] for k in raw_map.keys()}
-        else:
-            # Accept JSON or Python-literal dict strings
-            try:
-                parsed = json.loads(str(raw_map).strip())
-            except Exception:
-                import ast
-
-                try:
-                    parsed = ast.literal_eval(str(raw_map).strip())
-                except Exception:
-                    parsed = {}
-            if isinstance(parsed, dict):
-                test_keys = {str(k).upper()[:4] for k in parsed.keys()}
+        test_map = _coerce_test_map(raw_map)
+        test_keys = {k[:4] for k in test_map.keys()}
         if test_keys:
             kept, skipped = [], []
             for f in pdb_files:
                 nid = _norm_pdb_id(f)
-                if nid and nid.upper() in test_keys:
+                if nid and nid.upper()[:4] in test_keys:
                     kept.append(f)
                 else:
                     skipped.append(f)
+
             if skipped:
-                # Print short list of IDs we're skipping so it's obvious in logs
-                skipped_ids = sorted({(_norm_pdb_id(x) or x) for x in skipped})
-                print(
-                    f"[test-mode] Skipping {len(skipped)} protein(s) not in TEST_LIBRARY_MAP: {', '.join(skipped_ids[:20])}" +
-                    (" ..." if len(skipped_ids) > 20 else ""))
+                print(f"[test-mode] Enabled mode={test_mode}; restricting to {len(kept)} PDBs from TEST_LIBRARY_MAP keys.")
+                for s in skipped:
+                    print(f"[test-mode] Skipping {s} (not in TEST_LIBRARY_MAP).")
+
             pdb_files = kept
         else:
             print("[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied.")
