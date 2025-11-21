@@ -5507,7 +5507,11 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     except Exception:
                         ph_num = None
 
-                if ph_num is not None:
+                if ph_num is None:
+                    ph_log.warning(
+                        "[ph_ligand.context] unable to parse ph_label=%s; using base ligands", ph_label
+                    )
+                else:
                     ligand_window = [round(p, 1) for p in (ph_num - 1.0, ph_num, ph_num + 1.0)]
                     ph_log.info(f"[ph_ligand.context] receptor pH={ph_num} -> ligand window={ligand_window}")
 
@@ -5517,9 +5521,29 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         force=False,
                     )
 
-                    ligands = [str(p) for p in enumerated]
-                    heavy_atom_counts = {str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated}
-                    pains_flags = {k: base_pains_flags.get(k, base_pains_flags.get(Path(k).stem, False)) for k in ligands}
+                    if enumerated:
+                        ligands = [str(p) for p in enumerated]
+                        heavy_atom_counts = {str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated}
+                        pains_flags = {
+                            k: base_pains_flags.get(
+                                k,
+                                base_pains_flags.get(Path(k).stem, False),
+                            )
+                            for k in ligands
+                        }
+                        ph_log.info(
+                            "[ph_ligand.selected] pdb_id=%s ph=%s ligands=%d",
+                            paths.pdb_id,
+                            ph_label,
+                            len(ligands),
+                        )
+                    else:
+                        ph_log.warning(
+                            "[ph_ligand.empty] pdb_id=%s ph=%s window=%s -> no microstates; falling back to base ligands",
+                            paths.pdb_id,
+                            ph_label,
+                            ligand_window,
+                        )
             except Exception as e:
                 ph_log.warning(f"[ph_ligand.context.skip] failed during pH-specific ligand enumeration: {e}")
         # --------------------------------------------------------
