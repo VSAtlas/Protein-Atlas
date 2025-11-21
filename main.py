@@ -3074,134 +3074,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         prepped_ligands_dir=paths.prepped_ligands_dir,
     )
 
-    # --- roots discovery (unchanged baseline) ---
-    roots: list[Path] = []
-    global_root = Path(cfg["OUTPUT_LIGANDS_DIR"]) if cfg.get("OUTPUT_LIGANDS_DIR") else None
-    if global_root and global_root.exists():
-        roots.append(global_root)
-    if paths.prepped_ligands_dir.exists():
-        roots.append(paths.prepped_ligands_dir)
-
-    extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
-    extra_paths: list[Path] = []
-    if extra_dirs:
-        for d in extra_dirs.split(";"):
-            d = d.strip()
-            if not d:
-                continue
-            p = Path(d)
-            if p.exists():
-                roots.append(p)
-                extra_paths.append(p)
-
-    single_selector = cfg.get("_EFFECTIVE_SINGLE_LIGAND")
-    crawl_allowed = not bool(single_selector)
-    logger.info(
-        "[ligands.scan.guard] single_mode=%s roots=%d crawl_allowed=%s",
-        str(bool(single_selector)).lower(),
-        len(roots),
-        "true" if crawl_allowed else "false(single)",
-    )
-    logger.info("Scanning for ligands under: " + " | ".join(str(r) for r in roots))
-
-    # --- collect all .pdbqt (dedup by normalized path), directory-first ---
-    seen: set[str] = set()
-    all_pdbqt_paths: list[Path] = []
-
-    # Allowlist only control/reference in the per-protein tree; everything
-    # else (non-controls) comes from explicitly allowed library roots.
-    per_protein_allow = {"controls", "reference"}
-
-    for r in roots:
-        allowed = None
-        if r == paths.prepped_ligands_dir:
-            allowed = per_protein_allow
-        for p in _iter_pdbqt_dirfirst(r, allowed_subdirs=allowed):
-            pn = norm(p)
-            if pn not in seen:
-                seen.add(pn)
-                all_pdbqt_paths.append(p)
-
-    if not all_pdbqt_paths:
-        logger.warning("No .pdbqt ligands were found under the configured roots.")
-        return [], {}, {}
-
-    # --- validity pass (keep your existing checker) ---
-    valid_pdbqt: Dict[str, Path] = {}
-    for p in all_pdbqt_paths:
-        try:
-            # Keep existing lib-root heuristic for validation
-            lib_root_for_checks = str(global_root if (global_root and global_root.exists()) else paths.prepped_ligands_dir.parent)
-            if is_valid_ligand(p, lib_root_for_checks):
-                valid_pdbqt[norm(p)] = p
-            else:
-                logger.debug(f"Excluded malformed ligand (pdbqt check failed): {p}")
-        except Exception:
-            logger.debug(f"Excluded malformed ligand (exception): {p}")
-
-    logger.info(f"Valid .pdbqt ligands (union): {len(valid_pdbqt)}")
-
-    # --- per-protein subfolder selection for non-controls only ----------
-    pdb_id = paths.pdb_id.upper()
-    subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
-    test_mode = _resolve_test_mode(cfg)
-
-    # Robust parse of TEST_LIBRARY_MAP (dict, JSON, or Python-literal string)
-    maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
-    test_map: Dict[str, str] = {}
-
-    test_map = _coerce_test_map(maybe_map)
-    logger.info(f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}")
-    mapped_subdir = test_map.get(pdb_id)
-
-    # Build allowed non-control roots
-    allowed_noncontrol_roots: list[Path] = []
-    roots: list[Path] = []
-    if cfg.get("OUTPUT_LIGANDS_DIR"):
-        base_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
-        default_root = base_root / subdir_default
-
-        if test_mode == "off" or not mapped_subdir:
-            roots = [default_root]
-            if test_mode in ("dud", "fda+dud") and not mapped_subdir:
-                logger.warning(
-                    "[test-mode] pdb_id=%s mode=%s but no TEST_LIBRARY_MAP entry; falling back to default %s",
-                    pdb_id, test_mode, default_root
-                )
-        elif test_mode == "fda+dud":
-            test_root = base_root / mapped_subdir
-            roots = [test_root, default_root]
-        elif test_mode == "dud":
-            test_root = base_root / mapped_subdir
-            roots = [test_root]
-
-    deduped_roots: list[Path] = []
-    seen_keys: set[str] = set()
-    for r in roots:
-        key = str(r.resolve())
-        if key not in seen_keys:
-            seen_keys.add(key)
-            deduped_roots.append(r)
-
-    allowed_noncontrol_roots.extend(deduped_roots)
-
-    logger.info(
-        "[fuel] pdb_id=%s test_mode=%s mapped_subdir=%s roots=%s",
-        pdb_id,
-        test_mode,
-        mapped_subdir or "default",
-        ",".join(str(r.resolve()) for r in deduped_roots) or "none",
-    )
-
-    # Always include extras (unchanged)
-    for d in (extra_dirs.split(";") if extra_dirs else []):
-        d = d.strip()
-        if d:
-            allowed_noncontrol_roots.append(Path(d))
-
-    # Final audits (after list is populated)
-    logger.info("[lib-roots] non-control roots = " + ", ".join(map(str, allowed_noncontrol_roots)))
-
     def _dedup_index_roots(seq: list[Path]) -> list[Path]:
         deduped: list[Path] = []
         seen: set[str] = set()
@@ -3218,6 +3090,143 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
                 deduped.append(path_obj)
         return deduped
 
+    extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
+    extra_paths: list[Path] = []
+    if extra_dirs:
+        for d in extra_dirs.split(";"):
+            d = d.strip()
+            if not d:
+                continue
+            p = Path(d)
+            if p.exists():
+                extra_paths.append(p)
+
+    pdb_id = paths.pdb_id.upper()
+    subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
+    test_mode = _resolve_test_mode(cfg)
+
+    maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
+    test_map: Dict[str, str] = {}
+    test_map = _coerce_test_map(maybe_map)
+    logger.info(f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}")
+    mapped_value = (test_map or {}).get(pdb_id)
+
+    base_root = Path(
+        cfg.get("OUTPUT_LIGANDS_DIR")
+        or cfg.get("PREPPED_LIGANDS_ROOT")
+        or "prepped_ligands"
+    )
+
+    roots_for_mode: list[Path]
+    if test_mode == "off" or not mapped_value:
+        roots_for_mode = [base_root / subdir_default]
+        if test_mode in ("dud", "fda+dud") and not mapped_value:
+            logger.warning(
+                "[test-mode] PDB %s missing from TEST_LIBRARY_MAP; using default library=%s",
+                pdb_id,
+                subdir_default,
+            )
+    elif test_mode == "dud":
+        roots_for_mode = [base_root / mapped_value]
+    elif test_mode == "fda+dud":
+        roots_for_mode = [base_root / mapped_value, base_root / subdir_default]
+    else:
+        roots_for_mode = [base_root / subdir_default]
+
+    deduped_roots = _dedup_index_roots(roots_for_mode)
+    allowed_noncontrol_roots: list[Path] = []
+    for r in deduped_roots:
+        if r.exists():
+            allowed_noncontrol_roots.append(r)
+        else:
+            logger.warning("[ligands.test-roots] missing=%s", r)
+
+    extra_paths_cfg: list[str] = cfg.get("EXTRA_LIGAND_ROOTS", []) or []
+    for d in extra_paths_cfg:
+        p = Path(d)
+        if p.exists():
+            allowed_noncontrol_roots.append(p)
+        else:
+            logger.warning("[ligands.extra-roots] missing=%s", p)
+
+    allowed_noncontrol_roots.extend(extra_paths)
+    allowed_noncontrol_roots = _dedup_index_roots(allowed_noncontrol_roots)
+
+    logger.info(
+        "[ligands.allowed-roots] test_mode=%s pdb=%s roots=%d",
+        test_mode,
+        pdb_id,
+        len(allowed_noncontrol_roots),
+    )
+    cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
+    cfg["_TEST_MODE_EFFECTIVE"] = test_mode
+
+    scan_roots: list[Path] = []
+    prepped_lig_root = paths.prepped_ligands_dir
+    if prepped_lig_root and prepped_lig_root.exists():
+        scan_roots.append(prepped_lig_root)
+
+    scan_roots.extend(allowed_noncontrol_roots)
+    scan_roots = _dedup_index_roots(scan_roots)
+
+    single_selector = cfg.get("_EFFECTIVE_SINGLE_LIGAND")
+    crawl_allowed = not bool(single_selector)
+    logger.info(
+        "[ligands.scan.guard] roots=%d crawl_allowed=%s selector=%s",
+        len(scan_roots),
+        crawl_allowed,
+        single_selector,
+    )
+
+    seen: set[str] = set()
+    all_pdbqt_paths: list[Path] = []
+    per_protein_allow = {"controls", "reference"}
+
+    for root in scan_roots:
+        if not root.exists():
+            logger.warning("[ligands.scan] root_missing=%s", root)
+            continue
+
+        allowed_subdirs = None
+        if prepped_lig_root and root == prepped_lig_root:
+            allowed_subdirs = per_protein_allow
+
+        logger.info(
+            "[ligands.scan.root] root=%s allowed_subdirs=%s crawl=%s",
+            root,
+            allowed_subdirs,
+            crawl_allowed,
+        )
+
+        for p in _iter_pdbqt_dirfirst(root, allowed_subdirs=allowed_subdirs):
+            pn = norm(p)
+            if pn not in seen:
+                seen.add(pn)
+                all_pdbqt_paths.append(p)
+
+    logger.info("[ligands.scan] roots=%d found=%d", len(scan_roots), len(all_pdbqt_paths))
+    cfg["ALL_LIGAND_PATHS"] = [str(p) for p in all_pdbqt_paths]
+
+    if not all_pdbqt_paths:
+        logger.warning("No .pdbqt ligands were found under the configured roots.")
+        return [], {}, {}
+
+    global_root = Path(cfg["OUTPUT_LIGANDS_DIR"]) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+
+    valid_pdbqt: Dict[str, Path] = {}
+    for p in all_pdbqt_paths:
+        try:
+            lib_root_for_checks = str(global_root if (global_root and global_root.exists()) else paths.prepped_ligands_dir.parent)
+            if is_valid_ligand(p, lib_root_for_checks):
+                valid_pdbqt[norm(p)] = p
+            else:
+                logger.debug(f"Excluded malformed ligand (pdbqt check failed): {p}")
+        except Exception:
+            logger.debug(f"Excluded malformed ligand (exception): {p}")
+
+    cfg["ALL_LIGAND_PATHS_VALID"] = [str(p) for p in valid_pdbqt.values()]
+    logger.info("[ligands.valid] count=%d", len(valid_pdbqt))
+
     per_index_roots: list[Path] = []
     if paths.prepped_ligands_dir:
         per_index_roots.append(paths.prepped_ligands_dir)
@@ -3229,8 +3238,7 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         tokens = [tok.strip() for tok in str(mapped_value).split(",") if tok.strip()]
         index_library_roots.extend(base_root / tok for tok in tokens)
     else:
-        index_library_roots.extend(deduped_roots)
-        index_library_roots.extend(extra_paths)
+        index_library_roots.extend(allowed_noncontrol_roots)
 
     per_index_roots = _dedup_index_roots(per_index_roots)
     index_library_roots = _dedup_index_roots(index_library_roots)
