@@ -19,7 +19,7 @@ import atexit, datetime
 from pathlib import Path
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Mapping
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
@@ -33,7 +33,7 @@ from input_and_export_functions import (
 )
 from protein_functions import detect_active_site
 from activesite import extract_and_remove_ligands, get_atom_rules
-from prep_ligands import prep_ligands_from_pdb, is_valid_ligand
+from prep_ligands import prep_ligands_from_pdb, is_valid_ligand, enumerate_ligands_for_docking
 from pose_validation import (
     validate_pose_pdbqt, extract_surface_atoms, attempt_fallback_recenter,
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
@@ -1830,6 +1830,22 @@ def _ph_values_from_context(pdb_path: str) -> list[float]:
     return vals
 
 
+def _ph_ligand_mode(cfg: Mapping[str, Any]) -> str:
+    """
+    Interpret PH_LIGAND_MODE from config.
+
+    Recognized values (case-insensitive):
+    - off / none / false / 0 / "" -> "off"
+    - anything else -> "context_window"
+
+    This keeps the behavior opt-in while allowing future modes later.
+    """
+    raw = str(cfg.get("PH_LIGAND_MODE", "off")).strip().lower()
+    if raw in ("", "off", "none", "false", "0"):
+        return "off"
+    return "context_window"
+
+
 # ----------------------
 
 
@@ -2074,6 +2090,50 @@ def prepare_receptor(
         receptor_norm = norm(receptor_pdbqt_path)
         if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
             _build_ph_ensemble(cleaned_norm)
+            mode = _ph_ligand_mode(cfg)
+            if mode != "off":
+                try:
+                    context_ph_values = _ph_values_from_context(cleaned_pdb_path)
+                except Exception as e:
+                    logger.warning("[ph_ligand] failed to load context pH values; skipping ligand enumeration: %s", e)
+                    context_ph_values = []
+
+                if context_ph_values:
+                    window: set[float] = set()
+                    for p in context_ph_values:
+                        if p is None:
+                            continue
+                        try:
+                            p_val = float(p)
+                        except Exception:
+                            continue
+                        for delta in (-1.0, 0.0, +1.0):
+                            v = p_val + delta
+                            if v < 3.0 or v > 10.5:
+                                continue
+                            window.add(round(v, 1))
+
+                    ligand_ph_values = sorted(window)
+                    if ligand_ph_values:
+                        logger.info(
+                            "[ph_ligand] mode=%s context_pH=%s ligand_pH_window=%s",
+                            mode,
+                            ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
+                            ",".join(f"{p:.1f}" for p in ligand_ph_values),
+                        )
+                        try:
+                            enumerate_ligands_for_docking(
+                                requested_ph_values=ligand_ph_values,
+                                root_dir=None,
+                                microstate_dedup=True,
+                                force=False,
+                            )
+                        except Exception as e:
+                            logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                    else:
+                        logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
+                else:
+                    logger.info("[ph_ligand] no context pH values available; ligand enumeration skipped")
         prepare_receptor.last_provenance = "cache_reuse"
         return cleaned_norm, receptor_norm
     
@@ -2114,8 +2174,61 @@ def prepare_receptor(
     except Exception as e:
         logger.warning(f"Could not relocate cleaned PDB: {e}")
 
-    if bool(cfg.get("PH_ENSEMBLE_IN_PREP", False)):
+    # Build protein pH ensemble if requested
+    ph_ensemble_in_prep = bool(cfg.get("PH_ENSEMBLE_IN_PREP", False))
+    if ph_ensemble_in_prep:
         _build_ph_ensemble(cleaned_pdb)
+
+    # Optional ligand microstate priming based on context pH
+    mode = _ph_ligand_mode(cfg)
+    if ph_ensemble_in_prep and mode != "off":
+        try:
+            # Use the existing context-pH helper to recover the canonical pH values
+            # used to build the ensemble, instead of parsing any filenames.
+            context_ph_values = _ph_values_from_context(cleaned_pdb_path)
+        except Exception as e:
+            logger.warning("[ph_ligand] failed to load context pH values; skipping ligand enumeration: %s", e)
+            context_ph_values = []
+
+        if context_ph_values:
+            # Build a ±1 pH window union across all context pHs, clamped to [3.0, 10.5]
+            window: set[float] = set()
+            for p in context_ph_values:
+                if p is None:
+                    continue
+                try:
+                    p_val = float(p)
+                except Exception:
+                    continue
+                for delta in (-1.0, 0.0, +1.0):
+                    v = p_val + delta
+                    if v < 3.0 or v > 10.5:
+                        continue
+                    # round to 1 decimal place to match microstate registry convention
+                    window.add(round(v, 1))
+
+            ligand_ph_values = sorted(window)
+            if ligand_ph_values:
+                logger.info(
+                    "[ph_ligand] mode=%s context_pH=%s ligand_pH_window=%s",
+                    mode,
+                    ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
+                    ",".join(f"{p:.1f}" for p in ligand_ph_values),
+                )
+                try:
+                    # Let prep_ligands resolve the library and root dir from config
+                    enumerate_ligands_for_docking(
+                        requested_ph_values=ligand_ph_values,
+                        root_dir=None,
+                        microstate_dedup=True,
+                        force=False,
+                    )
+                except Exception as e:
+                    logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+            else:
+                logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
+        else:
+            logger.info("[ph_ligand] no context pH values available; ligand enumeration skipped")
 
     try:
         provenance = getattr(automate_protein_prep, "get_clean_provenance", lambda: "clean_pdb")()

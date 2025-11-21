@@ -257,6 +257,10 @@ def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
 
 def enumerate_ligands_for_docking(
     requested_ph_values: Optional[Collection[float]] = None,
+    *,
+    root_dir: Optional[Path] = None,
+    microstate_dedup: bool = True,
+    force: bool = False,
 ) -> List[Path]:
     """
     Enumerate canonical ligand PDBQTs for docking, deduplicated at the microstate level.
@@ -274,6 +278,8 @@ def enumerate_ligands_for_docking(
         Sorted list of canonical PDBQT paths (one per microstate) under the current
         library's prepped_ligands directory.
     """
+
+    _ = (root_dir, microstate_dedup, force)
 
     cfg = load_config("config.txt")
     validate_config(cfg)
