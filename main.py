@@ -4619,52 +4619,55 @@ def validate_ligand(
 # ======================
 # Per-protein driver
 # ======================
+def _summarize_ions_file(file_path: Path | str) -> dict[str, object]:
+    path = Path(file_path)
+    if not path.exists():
+        return {
+            "hist": "missing",
+            "counts": {},
+            "metals_present": False,
+            "salts_present": False,
+            "error": "missing",
+        }
+    counts = Counter()
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            for ln in fh:
+                if not ln.startswith("HETATM"):
+                    continue
+                res = ln[17:20].strip().upper()
+                elem = (ln[76:78].strip() or res).upper()
+                token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
+                if token and token.isalpha() and len(token) <= 3:
+                    counts[token] += 1
+    except Exception as exc:  # pragma: no cover - diagnostics
+        return {
+            "hist": "error",
+            "counts": {},
+            "metals_present": False,
+            "salts_present": False,
+            "error": str(exc),
+        }
+
+    hist = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
+    metals_present = any(token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts)
+    salts_present = any(token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts)
+    return {
+        "hist": hist,
+        "counts": dict(counts),
+        "metals_present": metals_present,
+        "salts_present": salts_present,
+        "error": None,
+    }
+
+
 def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
+    # ======================
+    # Phase 0 – ID & path setup
+    # ======================
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = re.sub(r'(?i)_cleaned$', '', base_id)
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=os.path.basename(pdb_file))
-
-    # [ions] summarizer for raw/clean histograms
-    def _summarize_ions_file(file_path: Path | str) -> dict[str, object]:
-        path = Path(file_path)
-        if not path.exists():
-            return {
-                "hist": "missing",
-                "counts": {},
-                "metals_present": False,
-                "salts_present": False,
-                "error": "missing",
-            }
-        counts = Counter()
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                for ln in fh:
-                    if not ln.startswith("HETATM"):
-                        continue
-                    res = ln[17:20].strip().upper()
-                    elem = (ln[76:78].strip() or res).upper()
-                    token = elem if elem.isalpha() and 1 <= len(elem) <= 2 else res
-                    if token and token.isalpha() and len(token) <= 3:
-                        counts[token] += 1
-        except Exception as exc:  # pragma: no cover - diagnostics
-            return {
-                "hist": "error",
-                "counts": {},
-                "metals_present": False,
-                "salts_present": False,
-                "error": str(exc),
-            }
-
-        hist = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
-        metals_present = any(token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts)
-        salts_present = any(token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts)
-        return {
-            "hist": hist,
-            "counts": dict(counts),
-            "metals_present": metals_present,
-            "salts_present": salts_present,
-            "error": None,
-        }
 
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
     logger.info(f"[paths] base_id={base_id} -> pdb_id={pdb_id}")
@@ -4674,45 +4677,19 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     prepped_dir  = os.path.join(cfg['PREPPED_LIGANDS_DIR'], pdb_id)
     collapse_sanitized_names([lig_raw_dir, prepped_dir], logger=logger)
 
-    # 1) Extract ligands ? produce nolig PDB
-    _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
-    # Ensure extracted crystal controls are prepped before control redock
-    try:
-        from prep_ligands import prep_ligands_from_pdb
-        prep_ligands_from_pdb(
-            ligand_output_dir=paths.ligand_output_dir,
-            ligands_mol2_dir=paths.ligands_mol2_dir,
-            prepped_ligands_dir=paths.prepped_ligands_dir,
-        )
-        logger.info("[Controls] Prepped extracted controls ahead of redock.")
-    except Exception as e:
-        logger.warning(f"[Controls] Prepping extracted controls failed: {e}")
-    
-    
-    ctrl_pdbqts: list[Path] = []
-    for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
-        if root.exists():
-            ctrl_pdbqts.extend(root.glob("*.pdbqt"))
-
-    logger.info(f"[Controls] Prepped control PDBQTs found (union): {len(ctrl_pdbqts)}")
-    for p in ctrl_pdbqts[:10]:
-        logger.info(f"[Controls]   {p.name}")
-
-    # build crystal-ligand lookup (prefer PDB)
-    control_lookup = build_control_lookup(paths)
-
+    # ======================
+    # Phase 1 – Variant & ion context
+    # ======================
     variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant_token = variant_env or None
     variant_label = variant_env or "legacy"
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     active_ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
 
-    # [ions] track per-protein ion audit
     ion_audit_root: dict = cfg.setdefault("_ION_AUDIT", {})
     pdb_audit: dict = ion_audit_root.setdefault(paths.pdb_id, {})
     clean_audit: dict = pdb_audit.setdefault("clean_counts", {})
 
-    # [ions] raw input audit
     input_summary = _summarize_ions_file(paths.input_pdb_path)
     input_hist = str(input_summary.get("hist", "none"))
     input_error = input_summary.get("error")
@@ -4756,6 +4733,10 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         receptor_target,
         receptor_target.exists(),
     )
+
+    # ======================
+    # Phase 2 – Receptor prep (with ion summary)
+    # ======================
 
     # 2) Protein prep (re-use if cached)
     logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
@@ -4836,6 +4817,35 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             cleaned_pdb,
         )
 
+    # ======================
+    # Phase 3 – Crystallographic ligand extraction / control setup
+    # ======================
+    _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
+    try:
+        from prep_ligands import prep_ligands_from_pdb
+        prep_ligands_from_pdb(
+            ligand_output_dir=paths.ligand_output_dir,
+            ligands_mol2_dir=paths.ligands_mol2_dir,
+            prepped_ligands_dir=paths.prepped_ligands_dir,
+        )
+        logger.info("[Controls] Prepped extracted controls ahead of redock.")
+    except Exception as e:
+        logger.warning(f"[Controls] Prepping extracted controls failed: {e}")
+
+    ctrl_pdbqts: list[Path] = []
+    for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
+        if root.exists():
+            ctrl_pdbqts.extend(root.glob("*.pdbqt"))
+
+    logger.info(f"[Controls] Prepped control PDBQTs found (union): {len(ctrl_pdbqts)}")
+    for p in ctrl_pdbqts[:10]:
+        logger.info(f"[Controls]   {p.name}")
+
+    control_lookup = build_control_lookup(paths)
+
+    # ======================
+    # Phase 4 – Pocket detection and initial center/box
+    # ======================
     # 3) Pocket detection
     center, box_size, center_source = None, None, "none"
     try:
@@ -5087,6 +5097,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
 
 
+    # ======================
+    # Phase 5 – pH ensemble manifest (global protein-level)
+    # ======================
     # >>> PH ENSEMBLE (GLOBAL) START
     if bool(cfg.get("PH_ENSEMBLE", False)):
         try:
@@ -5125,7 +5138,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             logger.warning("[ph_ensemble.skip] error=%s", e)
     # >>> PH ENSEMBLE (GLOBAL) END
 
-
+    # ======================
+    # Phase 6 – Ligand prep & filtering
+    # ======================
     # 4) Ligand prep & filtering
     cfg.setdefault("_EFFECTIVE_SINGLE_LIGAND", "")
     single_ligand_hit: Optional[Path] = None
@@ -5242,6 +5257,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     base_center = tuple(center)
     base_box = tuple(box_size)
 
+    # ======================
+    # Phase 7 – pH/variant loop (core docking)
+    # ======================
     ph_log = logging.getLogger("ph_ensemble")
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
@@ -5654,6 +5672,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
             i += 1
 
+        # ======================
+        # Phase 8 – Summary outputs & cleanup
+        # ======================
         final_pose_validation_and_screenshots(
             cfg, paths.pdb_id, stages, receptor_pdbqt, center, validated_ligands_last,
             score_history, cleaned_pdb, docking_mode, logger, ph_label
