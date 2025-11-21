@@ -5197,6 +5197,27 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         heavy_atom_counts = {str(single_ligand_hit): ha}
         pains_flags = {}
         logger.info(f"[single] Active ? docking only: {single_ligand_hit.name} (heavy={ha})")
+
+        # --- PH-ligand support for single-ligand mode ---
+        if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get("PH_ENSEMBLE_IN_PREP"):
+            try:
+                from prep_ligands import enumerate_ligands_for_docking
+
+                ph_values = [6.0, 8.0]
+                if "_PH_CONTEXT_VALUES" in cfg:
+                    ph_values = cfg["_PH_CONTEXT_VALUES"]
+                ligand_window = sorted(
+                    {round(p, 1) for ph in ph_values for p in (float(ph) - 1.0, float(ph), float(ph) + 1.0)}
+                )
+                logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
+                enumerate_ligands_for_docking(
+                    requested_ph_values=ligand_window,
+                    microstate_dedup=True,
+                    force=False,
+                )
+            except Exception as e:
+                logger.warning(f"[single.ph_ligand.skip] Could not run PH-ligand window for single mode: {e}")
+        # ------------------------------------------------
     else:
         ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
 
@@ -5289,6 +5310,39 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     else:
         ph_tags = [None]
 
+    # --- pH-ligand context integration ---
+    if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get("PH_ENSEMBLE"):
+        try:
+            from prep_ligands import enumerate_ligands_for_docking
+
+            ph_log.info("[ph_ligand.bridge] active: PH_LIGAND_MODE=context_window")
+
+            context_pHs = []
+            for tag in ph_tags:
+                try:
+                    pH_num = float(str(tag).replace("pH", "").replace("_", ".")) if tag else None
+                except Exception:
+                    pH_num = None
+                if pH_num is not None:
+                    context_pHs.append(pH_num)
+            if context_pHs:
+                ligand_window = sorted(
+                    {
+                        round(x, 1)
+                        for x in [p for ph in context_pHs for p in (ph - 1.0, ph, ph + 1.0)]
+                    }
+                )
+                ph_log.info(f"[ph_ligand.prep] preparing ligands for window {ligand_window}")
+
+                enumerate_ligands_for_docking(
+                    requested_ph_values=ligand_window,
+                    microstate_dedup=True,
+                    force=False,
+                )
+        except Exception as e:
+            ph_log.warning(f"[ph_ligand.prep.skip] failed to initialize: {e}")
+    # -------------------------------------
+
     for ph_label in ph_tags:
         rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
         out_root = docked_dir(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
@@ -5334,6 +5388,35 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         center = tuple(base_center)
         box_size = tuple(base_box)
         receptor_pdbqt = str(rec_path)
+
+        # --- Dynamic ligand enumeration for current pH context ---
+        if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window":
+            try:
+                from prep_ligands import enumerate_ligands_for_docking
+
+                ph_num = None
+                if ph_label:
+                    try:
+                        ph_num = float(str(ph_label).replace("pH", "").replace("_", "."))
+                    except Exception:
+                        ph_num = None
+
+                if ph_num is not None:
+                    ligand_window = [round(p, 1) for p in (ph_num - 1.0, ph_num, ph_num + 1.0)]
+                    ph_log.info(f"[ph_ligand.context] receptor pH={ph_num} -> ligand window={ligand_window}")
+
+                    enumerated = enumerate_ligands_for_docking(
+                        requested_ph_values=ligand_window,
+                        microstate_dedup=True,
+                        force=False,
+                    )
+
+                    ligands = [str(p) for p in enumerated]
+                    heavy_atom_counts = {str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated}
+                    pains_flags = {k: base_pains_flags.get(k, base_pains_flags.get(Path(k).stem, False)) for k in ligands}
+            except Exception as e:
+                ph_log.warning(f"[ph_ligand.context.skip] failed during pH-specific ligand enumeration: {e}")
+        # --------------------------------------------------------
 
         ctrl_stems_lower = {s.lower() for s in control_stems}
         ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
