@@ -3387,6 +3387,81 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         if keep:
             filtered_noncontrols.append(p)
 
+    # --- Optional: build library manifests from scan results ---
+    if cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN"):
+        try:
+            manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+            by_root: Dict[Path, list[Path]] = {}
+
+            for root in allowed_noncontrol_roots:
+                root = Path(root)
+                if not root.exists():
+                    continue
+                for lig in filtered_noncontrols:
+                    lig_path = Path(lig)
+                    if not lig_path.exists():
+                        continue
+                    if not _under(lig_path, root):
+                        continue
+                    by_root.setdefault(root, []).append(lig_path)
+
+            for root, ligs in by_root.items():
+                manifest_path = root / manifest_filename
+                if manifest_path.exists():
+                    logger.info(
+                        "[lib-manifest.scan.skip] root=%s reason=exists path=%s",
+                        str(root),
+                        str(manifest_path),
+                    )
+                    continue
+
+                if not ligs:
+                    continue
+
+                logger.info(
+                    "[lib-manifest.scan.build] root=%s ligands=%d manifest=%s",
+                    str(root),
+                    len(ligs),
+                    str(manifest_path),
+                )
+
+                entries: list[str] = []
+                for lig in ligs:
+                    try:
+                        rel = Path(lig).resolve().relative_to(root.resolve())
+                        entries.append(rel.as_posix())
+                    except Exception:
+                        entries.append(os.path.relpath(str(lig), str(root)))
+
+                tmp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+
+                try:
+                    from library_index import LibraryIndex
+
+                    lib_index = LibraryIndex(
+                        manifest_filename=manifest_filename,
+                        logger=logger,
+                    )
+                    if hasattr(lib_index, "write_manifest_for_root"):
+                        lib_index.write_manifest_for_root(root, entries, tmp_path)
+                    else:
+                        import json
+
+                        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                        data = {"root": str(root), "entries": entries}
+                        tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+                    tmp_path.replace(manifest_path)
+                except Exception:
+                    logger.exception(
+                        "[lib-manifest.scan.error] root=%s manifest=%s",
+                        str(root),
+                        str(manifest_path),
+                    )
+        except Exception:
+            logger.exception("[lib-manifest.scan.error] unexpected failure during build_on_scan")
+    # ------------------------------------------------------------
+
     # Merge back: controls (unaltered) + filtered non-controls
     if cfg.get("_EFFECTIVE_SINGLE_LIGAND") and cfg.get("_SINGLE_RESOLVED_PATH"):
         resolved_path = Path(cfg["_SINGLE_RESOLVED_PATH"])
@@ -6186,6 +6261,20 @@ def main() -> None:
     cfg.setdefault("SINGLE_LIGAND_SUGGESTIONS", 5)
     cfg.setdefault("ALLOW_FDA_FALLBACK", False)
     cfg.setdefault("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
+    # Default + env override for building manifests during fallback scans
+    cfg.setdefault("LIBRARY_MANIFEST_BUILD_ON_SCAN", True)
+    env_build_flag = os.environ.get("LIBRARY_MANIFEST_BUILD_ON_SCAN")
+    if env_build_flag is not None:
+        try:
+            cfg["LIBRARY_MANIFEST_BUILD_ON_SCAN"] = _to_bool(env_build_flag)
+        except Exception:
+            # If parsing fails, keep the config/default
+            pass
+
+    logging.getLogger("lib-manifest").info(
+        "[lib-manifest.scan] build_on_scan=%s",
+        str(bool(cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN", True))).lower(),
+    )
     cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
 
     # CLI > ENV > CFG precedence
