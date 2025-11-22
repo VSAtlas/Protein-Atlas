@@ -3208,6 +3208,11 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         pdb_id,
         len(allowed_noncontrol_roots),
     )
+    # Record a primary non-control library root for PH-ligand mode
+    if allowed_noncontrol_roots:
+        cfg["_PH_LIGAND_ROOT"] = str(allowed_noncontrol_roots[0])
+    else:
+        cfg.pop("_PH_LIGAND_ROOT", None)
     cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
     cfg["_TEST_MODE_EFFECTIVE"] = test_mode
 
@@ -5466,6 +5471,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     else:
         ph_tags = [None]
 
+    ph_ligand_root = None
+    ph_ligand_root_str = cfg.get("_PH_LIGAND_ROOT")
+    if ph_ligand_root_str:
+        try:
+            ph_ligand_root = Path(ph_ligand_root_str)
+        except Exception:
+            ph_ligand_root = None
+
     # --- pH-ligand context integration ---
     if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get("PH_ENSEMBLE"):
         try:
@@ -5495,6 +5508,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     requested_ph_values=ligand_window,
                     microstate_dedup=True,
                     force=False,
+                    root_dir=ph_ligand_root,
                 )
             else:
                 ph_log.warning(
@@ -5576,6 +5590,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         requested_ph_values=ligand_window,
                         microstate_dedup=True,
                         force=False,
+                        root_dir=ph_ligand_root,
                     )
 
                     if enumerated:
