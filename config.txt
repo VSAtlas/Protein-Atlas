@@ -42,8 +42,8 @@ PYMOL_PATH=pymol
 PYMOL_EXE=pymol
 
 CPU_ONLY=True
-CPU=128
-MAX_PARALLEL_JOBS=128
+CPU=64
+MAX_PARALLEL_JOBS=64
 FORCE_REPROCESS=True
 DOCKING_MODE=polypharmacology
 FINAL_STAGE_POLY = stage3
@@ -198,8 +198,9 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
-TEST_MODE_ENABLE = false
+TEST_MODE_ENABLE = fda+dud
 TEST_LIBRARY_MAP = {
+    "1BN1": "cah2",
     "1T46": "kit",
     "2GQG": "abl1",
     "2HYY": "abl1",

@@ -1846,6 +1846,55 @@ def _ph_ligand_mode(cfg: Mapping[str, Any]) -> str:
     return "context_window"
 
 
+def _parse_ph_values_from_label(label: Optional[str]) -> list[float]:
+    """
+    Parse one of our PH ensemble labels into a list of numeric pH values.
+
+    Handles simple tags like:
+        "pH7_0", "pH8_4"
+    and composite tags like:
+        "pH7_9+8_4+8_9-dup19"
+
+    Returns a list of floats (e.g. [7.9, 8.4, 8.9]) or an empty list
+    if no numeric pH values can be parsed.
+    """
+    vals: list[float] = []
+    if not label:
+        return vals
+
+    s = str(label).strip()
+    if not s:
+        return vals
+
+    # Strip leading "pH" (case-insensitive)
+    m = re.search(r"(?i)pH(.+)", s)
+    if m:
+        s = m.group(1)
+
+    # Drop any suffix after first "-" (e.g. "-dup19")
+    if "-" in s:
+        s = s.split("-", 1)[0]
+
+    # Split on "+", convert pieces like "7_9" -> 7.9
+    for part in s.split("+"):
+        part = part.strip()
+        if not part:
+            continue
+        part = part.replace("_", ".")
+        try:
+            ph = float(part)
+        except Exception:
+            continue
+        # Sanity range for pH values
+        if 0.0 < ph < 15.0:
+            vals.append(ph)
+
+    return vals
+
+
+# ----------------------
+
+
 # ----------------------
 
 
@@ -3037,7 +3086,9 @@ def _resolve_test_mode(cfg) -> str:
           "fda_dud"    -> "fda+dud"
     Any unrecognized string should log a warning and fall back to "off".
     """
-    raw = cfg.get("TEST_MODE_ENABLE", "off")
+    #env has priority over config
+    raw = os.environ.get("TEST_MODE_ENABLE", cfg.get("TEST_MODE_ENABLE", "off"))
+
     if isinstance(raw, bool):
         return "fda+dud" if raw else "off"
 
@@ -3053,7 +3104,6 @@ def _resolve_test_mode(cfg) -> str:
 
     print(f"[test-mode] WARNING: Unknown TEST_MODE_ENABLE={raw!r}; treating as 'off'.")
     return "off"
-
 
 def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
     """
@@ -5423,14 +5473,11 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
             ph_log.info("[ph_ligand.bridge] active: PH_LIGAND_MODE=context_window")
 
-            context_pHs = []
+            context_pHs: list[float] = []
             for tag in ph_tags:
-                try:
-                    pH_num = float(str(tag).replace("pH", "").replace("_", ".")) if tag else None
-                except Exception:
-                    pH_num = None
-                if pH_num is not None:
+                for pH_num in _parse_ph_values_from_label(tag):
                     context_pHs.append(pH_num)
+
             if context_pHs:
                 ligand_window = sorted(
                     {
@@ -5438,12 +5485,21 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         for x in [p for ph in context_pHs for p in (ph - 1.0, ph, ph + 1.0)]
                     }
                 )
-                ph_log.info(f"[ph_ligand.prep] preparing ligands for window {ligand_window}")
+                ph_log.info(
+                    "[ph_ligand.prep] preparing ligands for window %s from tags=%s",
+                    ligand_window,
+                    ph_tags,
+                )
 
                 enumerate_ligands_for_docking(
                     requested_ph_values=ligand_window,
                     microstate_dedup=True,
                     force=False,
+                )
+            else:
+                ph_log.warning(
+                    "[ph_ligand.prep] no numeric pH values parsed from tags=%s; skipping ligand prep window",
+                    ph_tags,
                 )
         except Exception as e:
             ph_log.warning(f"[ph_ligand.prep.skip] failed to initialize: {e}")
@@ -5500,20 +5556,21 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             try:
                 from prep_ligands import enumerate_ligands_for_docking
 
-                ph_num = None
-                if ph_label:
-                    try:
-                        ph_num = float(str(ph_label).replace("pH", "").replace("_", "."))
-                    except Exception:
-                        ph_num = None
-
-                if ph_num is None:
+                ph_values = _parse_ph_values_from_label(ph_label)
+                if not ph_values:
                     ph_log.warning(
-                        "[ph_ligand.context] unable to parse ph_label=%s; using base ligands", ph_label
+                        "[ph_ligand.context] unable to parse numeric pH from ph_label=%s; using base ligands",
+                        ph_label,
                     )
                 else:
+                    ph_num = sum(ph_values) / len(ph_values)
                     ligand_window = [round(p, 1) for p in (ph_num - 1.0, ph_num, ph_num + 1.0)]
-                    ph_log.info(f"[ph_ligand.context] receptor pH={ph_num} -> ligand window={ligand_window}")
+                    ph_log.info(
+                        "[ph_ligand.context] ph_label=%s values=%s -> ligand window=%s",
+                        ph_label,
+                        ph_values,
+                        ligand_window,
+                    )
 
                     enumerated = enumerate_ligands_for_docking(
                         requested_ph_values=ligand_window,
@@ -5523,7 +5580,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
                     if enumerated:
                         ligands = [str(p) for p in enumerated]
-                        heavy_atom_counts = {str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated}
+                        heavy_atom_counts = {
+                            str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated
+                        }
                         pains_flags = {
                             k: base_pains_flags.get(
                                 k,
@@ -5545,8 +5604,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                             ligand_window,
                         )
             except Exception as e:
-                ph_log.warning(f"[ph_ligand.context.skip] failed during pH-specific ligand enumeration: {e}")
+                ph_log.warning(
+                    "[ph_ligand.context.skip] failed during pH-specific ligand enumeration: %s",
+                    e,
+                )
         # --------------------------------------------------------
+
 
         ctrl_stems_lower = {s.lower() for s in control_stems}
         ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
@@ -6060,6 +6123,27 @@ def main() -> None:
 
     log = logging.getLogger("ph_ensemble")
     log.info("[ph_ensemble.mode] enabled=%s scope=%s radius=%s", cfg.PH_ENSEMBLE, getattr(cfg, "PH_SCOPE", "auto"), getattr(cfg, "PH_RADIUS", 10.0))
+    # --- PH-ligand mode (CLI > ENV > CFG) ---
+    cfg.setdefault("PH_LIGAND_MODE", "off")
+    cli_ph_mode = _cli_val(sys.argv, "--ph-ligand-mode")
+    env_ph_mode = os.environ.get("PH_LIGAND_MODE")
+    cfg_ph_mode = str(cfg.get("PH_LIGAND_MODE", "off"))
+
+    effective_ph_mode = next(
+        (
+            m
+            for m in (cli_ph_mode, env_ph_mode, cfg_ph_mode)
+            if m is not None and str(m).strip() != ""
+        ),
+        "off",
+    )
+    cfg["PH_LIGAND_MODE"] = effective_ph_mode
+
+    log.info(
+        "[ph_ligand.mode] effective=%r (source=%s)",
+        effective_ph_mode,
+        "CLI" if cli_ph_mode else "ENV" if env_ph_mode else "CFG",
+    )
 
     # --- Per-run configs (RUN_DIR) ---
     cfg.setdefault("CONFIGS_DIR", str(Path(cfg["OVERALL_DIR"]) / "configs"))
