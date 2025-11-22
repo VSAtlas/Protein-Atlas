@@ -85,6 +85,9 @@ OBABEL_THREADS = 50
 OBABEL_TIMEOUT_S = 900
 CHUNK_SIZE = 200
 
+# Dedicated timeout for per-ligand SDF->MOL2 conversions (test-mode path)
+LIGPREP_OBABEL_TIMEOUT_SEC = OBABEL_TIMEOUT_S
+
 
 # --------------------------------------
 
@@ -1605,6 +1608,65 @@ def _attempt_obabel_series(base_cmd: List[str], timeout_sec: int, threads_list: 
             return True
         print("Retrying with a more conservative setting...")
     return False
+
+
+# =========================
+# Single SDF -> MOL2 helper
+# =========================
+
+def _sdf_to_mol2(
+    sdf_path: Path,
+    mol2_path: Path,
+    obabel_exe: str,
+    timeout_sec: int = LIGPREP_OBABEL_TIMEOUT_SEC,
+) -> tuple[bool, str]:
+    """
+    Convert a single SDF to MOL2 using Open Babel.
+
+    Returns
+    -------
+    ok : bool
+        True if the conversion completed successfully (return code 0).
+    stderr_text : str
+        Captured stderr (trimmed) for logging or debug.
+    """
+
+    mol2_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        obabel_exe,
+        "-isdf", str(sdf_path),
+        "-omol2",
+        "-O", str(mol2_path),
+        "--gen3d",
+    ]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.warning(
+            "[ligprep] per-ligand sdf->mol2 timed out for %s (timeout=%s s)",
+            sdf_path,
+            timeout_sec,
+        )
+        return False, f"timeout: {exc}"
+
+    ok = (proc.returncode == 0)
+    stderr_text = (proc.stderr or "").strip()
+    if not ok:
+        logger.warning(
+            "[ligprep] per-ligand sdf->mol2 non-zero exit for %s: rc=%s stderr=%s",
+            sdf_path,
+            proc.returncode,
+            stderr_text[:200],
+        )
+    return ok, stderr_text
 
 
 # =========================
