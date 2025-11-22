@@ -3208,6 +3208,11 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         pdb_id,
         len(allowed_noncontrol_roots),
     )
+    # Record a primary non-control library root for PH-ligand mode
+    if allowed_noncontrol_roots:
+        cfg["_PH_LIGAND_ROOT"] = str(allowed_noncontrol_roots[0])
+    else:
+        cfg.pop("_PH_LIGAND_ROOT", None)
     cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
     cfg["_TEST_MODE_EFFECTIVE"] = test_mode
 
@@ -3381,6 +3386,79 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
                 break
         if keep:
             filtered_noncontrols.append(p)
+
+    # --- Optional: build library manifests from scan results ---
+    if cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN"):
+        try:
+            manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+            by_root: Dict[Path, list[Path]] = {}
+
+            for root in allowed_noncontrol_roots:
+                root = Path(root)
+                if not root.exists():
+                    continue
+                for lig in filtered_noncontrols:
+                    lig_path = Path(lig)
+                    if not lig_path.exists():
+                        continue
+                    if not _under(lig_path, root):
+                        continue
+                    by_root.setdefault(root, []).append(lig_path)
+
+            for root, ligs in by_root.items():
+                manifest_path = root / manifest_filename
+                if manifest_path.exists():
+                    logger.info(
+                        "[lib-manifest.scan.skip] root=%s reason=exists path=%s",
+                        str(root),
+                        str(manifest_path),
+                    )
+                    continue
+
+                if not ligs:
+                    continue
+
+                logger.info(
+                    "[lib-manifest.scan.build] root=%s ligands=%d manifest=%s",
+                    str(root),
+                    len(ligs),
+                    str(manifest_path),
+                )
+
+                entries: list[str] = []
+                for lig in ligs:
+                    try:
+                        rel = Path(lig).resolve().relative_to(root.resolve())
+                        entries.append(rel.as_posix())
+                    except Exception:
+                        entries.append(os.path.relpath(str(lig), str(root)))
+
+                tmp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+
+                try:
+                    lib_index = LibraryIndex(
+                        manifest_filename=manifest_filename,
+                        logger=logger,
+                    )
+                    if hasattr(lib_index, "write_manifest_for_root"):
+                        lib_index.write_manifest_for_root(root, entries, tmp_path)
+                    else:
+                        import json
+
+                        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                        data = {"root": str(root), "entries": entries}
+                        tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+                    tmp_path.replace(manifest_path)
+                except Exception:
+                    logger.exception(
+                        "[lib-manifest.scan.error] root=%s manifest=%s",
+                        str(root),
+                        str(manifest_path),
+                    )
+        except Exception:
+            logger.exception("[lib-manifest.scan.error] unexpected failure during build_on_scan")
+    # ------------------------------------------------------------
 
     # Merge back: controls (unaltered) + filtered non-controls
     if cfg.get("_EFFECTIVE_SINGLE_LIGAND") and cfg.get("_SINGLE_RESOLVED_PATH"):
@@ -5466,6 +5544,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     else:
         ph_tags = [None]
 
+    ph_ligand_root = None
+    ph_ligand_root_str = cfg.get("_PH_LIGAND_ROOT")
+    if ph_ligand_root_str:
+        try:
+            ph_ligand_root = Path(ph_ligand_root_str)
+        except Exception:
+            ph_ligand_root = None
+
     # --- pH-ligand context integration ---
     if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get("PH_ENSEMBLE"):
         try:
@@ -5495,6 +5581,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     requested_ph_values=ligand_window,
                     microstate_dedup=True,
                     force=False,
+                    root_dir=ph_ligand_root,
                 )
             else:
                 ph_log.warning(
@@ -5576,6 +5663,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         requested_ph_values=ligand_window,
                         microstate_dedup=True,
                         force=False,
+                        root_dir=ph_ligand_root,
                     )
 
                     if enumerated:
@@ -6171,6 +6259,20 @@ def main() -> None:
     cfg.setdefault("SINGLE_LIGAND_SUGGESTIONS", 5)
     cfg.setdefault("ALLOW_FDA_FALLBACK", False)
     cfg.setdefault("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
+    # Default + env override for building manifests during fallback scans
+    cfg.setdefault("LIBRARY_MANIFEST_BUILD_ON_SCAN", True)
+    env_build_flag = os.environ.get("LIBRARY_MANIFEST_BUILD_ON_SCAN")
+    if env_build_flag is not None:
+        try:
+            cfg["LIBRARY_MANIFEST_BUILD_ON_SCAN"] = _to_bool(env_build_flag)
+        except Exception:
+            # If parsing fails, keep the config/default
+            pass
+
+    logging.getLogger("lib-manifest").info(
+        "[lib-manifest.scan] build_on_scan=%s",
+        str(bool(cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN", True))).lower(),
+    )
     cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
 
     # CLI > ENV > CFG precedence
@@ -6401,6 +6503,7 @@ def main() -> None:
                     # Per-PDB failure handling
                     exc_type = type(exc).__name__
                     exc_msg = str(exc)
+                    traceback_str = traceback.format_exc()
 
                     fail_log_path = Path(failed_root) / f"{pdb_id}.{label}.log"
 

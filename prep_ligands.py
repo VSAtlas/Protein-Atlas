@@ -279,8 +279,6 @@ def enumerate_ligands_for_docking(
         library's prepped_ligands directory.
     """
 
-    _ = (root_dir, microstate_dedup, force)
-
     cfg = load_config("config.txt")
     validate_config(cfg)
     pdb_token = (
@@ -299,7 +297,10 @@ def enumerate_ligands_for_docking(
     in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
     out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
 
-    output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
+    if root_dir is not None:
+        output_ligands_dir = Path(root_dir).resolve()
+    else:
+        output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
     library_hint = output_ligands_dir.name.lower()
 
     library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
@@ -341,6 +342,7 @@ def enumerate_ligands_for_docking(
             only=None,
             ph_values=sorted(set(float(ph) for ph in ph_values)),
             microstate_dedup=True,
+            root_dir=library_out_dir if root_dir is not None else None,
         )
 
     if requested_set is not None:
@@ -3638,7 +3640,8 @@ def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
 
 def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None,
                                ph_values: Optional[List[float]] = None,
-                               microstate_dedup: bool = False):
+                               microstate_dedup: bool = False,
+                               root_dir: Optional[Path] = None):
     microstate_registry: Dict[str, Any] | None = None
     microstate_index: Dict[str, dict] | None = None
     alias_index: Dict[Tuple[str, str, float], dict] | None = None
@@ -3685,12 +3688,19 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     prepped_lig_dir = paths.prepped_ligands_dir
     ligands_mol2_root = paths.ligands_mol2_dir
 
-    ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
-    output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
-    prepped_ligands_dir = output_ligands_dir
-    library_hint = prepped_ligands_dir.name.lower()
-
     library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    library_base = ""
+
+    if root_dir is not None:
+        root_dir = Path(root_dir).resolve()
+        output_ligands_dir = root_dir
+        prepped_ligands_dir = output_ligands_dir
+        library_hint = prepped_ligands_dir.name.lower()
+    else:
+        output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
+        prepped_ligands_dir = output_ligands_dir
+        library_hint = prepped_ligands_dir.name.lower()
+
     if library_env:
         library_base = library_env.lower()
     elif in_sdf_env:
@@ -3708,7 +3718,27 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     else:
         library_base = library_hint
     library_base = (library_base or library_hint or "ligprep").lower()
-    library_name = library_base
+
+    if root_dir is not None and not in_sdf_dir_env:
+        project_root: Optional[Path] = None
+        for parent in root_dir.parents:
+            if parent.name == "prepped_ligands":
+                project_root = parent.parent
+                break
+        if project_root is None:
+            project_root = root_dir.parent.parent
+        candidate_extracted = project_root / "extracted_ligands" / library_base
+        if candidate_extracted.is_dir():
+            ligand_extracted_dir = candidate_extracted
+            logger.info(
+                "prep_ligands: using extracted_ligands source library=%s path=%s",
+                library_base,
+                ligand_extracted_dir,
+            )
+        else:
+            ligand_extracted_dir = ligands_raw_dir
+    else:
+        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
 
     # align downstream helpers (rdkit embed) with the chosen base when not explicitly set
     if not library_env:
@@ -3720,6 +3750,8 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     else:
         ligands_mol2_dir = Path(ligands_mol2_root) / library_base
 
+    library_name = library_base
+
     is_fda_library = (library_hint == "fda")
     # direct all malformed logs for this protein to its prepped_ligands dir
     global MALFORMED_DIR
@@ -3729,7 +3761,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
 
-    library_out_dir = output_ligands_dir
+    library_out_dir = prepped_ligands_dir
 
     if microstate_dedup:
         microstates_dir = library_out_dir / "microstates"

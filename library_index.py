@@ -144,6 +144,62 @@ class LibraryIndex:
         self._logger.info("[lib-index.build] root=%s count=%d time_sec=%.3f", str(root), count, elapsed)
         return entries, filenames
 
+    def write_manifest_for_root(
+        self,
+        root: Path,
+        relative_entries: Iterable[str | Path],
+        tmp_path: Path | None = None,
+    ) -> Path:
+        """Write a manifest for ``root`` using already-resolved relative entries.
+
+        Intended for callers that have just scanned a library tree and want to
+        persist a manifest without re-crawling the filesystem. ``relative_entries``
+        should already be relative to ``root``.
+        """
+
+        root = Path(root)
+        manifest_path = tmp_path or self._manifest_path(root, self._manifest_filename)
+        try:
+            root_stat = root.stat()
+            mtime = getattr(root_stat, "st_mtime", time.time())
+        except Exception:
+            mtime = time.time()
+
+        entries: dict[str, str] = {}
+        filenames: dict[str, str] = {}
+        count = 0
+        start = time.perf_counter()
+        for rel in relative_entries:
+            rel_path = Path(rel)
+            rel_key = rel_path.as_posix()
+            name = rel_path.name
+            filename_key = name.lower()
+            if filename_key not in filenames:
+                filenames[filename_key] = rel_key
+            exact_key = self._normalize_exact(name)
+            if exact_key not in entries:
+                entries[exact_key] = rel_key
+            base_key = self._normalize_base(name)
+            if base_key and base_key not in entries:
+                entries[base_key] = rel_key
+            count += 1
+
+        try:
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(manifest_path, "w", encoding="utf-8") as fh:
+                json.dump({"mtime": mtime, "entries": entries, "filenames": filenames}, fh, indent=2, sort_keys=True)
+        except Exception as exc:
+            self._logger.warning(
+                "[lib-index.error] root=%s path=%s reason=%s",
+                str(root),
+                str(manifest_path),
+                exc,
+            )
+
+        elapsed = time.perf_counter() - start
+        self._logger.info("[lib-index.build.scan] root=%s count=%d time_sec=%.3f", str(root), count, elapsed)
+        return manifest_path
+
     def lookup(
         self,
         selector: str,
