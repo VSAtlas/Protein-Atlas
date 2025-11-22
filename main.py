@@ -48,7 +48,7 @@ from path_router import (
     load_ph_tags,
     config_dir as router_config_dir,
 )
-from library_index import LibraryIndex
+from library_index import LibraryIndex, LibraryEntry
 import automate_protein_prep as protein_prep
 
 # [ions] audit classification tokens
@@ -3436,8 +3436,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
                 tmp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
 
                 try:
-                    from library_index import LibraryIndex
-
                     lib_index = LibraryIndex(
                         manifest_filename=manifest_filename,
                         logger=logger,
@@ -6505,6 +6503,7 @@ def main() -> None:
                     # Per-PDB failure handling
                     exc_type = type(exc).__name__
                     exc_msg = str(exc)
+                    traceback_str = traceback.format_exc()
 
                     fail_log_path = Path(failed_root) / f"{pdb_id}.{label}.log"
 
