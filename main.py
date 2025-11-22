@@ -48,7 +48,7 @@ from path_router import (
     load_ph_tags,
     config_dir as router_config_dir,
 )
-from library_index import LibraryIndex, LibraryEntry
+from library_index import LibraryIndex
 import automate_protein_prep as protein_prep
 
 # [ions] audit classification tokens
