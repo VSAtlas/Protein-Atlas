@@ -3730,6 +3730,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         candidate_extracted = project_root / "extracted_ligands" / library_base
         if candidate_extracted.is_dir():
             ligand_extracted_dir = candidate_extracted
+            logger.info(
+                "prep_ligands: using extracted_ligands source library=%s path=%s",
+                library_base,
+                ligand_extracted_dir,
+            )
         else:
             ligand_extracted_dir = ligands_raw_dir
     else:
