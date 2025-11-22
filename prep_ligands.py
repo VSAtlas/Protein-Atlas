@@ -297,7 +297,10 @@ def enumerate_ligands_for_docking(
     in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
     out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
 
-    output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
+    if root_dir is not None:
+        output_ligands_dir = Path(root_dir).resolve()
+    else:
+        output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
     library_hint = output_ligands_dir.name.lower()
 
     library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
@@ -320,14 +323,8 @@ def enumerate_ligands_for_docking(
     library_base = (library_base or library_hint or "ligprep").lower()
     library_name = library_base
 
-    if root_dir is not None:
-        root_dir = Path(root_dir).resolve()
-        library_out_dir = root_dir
-        registry_path = library_out_dir / "microstates.json"
-        library_name = root_dir.name.lower()
-    else:
-        library_out_dir = output_ligands_dir
-        registry_path = library_out_dir / "microstates.json"
+    library_out_dir = output_ligands_dir
+    registry_path = library_out_dir / "microstates.json"
 
     requested_set: Optional[Set[float]] = None
     if requested_ph_values:
@@ -3696,47 +3693,57 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     if root_dir is not None:
         root_dir = Path(root_dir).resolve()
-        library_base = root_dir.name.lower()
-        prepped_ligands_dir = root_dir
         output_ligands_dir = root_dir
-        library_hint = library_base
-        ligands_raw_dir = Path(paths.ligand_output_dir) / library_base
-        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
-        ligands_mol2_root = paths.ligands_mol2_dir
-        ligands_mol2_dir = Path(ligands_mol2_root) / library_base
+        prepped_ligands_dir = output_ligands_dir
+        library_hint = prepped_ligands_dir.name.lower()
     else:
-        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
         output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
         prepped_ligands_dir = output_ligands_dir
         library_hint = prepped_ligands_dir.name.lower()
 
-        if library_env:
-            library_base = library_env.lower()
-        elif in_sdf_env:
-            try:
-                in_sdf_path = Path(in_sdf_env).resolve()
-                detected = ""
-                parts = list(in_sdf_path.parts)
-                for idx, part in enumerate(parts):
-                    if part == "extracted_ligands" and idx + 1 < len(parts):
-                        detected = parts[idx + 1]
-                        break
-                library_base = (detected or in_sdf_path.stem).lower()
-            except Exception:
-                library_base = ""
-        else:
-            library_base = library_hint
-        library_base = (library_base or library_hint or "ligprep").lower()
+    if library_env:
+        library_base = library_env.lower()
+    elif in_sdf_env:
+        try:
+            in_sdf_path = Path(in_sdf_env).resolve()
+            detected = ""
+            parts = list(in_sdf_path.parts)
+            for idx, part in enumerate(parts):
+                if part == "extracted_ligands" and idx + 1 < len(parts):
+                    detected = parts[idx + 1]
+                    break
+            library_base = (detected or in_sdf_path.stem).lower()
+        except Exception:
+            library_base = ""
+    else:
+        library_base = library_hint
+    library_base = (library_base or library_hint or "ligprep").lower()
 
-        # align downstream helpers (rdkit embed) with the chosen base when not explicitly set
-        if not library_env:
-            os.environ["LIGPREP_LIBRARY"] = library_base
-
-        # honor explicit mol2 dir override; otherwise scope under per-library subdir
-        if mol2_dir_env:
-            ligands_mol2_dir = Path(mol2_dir_env).resolve()
+    if root_dir is not None and not in_sdf_dir_env:
+        project_root: Optional[Path] = None
+        for parent in root_dir.parents:
+            if parent.name == "prepped_ligands":
+                project_root = parent.parent
+                break
+        if project_root is None:
+            project_root = root_dir.parent.parent
+        candidate_extracted = project_root / "extracted_ligands" / library_base
+        if candidate_extracted.is_dir():
+            ligand_extracted_dir = candidate_extracted
         else:
-            ligands_mol2_dir = Path(ligands_mol2_root) / library_base
+            ligand_extracted_dir = ligands_raw_dir
+    else:
+        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
+
+    # align downstream helpers (rdkit embed) with the chosen base when not explicitly set
+    if not library_env:
+        os.environ["LIGPREP_LIBRARY"] = library_base
+
+    # honor explicit mol2 dir override; otherwise scope under per-library subdir
+    if mol2_dir_env:
+        ligands_mol2_dir = Path(mol2_dir_env).resolve()
+    else:
+        ligands_mol2_dir = Path(ligands_mol2_root) / library_base
 
     library_name = library_base
 
