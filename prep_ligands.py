@@ -3973,8 +3973,9 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     # Only allow “true test-mode” when NO explicit SDF or PDB input was specified.
     test_mode_allowed = (in_sdf_env is None) and (in_pdb_dir_env is None)
+    has_only = bool(only)
 
-    if unit_sdfs and test_mode_allowed:
+    if unit_sdfs and test_mode_allowed and has_only:
         print(f"[test-mode] per-ligand SDFs detected dir={rdkit_unit_sdf_dir}")
         # Build the candidate SDF list
         selected_sdfs: List[Path]
@@ -4113,6 +4114,10 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
         _maybe_save_microstate_registry()
         return
+    elif unit_sdfs and test_mode_allowed and not has_only:
+        print(
+            "[test-mode] per-ligand SDFs present but ONLY not set; using bulk ligprep path instead"
+        )
 
     elif unit_sdfs and not test_mode_allowed:
         # Helpful breadcrumb so you know why test-mode was skipped.
