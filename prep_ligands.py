@@ -433,8 +433,9 @@ def enumerate_ligands_for_docking(
 
             if pdbqt_paths:
                 logger.info(
-                    "enumerate_ligands_for_docking: manifest fallback returning %d PDBQT(s) (ignoring requested_ph_values)",
+                    "enumerate_ligands_for_docking: manifest fallback returning %d PDBQT(s) (ignoring requested_ph_values=%s)",
                     len(pdbqt_paths),
+                    "any" if requested_set is None else sorted(requested_set),
                 )
                 # In manifest mode we do *not* filter by requested_ph_values;
                 # we return one canonical PDBQT per ligand.
@@ -1876,7 +1877,11 @@ def _obabel_convert_chunk(chunk_sdf: Path, out_prefix: Path, obabel_exe: str) ->
 # RDKit ETKDG path (with parent picking)
 # =========================
 def rdkit_embed_sdf_to_mol2(
-        sdf_in: Path, mol2_out_dir: Path, obabel_exe: str, max_workers: int = 8
+        sdf_in: Path,
+        mol2_out_dir: Path,
+        obabel_exe: str,
+        max_workers: int = 8,
+        only_set: Optional[Set[str]] = None,
 ) -> List[Path]:
     # Ensure both imports exist in this scope
     from rdkit import Chem
@@ -1905,8 +1910,34 @@ def rdkit_embed_sdf_to_mol2(
             library_base = sdf_in.stem
         library_base = (library_base or "").lower()
 
+    allowed_indices: Optional[Set[int]] = None
+    if only_set:
+        try:
+            allowed_indices = {
+                int(tok.split("_", 1)[1])
+                for tok in only_set
+                if tok.startswith("rdk_") and tok.split("_", 1)[1].isdigit()
+            }
+        except Exception:
+            allowed_indices = None
+
     suppl = Chem.SDMolSupplier(str(sdf_in), removeHs=False, sanitize=False)
-    mols = [(i, m) for i, m in enumerate(suppl) if m is not None]
+
+    mols: List[Tuple[int, Chem.Mol]] = []
+    raw_count = 0
+    for i, m in enumerate(suppl):
+        raw_count += 1
+        if m is None:
+            continue
+        if allowed_indices is not None and i not in allowed_indices:
+            continue
+        mols.append((i, m))
+
+    if allowed_indices is not None:
+        print(
+            f"[test-mode.rdkit] RDKit supplier read {raw_count} records from {sdf_in.name}; "
+            f"kept {len(mols)} based on ONLY filter (requested={len(allowed_indices)})"
+        )
     print(f"RDKit: loaded {len(mols)} molecules from {sdf_in.name}")
 
     parent_names: List[str] = []
@@ -4049,6 +4080,19 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         else (output_ligands_dir / (status_log_env or cfg.get("LIGAND_STATUS_LOG_BASENAME", "ligand_prep_status.tsv")))
     )
 
+    if only:
+        logging.info(
+            "[ligprep] ONLY-set active for library=%s count=%d sample=%s",
+            library_name,
+            len(only),
+            ",".join(sorted(list(only))[:10]),
+        )
+    else:
+        logging.info(
+            "[ligprep] ONLY-set empty; full library will be processed for library=%s",
+            library_name,
+        )
+
     # =========================
     # TRUE TEST-MODE: prefer per-ligand SDFs and filter by ONLY
     # =========================
@@ -4059,8 +4103,19 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     test_mode_allowed = (in_sdf_env is None) and (in_pdb_dir_env is None)
     has_only = bool(only)
 
-    if unit_sdfs and test_mode_allowed and has_only:
+    use_unit_sdf_test_mode = (
+        unit_sdfs
+        and test_mode_allowed
+        and has_only
+        and not (microstate_dedup and ph_values is not None)
+    )
+
+    if use_unit_sdf_test_mode:
         print(f"[test-mode] per-ligand SDFs detected dir={rdkit_unit_sdf_dir}")
+        print(
+            "[test-mode] using legacy unit-SDF pipeline (microstate_dedup=False or no ph_values); "
+            "bulk SDF path is disabled."
+        )
         # Build the candidate SDF list
         selected_sdfs: List[Path]
         if only:
@@ -4198,6 +4253,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
         _maybe_save_microstate_registry()
         return
+    if unit_sdfs and test_mode_allowed and has_only and microstate_dedup and ph_values is not None:
+        print(
+            "[test-mode] per-ligand SDFs detected but microstate_dedup=True with ph_values; "
+            "using bulk RDKit SDF pipeline with ONLY filter instead of legacy unit-SDF path."
+        )
     elif unit_sdfs and test_mode_allowed and not has_only:
         print(
             "[test-mode] per-ligand SDFs present but ONLY not set; using bulk ligprep path instead"
@@ -4262,7 +4322,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         if USE_RDKIT_FOR_3D:
             print("Using RDKit ETKDG for 3D with parent-picking; OBabel only for format conversion ")
             mol2_files = rdkit_embed_sdf_to_mol2(
-                sdf_abs, ligands_mol2_dir, obabel_exe=obabel_exe_short, max_workers=max_workers
+                sdf_abs,
+                ligands_mol2_dir,
+                obabel_exe=obabel_exe_short,
+                max_workers=max_workers,
+                only_set=only,
             )
         else:
             print("Using OBabel --gen3d; pre-cleaning SDF to parent-only ")
@@ -4468,6 +4532,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     ):
                         microstate_id = compute_microstate_id(rdkit_mol_for_microstate)
                         microstate_entry = microstate_index.get(microstate_id)
+                        microstate_status = "existing"
                         if microstate_entry is None:
                             canonical_name = f"{lig_stem}__ms_{microstate_id}.pdbqt"
                             canonical_rel_path = f"microstates/{canonical_name}"
@@ -4487,6 +4552,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                             microstate_registry["microstates"].append(microstate_entry)
                             microstate_index[microstate_id] = microstate_entry
                             use_canonical_as_primary = True
+                            microstate_status = "new"
                         else:
                             canonical_rel = microstate_entry.get("pdbqt_path")
                             if canonical_rel:
@@ -4509,6 +4575,15 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                             }
                             if alias not in microstate_entry.get("aliases", []):
                                 microstate_entry.setdefault("aliases", []).append(alias)
+                                logger.debug(
+                                    "[microstate] alias_add library=%s ligand=%s ph=%s microstate_id=%s status=%s canonical=%s",
+                                    library_name,
+                                    lig_stem,
+                                    ph_label or ph_value,
+                                    microstate_id,
+                                    microstate_status,
+                                    microstate_entry.get("pdbqt_path"),
+                                )
                             # update alias_index so subsequent runs see this mapping
                             if alias_index is not None:
                                 alias_index[alias_key] = microstate_entry
