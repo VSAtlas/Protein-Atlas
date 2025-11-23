@@ -1887,28 +1887,8 @@ def rdkit_embed_sdf_to_mol2(
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
-    library_env = os.environ.get("LIGPREP_LIBRARY", "").strip()
-    library_base: str
-    if library_env:
-        library_base = library_env.lower()
-    else:
-        in_sdf_env = os.environ.get("LIGPREP_IN_SDF", "").strip()
-        library_base = ""
-        if in_sdf_env:
-            try:
-                in_sdf_path = Path(in_sdf_env).resolve()
-                parts = list(in_sdf_path.parts)
-                for idx, part in enumerate(parts):
-                    if part == "extracted_ligands" and idx + 1 < len(parts):
-                        library_base = parts[idx + 1]
-                        break
-                if not library_base:
-                    library_base = in_sdf_path.stem
-            except Exception:
-                library_base = sdf_in.stem
-        else:
-            library_base = sdf_in.stem
-        library_base = (library_base or "").lower()
+    sdf_stem = sdf_in.stem
+    name_prefix = sdf_stem
 
     allowed_indices: Optional[Set[int]] = None
     if only_set:
@@ -1946,23 +1926,13 @@ def rdkit_embed_sdf_to_mol2(
         max_idx = max(i for i, _ in mols)
         parent_names = ["" for _ in range(max_idx + 1)]
         for idx, mol in mols:
-            parent_name = ""
             raw_name = ""
-            try:
-                if mol is not None and mol.HasProp("_Name"):
-                    raw_name = mol.GetProp("_Name")
-            except Exception:
-                raw_name = ""
-            raw_name = (raw_name or "").strip()
-            if raw_name:
-                parent_name = raw_name
-            else:
-                parent_name = f"{library_base}_{idx + 1:05d}"
+            parent_name = f"{name_prefix}_{idx + 1:05d}"
             parent_names[idx] = parent_name
             if idx < debug_limit:
                 print(
                     f"[rdkit-debug] idx={idx} raw_name={raw_name!r} "
-                    f"fallback_base={library_base!r} stored_parent={parent_name!r}"
+                    f"fallback_base={name_prefix!r} stored_parent={parent_name!r}"
                 )
 
     sdf_tmp_dir = mol2_out_dir / "_rdkit_embedded_sdf"
@@ -4403,7 +4373,8 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         logging.warning("[tidy] unable to normalize %s: %s", mol2_file, e)
 
                 mol2_input = Path(mol2_file)
-                lig_stem = mol2_input.stem
+                rdk_stem = mol2_input.stem
+                lig_stem = rdk_stem
                 if not is_fda_library:
                     name_path = mol2_input.with_suffix(".name")
                     name_exists = name_path.exists()
@@ -4432,7 +4403,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     embedded_sdf_dir = ligands_mol2_dir / "_rdkit_embedded_sdf"
 
                     try:
-                        candidate_sdf = embedded_sdf_dir / f"{lig_stem}.sdf"
+                        candidate_sdf = embedded_sdf_dir / f"{rdk_stem}.sdf"
                         if candidate_sdf.exists():
                             sdf_for_microstate = candidate_sdf
                     except Exception:
