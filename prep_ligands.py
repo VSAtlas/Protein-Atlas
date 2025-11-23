@@ -387,9 +387,61 @@ def enumerate_ligands_for_docking(
         registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
 
     if (not registry_path.exists()) or not (registry.get("microstates") or []):
+        # Registry missing or empty: try a manifest/base-PDBQT fallback so docking still has ligands.
+        if not registry_path.exists():
+            logger.warning(
+                "enumerate_ligands_for_docking: no microstate registry found at %s",
+                registry_path,
+            )
+        else:
+            logger.warning(
+                "enumerate_ligands_for_docking: microstate registry %s has no entries; attempting manifest fallback",
+                registry_path,
+            )
+
+        manifest_path = library_out_dir / "_manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except Exception as e:
+                logger.warning(
+                    "enumerate_ligands_for_docking: failed to read manifest %s: %s; returning empty list",
+                    manifest_path,
+                    e,
+                )
+                return []
+
+            entries = manifest.get("entries") or {}
+            pdbqt_paths: List[Path] = []
+            for key, rel_name in entries.items():
+                p = library_out_dir / rel_name
+                try:
+                    if p.exists() and p.stat().st_size > 100:
+                        pdbqt_paths.append(p)
+                    else:
+                        logger.debug(
+                            "enumerate_ligands_for_docking: skipping manifest entry %s -> %s (missing or too small)",
+                            key,
+                            p,
+                        )
+                except OSError:
+                    logger.debug(
+                        "enumerate_ligands_for_docking: skipping manifest entry %s -> %s (stat failed)",
+                        key,
+                        p,
+                    )
+
+            if pdbqt_paths:
+                logger.info(
+                    "enumerate_ligands_for_docking: manifest fallback returning %d PDBQT(s) (ignoring requested_ph_values)",
+                    len(pdbqt_paths),
+                )
+                # In manifest mode we do *not* filter by requested_ph_values;
+                # we return one canonical PDBQT per ligand.
+                return sorted(pdbqt_paths, key=lambda p: p.name)
+
         logger.warning(
-            "enumerate_ligands_for_docking: no microstate registry found at %s; returning empty list",
-            registry_path,
+            "enumerate_ligands_for_docking: no usable microstates or manifest entries; returning empty list",
         )
         return []
 
@@ -3847,15 +3899,39 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     continue
                 alias_index[key] = entry
 
+    if microstate_dedup and ph_values is not None and microstate_registry is not None:
+        logger.info(
+            "prep_ligands: microstate_dedup init library=%s out_dir=%s existing_microstates=%d",
+            library_name,
+            library_out_dir,
+            len(microstate_registry.get("microstates", []) or []),
+        )
+
     def _maybe_save_microstate_registry() -> None:
         if microstate_dedup and microstate_registry is not None and library_out_dir is not None:
             try:
-                alias_total = sum(len(e.get("aliases", [])) for e in microstate_registry.get("microstates", []))
-                logger.info(
-                    "prep_ligands: microstate_dedup summary: %d microstates, %d aliases",
-                    len(microstate_registry.get("microstates", [])),
-                    alias_total,
-                )
+                microstates = microstate_registry.get("microstates") or []
+                alias_count = 0
+                for entry in microstates:
+                    alias_count += len(entry.get("aliases") or [])
+
+                if microstate_dedup:
+                    if microstates:
+                        logger.info(
+                            "prep_ligands: microstate_dedup summary library=%s out_dir=%s microstates=%d aliases=%d",
+                            library_name,
+                            library_out_dir,
+                            len(microstates),
+                            alias_count,
+                        )
+                    else:
+                        logger.warning(
+                            "prep_ligands: microstate_dedup summary library=%s out_dir=%s microstates=%d aliases=%d (EMPTY REGISTRY)",
+                            library_name,
+                            library_out_dir,
+                            len(microstates),
+                            alias_count,
+                        )
             except Exception:
                 pass
             save_microstate_registry(library_out_dir, microstate_registry)
@@ -4292,6 +4368,12 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     except Exception as e:
                         logging.debug("[microstate] rdkit_load_failed file=%s err=%s", mol2_input, e)
 
+                if microstate_dedup and ph_values is not None:
+                    if rdkit_mol_for_microstate is not None:
+                        logger.debug("[microstate] rdkit_load_ok file=%s ligand=%s", mol2_input, lig_stem)
+                    else:
+                        logger.warning("[microstate] rdkit_mol None for file=%s ligand=%s", mol2_input, lig_stem)
+
                 for ph_value in eff_ph_values:
                     ph_label = _ph_label(ph_value) if use_ph_subdirs else None
                     ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
@@ -4347,6 +4429,13 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                 "pdbqt_path": canonical_rel_path,
                                 "aliases": [],
                             }
+                            logger.debug(
+                                "[microstate] new_microstate library=%s ligand=%s microstate_id=%s canonical=%s",
+                                library_name,
+                                lig_stem,
+                                microstate_id,
+                                canonical_name,
+                            )
                             microstate_registry["microstates"].append(microstate_entry)
                             microstate_index[microstate_id] = microstate_entry
                             use_canonical_as_primary = True
@@ -4356,6 +4445,13 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                 canonical_path = library_out_dir / canonical_rel
                                 if not canonical_path.exists():
                                     use_canonical_as_primary = True
+                            logger.debug(
+                                "[microstate] reuse_microstate library=%s ligand=%s microstate_id=%s canonical=%s",
+                                library_name,
+                                lig_stem,
+                                microstate_id,
+                                microstate_entry.get("pdbqt_path"),
+                            )
 
                         if microstate_entry is not None:
                             alias = {
