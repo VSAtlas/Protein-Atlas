@@ -85,6 +85,9 @@ OBABEL_THREADS = 50
 OBABEL_TIMEOUT_S = 900
 CHUNK_SIZE = 200
 
+# Dedicated timeout for per-ligand SDF->MOL2 conversions (test-mode path)
+LIGPREP_OBABEL_TIMEOUT_SEC = OBABEL_TIMEOUT_S
+
 
 # --------------------------------------
 
@@ -297,8 +300,14 @@ def enumerate_ligands_for_docking(
     in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
     out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
 
-    output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
-    library_hint = output_ligands_dir.name.lower()
+    if root_dir is not None:
+        library_out_dir = Path(root_dir).resolve()
+        output_ligands_dir = library_out_dir
+        library_hint = library_out_dir.name.lower()
+    else:
+        output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
+        library_hint = output_ligands_dir.name.lower()
+        library_out_dir = output_ligands_dir
 
     library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
     if library_env:
@@ -320,14 +329,7 @@ def enumerate_ligands_for_docking(
     library_base = (library_base or library_hint or "ligprep").lower()
     library_name = library_base
 
-    if root_dir is not None:
-        root_dir = Path(root_dir).resolve()
-        library_out_dir = root_dir
-        registry_path = library_out_dir / "microstates.json"
-        library_name = root_dir.name.lower()
-    else:
-        library_out_dir = output_ligands_dir
-        registry_path = library_out_dir / "microstates.json"
+    registry_path = library_out_dir / "microstates.json"
 
     requested_set: Optional[Set[float]] = None
     if requested_ph_values:
@@ -1606,6 +1608,65 @@ def _attempt_obabel_series(base_cmd: List[str], timeout_sec: int, threads_list: 
             return True
         print("Retrying with a more conservative setting...")
     return False
+
+
+# =========================
+# Single SDF -> MOL2 helper
+# =========================
+
+def _sdf_to_mol2(
+    sdf_path: Path,
+    mol2_path: Path,
+    obabel_exe: str,
+    timeout_sec: int = LIGPREP_OBABEL_TIMEOUT_SEC,
+) -> tuple[bool, str]:
+    """
+    Convert a single SDF to MOL2 using Open Babel.
+
+    Returns
+    -------
+    ok : bool
+        True if the conversion completed successfully (return code 0).
+    stderr_text : str
+        Captured stderr (trimmed) for logging or debug.
+    """
+
+    mol2_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        obabel_exe,
+        "-isdf", str(sdf_path),
+        "-omol2",
+        "-O", str(mol2_path),
+        "--gen3d",
+    ]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.warning(
+            "[ligprep] per-ligand sdf->mol2 timed out for %s (timeout=%s s)",
+            sdf_path,
+            timeout_sec,
+        )
+        return False, f"timeout: {exc}"
+
+    ok = (proc.returncode == 0)
+    stderr_text = (proc.stderr or "").strip()
+    if not ok:
+        logger.warning(
+            "[ligprep] per-ligand sdf->mol2 non-zero exit for %s: rc=%s stderr=%s",
+            sdf_path,
+            proc.returncode,
+            stderr_text[:200],
+        )
+    return ok, stderr_text
 
 
 # =========================
@@ -3696,49 +3757,58 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     if root_dir is not None:
         root_dir = Path(root_dir).resolve()
-        library_base = root_dir.name.lower()
-        prepped_ligands_dir = root_dir
         output_ligands_dir = root_dir
-        library_hint = library_base
-        ligands_raw_dir = Path(paths.ligand_output_dir) / library_base
-        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
-        ligands_mol2_root = paths.ligands_mol2_dir
-        ligands_mol2_dir = Path(ligands_mol2_root) / library_base
+        prepped_ligands_dir = output_ligands_dir
+        library_hint = prepped_ligands_dir.name.lower()
     else:
-        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
         output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
         prepped_ligands_dir = output_ligands_dir
         library_hint = prepped_ligands_dir.name.lower()
 
-        if library_env:
-            library_base = library_env.lower()
-        elif in_sdf_env:
-            try:
-                in_sdf_path = Path(in_sdf_env).resolve()
-                detected = ""
-                parts = list(in_sdf_path.parts)
-                for idx, part in enumerate(parts):
-                    if part == "extracted_ligands" and idx + 1 < len(parts):
-                        detected = parts[idx + 1]
-                        break
-                library_base = (detected or in_sdf_path.stem).lower()
-            except Exception:
-                library_base = ""
-        else:
-            library_base = library_hint
-        library_base = (library_base or library_hint or "ligprep").lower()
-
-        # align downstream helpers (rdkit embed) with the chosen base when not explicitly set
-        if not library_env:
-            os.environ["LIGPREP_LIBRARY"] = library_base
-
-        # honor explicit mol2 dir override; otherwise scope under per-library subdir
-        if mol2_dir_env:
-            ligands_mol2_dir = Path(mol2_dir_env).resolve()
-        else:
-            ligands_mol2_dir = Path(ligands_mol2_root) / library_base
-
+    if library_env:
+        library_base = library_env.lower()
+    elif in_sdf_env:
+        try:
+            in_sdf_path = Path(in_sdf_env).resolve()
+            detected = ""
+            parts = list(in_sdf_path.parts)
+            for idx, part in enumerate(parts):
+                if part == "extracted_ligands" and idx + 1 < len(parts):
+                    detected = parts[idx + 1]
+                    break
+            library_base = (detected or in_sdf_path.stem).lower()
+        except Exception:
+            library_base = ""
+    else:
+        library_base = library_hint
+    library_base = (library_base or library_hint or "ligprep").lower()
     library_name = library_base
+
+    if root_dir is not None and not in_sdf_dir_env:
+        project_root = None
+        for parent in root_dir.parents:
+            if parent.name == "prepped_ligands":
+                project_root = parent.parent
+                break
+        if project_root is None:
+            project_root = root_dir.parent.parent
+
+        candidate_extracted = project_root / "extracted_ligands" / library_base
+        if candidate_extracted.is_dir():
+            ligand_extracted_dir = candidate_extracted
+            logger.info("prep_ligands: using extracted_ligands source path=%s", candidate_extracted)
+        else:
+            ligand_extracted_dir = ligands_raw_dir
+    else:
+        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
+
+    if mol2_dir_env:
+        ligands_mol2_dir = Path(mol2_dir_env).resolve()
+    else:
+        ligands_mol2_dir = Path(ligands_mol2_root) / library_base
+
+    if not library_env and root_dir is None:
+        os.environ["LIGPREP_LIBRARY"] = library_base
 
     is_fda_library = (library_hint == "fda")
     # direct all malformed logs for this protein to its prepped_ligands dir
@@ -3903,8 +3973,9 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     # Only allow “true test-mode” when NO explicit SDF or PDB input was specified.
     test_mode_allowed = (in_sdf_env is None) and (in_pdb_dir_env is None)
+    has_only = bool(only)
 
-    if unit_sdfs and test_mode_allowed:
+    if unit_sdfs and test_mode_allowed and has_only:
         print(f"[test-mode] per-ligand SDFs detected dir={rdkit_unit_sdf_dir}")
         # Build the candidate SDF list
         selected_sdfs: List[Path]
@@ -4043,6 +4114,10 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
         _maybe_save_microstate_registry()
         return
+    elif unit_sdfs and test_mode_allowed and not has_only:
+        print(
+            "[test-mode] per-ligand SDFs present but ONLY not set; using bulk ligprep path instead"
+        )
 
     elif unit_sdfs and not test_mode_allowed:
         # Helpful breadcrumb so you know why test-mode was skipped.
