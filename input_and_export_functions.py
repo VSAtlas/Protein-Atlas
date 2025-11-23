@@ -198,16 +198,39 @@ def _parse_kv_config(path: Path) -> Dict[str, str]:
 
 def _expand_vars_in_value(val: str, cfg_now: Dict[str, Any]) -> str:
     """
-    Expand {OVERALL_DIR} and $OVERALL_DIR occurrences inside config values.
-    We intentionally keep it simple, not a full env expansion.
+    Expand simple config variables inside string values.
+
+    Supported forms:
+      - ${VAR_NAME}   (preferred, "professional" style)
+      - {OVERALL_DIR} (legacy)
+      - $OVERALL_DIR  (legacy)
+
+    For ${VAR_NAME}, we look up VAR_NAME (uppercased) in the current cfg dict.
+    We intentionally keep this modest, not a full shell-style expansion.
     """
     if not isinstance(val, str):
         return val
+
+    # 1) Generic ${VAR_NAME} expansion using keys from cfg_now
+    def _repl(match: re.Match) -> str:
+        key = match.group(1) or ""
+        key_upper = key.upper()
+        if key_upper in cfg_now and cfg_now[key_upper] is not None:
+            return str(cfg_now[key_upper])
+        # If we don't know the key, leave the original text unchanged
+        return match.group(0)
+
+    # Replace all ${VAR_NAME} occurrences
+    val = re.sub(r"\$\{([A-Za-z0-9_]+)\}", _repl, val)
+
+    # 2) Backwards-compatible OVERALL_DIR shorthands
     od = str(cfg_now.get("OVERALL_DIR", ""))
     if od:
         val = val.replace("{OVERALL_DIR}", od)
         val = val.replace("$OVERALL_DIR", od)
+
     return val
+
 
 def _expand_all_vars(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # single pass is sufficient for our use: expand OVERALL_DIR in the other paths

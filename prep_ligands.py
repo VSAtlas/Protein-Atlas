@@ -309,27 +309,33 @@ def enumerate_ligands_for_docking(
         library_hint = output_ligands_dir.name.lower()
         library_out_dir = output_ligands_dir
 
+    # library_hint currently comes from the output directory name (e.g. 'cah2')
+    # Allow overrides via environment / config, but keep the directory name as the default.
+    library_base: Optional[str] = library_hint
+
+    # Highest priority: explicit library name from env or config
     library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip()
     if library_env:
         library_base = library_env.lower()
-    elif in_sdf_env:
-        try:
-            in_sdf_path = Path(in_sdf_env).resolve()
-            detected = ""
-            parts = list(in_sdf_path.parts)
-            for idx, part in enumerate(parts):
-                if part == "extracted_ligands" and idx + 1 < len(parts):
-                    detected = parts[idx + 1]
-                    break
-            library_base = (detected or in_sdf_path.stem).lower()
-        except Exception:
-            library_base = ""
-    else:
-        library_base = library_hint
-    library_base = (library_base or library_hint or "ligprep").lower()
+    elif library_cfg:
+        library_base = library_cfg.lower()
+
+    # Final fallback: make sure we have something usable
+    library_base = (library_base or "ligprep").lower()
     library_name = library_base
 
     registry_path = library_out_dir / "microstates.json"
+
+    # Optional: restrict which ligands we prep when called via main.py.
+    # Reuse the same ONLY parsing as the prep_ligands CLI:
+    #   - LIGPREP_ONLY        (env; space/comma separated)
+    #   - LIGPREP_ONLY_FILE   (env; one per line)
+    #   - --only              (CLI; not used in this code path)
+    #
+    # Tokens like "1" become "rdk_0000001" via _normalize_only_token.
+    only_set = _collect_only_from_env_and_cli(None)
+    only_for_microstate: Optional[Set[str]] = only_set or None
 
     requested_set: Optional[Set[float]] = None
     if requested_ph_values:
@@ -344,11 +350,13 @@ def enumerate_ligands_for_docking(
         )
         prep_ligands_with_mgltools(
             force=False,
-            only=None,
+            only=only_for_microstate,
             ph_values=sorted(set(float(ph) for ph in ph_values)),
             microstate_dedup=True,
             root_dir=library_out_dir if root_dir is not None else None,
         )
+
+
 
     if requested_set is not None:
         if not registry_path.exists():
@@ -4137,8 +4145,20 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         _maybe_save_microstate_registry()
         return result
 
-    #  single-file override; else scan directory as before
+    # single-file override; else scan directory as before
     sdf_files = [Path(in_sdf_env).resolve()] if in_sdf_env else list(ligand_extracted_dir.glob("*.sdf"))
+
+    # Guard: skip bulk docking output SDFs (e.g. *_docked_vina.sdf)
+    initial_count = len(sdf_files)
+    sdf_files = [p for p in sdf_files if "docked" not in p.name.lower()]
+    skipped = initial_count - len(sdf_files)
+    if skipped > 0:
+        logging.info(
+            "[ligprep.skip] skipped %d SDF(s) with 'docked' in name under %s",
+            skipped,
+            ligand_extracted_dir,
+        )
+
     print(f"Found {len(sdf_files)} SDF file(s)")
 
     if not sdf_files:

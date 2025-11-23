@@ -1,39 +1,54 @@
-OVERALL_DIR=/stor/home/mpg2352/atlas2/code/protein_automation
-INPUT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/input_pdbs
-LIGAND_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/input_ligands
-LIGAND_EXTRACTED_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/extracted_ligands
-EXTRACTED_LIGANDS_DIR=${OVERALL_DIR}/extracted_ligands
-LIGANDS_MOL2_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/ligands_mol2
-OUTPUT_LIGANDS_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/prepped_ligands
-PREPPED_LIGANDS_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/prepped_ligands
-PREPPED_LIGANDS_ROOT=/stor/home/mpg2352/atlas2/code/protein_automation/prepped_ligands
-OUTPUT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/processed_pdbs
-PDBQT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/pdbqts
-DOCKED_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/docked
+OVERALL_DIR=/stor/work/VDS_Beckham/atlas/code/protein_automation
 
-P2RANK_PATH=/stor/home/mpg2352/atlas2/tools/p2rank/bin/p2rank.jar
-P2RANK_OUTPUT_DIR=/stor/home/mpg2352/atlas2/code/protein_automation/p2rank_out
+# Core I/O directories
+INPUT_DIR=${OVERALL_DIR}/input_pdbs
+LIGAND_DIR=${OVERALL_DIR}/input_ligands
+
+LIGAND_EXTRACTED_DIR=${OVERALL_DIR}/extracted_ligands
+EXTRACTED_LIGANDS_DIR=${OVERALL_DIR}/extracted_ligands
+
+LIGANDS_MOL2_DIR=${OVERALL_DIR}/ligands_mol2
+
+OUTPUT_LIGANDS_DIR=${OVERALL_DIR}/prepped_ligands
+PREPPED_LIGANDS_DIR=${OVERALL_DIR}/prepped_ligands
+PREPPED_LIGANDS_ROOT=${OVERALL_DIR}/prepped_ligands
+
+OUTPUT_DIR=${OVERALL_DIR}/processed_pdbs
+PDBQT_DIR=${OVERALL_DIR}/pdbqts
+DOCKED_DIR=${OVERALL_DIR}/docked
+
+# P2Rank
+P2RANK_PATH=/stor/work/VDS_Beckham/atlas/tools/p2rank/bin/p2rank.jar
+P2RANK_OUTPUT_DIR=${OVERALL_DIR}/p2rank_out
+
+# PROPKA (env-local; keep as-is unless you moved the env)
 PROPKA_EXE=/stor/home/mpg2352/micromamba/envs/docking-env/bin/propka3
 
-MGLTOOLS_PATH=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7
-MGLTOOLS_DIR=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7
-MGLTOOLS_PYTHON=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/bin/pythonsh
-PREPARE_RECEPTOR_SCRIPT=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
-PREPARE_LIGAND_SCRIPT=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
-PREPARE_LIGAND4=/stor/home/mpg2352/atlas2/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
-ADFRSUITE_BIN=/stor/home/mpg2352/atlas2/tools/ADFRsuite/bin
+# MGLTools / AutoDockTools
+MGLTOOLS_PATH=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7
+MGLTOOLS_DIR=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7
+MGLTOOLS_PYTHON=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/bin/pythonsh
 
-PHENIX_DIR=/stor/home/mpg2352/atlas2/tools/phenix/phenix-1.21.2-5419/build/bin
-PHENIX_LIB_PATH=/stor/home/mpg2352/atlas2/tools/phenix/phenix-1.21.2-5419/conda_base/lib
-PHENIX_CLEAN_SCRIPT=/stor/home/mpg2352/atlas2/code/protein_automation/phenix_clean.py
+PREPARE_RECEPTOR_SCRIPT=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
+PREPARE_LIGAND_SCRIPT=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+PREPARE_LIGAND4=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
 
-REDUCE_EXE=/stor/home/mpg2352/atlas2/tools/reduce/reduce_src/reduce
-REDUCE_LOCAL_CANDIDATE=/stor/home/mpg2352/atlas2/tools/reduce/reduce_src/reduce
-REDUCE_HET_DICT=/stor/home/mpg2352/atlas2/tools/reduce/reduce_wwPDB_het_dict.txt
+ADFRSUITE_BIN=/stor/work/VDS_Beckham/atlas/tools/ADFRsuite/bin
 
-VINA_EXE=/stor/home/mpg2352/atlas2/code/protein_automation/vina1.sh
+# Phenix
+PHENIX_DIR=/stor/work/VDS_Beckham/atlas/tools/phenix/phenix-1.21.2-5419/build/bin
+PHENIX_LIB_PATH=/stor/work/VDS_Beckham/atlas/tools/phenix/phenix-1.21.2-5419/conda_base/lib
+PHENIX_CLEAN_SCRIPT=${OVERALL_DIR}/phenix_clean.py
 
+# Reduce
+REDUCE_EXE=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_src/reduce
+REDUCE_LOCAL_CANDIDATE=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_src/reduce
+REDUCE_HET_DICT=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
 
+# Vina wrapper
+VINA_EXE=${OVERALL_DIR}/vina1.sh
+
+# Open Babel (env-local; keep as-is unless env moved)
 OPENBABEL_PATH=/stor/home/mpg2352/micromamba/envs/docking-env/bin/obabel
 BABEL_LIBDIR=/stor/home/mpg2352/micromamba/envs/docking-env/lib/openbabel/3.1.0
 BABEL_DATADIR=
