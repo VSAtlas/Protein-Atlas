@@ -4360,19 +4360,67 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         ligprep_debug_seen += 1
 
                 rdkit_mol_for_microstate: Optional[Chem.Mol] = None
-                if microstate_dedup and ph_values is not None:
-                    try:
-                        rdkit_mol_for_microstate = Chem.MolFromMol2File(
-                            str(mol2_input), sanitize=False, removeHs=False
-                        )
-                    except Exception as e:
-                        logging.debug("[microstate] rdkit_load_failed file=%s err=%s", mol2_input, e)
+                sdf_for_microstate: Optional[Path] = None
 
                 if microstate_dedup and ph_values is not None:
+                    # Prefer per-ligand SDFs from the RDKit-embedded directory for microstate IDs.
+                    # These should have the same stem as the MOL2 (e.g., rdk_0000001.sdf).
+                    embedded_sdf_dir = ligands_mol2_dir / "_rdkit_embedded_sdf"
+
+                    try:
+                        candidate_sdf = embedded_sdf_dir / f"{lig_stem}.sdf"
+                        if candidate_sdf.exists():
+                            sdf_for_microstate = candidate_sdf
+                    except Exception:
+                        sdf_for_microstate = None
+
+                    # 1) Try to load RDKit Mol from the SDF first
+                    if sdf_for_microstate is not None and sdf_for_microstate.exists():
+                        try:
+                            rdkit_mol_for_microstate = Chem.MolFromMolFile(
+                                str(sdf_for_microstate),
+                                sanitize=False,
+                                removeHs=False,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "[microstate] rdkit_load_failed_sdf file=%s ligand=%s err=%s",
+                                sdf_for_microstate,
+                                lig_stem,
+                                e,
+                            )
+
+                    # 2) Fallback: try the MOL2 if SDF-based load failed or was not available
+                    if rdkit_mol_for_microstate is None:
+                        try:
+                            rdkit_mol_for_microstate = Chem.MolFromMol2File(
+                                str(mol2_input),
+                                sanitize=False,
+                                removeHs=False,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "[microstate] rdkit_load_failed_mol2 file=%s ligand=%s err=%s",
+                                mol2_input,
+                                lig_stem,
+                                e,
+                            )
+
+                    # 3) Final load status logging
                     if rdkit_mol_for_microstate is not None:
-                        logger.debug("[microstate] rdkit_load_ok file=%s ligand=%s", mol2_input, lig_stem)
+                        logger.debug(
+                            "[microstate] rdkit_load_ok ligand=%s sdf=%s mol2=%s",
+                            lig_stem,
+                            str(sdf_for_microstate) if sdf_for_microstate is not None else "None",
+                            str(mol2_input),
+                        )
                     else:
-                        logger.warning("[microstate] rdkit_mol None for file=%s ligand=%s", mol2_input, lig_stem)
+                        logger.warning(
+                            "[microstate] rdkit_mol None for ligand=%s (sdf=%s mol2=%s)",
+                            lig_stem,
+                            str(sdf_for_microstate) if sdf_for_microstate is not None else "None",
+                            str(mol2_input),
+                        )
 
                 for ph_value in eff_ph_values:
                     ph_label = _ph_label(ph_value) if use_ph_subdirs else None
