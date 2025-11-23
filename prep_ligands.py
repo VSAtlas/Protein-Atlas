@@ -4059,7 +4059,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     test_mode_allowed = (in_sdf_env is None) and (in_pdb_dir_env is None)
     has_only = bool(only)
 
-    if unit_sdfs and test_mode_allowed and has_only and not microstate_dedup:
+    if unit_sdfs and test_mode_allowed and has_only:
         print(f"[test-mode] per-ligand SDFs detected dir={rdkit_unit_sdf_dir}")
         # Build the candidate SDF list
         selected_sdfs: List[Path]
@@ -4198,15 +4198,6 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
         _maybe_save_microstate_registry()
         return
-    elif unit_sdfs and test_mode_allowed and has_only and microstate_dedup:
-        # In microstate_dedup + pH-ligand mode, we still want ONLY filtering,
-        # but we must *not* short-circuit via the legacy per-ligand SDF path.
-        # Fall through to the bulk SDF + microstate_dedup pipeline below.
-        print(
-            "[test-mode] per-ligand SDFs detected but microstate_dedup=True; "
-            "skipping legacy test-mode shortcut so full pH/microstate prep can run "
-            "with ONLY-filtered ligands."
-        )
     elif unit_sdfs and test_mode_allowed and not has_only:
         print(
             "[test-mode] per-ligand SDFs present but ONLY not set; using bulk ligprep path instead"
