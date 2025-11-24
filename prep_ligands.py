@@ -3816,11 +3816,19 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
     library_base = ""
 
+    project_root_guess: Optional[Path] = None
+
     if root_dir is not None:
         root_dir = Path(root_dir).resolve()
         output_ligands_dir = root_dir
         prepped_ligands_dir = output_ligands_dir
         library_hint = prepped_ligands_dir.name.lower()
+        for parent in root_dir.parents:
+            if parent.name == "prepped_ligands":
+                project_root_guess = parent.parent
+                break
+        if project_root_guess is None:
+            project_root_guess = root_dir.parent.parent
     else:
         output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
         prepped_ligands_dir = output_ligands_dir
@@ -3843,25 +3851,46 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     else:
         library_base = library_hint
     library_base = (library_base or library_hint or "ligprep").lower()
-    library_name = library_base
+    library_name = (library_base or library_hint or "ligprep").lower()
 
-    if root_dir is not None and not in_sdf_dir_env:
-        project_root = None
-        for parent in root_dir.parents:
-            if parent.name == "prepped_ligands":
-                project_root = parent.parent
-                break
-        if project_root is None:
-            project_root = root_dir.parent.parent
+    # Treat both "fda" and "fda_library" as FDA-mode library names
+    is_fda_library = library_name in {"fda", "fda_library"}
+    logger.info(
+        "prep_ligands: library_name=%s is_fda_library=%s",
+        library_name,
+        is_fda_library,
+    )
 
-        candidate_extracted = project_root / "extracted_ligands" / library_base
+    if project_root_guess is None and root_dir is not None:
+        project_root_guess = root_dir.parent.parent
+
+    if project_root_guess is None:
+        project_root_guess = Path(__file__).resolve().parent
+
+    if in_sdf_dir_env:
+        ligand_extracted_dir = Path(in_sdf_dir_env).resolve()
+    else:
+        # Prefer per-library extracted_ligands/<library_name> when available.
+        # For FDA specifically, we want extracted_ligands/fda_library.
+        candidate_extracted = project_root_guess / "extracted_ligands" / library_name
+        if is_fda_library:
+            # be explicit for FDA, in case library_name=="fda"
+            candidate_extracted = project_root_guess / "extracted_ligands" / "fda_library"
+
         if candidate_extracted.is_dir():
             ligand_extracted_dir = candidate_extracted
-            logger.info("prep_ligands: using extracted_ligands source path=%s", candidate_extracted)
+            logger.info(
+                "prep_ligands: using extracted_ligands source path=%s (library_name=%s)",
+                candidate_extracted,
+                library_name,
+            )
         else:
             ligand_extracted_dir = ligands_raw_dir
-    else:
-        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
+            logger.info(
+                "prep_ligands: no extracted_ligands/%s dir; falling back to ligands_raw_dir=%s",
+                library_name,
+                ligands_raw_dir,
+            )
 
     if mol2_dir_env:
         ligands_mol2_dir = Path(mol2_dir_env).resolve()
@@ -3871,7 +3900,13 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     if not library_env and root_dir is None:
         os.environ["LIGPREP_LIBRARY"] = library_base
 
-    is_fda_library = (library_hint == "fda")
+    # If no explicit OUT dir is set and we are in FDA mode, enforce prepped_ligands/fda_library
+    if is_fda_library and not out_dir_env and root_dir is None:
+        project_root_guess = project_root_guess or Path(__file__).resolve().parent
+        fda_prepped = project_root_guess / "prepped_ligands" / "fda_library"
+        prepped_ligands_dir = fda_prepped
+        output_ligands_dir = fda_prepped
+        logger.info("prep_ligands: overriding prepped_ligands_dir for FDA -> %s", fda_prepped)
     # direct all malformed logs for this protein to its prepped_ligands dir
     global MALFORMED_DIR
 
