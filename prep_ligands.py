@@ -310,16 +310,19 @@ def enumerate_ligands_for_docking(
     else:
         prepped_root = paths.prepped_ligands_dir.parent
 
+    ph_ligand_root = (cfg.get("_PH_LIGAND_ROOT") or "").strip()
+    ph_library_name = Path(ph_ligand_root).name.lower() if ph_ligand_root else None
+
     # Derive an initial library_hint from the most specific information we have
     library_hint: Optional[str] = None
     if root_dir_path is not None:
         library_hint = root_dir_path.name.lower()
     elif out_dir_env:
         library_hint = Path(out_dir_env).name.lower()
+    elif ph_library_name:
+        library_hint = ph_library_name
     else:
-        # fall back to whatever prepped_root suggests, but this will likely
-        # be overridden by LIGPREP_LIBRARY below
-        library_hint = prepped_root.name.lower()
+        library_hint = None
 
     library_base: Optional[str] = library_hint
 
@@ -345,8 +348,9 @@ def enumerate_ligands_for_docking(
     registry_path = library_out_dir / "microstates.json"
 
     logger.info(
-        "enumerate_ligands_for_docking: library=%s out_dir=%s registry=%s",
+        "enumerate_ligands_for_docking: library=%s prepped_root=%s out_dir=%s registry=%s",
         library_name,
+        prepped_root,
         library_out_dir,
         registry_path,
     )
