@@ -1347,6 +1347,14 @@ def bootstrap_root_logging(cfg: Dict, run_log_path: str) -> logging.Logger:
     if getattr(root, "_atlas_bootstrapped", False):
         return root
 
+    # Clear any pre-existing handlers (e.g., from logging.basicConfig in imported modules)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+        try:
+            h.close()
+        except Exception:
+            pass
+
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     configured_level = (
         os.environ.get("LOG_LEVEL_CONSOLE")
