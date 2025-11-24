@@ -24,6 +24,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import traceback
+from logging_topics import coerce_log_level, build_topic_filter
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -1323,39 +1324,16 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
     quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else _to_bool(cfg.get("QUIET_CONSOLE", False))
     ch.setLevel(logging.WARNING if quiet else logging.INFO)
     ch.setFormatter(formatter)
-    # Opt-in topic filtering and level overrides
-    def _coerce_level(name: str | None, default: int) -> int:
-        m = {"CRITICAL":50,"ERROR":40,"WARN":30,"WARNING":30,"INFO":20,"DEBUG":10,"NOTSET":0}
-        return m.get(str(name or "").strip().upper(), default)
-
-    raw_topics = (os.environ.get("LOG_TOPICS") or str(cfg.get("LOG_TOPICS", ""))).replace(",", " ")
-    topics = {t.strip().lower() for t in raw_topics.split() if t.strip()}
-
-    class _TopicFilter(logging.Filter):
-        def __init__(self, allowed: set[str]): self.allowed = allowed
-        def filter(self, record: logging.LogRecord) -> bool:
-            # Always show warnings/errors
-            if record.levelno >= logging.WARNING:
-                return True
-            msg = record.getMessage()
-            # If message is [tag]..., allow only when tag in allowed
-            if msg.startswith("[") and ("]" in msg):
-                tag = msg[1:msg.find("]")].strip().lower()
-                if not self.allowed or "all" in self.allowed:
-                    return True
-                return tag in self.allowed
-            # Untagged INFO/DEBUG only pass when explicitly enabled as 'untagged'
-            return ("untagged" in self.allowed) or (not self.allowed)
-
     # Optional level overrides
-    fh.setLevel(_coerce_level(os.environ.get("LOG_LEVEL_FILE") or cfg.get("LOG_LEVEL_FILE"), fh.level))
-    ch.setLevel(_coerce_level(os.environ.get("LOG_LEVEL_CONSOLE") or cfg.get("LOG_LEVEL_CONSOLE"), ch.level))
+    fh.setLevel(coerce_log_level(os.environ.get("LOG_LEVEL_FILE") or cfg.get("LOG_LEVEL_FILE"), fh.level))
+    ch.setLevel(coerce_log_level(os.environ.get("LOG_LEVEL_CONSOLE") or cfg.get("LOG_LEVEL_CONSOLE"), ch.level))
 
-    # Apply topic filter only if topics were provided (and not 'all')
-    if topics and ("all" not in topics):
-        filt = _TopicFilter(topics)
-        fh.addFilter(filt)
-        ch.addFilter(filt)
+    # NOTE: logging_topics.TopicFilter mutes noisy topics (vina.call, ligprep, altloc, etc.)
+    #       by default; use LOG_TOPICS=all or a list (e.g. LOG_TOPICS=ligprep,altloc) to opt back in.
+    topic_filter = build_topic_filter(cfg)
+    if topic_filter is not None:
+        fh.addFilter(topic_filter)
+        ch.addFilter(topic_filter)
 
     logger.addHandler(fh)
     logger.addHandler(ch)
@@ -1369,25 +1347,13 @@ def bootstrap_root_logging(cfg: Dict, run_log_path: str) -> logging.Logger:
     if getattr(root, "_atlas_bootstrapped", False):
         return root
 
-    def _coerce_level(name: str | None, default: int) -> int:
-        mapping = {
-            "CRITICAL": logging.CRITICAL,
-            "ERROR": logging.ERROR,
-            "WARN": logging.WARNING,
-            "WARNING": logging.WARNING,
-            "INFO": logging.INFO,
-            "DEBUG": logging.DEBUG,
-            "NOTSET": logging.NOTSET,
-        }
-        return mapping.get(str(name or "").strip().upper(), default)
-
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     configured_level = (
         os.environ.get("LOG_LEVEL_CONSOLE")
         or cfg.get("LOG_LEVEL_CONSOLE")
         or "INFO"
     )
-    level_value = _coerce_level(configured_level, logging.INFO)
+    level_value = coerce_log_level(configured_level, logging.INFO)
     if level_value < logging.INFO:
         level_value = logging.INFO
     stream_handler.setLevel(level_value)
@@ -1395,30 +1361,11 @@ def bootstrap_root_logging(cfg: Dict, run_log_path: str) -> logging.Logger:
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
     stream_handler.setFormatter(formatter)
 
-    raw_topics = (
-        os.environ.get("LOG_TOPICS")
-        or str(cfg.get("LOG_TOPICS", ""))
-    ).replace(",", " ")
-    topics = {t.strip().lower() for t in raw_topics.split() if t.strip()}
-
-    class _TopicFilter(logging.Filter):
-        def __init__(self, allowed: set[str]):
-            super().__init__()
-            self.allowed = allowed
-
-        def filter(self, record: logging.LogRecord) -> bool:
-            if record.levelno >= logging.WARNING:
-                return True
-            message = record.getMessage()
-            if message.startswith("[") and ("]" in message):
-                tag = message[1:message.find("]")].strip().lower()
-                if not self.allowed or "all" in self.allowed:
-                    return True
-                return tag in self.allowed
-            return ("untagged" in self.allowed) or (not self.allowed)
-
-    if topics and ("all" not in topics):
-        stream_handler.addFilter(_TopicFilter(topics))
+    # NOTE: logging_topics.TopicFilter mutes noisy topics (vina.call, ligprep, altloc, etc.)
+    #       by default; use LOG_TOPICS=all or a list (e.g. LOG_TOPICS=ligprep,altloc) to opt back in.
+    topic_filter = build_topic_filter(cfg)
+    if topic_filter is not None:
+        stream_handler.addFilter(topic_filter)
 
     root.setLevel(logging.DEBUG)
     root.addHandler(stream_handler)
