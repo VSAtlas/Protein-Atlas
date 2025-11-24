@@ -15,16 +15,19 @@ from __future__ import annotations
 
 import sys, hashlib, re, logging, json, time, os, shutil, re
 from dataclasses import dataclass, field
-import atexit, datetime
+import datetime
 from pathlib import Path
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any, Mapping
 import numpy as np
 from tqdm import tqdm
-from pathlib import Path
 import traceback
-from logging_topics import coerce_log_level, build_topic_filter
+from logging_topics import (
+    _tee_stdio_to,
+    bootstrap_root_logging,
+    make_protein_logger,
+)
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -90,54 +93,6 @@ def _prepare_run_logfile(run_id: str) -> str:
     logs_dir = Path.cwd() / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     return str(logs_dir / f"main_{run_id}.log")
-
-class _Tee:
-    def __init__(self, stream, file_path):
-        self._stream = stream
-        self._fh = open(file_path, "a", buffering=1, encoding="utf-8", errors="replace")
-    def write(self, data):
-        try:
-            self._stream.write(data)
-        except Exception:
-            pass
-        try:
-            self._fh.write(data)
-        except Exception:
-            pass
-    def flush(self):
-        try:
-            self._stream.flush()
-        except Exception:
-            pass
-        try:
-            self._fh.flush()
-        except Exception:
-            pass
-    def isatty(self):
-        try:
-            return self._stream.isatty()
-        except Exception:
-            return False
-    def close(self):
-        try:
-            self._fh.close()
-        except Exception:
-            pass
-
-def _tee_stdio_to(log_path):
-    tee_out, tee_err = _Tee(sys.stdout, log_path), _Tee(sys.stderr, log_path)
-    sys.stdout, sys.stderr = tee_out, tee_err
-    def _announce_and_close():
-        try:
-            sys.stdout.write(f"Log -> {log_path}\n")
-            sys.stdout.flush()
-        finally:
-            try:
-                tee_out.close()
-                tee_err.close()
-            except Exception:
-                pass
-    atexit.register(_announce_and_close)
 
 
 
@@ -1293,92 +1248,6 @@ def get_recenter_params(cfg: Dict) -> RecenterParams:
     )
 
 
-def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logger:
-    """
-    Create a logger writing to DOCKED_DIR/<pdb_id>/protein.log and also to console.
-    Keeps logs per-protein and avoids duplicate handlers.
-    """
-    base = Path(docked_dir)
-    # If caller already passed .../docked/<PDB>, don't append <PDB> again
-    log_dir = base if base.name.upper() == pdb_id.upper() else (base / pdb_id)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file_path = log_dir / "protein.log"
-
-    logger = logging.getLogger(pdb_id)
-    logger.setLevel(logging.DEBUG)
-
-
-    # Reset handlers to avoid duplicates if re-used
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-
-    # Overwrite per run (truncate), not append
-    fh = logging.FileHandler(log_file_path, mode="w")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(formatter)
-
-    ch = logging.StreamHandler(stream=sys.stdout)  # stdout, not stderr
-    env_override = os.environ.get("QUIET_CONSOLE_OVERRIDE", "").strip()
-    quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else _to_bool(cfg.get("QUIET_CONSOLE", False))
-    ch.setLevel(logging.WARNING if quiet else logging.INFO)
-    ch.setFormatter(formatter)
-    # Optional level overrides
-    fh.setLevel(coerce_log_level(os.environ.get("LOG_LEVEL_FILE") or cfg.get("LOG_LEVEL_FILE"), fh.level))
-    ch.setLevel(coerce_log_level(os.environ.get("LOG_LEVEL_CONSOLE") or cfg.get("LOG_LEVEL_CONSOLE"), ch.level))
-
-    # NOTE: logging_topics.TopicFilter mutes noisy topics (vina.call, ligprep, altloc, etc.)
-    #       by default; use LOG_TOPICS=all or a list (e.g. LOG_TOPICS=ligprep,altloc) to opt back in.
-    topic_filter = build_topic_filter(cfg)
-    if topic_filter is not None:
-        fh.addFilter(topic_filter)
-        ch.addFilter(topic_filter)
-
-    logger.addHandler(fh)
-    logger.addHandler(ch)
-    logger.propagate = False
-    return logger
-
-
-def bootstrap_root_logging(cfg: Dict, run_log_path: str) -> logging.Logger:
-    """Ensure the root logger emits INFO-level records to the tee'd console."""
-    root = logging.getLogger()
-    if getattr(root, "_atlas_bootstrapped", False):
-        return root
-
-    # Clear any pre-existing handlers (e.g., from logging.basicConfig in imported modules)
-    for h in list(root.handlers):
-        root.removeHandler(h)
-        try:
-            h.close()
-        except Exception:
-            pass
-
-    stream_handler = logging.StreamHandler(stream=sys.stdout)
-    configured_level = (
-        os.environ.get("LOG_LEVEL_CONSOLE")
-        or cfg.get("LOG_LEVEL_CONSOLE")
-        or "INFO"
-    )
-    level_value = coerce_log_level(configured_level, logging.INFO)
-    if level_value < logging.INFO:
-        level_value = logging.INFO
-    stream_handler.setLevel(level_value)
-
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
-    stream_handler.setFormatter(formatter)
-
-    # NOTE: logging_topics.TopicFilter mutes noisy topics (vina.call, ligprep, altloc, etc.)
-    #       by default; use LOG_TOPICS=all or a list (e.g. LOG_TOPICS=ligprep,altloc) to opt back in.
-    topic_filter = build_topic_filter(cfg)
-    if topic_filter is not None:
-        stream_handler.addFilter(topic_filter)
-
-    root.setLevel(logging.DEBUG)
-    root.addHandler(stream_handler)
-    root._atlas_bootstrapped = True  # type: ignore[attr-defined]
-    return root
 
 
 
