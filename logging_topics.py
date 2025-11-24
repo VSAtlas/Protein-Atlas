@@ -22,6 +22,10 @@ DEFAULT_MUTED_TAGS: set[str] = {
     "read_any",
     "elemfix",
 
+    # Element-repair noise from activesite/elem-fix
+    "element",
+    "elements",
+
     # Now also mute these by default (opt-in via LOG_TOPICS)
     "ligprep",
     "bulksdf",
@@ -33,6 +37,7 @@ DEFAULT_MUTED_TAGS: set[str] = {
     # Pseudo-topic for altLoc-style messages (handled specially)
     "altloc",
 }
+
 
 
 def coerce_log_level(name: str | None, default: int) -> int:
