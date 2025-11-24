@@ -1645,6 +1645,18 @@ def prepare_receptor(
                             ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                             ",".join(f"{p:.1f}" for p in ligand_ph_values),
                         )
+                        ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
+                        try:
+                            ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+                        except Exception:
+                            ph_root_path = None
+
+                        logger.info(
+                            "[ph_ligand.context.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
+                            ph_root_cfg,
+                            str(ph_root_path) if ph_root_path is not None else "",
+                            ph_root_path.exists() if ph_root_path is not None else False,
+                        )
                         try:
                             enumerate_ligands_for_docking(
                                 requested_ph_values=ligand_ph_values,
@@ -2689,6 +2701,13 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     else:
         cfg.pop("_PH_LIGAND_ROOT", None)
     cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
+    logger.info(
+        "[ph_ligand.roots] test_mode=%s pdb=%s ph_root=%s noncontrol_roots=%s",
+        test_mode,
+        pdb_id,
+        cfg.get("_PH_LIGAND_ROOT"),
+        cfg.get("_ALLOWED_NONCONTROL_ROOTS"),
+    )
     cfg["_TEST_MODE_EFFECTIVE"] = test_mode
 
     per_index_roots: list[Path] = []
@@ -4867,6 +4886,19 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     {round(p, 1) for ph in ph_values for p in (float(ph) - 1.0, float(ph), float(ph) + 1.0)}
                 )
                 logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
+
+                ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
+                try:
+                    ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+                except Exception:
+                    ph_root_path = None
+
+                logger.info(
+                    "[single.ph_ligand.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
+                    ph_root_cfg,
+                    str(ph_root_path) if ph_root_path is not None else "",
+                    ph_root_path.exists() if ph_root_path is not None else False,
+                )
                 enumerate_ligands_for_docking(
                     requested_ph_values=ligand_window,
                     microstate_dedup=True,
@@ -5080,6 +5112,19 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         ph_label,
                         ph_values,
                         ligand_window,
+                    )
+
+                    ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
+                    try:
+                        ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+                    except Exception:
+                        ph_root_path = None
+
+                    ph_log.info(
+                        "[ph_ligand.context.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
+                        ph_root_cfg,
+                        str(ph_root_path) if ph_root_path is not None else "",
+                        ph_root_path.exists() if ph_root_path is not None else False,
                     )
 
                     enumerated = enumerate_ligands_for_docking(

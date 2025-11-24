@@ -300,6 +300,29 @@ def enumerate_ligands_for_docking(
     in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
     out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
 
+    prepped_root_cfg_log = (cfg.get("PREPPED_LIGANDS_ROOT") or cfg.get("PREPPED_LIGANDS_DIR") or "").strip()
+    prepped_dir_env = os.environ.get("PREPPED_LIGANDS_DIR", "")
+    out_dir_generic_env = os.environ.get("OUT_DIR", "")
+    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip()
+    output_ligands_cfg = str(cfg.get("OUTPUT_LIGANDS_DIR", "") or "")
+    root_dir_str = str(root_dir) if root_dir is not None else ""
+
+    logger.info(
+        "enumerate_ligands_for_docking: pdb=%s root_dir=%s prepped_root_cfg=%s "
+        "out_dir_env=%s prepped_dir_env=%s out_dir_generic_env=%s output_ligands_cfg=%s "
+        "library_env=%s library_cfg=%s",
+        pdb_id,
+        root_dir_str,
+        prepped_root_cfg_log,
+        out_dir_env or "",
+        prepped_dir_env,
+        out_dir_generic_env,
+        output_ligands_cfg,
+        library_env,
+        library_cfg,
+    )
+
     # Normalise root_dir if provided
     root_dir_path: Optional[Path] = Path(root_dir).resolve() if root_dir is not None else None
 
@@ -365,11 +388,15 @@ def enumerate_ligands_for_docking(
     registry_path = library_out_dir / "microstates.json"
 
     logger.info(
-        "enumerate_ligands_for_docking: library=%s prepped_root=%s out_dir=%s registry=%s",
+        "enumerate_ligands_for_docking: library_hint=%s library_env=%s library_cfg=%s "
+        "resolved_library=%s prepped_root=%s library_out_dir=%s registry=%s",
+        library_hint,
+        library_env,
+        library_cfg,
         library_name,
-        prepped_root,
-        library_out_dir,
-        registry_path,
+        str(prepped_root),
+        str(library_out_dir),
+        str(registry_path),
     )
 
     # Optional: restrict which ligands we prep when called via main.py.
