@@ -329,13 +329,30 @@ def enumerate_ligands_for_docking(
     # Highest priority: explicit library name from env or config
     library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
     library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip()
-    if library_env:
-        library_base = library_env.lower()
-    elif library_cfg:
-        library_base = library_cfg.lower()
+
+    # Only use env/cfg overrides if we do not already have a library from
+    # root_dir / out_dir / PH-ligand mapping.
+    if not library_base:
+        if library_env:
+            library_base = library_env.lower()
+        elif library_cfg:
+            library_base = library_cfg.lower()
 
     # Final fallback: make sure we have something usable
     library_name = (library_base or "ligprep").lower()
+
+    logger.info(
+        "enumerate_ligands_for_docking: pdb=%s ph_ligand_root=%s ph_library=%s "
+        "library_hint=%s library_env=%s library_cfg=%s library=%s prepped_root=%s",
+        pdb_id,
+        ph_ligand_root or "",
+        ph_library_name or "",
+        library_hint or "",
+        library_env or "",
+        library_cfg or "",
+        library_name,
+        str(prepped_root),
+    )
 
     # Crucial: library_out_dir is the library subdir, not the PDB-specific LIGPREP dir
     if root_dir_path is not None:
