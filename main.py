@@ -25,8 +25,8 @@ from tqdm import tqdm
 import traceback
 from logging_topics import (
     _tee_stdio_to,
-    bootstrap_root_logging,
     make_protein_logger,
+    bootstrap_root_logging,
 )
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
