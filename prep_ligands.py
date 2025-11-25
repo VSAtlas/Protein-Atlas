@@ -284,17 +284,47 @@ def enumerate_ligands_for_docking(
         library's prepped_ligands directory.
     """
 
-    _ = cfg  # retained for call-site compatibility; path resolution is driven solely by root_dir.
+    _ = cfg  # retained for call-site compatibility.
     pdb_label = (pdb_id or "LIGPREP").upper()
 
-    if root_dir is None:
-        raise ValueError(
-            "enumerate_ligands_for_docking now requires root_dir; callers must pass a library root derived from path_router."
-        )
+    root_dir_path = Path(root_dir).resolve() if root_dir is not None else None
+    out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
 
-    library_out_dir = Path(root_dir).resolve()
-    library_name_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
-    library_name = (library_name_env or library_out_dir.name).lower()
+    library_hint: Optional[str] = None
+    if root_dir_path is not None:
+        library_hint = root_dir_path.name.lower()
+    elif out_dir_env:
+        library_hint = Path(out_dir_env).name.lower()
+
+    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip() if cfg else ""
+
+    library_base: Optional[str] = library_hint
+    if not library_base:
+        if library_env:
+            library_base = library_env.lower()
+        elif library_cfg:
+            library_base = library_cfg.lower()
+
+    library_name = (library_base or "ligprep").lower()
+
+    prepped_root_env = (os.environ.get("PREPPED_LIGANDS_ROOT", "") or "").strip()
+    if prepped_root_env:
+        prepped_root = Path(prepped_root_env).resolve()
+    else:
+        try:
+            paths = make_paths(cfg, base_id=pdb_label, pdb_file=f"{pdb_label}.pdb") if cfg is not None else None
+            prepped_root = paths.prepped_ligands_dir.parent if paths is not None else Path("prepped_ligands").resolve()
+        except Exception:
+            prepped_root = Path("prepped_ligands").resolve()
+
+    if root_dir_path is not None:
+        library_out_dir = root_dir_path
+        library_source = "root_dir"
+    else:
+        library_out_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_root / library_name
+        library_source = "config/env"
+
     registry_path = library_out_dir / "microstates.json"
 
     requested_set: Optional[Set[float]] = None
@@ -303,19 +333,24 @@ def enumerate_ligands_for_docking(
 
     logger.info(
         "enumerate_ligands_for_docking: root_dir=%s ph_values=%s microstate_dedup=%s force=%s",
-        str(library_out_dir),
+        str(root_dir_path) if root_dir_path is not None else "",
         sorted(requested_set) if requested_set is not None else [],
         microstate_dedup,
         force,
     )
 
     logger.info(
-        "enumerate_ligands_for_docking: pdb=%s library=%s source=%s library_out_dir=%s registry=%s",
+        "enumerate_ligands_for_docking: pdb=%s library_hint=%s library_env=%s library_cfg=%s resolved_library=%s "
+        "prepped_root=%s library_out_dir=%s registry=%s source=%s",
         pdb_label,
+        library_hint,
+        library_env,
+        library_cfg,
         library_name,
-        "root_dir",
+        str(prepped_root),
         library_out_dir,
         registry_path,
+        library_source,
     )
 
     # Optional: restrict which ligands we prep when called via main.py.
@@ -343,6 +378,97 @@ def enumerate_ligands_for_docking(
             root_dir=library_out_dir,
         )
 
+    def _collect_expected_ligand_stems_from_manifest() -> Set[str]:
+        """
+        Inspect _manifest.json (if present) and return the set of ligand stems
+        that we expect to have microstate coverage for the current library.
+        This is used as a guardrail so that microstates.json can never silently
+        drop decoys or other ligands that belong to the library.
+        """
+        manifest_path = library_out_dir / "_manifest.json"
+        expected: Set[str] = set()
+        if not manifest_path.exists():
+            return expected
+
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except Exception as e:
+            logger.warning(
+                "enumerate_ligands_for_docking: failed to read manifest %s for coverage check: %s",
+                manifest_path,
+                e,
+            )
+            return expected
+
+        entries = manifest.get("entries") or {}
+        for key, rel_name in entries.items():
+            # Prefer the basename stem from the relative path, but also keep the key.
+            try:
+                stem = Path(rel_name).stem
+            except Exception:
+                stem = ""
+            if stem:
+                expected.add(stem)
+            if isinstance(key, str) and key:
+                expected.add(key)
+
+        # Respect ONLY filters (LIGPREP_ONLY / LIGPREP_ONLY_FILE) when present.
+        if only_for_microstate:
+            expected &= set(only_for_microstate)
+
+        return expected
+
+    def _collect_ligand_stems_with_microstates(registry: dict, ph_values: Optional[Set[float]]) -> Set[str]:
+        """
+        From the current registry, collect ligand_stem values that have at least one alias
+        in the requested pH set. If ph_values is None, we treat all microstates as covered.
+        """
+        covered: Set[str] = set()
+        microstates = registry.get("microstates") or []
+        if not microstates:
+            return covered
+
+        for entry in microstates:
+            aliases = entry.get("aliases") or []
+            lig_stem: Optional[str] = None
+
+            # Prefer the explicit ligand_stem stored on aliases.
+            for alias in aliases:
+                cand = alias.get("ligand_stem")
+                if cand:
+                    lig_stem = cand
+                    break
+
+            # Fallback: derive stem from canonical PDBQT path.
+            if not lig_stem:
+                rel = entry.get("pdbqt_path") or ""
+                if rel:
+                    try:
+                        lig_stem = Path(rel).stem
+                    except Exception:
+                        lig_stem = None
+
+            if not lig_stem:
+                continue
+
+            if ph_values is None:
+                covered.add(lig_stem)
+                continue
+
+            for alias in aliases:
+                ph_value = alias.get("ph_value")
+                if ph_value is None:
+                    continue
+                try:
+                    pv = float(ph_value)
+                except Exception:
+                    continue
+                if pv in ph_values:
+                    covered.add(lig_stem)
+                    break
+
+        return covered
+
     if requested_set is not None:
         if not registry_path.exists():
             _run_microstate_prep_for_phs(requested_set)
@@ -359,7 +485,25 @@ def enumerate_ligands_for_docking(
                 except Exception:
                     continue
 
+        logger.info(
+            "enumerate_ligands_for_docking: library=%s requested_ph=%s existing_ph=%s",
+            library_name,
+            ",".join(f"{p:.2f}" for p in sorted(requested_set)),
+            ",".join(f"{p:.2f}" for p in sorted(existing_ph_values)),
+        )
+
         missing = requested_set - existing_ph_values
+        if missing:
+            logger.info(
+                "enumerate_ligands_for_docking: library=%s missing_ph=%s (will trigger microstate prep)",
+                library_name,
+                ",".join(f"{p:.2f}" for p in sorted(missing)),
+            )
+        else:
+            logger.info(
+                "enumerate_ligands_for_docking: library=%s no missing_ph; microstates already cover requested pH values",
+                library_name,
+            )
         if missing:
             logger.info(
                 "enumerate_ligands_for_docking: requested_ph=%s missing_ph=%s",
@@ -370,6 +514,41 @@ def enumerate_ligands_for_docking(
             registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
     else:
         registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+    # After pH coverage repair, ensure the registry has ligand coverage that matches the manifest.
+    # This protects against partial registries (e.g., actives-only) silently dropping ligands.
+    if requested_set is not None:
+        expected_ligands = _collect_expected_ligand_stems_from_manifest()
+        if expected_ligands:
+            covered_before = _collect_ligand_stems_with_microstates(registry, requested_set)
+            missing_ligands = expected_ligands - covered_before
+            if missing_ligands:
+                # Log a concise sample of missing ligands to make debugging easier.
+                sample_missing = ", ".join(sorted(list(missing_ligands))[:5])
+                logger.info(
+                    "enumerate_ligands_for_docking: microstate coverage incomplete library=%s expected=%d covered=%d missing=%d example_missing=%s",
+                    library_name,
+                    len(expected_ligands),
+                    len(covered_before),
+                    len(missing_ligands),
+                    sample_missing,
+                )
+                # Attempt a one-shot repair by re-running microstate prep for the requested pH set.
+                _run_microstate_prep_for_phs(requested_set)
+                registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+                covered_after = _collect_ligand_stems_with_microstates(registry, requested_set)
+                remaining = expected_ligands - covered_after
+                if remaining:
+                    sample_remaining = ", ".join(sorted(list(remaining))[:5])
+                    logger.warning(
+                        "enumerate_ligands_for_docking: microstate coverage still incomplete after repair library=%s expected=%d covered=%d missing=%d example_missing=%s",
+                        library_name,
+                        len(expected_ligands),
+                        len(covered_after),
+                        len(remaining),
+                        sample_remaining,
+                    )
 
     if (not registry_path.exists()) or not (registry.get("microstates") or []):
         # Registry missing or empty: try a manifest/base-PDBQT fallback so docking still has ligands.
@@ -434,6 +613,9 @@ def enumerate_ligands_for_docking(
     result: Set[Path] = set()
     total_microstates = len(registry.get("microstates", []) or [])
 
+    sample_limit = 20
+    sample_count = 0
+
     for entry in registry.get("microstates", []) or []:
         rel_path = entry.get("pdbqt_path")
         if not rel_path:
@@ -443,6 +625,7 @@ def enumerate_ligands_for_docking(
         canonical_path = library_out_dir / rel_path
 
         include = requested_set is None
+        selected_alias: Optional[dict] = None
         if requested_set is not None:
             for alias in aliases:
                 ph_value = alias.get("ph_value")
@@ -454,13 +637,27 @@ def enumerate_ligands_for_docking(
                     continue
                 if pv in requested_set:
                     include = True
+                    selected_alias = alias
                     break
+        else:
+            if aliases:
+                selected_alias = aliases[0]
 
         if not include:
             continue
 
         # Lightweight sanity check only; heavy validation happens during prep
         if canonical_path.exists() and canonical_path.stat().st_size > 100:
+            if sample_count < sample_limit:
+                logger.info(
+                    "enumerate_ligands_for_docking.selection: stem=%s ph_label=%s ph_value=%s microstate_id=%s pdbqt=%s",
+                    (selected_alias or {}).get("ligand_stem"),
+                    (selected_alias or {}).get("ph_label"),
+                    (selected_alias or {}).get("ph_value"),
+                    entry.get("microstate_id"),
+                    canonical_path,
+                )
+                sample_count += 1
             result.add(canonical_path)
 
     if requested_set is None:
@@ -2358,6 +2555,15 @@ def _prepare_one(
 
     copy_targets = copy_targets or []
 
+    logger.debug(
+        "prep_ligands._prepare_one: ligand=%s ph=%s mol2=%s pdbqt=%s copy_targets=%d",
+        lig_id,
+        "%.2f" % ph if ph is not None else "None",
+        mol2_file,
+        pdbqt_path,
+        len(copy_targets),
+    )
+
     logging.info("[debug] _prepare_one lig=%s mol2=%s out=%s obabel=%s",
                  lig_id, mol2_file.name, pdbqt_path.name, bool(obabel_exe_short))
 
@@ -3759,6 +3965,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     microstate_registry: Dict[str, Any] | None = None
     microstate_index: Dict[str, dict] | None = None
     alias_index: Dict[Tuple[str, str, float], dict] | None = None
+    microstate_registry_dirty = False
     library_out_dir: Path | None = None
     microstates_dir: Path | None = None
 
@@ -3875,6 +4082,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         microstates_dir = library_out_dir / "microstates"
         microstates_dir.mkdir(parents=True, exist_ok=True)
         microstate_registry, microstate_index = load_microstate_registry(library_out_dir, library_name)
+        microstate_registry_dirty = False
 
         alias_index = {}
         for entry in microstate_registry.get("microstates", []) or []:
@@ -3897,7 +4105,9 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             len(microstate_registry.get("microstates", []) or []),
         )
 
-    def _maybe_save_microstate_registry() -> None:
+    def _maybe_save_microstate_registry(force: bool = False) -> None:
+        nonlocal microstate_registry_dirty
+
         if microstate_dedup and microstate_registry is not None and library_out_dir is not None:
             try:
                 microstates = microstate_registry.get("microstates") or []
@@ -3924,7 +4134,10 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         )
             except Exception:
                 pass
-            save_microstate_registry(library_out_dir, microstate_registry)
+
+            if microstate_registry_dirty or force:
+                save_microstate_registry(library_out_dir, microstate_registry)
+                microstate_registry_dirty = False
 
 
     # emit a compact audit banner (single line)
@@ -3981,6 +4194,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     ph_source = "python" if ph_values is not None else "config"
     ph_summary = ",".join(f"{ph:.1f}" for ph in eff_ph_values)
     print(f"[ligprep] ph_schedule source={ph_source} values={ph_summary} multiple={multiple_ph}")
+    logger.info("prep_ligands: pH schedule eff_ph_values=%s", eff_ph_values)
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     # If someone pointed MOL2s at 'prepped_ligands', redirect to 'ligands_mol2' (compat warning).
     if "prepped_ligands" in str(ligands_mol2_dir):
@@ -4210,7 +4424,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         )
 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
-        _maybe_save_microstate_registry()
+        _maybe_save_microstate_registry(force=True)
         return
     if unit_sdfs and test_mode_allowed and has_only and microstate_dedup and ph_values is not None:
         print(
@@ -4237,7 +4451,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     # : crystal-safe dispatch (takes precedence over bulk scan when in_sdf not set)
     if in_pdb_dir_env and not in_sdf_env:
         result = prep_ligands_from_pdb(Path(in_pdb_dir_env).resolve(), ligands_mol2_dir, output_ligands_dir)
-        _maybe_save_microstate_registry()
+        _maybe_save_microstate_registry(force=True)
         return result
 
     # single-file override; else scan directory as before
@@ -4257,7 +4471,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     print(f"Found {len(sdf_files)} SDF file(s)")
 
     if not sdf_files:
-        _maybe_save_microstate_registry()
+        _maybe_save_microstate_registry(force=True)
         return
 
     for sdf_file in sdf_files:
@@ -4336,7 +4550,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             # Early exit if nothing remains
             if not mol2_files:
                 print("[test-mode] No requested ligands were found. Nothing to do; exiting cleanly.")
-                _maybe_save_microstate_registry()
+                _maybe_save_microstate_registry(force=True)
                 return
 
 
@@ -4491,6 +4705,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         and rdkit_mol_for_microstate is not None
                     ):
                         microstate_id = compute_microstate_id(rdkit_mol_for_microstate)
+                        microstate_key = microstate_id
+                        canonical_smiles = None
+                        formal_charge = None
+                        try:
+                            _h_mol = Chem.AddHs(rdkit_mol_for_microstate, addCoords=False)
+                            canonical_smiles = Chem.MolToSmiles(_h_mol, canonical=True)
+                            formal_charge = Chem.GetFormalCharge(rdkit_mol_for_microstate)
+                        except Exception:
+                            canonical_smiles = None
+                            formal_charge = None
                         microstate_entry = microstate_index.get(microstate_id)
                         microstate_status = "existing"
                         if microstate_entry is None:
@@ -4509,10 +4733,21 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                 microstate_id,
                                 canonical_name,
                             )
+                            logger.info(
+                                "microstate_dedup: new microstate key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
+                                microstate_key,
+                                microstate_id,
+                                lig_stem,
+                                ph_label,
+                                ph_value,
+                                canonical_smiles,
+                                formal_charge,
+                            )
                             microstate_registry["microstates"].append(microstate_entry)
                             microstate_index[microstate_id] = microstate_entry
                             use_canonical_as_primary = True
                             microstate_status = "new"
+                            microstate_registry_dirty = True
                         else:
                             canonical_rel = microstate_entry.get("pdbqt_path")
                             if canonical_rel:
@@ -4526,6 +4761,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                 microstate_id,
                                 microstate_entry.get("pdbqt_path"),
                             )
+                            logger.info(
+                                "microstate_dedup: reuse key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
+                                microstate_key,
+                                microstate_id,
+                                lig_stem,
+                                ph_label,
+                                ph_value,
+                                canonical_smiles,
+                                formal_charge,
+                            )
 
                         if microstate_entry is not None:
                             alias = {
@@ -4536,14 +4781,13 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                             if alias not in microstate_entry.get("aliases", []):
                                 microstate_entry.setdefault("aliases", []).append(alias)
                                 logger.debug(
-                                    "[microstate] alias_add library=%s ligand=%s ph=%s microstate_id=%s status=%s canonical=%s",
-                                    library_name,
+                                    "microstate_dedup: add_alias stem=%s ph_label=%s ph_value=%.2f microstate_id=%s",
                                     lig_stem,
-                                    ph_label or ph_value,
-                                    microstate_id,
-                                    microstate_status,
-                                    microstate_entry.get("pdbqt_path"),
+                                    ph_label,
+                                    ph_value,
+                                    microstate_entry.get("microstate_id"),
                                 )
+                                microstate_registry_dirty = True
                             # update alias_index so subsequent runs see this mapping
                             if alias_index is not None:
                                 alias_index[alias_key] = microstate_entry
@@ -4598,6 +4842,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     if force and pdbqt_path.exists():
                         logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_rel)
 
+                    logger.debug(
+                        "prep_ligands: scheduling ligand prep stem=%s ph=%.2f",
+                        lig_stem,
+                        ph_value,
+                    )
                     fut = ex.submit(
                         _prepare_one,
                         mgltools_python_short, prepare_script_short,
@@ -4637,66 +4886,66 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             except Exception:
                 pass
 
-        _maybe_save_microstate_registry()
+    _maybe_save_microstate_registry(force=True)
 
-        def _as_path(p) -> Path:
-            return p if isinstance(p, Path) else Path(p)
+    def _as_path(p) -> Path:
+        return p if isinstance(p, Path) else Path(p)
 
-        def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
-            """Lightweight config reader that prefers env, then config.txt next to this file, else default."""
-            v = os.environ.get(key)
-            if v:
-                return v
-            # try config.txt next to this file (your project already uses this pattern)
-            try:
-                root = Path(__file__).resolve().parent
-                cfg = root / "config.txt"
-                if cfg.is_file():
-                    for line in cfg.read_text().splitlines():
-                        line = line.strip()
-                        if not line or line.startswith("#") or "=" not in line:
+    def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
+        """Lightweight config reader that prefers env, then config.txt next to this file, else default."""
+        v = os.environ.get(key)
+        if v:
+            return v
+        # try config.txt next to this file (your project already uses this pattern)
+        try:
+            root = Path(__file__).resolve().parent
+            cfg = root / "config.txt"
+            if cfg.is_file():
+                for line in cfg.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, val = line.split("=", 1)
+                    if k.strip() == key:
+                        return val.strip()
+        except Exception:
+            pass
+        return default
+
+    def _canon_base(output_root: Path, pdb_id: str) -> Path:
+        """Canonical per-protein base dir: processed_pdbs/<PDB>"""
+        output_root = _as_path(output_root)
+        return (output_root / pdb_id.upper()).resolve()
+
+    def _merge_dir(src: Path, dst: Path) -> None:
+        """Merge src directory into dst (mkdirs as needed); removes src if emptied."""
+        src, dst = src.resolve(), dst.resolve()
+        if not src.exists():
+            return
+        dst.mkdir(parents=True, exist_ok=True)
+        for root, dirs, files in os.walk(src):
+            r = Path(root)
+            rel = r.relative_to(src)
+            (dst / rel).mkdir(parents=True, exist_ok=True)
+            for d in dirs:
+                (dst / rel / d).mkdir(parents=True, exist_ok=True)
+            for f in files:
+                s = r / f
+                t = (dst / rel / f)
+                if t.exists():
+                    # prefer keeping existing canonical artifacts; only overwrite if target is missing
+                    try:
+                        # If same file, skip; else overwrite (safe in our case)
+                        if s.stat().st_size == t.stat().st_size:
                             continue
-                        k, val = line.split("=", 1)
-                        if k.strip() == key:
-                            return val.strip()
-            except Exception:
-                pass
-            return default
-
-        def _canon_base(output_root: Path, pdb_id: str) -> Path:
-            """Canonical per-protein base dir: processed_pdbs/<PDB>"""
-            output_root = _as_path(output_root)
-            return (output_root / pdb_id.upper()).resolve()
-
-        def _merge_dir(src: Path, dst: Path) -> None:
-            """Merge src directory into dst (mkdirs as needed); removes src if emptied."""
-            src, dst = src.resolve(), dst.resolve()
-            if not src.exists():
-                return
-            dst.mkdir(parents=True, exist_ok=True)
-            for root, dirs, files in os.walk(src):
-                r = Path(root)
-                rel = r.relative_to(src)
-                (dst / rel).mkdir(parents=True, exist_ok=True)
-                for d in dirs:
-                    (dst / rel / d).mkdir(parents=True, exist_ok=True)
-                for f in files:
-                    s = r / f
-                    t = (dst / rel / f)
-                    if t.exists():
-                        # prefer keeping existing canonical artifacts; only overwrite if target is missing
-                        try:
-                            # If same file, skip; else overwrite (safe in our case)
-                            if s.stat().st_size == t.stat().st_size:
-                                continue
-                        except Exception:
-                            pass
-                    shutil.move(str(s), str(t))
-            # try to remove empty src tree
-            try:
-                shutil.rmtree(src)
-            except Exception:
-                pass
+                    except Exception:
+                        pass
+                shutil.move(str(s), str(t))
+        # try to remove empty src tree
+        try:
+            shutil.rmtree(src)
+        except Exception:
+            pass
 
         def fold_legacy_layout(pdb_id: str, output_root) -> None:
             """
