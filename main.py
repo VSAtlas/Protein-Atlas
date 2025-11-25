@@ -1657,12 +1657,24 @@ def prepare_receptor(
                             str(ph_root_path) if ph_root_path is not None else "",
                             ph_root_path.exists() if ph_root_path is not None else False,
                         )
+                        _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(
+                            cfg, paths.pdb_id.upper(), paths, logger
+                        )
+                        ph_ligand_root = noncontrol_roots[0] if noncontrol_roots else None
+                        logger.info(
+                            "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
+                            paths.pdb_id,
+                            ph_ligand_root,
+                            ligand_ph_values,
+                        )
                         try:
                             enumerate_ligands_for_docking(
                                 requested_ph_values=ligand_ph_values,
-                                root_dir=None,
+                                root_dir=ph_ligand_root,
                                 microstate_dedup=True,
                                 force=False,
+                                cfg=cfg,
+                                pdb_id=paths.pdb_id,
                             )
                         except Exception as e:
                             logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
@@ -2592,41 +2604,24 @@ def _resolve_test_mode(cfg) -> str:
     print(f"[test-mode] WARNING: Unknown TEST_MODE_ENABLE={raw!r}; treating as 'off'.")
     return "off"
 
-def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
-    """
-    Gathers candidate ligands, keeps existing validation/PAINS logic, and
-    filters the *non-control* pool to allowed library roots:
+def _dedup_index_roots(seq: list[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in seq:
+        if not candidate:
+            continue
+        path_obj = Path(candidate)
+        try:
+            key = str(path_obj.resolve())
+        except Exception:
+            key = str(path_obj)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path_obj)
+    return deduped
 
-      - TEST_MODE_ENABLE="off"      -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
-      - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
-      - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
 
-    Controls are *never* filtered out here.
-    LIBRARY_EXTRA_DIRS remain included (unchanged).
-    """
-    # Keep existing prep step for extracted controls (harmless if nothing to do)
-    prep_ligands_from_pdb(
-        ligand_output_dir=paths.ligand_output_dir,
-        ligands_mol2_dir=paths.ligands_mol2_dir,
-        prepped_ligands_dir=paths.prepped_ligands_dir,
-    )
-
-    def _dedup_index_roots(seq: list[Path]) -> list[Path]:
-        deduped: list[Path] = []
-        seen: set[str] = set()
-        for candidate in seq:
-            if not candidate:
-                continue
-            path_obj = Path(candidate)
-            try:
-                key = str(path_obj.resolve())
-            except Exception:
-                key = str(path_obj)
-            if key not in seen:
-                seen.add(key)
-                deduped.append(path_obj)
-        return deduped
-
+def _lib_roots_for_pdb(cfg: Dict, pdb_id: str, paths: Paths, logger: logging.Logger) -> tuple[list[Path], list[Path]]:
     extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
     extra_paths: list[Path] = []
     if extra_dirs:
@@ -2638,7 +2633,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
             if p.exists():
                 extra_paths.append(p)
 
-    pdb_id = paths.pdb_id.upper()
     subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
     test_mode = _resolve_test_mode(cfg)
 
@@ -2695,7 +2689,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         pdb_id,
         len(allowed_noncontrol_roots),
     )
-    # Record a primary non-control library root for PH-ligand mode
     if allowed_noncontrol_roots:
         cfg["_PH_LIGAND_ROOT"] = str(allowed_noncontrol_roots[0])
     else:
@@ -2709,7 +2702,29 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         cfg.get("_ALLOWED_NONCONTROL_ROOTS"),
     )
     cfg["_TEST_MODE_EFFECTIVE"] = test_mode
+    return [], allowed_noncontrol_roots
 
+
+def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
+    """
+    Gathers candidate ligands, keeps existing validation/PAINS logic, and
+    filters the *non-control* pool to allowed library roots:
+
+      - TEST_MODE_ENABLE="off"      -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+      - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
+      - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+
+    Controls are *never* filtered out here.
+    LIBRARY_EXTRA_DIRS remain included (unchanged).
+    """
+    # Keep existing prep step for extracted controls (harmless if nothing to do)
+    prep_ligands_from_pdb(
+        ligand_output_dir=paths.ligand_output_dir,
+        ligands_mol2_dir=paths.ligands_mol2_dir,
+        prepped_ligands_dir=paths.prepped_ligands_dir,
+    )
+
+    _control_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
     per_index_roots: list[Path] = []
     if paths.prepped_ligands_dir:
         per_index_roots.append(paths.prepped_ligands_dir)
@@ -5014,6 +5029,11 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
             ph_log.info("[ph_ligand.bridge] active: PH_LIGAND_MODE=context_window")
 
+            _ctrl_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
+                cfg, paths.pdb_id.upper(), paths, ph_log
+            )
+            ph_ligand_root = allowed_noncontrol_roots[0] if allowed_noncontrol_roots else None
+
             context_pHs: list[float] = []
             for tag in ph_tags:
                 for pH_num in _parse_ph_values_from_label(tag):
@@ -5032,11 +5052,20 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     ph_tags,
                 )
 
+                ph_log.info(
+                    "[ph_ligand.bridge] pdb=%s root_dir=%s requested_ph=%s",
+                    pdb_id,
+                    ph_ligand_root,
+                    ligand_window,
+                )
+
                 enumerate_ligands_for_docking(
                     requested_ph_values=ligand_window,
                     microstate_dedup=True,
                     force=False,
                     root_dir=ph_ligand_root,
+                    cfg=cfg,
+                    pdb_id=pdb_id,
                 )
             else:
                 ph_log.warning(
@@ -5127,11 +5156,25 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         ph_root_path.exists() if ph_root_path is not None else False,
                     )
 
+                    _ctrl_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
+                        cfg, paths.pdb_id.upper(), paths, ph_log
+                    )
+                    ph_bridge_root = allowed_noncontrol_roots[0] if allowed_noncontrol_roots else ph_ligand_root
+
+                    ph_log.info(
+                        "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
+                        paths.pdb_id,
+                        ph_bridge_root,
+                        ligand_window,
+                    )
+
                     enumerated = enumerate_ligands_for_docking(
                         requested_ph_values=ligand_window,
                         microstate_dedup=True,
                         force=False,
-                        root_dir=ph_ligand_root,
+                        root_dir=ph_bridge_root,
+                        cfg=cfg,
+                        pdb_id=pdb_id,
                     )
 
                     if enumerated:
