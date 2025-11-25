@@ -459,12 +459,8 @@ def enumerate_ligands_for_docking(
         if not include:
             continue
 
-        if "_valid_pdbqt" in globals():
-            is_valid = _valid_pdbqt(canonical_path, library_out_dir)
-        else:
-            is_valid = canonical_path.exists() and canonical_path.stat().st_size > 100
-
-        if is_valid:
+        # Lightweight sanity check only; heavy validation happens during prep
+        if canonical_path.exists() and canonical_path.stat().st_size > 100:
             result.add(canonical_path)
 
     if requested_set is None:
@@ -3744,7 +3740,16 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
 # =========================
 
 def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
-    return path.exists() and path.stat().st_size > 100 and is_valid_ligand(path, log_dir=log_dir)
+    """
+    Lightweight sanity check for PDBQT files during docking enumeration.
+
+    We assume heavy validation has already happened at prep time.
+    Here we only enforce existence and a minimum size threshold.
+    """
+    try:
+        return path.exists() and path.stat().st_size > 100
+    except Exception:
+        return False
 
 
 def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None,

@@ -2893,11 +2893,10 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     valid_pdbqt: Dict[str, Path] = {}
     for p in all_pdbqt_paths:
         try:
-            lib_root_for_checks = str(global_root if (global_root and global_root.exists()) else paths.prepped_ligands_dir.parent)
-            if is_valid_ligand(p, lib_root_for_checks):
+            if p.exists() and p.stat().st_size > 100:
                 valid_pdbqt[norm(p)] = p
             else:
-                logger.debug(f"Excluded malformed ligand (pdbqt check failed): {p}")
+                logger.debug(f"Excluded malformed ligand (missing or too small): {p}")
         except Exception:
             logger.debug(f"Excluded malformed ligand (exception): {p}")
 
