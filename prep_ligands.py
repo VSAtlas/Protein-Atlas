@@ -3759,6 +3759,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     microstate_registry: Dict[str, Any] | None = None
     microstate_index: Dict[str, dict] | None = None
     alias_index: Dict[Tuple[str, str, float], dict] | None = None
+    microstate_registry_dirty = False
     library_out_dir: Path | None = None
     microstates_dir: Path | None = None
 
@@ -3875,6 +3876,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         microstates_dir = library_out_dir / "microstates"
         microstates_dir.mkdir(parents=True, exist_ok=True)
         microstate_registry, microstate_index = load_microstate_registry(library_out_dir, library_name)
+        microstate_registry_dirty = False
 
         alias_index = {}
         for entry in microstate_registry.get("microstates", []) or []:
@@ -3897,7 +3899,9 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             len(microstate_registry.get("microstates", []) or []),
         )
 
-    def _maybe_save_microstate_registry() -> None:
+    def _maybe_save_microstate_registry(force: bool = False) -> None:
+        nonlocal microstate_registry_dirty
+
         if microstate_dedup and microstate_registry is not None and library_out_dir is not None:
             try:
                 microstates = microstate_registry.get("microstates") or []
@@ -3924,7 +3928,10 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         )
             except Exception:
                 pass
-            save_microstate_registry(library_out_dir, microstate_registry)
+
+            if microstate_registry_dirty or force:
+                save_microstate_registry(library_out_dir, microstate_registry)
+                microstate_registry_dirty = False
 
 
     # emit a compact audit banner (single line)
@@ -4210,7 +4217,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         )
 
         # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
-        _maybe_save_microstate_registry()
+        _maybe_save_microstate_registry(force=True)
         return
     if unit_sdfs and test_mode_allowed and has_only and microstate_dedup and ph_values is not None:
         print(
@@ -4237,7 +4244,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     # : crystal-safe dispatch (takes precedence over bulk scan when in_sdf not set)
     if in_pdb_dir_env and not in_sdf_env:
         result = prep_ligands_from_pdb(Path(in_pdb_dir_env).resolve(), ligands_mol2_dir, output_ligands_dir)
-        _maybe_save_microstate_registry()
+        _maybe_save_microstate_registry(force=True)
         return result
 
     # single-file override; else scan directory as before
@@ -4257,7 +4264,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     print(f"Found {len(sdf_files)} SDF file(s)")
 
     if not sdf_files:
-        _maybe_save_microstate_registry()
+        _maybe_save_microstate_registry(force=True)
         return
 
     for sdf_file in sdf_files:
@@ -4336,7 +4343,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             # Early exit if nothing remains
             if not mol2_files:
                 print("[test-mode] No requested ligands were found. Nothing to do; exiting cleanly.")
-                _maybe_save_microstate_registry()
+                _maybe_save_microstate_registry(force=True)
                 return
 
 
@@ -4513,6 +4520,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                             microstate_index[microstate_id] = microstate_entry
                             use_canonical_as_primary = True
                             microstate_status = "new"
+                            microstate_registry_dirty = True
                         else:
                             canonical_rel = microstate_entry.get("pdbqt_path")
                             if canonical_rel:
@@ -4544,6 +4552,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                     microstate_status,
                                     microstate_entry.get("pdbqt_path"),
                                 )
+                                microstate_registry_dirty = True
                             # update alias_index so subsequent runs see this mapping
                             if alias_index is not None:
                                 alias_index[alias_key] = microstate_entry
@@ -4637,66 +4646,66 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             except Exception:
                 pass
 
-        _maybe_save_microstate_registry()
+    _maybe_save_microstate_registry(force=True)
 
-        def _as_path(p) -> Path:
-            return p if isinstance(p, Path) else Path(p)
+    def _as_path(p) -> Path:
+        return p if isinstance(p, Path) else Path(p)
 
-        def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
-            """Lightweight config reader that prefers env, then config.txt next to this file, else default."""
-            v = os.environ.get(key)
-            if v:
-                return v
-            # try config.txt next to this file (your project already uses this pattern)
-            try:
-                root = Path(__file__).resolve().parent
-                cfg = root / "config.txt"
-                if cfg.is_file():
-                    for line in cfg.read_text().splitlines():
-                        line = line.strip()
-                        if not line or line.startswith("#") or "=" not in line:
+    def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
+        """Lightweight config reader that prefers env, then config.txt next to this file, else default."""
+        v = os.environ.get(key)
+        if v:
+            return v
+        # try config.txt next to this file (your project already uses this pattern)
+        try:
+            root = Path(__file__).resolve().parent
+            cfg = root / "config.txt"
+            if cfg.is_file():
+                for line in cfg.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, val = line.split("=", 1)
+                    if k.strip() == key:
+                        return val.strip()
+        except Exception:
+            pass
+        return default
+
+    def _canon_base(output_root: Path, pdb_id: str) -> Path:
+        """Canonical per-protein base dir: processed_pdbs/<PDB>"""
+        output_root = _as_path(output_root)
+        return (output_root / pdb_id.upper()).resolve()
+
+    def _merge_dir(src: Path, dst: Path) -> None:
+        """Merge src directory into dst (mkdirs as needed); removes src if emptied."""
+        src, dst = src.resolve(), dst.resolve()
+        if not src.exists():
+            return
+        dst.mkdir(parents=True, exist_ok=True)
+        for root, dirs, files in os.walk(src):
+            r = Path(root)
+            rel = r.relative_to(src)
+            (dst / rel).mkdir(parents=True, exist_ok=True)
+            for d in dirs:
+                (dst / rel / d).mkdir(parents=True, exist_ok=True)
+            for f in files:
+                s = r / f
+                t = (dst / rel / f)
+                if t.exists():
+                    # prefer keeping existing canonical artifacts; only overwrite if target is missing
+                    try:
+                        # If same file, skip; else overwrite (safe in our case)
+                        if s.stat().st_size == t.stat().st_size:
                             continue
-                        k, val = line.split("=", 1)
-                        if k.strip() == key:
-                            return val.strip()
-            except Exception:
-                pass
-            return default
-
-        def _canon_base(output_root: Path, pdb_id: str) -> Path:
-            """Canonical per-protein base dir: processed_pdbs/<PDB>"""
-            output_root = _as_path(output_root)
-            return (output_root / pdb_id.upper()).resolve()
-
-        def _merge_dir(src: Path, dst: Path) -> None:
-            """Merge src directory into dst (mkdirs as needed); removes src if emptied."""
-            src, dst = src.resolve(), dst.resolve()
-            if not src.exists():
-                return
-            dst.mkdir(parents=True, exist_ok=True)
-            for root, dirs, files in os.walk(src):
-                r = Path(root)
-                rel = r.relative_to(src)
-                (dst / rel).mkdir(parents=True, exist_ok=True)
-                for d in dirs:
-                    (dst / rel / d).mkdir(parents=True, exist_ok=True)
-                for f in files:
-                    s = r / f
-                    t = (dst / rel / f)
-                    if t.exists():
-                        # prefer keeping existing canonical artifacts; only overwrite if target is missing
-                        try:
-                            # If same file, skip; else overwrite (safe in our case)
-                            if s.stat().st_size == t.stat().st_size:
-                                continue
-                        except Exception:
-                            pass
-                    shutil.move(str(s), str(t))
-            # try to remove empty src tree
-            try:
-                shutil.rmtree(src)
-            except Exception:
-                pass
+                    except Exception:
+                        pass
+                shutil.move(str(s), str(t))
+        # try to remove empty src tree
+        try:
+            shutil.rmtree(src)
+        except Exception:
+            pass
 
         def fold_legacy_layout(pdb_id: str, output_root) -> None:
             """
