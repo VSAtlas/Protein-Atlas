@@ -39,6 +39,7 @@ DEFAULT_MUTED_TAGS: set[str] = {
     "choose-mol2",
     "arom-rescue",
     "router.debug",
+    "RDKit",
 
     # Pseudo-topic for altLoc-style messages (handled specially)
     "altloc",
