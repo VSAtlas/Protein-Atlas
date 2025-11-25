@@ -1603,18 +1603,6 @@ def prepare_receptor(
                             ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                             ",".join(f"{p:.1f}" for p in ligand_ph_values),
                         )
-                        ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
-                        try:
-                            ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
-                        except Exception:
-                            ph_root_path = None
-
-                        logger.info(
-                            "[ph_ligand.context.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
-                            ph_root_cfg,
-                            str(ph_root_path) if ph_root_path is not None else "",
-                            ph_root_path.exists() if ph_root_path is not None else False,
-                        )
                         _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(
                             cfg, paths.pdb_id.upper(), paths, logger
                         )
@@ -1627,7 +1615,7 @@ def prepare_receptor(
                         )
                         if ph_ligand_root is None or not ph_ligand_root.exists():
                             logger.info(
-                                "[ph_ligand.context.bridge.skip] no valid _PH_LIGAND_ROOT; skipping microstate priming",
+                                "[ph_ligand.context.bridge.skip] no valid ligand root; skipping microstate priming",
                             )
                         else:
                             try:
@@ -1726,19 +1714,20 @@ def prepare_receptor(
                     ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                     ",".join(f"{p:.1f}" for p in ligand_ph_values),
                 )
-                ph_root_cfg = (cfg.get("_PH_LIGAND_ROOT") or "").strip()
-                ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+                _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
+                ph_ligand_root = noncontrol_roots[0] if noncontrol_roots else None
 
-                if ligand_ph_values and ph_root_path is not None and ph_root_path.exists():
+                if ligand_ph_values and ph_ligand_root is not None and ph_ligand_root.exists():
                     logger.info(
-                        "[ph_ligand.context.bridge] priming microstates at root=%s for window=%s",
-                        ph_root_path,
+                        "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
+                        paths.pdb_id,
+                        ph_ligand_root,
                         ligand_ph_values,
                     )
                     try:
                         enumerate_ligands_for_docking(
                             requested_ph_values=ligand_ph_values,
-                            root_dir=ph_root_path,
+                            root_dir=ph_ligand_root,
                             microstate_dedup=True,
                             force=False,
                         )
@@ -1746,8 +1735,7 @@ def prepare_receptor(
                         logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
                 else:
                     logger.info(
-                        "[ph_ligand.context.bridge.skip] no valid _PH_LIGAND_ROOT or empty window; "
-                        "skipping microstate priming"
+                        "[ph_ligand.context.bridge.skip] no valid ligand root or empty window; skipping microstate priming"
                     )
             else:
                 logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
