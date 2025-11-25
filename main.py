@@ -1667,17 +1667,22 @@ def prepare_receptor(
                             ph_ligand_root,
                             ligand_ph_values,
                         )
-                        try:
-                            enumerate_ligands_for_docking(
-                                requested_ph_values=ligand_ph_values,
-                                root_dir=ph_ligand_root,
-                                microstate_dedup=True,
-                                force=False,
-                                cfg=cfg,
-                                pdb_id=paths.pdb_id,
+                        if ph_ligand_root is None or not ph_ligand_root.exists():
+                            logger.info(
+                                "[ph_ligand.context.bridge.skip] no valid _PH_LIGAND_ROOT; skipping microstate priming",
                             )
-                        except Exception as e:
-                            logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                        else:
+                            try:
+                                enumerate_ligands_for_docking(
+                                    requested_ph_values=ligand_ph_values,
+                                    root_dir=ph_ligand_root,
+                                    microstate_dedup=True,
+                                    force=False,
+                                    cfg=cfg,
+                                    pdb_id=paths.pdb_id,
+                                )
+                            except Exception as e:
+                                logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
                     else:
                         logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
                 else:
@@ -1763,16 +1768,29 @@ def prepare_receptor(
                     ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                     ",".join(f"{p:.1f}" for p in ligand_ph_values),
                 )
-                try:
-                    # Let prep_ligands resolve the library and root dir from config
-                    enumerate_ligands_for_docking(
-                        requested_ph_values=ligand_ph_values,
-                        root_dir=None,
-                        microstate_dedup=True,
-                        force=False,
+                ph_root_cfg = (cfg.get("_PH_LIGAND_ROOT") or "").strip()
+                ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+
+                if ligand_ph_values and ph_root_path is not None and ph_root_path.exists():
+                    logger.info(
+                        "[ph_ligand.context.bridge] priming microstates at root=%s for window=%s",
+                        ph_root_path,
+                        ligand_ph_values,
                     )
-                except Exception as e:
-                    logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                    try:
+                        enumerate_ligands_for_docking(
+                            requested_ph_values=ligand_ph_values,
+                            root_dir=ph_root_path,
+                            microstate_dedup=True,
+                            force=False,
+                        )
+                    except Exception as e:
+                        logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                else:
+                    logger.info(
+                        "[ph_ligand.context.bridge.skip] no valid _PH_LIGAND_ROOT or empty window; "
+                        "skipping microstate priming"
+                    )
             else:
                 logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
         else:
@@ -2766,8 +2784,16 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         microstate_roots = [r for r in resolved_existing if (r / "microstates.json").exists()]
         if microstate_roots:
             try:
-                ms_paths = enumerate_ligands_for_docking()
-                ms_filtered = [p for p in ms_paths if any(_under(p, root) for root in resolved_existing)]
+                all_ms: list[Path] = []
+                for root in microstate_roots:
+                    ms_paths = enumerate_ligands_for_docking(
+                        requested_ph_values=None,
+                        root_dir=root,
+                        microstate_dedup=True,
+                        force=False,
+                    )
+                    all_ms.extend(ms_paths)
+                ms_filtered = [p for p in all_ms if any(_under(p, root) for root in resolved_existing)]
                 candidates.extend(ms_filtered)
                 logger.info(
                     "[lib-index.microstate] roots=%d ligands=%d",
@@ -4914,11 +4940,18 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     str(ph_root_path) if ph_root_path is not None else "",
                     ph_root_path.exists() if ph_root_path is not None else False,
                 )
-                enumerate_ligands_for_docking(
-                    requested_ph_values=ligand_window,
-                    microstate_dedup=True,
-                    force=False,
-                )
+                if ph_root_path is not None and ph_root_path.exists():
+                    enumerate_ligands_for_docking(
+                        requested_ph_values=ligand_window,
+                        root_dir=ph_root_path,
+                        microstate_dedup=True,
+                        force=False,
+                    )
+                else:
+                    logger.info(
+                        "[single.ph_ligand.bridge.skip] no valid _PH_LIGAND_ROOT; "
+                        "skipping microstate priming for single-ligand mode"
+                    )
             except Exception as e:
                 logger.warning(f"[single.ph_ligand.skip] Could not run PH-ligand window for single mode: {e}")
         # ------------------------------------------------
@@ -5059,14 +5092,19 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     ligand_window,
                 )
 
-                enumerate_ligands_for_docking(
-                    requested_ph_values=ligand_window,
-                    microstate_dedup=True,
-                    force=False,
-                    root_dir=ph_ligand_root,
-                    cfg=cfg,
-                    pdb_id=pdb_id,
-                )
+                if ph_ligand_root is None or not ph_ligand_root.exists():
+                    ph_log.warning(
+                        "[ph_ligand.prep.skip] _PH_LIGAND_ROOT missing or invalid; skipping ligand window prep"
+                    )
+                else:
+                    enumerate_ligands_for_docking(
+                        requested_ph_values=ligand_window,
+                        microstate_dedup=True,
+                        force=False,
+                        root_dir=ph_ligand_root,
+                        cfg=cfg,
+                        pdb_id=pdb_id,
+                    )
             else:
                 ph_log.warning(
                     "[ph_ligand.prep] no numeric pH values parsed from tags=%s; skipping ligand prep window",
@@ -5168,14 +5206,20 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         ligand_window,
                     )
 
-                    enumerated = enumerate_ligands_for_docking(
-                        requested_ph_values=ligand_window,
-                        microstate_dedup=True,
-                        force=False,
-                        root_dir=ph_bridge_root,
-                        cfg=cfg,
-                        pdb_id=pdb_id,
-                    )
+                    if ph_bridge_root is None or not ph_bridge_root.exists():
+                        ph_log.warning(
+                            "[ph_ligand.prep.skip] _PH_LIGAND_ROOT missing or invalid; skipping ligand window prep"
+                        )
+                        enumerated = []
+                    else:
+                        enumerated = enumerate_ligands_for_docking(
+                            requested_ph_values=ligand_window,
+                            microstate_dedup=True,
+                            force=False,
+                            root_dir=ph_bridge_root,
+                            cfg=cfg,
+                            pdb_id=pdb_id,
+                        )
 
                     if enumerated:
                         ligands = [str(p) for p in enumerated]

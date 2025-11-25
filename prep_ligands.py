@@ -284,144 +284,39 @@ def enumerate_ligands_for_docking(
         library's prepped_ligands directory.
     """
 
-    cfg = cfg or load_config("config.txt")
-    validate_config(cfg)
-    pdb_token = pdb_id or (
-        os.environ.get("PDB_ID")
-        or cfg.get("PDB_ID")
-        or cfg.get("TARGET_PDB")
-        or cfg.get("PDB")
-        or cfg.get("INPUT_PDB")
-        or cfg.get("PDB_FILE")
-        or ""
-    )
-    pdb_id = Path(str(pdb_token)).stem.upper() if pdb_token else "LIGPREP"
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    _ = cfg  # retained for call-site compatibility; path resolution is driven solely by root_dir.
+    pdb_label = (pdb_id or "LIGPREP").upper()
 
-    in_sdf_env = (os.environ.get("LIGPREP_IN_SDF", "") or "").strip() or None
-    in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
-    out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
+    if root_dir is None:
+        raise ValueError(
+            "enumerate_ligands_for_docking now requires root_dir; callers must pass a library root derived from path_router."
+        )
 
-    prepped_root_cfg_log = (cfg.get("PREPPED_LIGANDS_ROOT") or cfg.get("PREPPED_LIGANDS_DIR") or "").strip()
-    prepped_dir_env = os.environ.get("PREPPED_LIGANDS_DIR", "")
-    out_dir_generic_env = os.environ.get("OUT_DIR", "")
-    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
-    library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip()
-    output_ligands_cfg = str(cfg.get("OUTPUT_LIGANDS_DIR", "") or "")
-    root_dir_str = str(root_dir) if root_dir is not None else ""
+    library_out_dir = Path(root_dir).resolve()
+    library_name_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    library_name = (library_name_env or library_out_dir.name).lower()
+    registry_path = library_out_dir / "microstates.json"
+
+    requested_set: Optional[Set[float]] = None
+    if requested_ph_values:
+        requested_set = {float(ph) for ph in requested_ph_values}
 
     logger.info(
-        "enumerate_ligands_for_docking: pdb=%s root_dir=%s prepped_root_cfg=%s "
-        "out_dir_env=%s prepped_dir_env=%s out_dir_generic_env=%s output_ligands_cfg=%s "
-        "library_env=%s library_cfg=%s",
-        pdb_id,
-        root_dir_str,
-        prepped_root_cfg_log,
-        out_dir_env or "",
-        prepped_dir_env,
-        out_dir_generic_env,
-        output_ligands_cfg,
-        library_env,
-        library_cfg,
+        "enumerate_ligands_for_docking: root_dir=%s ph_values=%s microstate_dedup=%s force=%s",
+        str(library_out_dir),
+        sorted(requested_set) if requested_set is not None else [],
+        microstate_dedup,
+        force,
     )
 
-    # Normalise root_dir if provided
-    root_dir_path: Optional[Path] = Path(root_dir).resolve() if root_dir is not None else None
-    if root_dir_path is not None and not root_dir_path.exists():
-        logger.warning(
-            "enumerate_ligands_for_docking: root_dir override %s does not exist; "
-            "falling back to config/env resolution",
-            root_dir_path,
-        )
-        root_dir_path = None
-
-    library_source = "config/env"
-    if root_dir_path is not None:
-        library_out_dir = root_dir_path
-        resolved_library = library_out_dir.name
-        prepped_root = library_out_dir.parent
-        library_source = "root_dir"
-    else:
-        # Base "prepped_ligands" root: cfg override, then fallback to paths.prepped_ligands_dir.parent
-        prepped_root_cfg = (cfg.get("PREPPED_LIGANDS_ROOT", "") or "").strip()
-        if prepped_root_cfg:
-            prepped_root = Path(prepped_root_cfg).resolve()
-        else:
-            prepped_root = paths.prepped_ligands_dir.parent
-
-        ph_ligand_root = (cfg.get("_PH_LIGAND_ROOT") or "").strip()
-        ph_library_name = Path(ph_ligand_root).name.lower() if ph_ligand_root else None
-
-        # Derive an initial library_hint from the most specific information we have
-        library_hint: Optional[str] = None
-        if out_dir_env:
-            library_hint = Path(out_dir_env).name.lower()
-        elif ph_library_name:
-            library_hint = ph_library_name
-        else:
-            library_hint = None
-
-        library_base: Optional[str] = library_hint
-
-        # Highest priority: explicit library name from env or config only if none resolved yet
-        library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
-        library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip()
-
-        if not library_base:
-            if library_env:
-                library_base = library_env.lower()
-            elif library_cfg:
-                library_base = library_cfg.lower()
-
-        # Final fallback: make sure we have something usable
-        resolved_library = (library_base or "ligprep").lower()
-
-        logger.info(
-            "enumerate_ligands_for_docking: pdb=%s ph_ligand_root=%s ph_library=%s "
-            "library_hint=%s library_env=%s library_cfg=%s library=%s prepped_root=%s",
-            pdb_id,
-            ph_ligand_root or "",
-            ph_library_name or "",
-            library_hint or "",
-            library_env or "",
-            library_cfg or "",
-            resolved_library,
-            str(prepped_root),
-        )
-
-        # Crucial: library_out_dir is the library subdir, not the PDB-specific LIGPREP dir
-        library_out_dir = prepped_root / resolved_library
-
-        registry_path = library_out_dir / "microstates.json"
-
-        logger.info(
-            "enumerate_ligands_for_docking: library_hint=%s library_env=%s library_cfg=%s "
-            "resolved_library=%s prepped_root=%s library_out_dir=%s registry=%s",
-            library_hint,
-            library_env,
-            library_cfg,
-            resolved_library,
-            str(prepped_root),
-            str(library_out_dir),
-            str(registry_path),
-        )
-
-    if root_dir_path is not None:
-        registry_path = library_out_dir / "microstates.json"
-
-    output_ligands_dir = library_out_dir
-
     logger.info(
-        "enumerate_ligands_for_docking: pdb=%s library=%s source=%s library_out_dir=%s registry=%s prepped_root=%s",
-        pdb_id,
-        resolved_library,
-        library_source,
+        "enumerate_ligands_for_docking: pdb=%s library=%s source=%s library_out_dir=%s registry=%s",
+        pdb_label,
+        library_name,
+        "root_dir",
         library_out_dir,
         registry_path,
-        prepped_root,
     )
-
-    library_name = resolved_library
 
     # Optional: restrict which ligands we prep when called via main.py.
     # Reuse the same ONLY parsing as the prep_ligands CLI:
@@ -432,10 +327,6 @@ def enumerate_ligands_for_docking(
     # Tokens like "1" become "rdk_0000001" via _normalize_only_token.
     only_set = _collect_only_from_env_and_cli(None)
     only_for_microstate: Optional[Set[str]] = only_set or None
-
-    requested_set: Optional[Set[float]] = None
-    if requested_ph_values:
-        requested_set = {float(ph) for ph in requested_ph_values}
 
     def _run_microstate_prep_for_phs(ph_values: Collection[float]) -> None:
         if not ph_values:
@@ -451,8 +342,6 @@ def enumerate_ligands_for_docking(
             microstate_dedup=True,
             root_dir=library_out_dir,
         )
-
-
 
     if requested_set is not None:
         if not registry_path.exists():
@@ -593,7 +482,6 @@ def enumerate_ligands_for_docking(
         )
 
     return sorted(result, key=lambda p: p.name)
-
 
 def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
     atom_lines = [ln for ln in lines if ln.startswith(("ATOM", "HETATM"))]
