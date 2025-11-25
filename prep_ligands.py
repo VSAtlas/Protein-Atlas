@@ -378,6 +378,97 @@ def enumerate_ligands_for_docking(
             root_dir=library_out_dir,
         )
 
+    def _collect_expected_ligand_stems_from_manifest() -> Set[str]:
+        """
+        Inspect _manifest.json (if present) and return the set of ligand stems
+        that we expect to have microstate coverage for the current library.
+        This is used as a guardrail so that microstates.json can never silently
+        drop decoys or other ligands that belong to the library.
+        """
+        manifest_path = library_out_dir / "_manifest.json"
+        expected: Set[str] = set()
+        if not manifest_path.exists():
+            return expected
+
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except Exception as e:
+            logger.warning(
+                "enumerate_ligands_for_docking: failed to read manifest %s for coverage check: %s",
+                manifest_path,
+                e,
+            )
+            return expected
+
+        entries = manifest.get("entries") or {}
+        for key, rel_name in entries.items():
+            # Prefer the basename stem from the relative path, but also keep the key.
+            try:
+                stem = Path(rel_name).stem
+            except Exception:
+                stem = ""
+            if stem:
+                expected.add(stem)
+            if isinstance(key, str) and key:
+                expected.add(key)
+
+        # Respect ONLY filters (LIGPREP_ONLY / LIGPREP_ONLY_FILE) when present.
+        if only_for_microstate:
+            expected &= set(only_for_microstate)
+
+        return expected
+
+    def _collect_ligand_stems_with_microstates(registry: dict, ph_values: Optional[Set[float]]) -> Set[str]:
+        """
+        From the current registry, collect ligand_stem values that have at least one alias
+        in the requested pH set. If ph_values is None, we treat all microstates as covered.
+        """
+        covered: Set[str] = set()
+        microstates = registry.get("microstates") or []
+        if not microstates:
+            return covered
+
+        for entry in microstates:
+            aliases = entry.get("aliases") or []
+            lig_stem: Optional[str] = None
+
+            # Prefer the explicit ligand_stem stored on aliases.
+            for alias in aliases:
+                cand = alias.get("ligand_stem")
+                if cand:
+                    lig_stem = cand
+                    break
+
+            # Fallback: derive stem from canonical PDBQT path.
+            if not lig_stem:
+                rel = entry.get("pdbqt_path") or ""
+                if rel:
+                    try:
+                        lig_stem = Path(rel).stem
+                    except Exception:
+                        lig_stem = None
+
+            if not lig_stem:
+                continue
+
+            if ph_values is None:
+                covered.add(lig_stem)
+                continue
+
+            for alias in aliases:
+                ph_value = alias.get("ph_value")
+                if ph_value is None:
+                    continue
+                try:
+                    pv = float(ph_value)
+                except Exception:
+                    continue
+                if pv in ph_values:
+                    covered.add(lig_stem)
+                    break
+
+        return covered
+
     if requested_set is not None:
         if not registry_path.exists():
             _run_microstate_prep_for_phs(requested_set)
@@ -405,6 +496,41 @@ def enumerate_ligands_for_docking(
             registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
     else:
         registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+    # After pH coverage repair, ensure the registry has ligand coverage that matches the manifest.
+    # This protects against partial registries (e.g., actives-only) silently dropping ligands.
+    if requested_set is not None:
+        expected_ligands = _collect_expected_ligand_stems_from_manifest()
+        if expected_ligands:
+            covered_before = _collect_ligand_stems_with_microstates(registry, requested_set)
+            missing_ligands = expected_ligands - covered_before
+            if missing_ligands:
+                # Log a concise sample of missing ligands to make debugging easier.
+                sample_missing = ", ".join(sorted(list(missing_ligands))[:5])
+                logger.info(
+                    "enumerate_ligands_for_docking: microstate coverage incomplete library=%s expected=%d covered=%d missing=%d example_missing=%s",
+                    library_name,
+                    len(expected_ligands),
+                    len(covered_before),
+                    len(missing_ligands),
+                    sample_missing,
+                )
+                # Attempt a one-shot repair by re-running microstate prep for the requested pH set.
+                _run_microstate_prep_for_phs(requested_set)
+                registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+                covered_after = _collect_ligand_stems_with_microstates(registry, requested_set)
+                remaining = expected_ligands - covered_after
+                if remaining:
+                    sample_remaining = ", ".join(sorted(list(remaining))[:5])
+                    logger.warning(
+                        "enumerate_ligands_for_docking: microstate coverage still incomplete after repair library=%s expected=%d covered=%d missing=%d example_missing=%s",
+                        library_name,
+                        len(expected_ligands),
+                        len(covered_after),
+                        len(remaining),
+                        sample_remaining,
+                    )
 
     if (not registry_path.exists()) or not (registry.get("microstates") or []):
         # Registry missing or empty: try a manifest/base-PDBQT fallback so docking still has ligands.
