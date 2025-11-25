@@ -10,16 +10,47 @@ from path_router import make_paths
 from pose_validation import validate_pose_pdbqt, attempt_fallback_recenter
 
 
-@dataclass
 class BudgetGuard:
     """Simple per-ligand wall-clock guard for retries/validation."""
-    max_seconds: float
-    _deadline: float = None
 
-    def __post_init__(self):
-        self._deadline = time.time() + float(self.max_seconds)
+    def __init__(
+        self,
+        max_seconds: float | None = None,
+        *,
+        dock_max_seconds: float | None = None,
+        idle_max_seconds: float | None = None,
+        log: logging.Logger | None = None,
+        **_ignored: object,
+    ) -> None:
+        effective_max = max_seconds if max_seconds is not None else dock_max_seconds
+        if effective_max is None:
+            effective_max = 300.0
+
+        self.max_seconds = float(effective_max)
+        self.idle_max_seconds = float(idle_max_seconds) if idle_max_seconds is not None else None
+        self.log = log
+        self._deadline: float = 0.0
+        self._lig_cfg: Optional[str] = None
+        self._out_pdbqt: Optional[str] = None
+        self.reset()
+
+    def reset(self) -> None:
+        """Reset the wall-clock deadline from now."""
+
+        self._deadline = time.time() + self.max_seconds
+
+    def bind(self, lig_cfg: str | None, out_pdbqt: str | None) -> None:
+        """
+        Optionally remember which config/output this guard is associated with.
+        This is for debugging/telemetry only; no logic elsewhere depends on it.
+        """
+
+        self._lig_cfg = lig_cfg
+        self._out_pdbqt = out_pdbqt
 
     def expired(self) -> bool:
+        """Return True if the wall-clock budget has been exceeded."""
+
         return time.time() >= self._deadline
 
 
