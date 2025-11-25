@@ -485,7 +485,25 @@ def enumerate_ligands_for_docking(
                 except Exception:
                     continue
 
+        logger.info(
+            "enumerate_ligands_for_docking: library=%s requested_ph=%s existing_ph=%s",
+            library_name,
+            ",".join(f"{p:.2f}" for p in sorted(requested_set)),
+            ",".join(f"{p:.2f}" for p in sorted(existing_ph_values)),
+        )
+
         missing = requested_set - existing_ph_values
+        if missing:
+            logger.info(
+                "enumerate_ligands_for_docking: library=%s missing_ph=%s (will trigger microstate prep)",
+                library_name,
+                ",".join(f"{p:.2f}" for p in sorted(missing)),
+            )
+        else:
+            logger.info(
+                "enumerate_ligands_for_docking: library=%s no missing_ph; microstates already cover requested pH values",
+                library_name,
+            )
         if missing:
             logger.info(
                 "enumerate_ligands_for_docking: requested_ph=%s missing_ph=%s",
@@ -595,6 +613,9 @@ def enumerate_ligands_for_docking(
     result: Set[Path] = set()
     total_microstates = len(registry.get("microstates", []) or [])
 
+    sample_limit = 20
+    sample_count = 0
+
     for entry in registry.get("microstates", []) or []:
         rel_path = entry.get("pdbqt_path")
         if not rel_path:
@@ -604,6 +625,7 @@ def enumerate_ligands_for_docking(
         canonical_path = library_out_dir / rel_path
 
         include = requested_set is None
+        selected_alias: Optional[dict] = None
         if requested_set is not None:
             for alias in aliases:
                 ph_value = alias.get("ph_value")
@@ -615,13 +637,27 @@ def enumerate_ligands_for_docking(
                     continue
                 if pv in requested_set:
                     include = True
+                    selected_alias = alias
                     break
+        else:
+            if aliases:
+                selected_alias = aliases[0]
 
         if not include:
             continue
 
         # Lightweight sanity check only; heavy validation happens during prep
         if canonical_path.exists() and canonical_path.stat().st_size > 100:
+            if sample_count < sample_limit:
+                logger.info(
+                    "enumerate_ligands_for_docking.selection: stem=%s ph_label=%s ph_value=%s microstate_id=%s pdbqt=%s",
+                    (selected_alias or {}).get("ligand_stem"),
+                    (selected_alias or {}).get("ph_label"),
+                    (selected_alias or {}).get("ph_value"),
+                    entry.get("microstate_id"),
+                    canonical_path,
+                )
+                sample_count += 1
             result.add(canonical_path)
 
     if requested_set is None:
@@ -2519,6 +2555,15 @@ def _prepare_one(
 
     copy_targets = copy_targets or []
 
+    logger.debug(
+        "prep_ligands._prepare_one: ligand=%s ph=%s mol2=%s pdbqt=%s copy_targets=%d",
+        lig_id,
+        "%.2f" % ph if ph is not None else "None",
+        mol2_file,
+        pdbqt_path,
+        len(copy_targets),
+    )
+
     logging.info("[debug] _prepare_one lig=%s mol2=%s out=%s obabel=%s",
                  lig_id, mol2_file.name, pdbqt_path.name, bool(obabel_exe_short))
 
@@ -4149,6 +4194,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     ph_source = "python" if ph_values is not None else "config"
     ph_summary = ",".join(f"{ph:.1f}" for ph in eff_ph_values)
     print(f"[ligprep] ph_schedule source={ph_source} values={ph_summary} multiple={multiple_ph}")
+    logger.info("prep_ligands: pH schedule eff_ph_values=%s", eff_ph_values)
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     # If someone pointed MOL2s at 'prepped_ligands', redirect to 'ligands_mol2' (compat warning).
     if "prepped_ligands" in str(ligands_mol2_dir):
@@ -4659,6 +4705,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                         and rdkit_mol_for_microstate is not None
                     ):
                         microstate_id = compute_microstate_id(rdkit_mol_for_microstate)
+                        microstate_key = microstate_id
+                        canonical_smiles = None
+                        formal_charge = None
+                        try:
+                            _h_mol = Chem.AddHs(rdkit_mol_for_microstate, addCoords=False)
+                            canonical_smiles = Chem.MolToSmiles(_h_mol, canonical=True)
+                            formal_charge = Chem.GetFormalCharge(rdkit_mol_for_microstate)
+                        except Exception:
+                            canonical_smiles = None
+                            formal_charge = None
                         microstate_entry = microstate_index.get(microstate_id)
                         microstate_status = "existing"
                         if microstate_entry is None:
@@ -4676,6 +4732,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                 lig_stem,
                                 microstate_id,
                                 canonical_name,
+                            )
+                            logger.info(
+                                "microstate_dedup: new microstate key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
+                                microstate_key,
+                                microstate_id,
+                                lig_stem,
+                                ph_label,
+                                ph_value,
+                                canonical_smiles,
+                                formal_charge,
                             )
                             microstate_registry["microstates"].append(microstate_entry)
                             microstate_index[microstate_id] = microstate_entry
@@ -4695,6 +4761,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                                 microstate_id,
                                 microstate_entry.get("pdbqt_path"),
                             )
+                            logger.info(
+                                "microstate_dedup: reuse key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
+                                microstate_key,
+                                microstate_id,
+                                lig_stem,
+                                ph_label,
+                                ph_value,
+                                canonical_smiles,
+                                formal_charge,
+                            )
 
                         if microstate_entry is not None:
                             alias = {
@@ -4705,13 +4781,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                             if alias not in microstate_entry.get("aliases", []):
                                 microstate_entry.setdefault("aliases", []).append(alias)
                                 logger.debug(
-                                    "[microstate] alias_add library=%s ligand=%s ph=%s microstate_id=%s status=%s canonical=%s",
-                                    library_name,
+                                    "microstate_dedup: add_alias stem=%s ph_label=%s ph_value=%.2f microstate_id=%s",
                                     lig_stem,
-                                    ph_label or ph_value,
-                                    microstate_id,
-                                    microstate_status,
-                                    microstate_entry.get("pdbqt_path"),
+                                    ph_label,
+                                    ph_value,
+                                    microstate_entry.get("microstate_id"),
                                 )
                                 microstate_registry_dirty = True
                             # update alias_index so subsequent runs see this mapping
@@ -4768,6 +4842,11 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     if force and pdbqt_path.exists():
                         logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_rel)
 
+                    logger.debug(
+                        "prep_ligands: scheduling ligand prep stem=%s ph=%.2f",
+                        lig_stem,
+                        ph_value,
+                    )
                     fut = ex.submit(
                         _prepare_one,
                         mgltools_python_short, prepare_script_short,

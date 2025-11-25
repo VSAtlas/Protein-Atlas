@@ -1578,6 +1578,13 @@ def prepare_receptor(
                             ph_ligand_root,
                             ligand_ph_values,
                         )
+                        logger.debug(
+                            "[ph_ligand.debug.call_enum] pdb_id=%s library_root=%s n_ph=%d ph_values=%s",
+                            paths.pdb_id,
+                            ph_ligand_root,
+                            len(ligand_ph_values),
+                            ",".join(f"{p:.2f}" for p in ligand_ph_values),
+                        )
                         if ph_ligand_root is None or not ph_ligand_root.exists():
                             logger.info(
                                 "[ph_ligand.context.bridge.skip] no valid ligand root; skipping microstate priming",
@@ -1688,6 +1695,13 @@ def prepare_receptor(
                         paths.pdb_id,
                         ph_ligand_root,
                         ligand_ph_values,
+                    )
+                    logger.debug(
+                        "[ph_ligand.debug.call_enum] pdb_id=%s library_root=%s n_ph=%d ph_values=%s",
+                        paths.pdb_id,
+                        ph_ligand_root,
+                        len(ligand_ph_values),
+                        ",".join(f"{p:.2f}" for p in ligand_ph_values),
                     )
                     try:
                         enumerate_ligands_for_docking(
