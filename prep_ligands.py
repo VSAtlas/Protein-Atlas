@@ -2556,9 +2556,9 @@ def _prepare_one(
     copy_targets = copy_targets or []
 
     logger.debug(
-        "prep_ligands._prepare_one: ligand=%s ph=%s mol2=%s pdbqt=%s copy_targets=%d",
+        "prep_ligands._prepare_one: ligand=%s ph=%.2f mol2=%s pdbqt=%s copy_targets=%d",
         lig_id,
-        "%.2f" % ph if ph is not None else "None",
+        ph if ph is not None else float("nan"),
         mol2_file,
         pdbqt_path,
         len(copy_targets),
