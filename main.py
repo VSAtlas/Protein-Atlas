@@ -52,6 +52,22 @@ from path_router import (
     load_ph_tags,
     config_dir as router_config_dir,
 )
+from fallback_recenter import (
+    BudgetGuard,
+    RecenterParams,
+    GlobalCenterGuard,
+    validate_first_valid_pose,
+    fallback_recentering_if_empty,
+)
+from apo_holo_mode import (
+    resolve_apo_holo_mode,
+    _debug_normalize_mode_token,
+    _variant_receptor_path,
+    file_sha1,
+    delete_variant_trees,
+    _record_apo_holo_usage,
+    _record_apo_holo_decision,
+)
 from library_index import LibraryIndex
 import automate_protein_prep as protein_prep
 
@@ -447,145 +463,6 @@ def collapse_sanitized_names(root_dirs: Iterable[str],
 
 
 # ======================
-# Apo vs Holo mode
-# ======================
-def _clean_mode_token(s: str | None) -> str:
-    s = (s or "").strip().lower()
-    # normalize separators
-    s = s.replace("-", "").replace("_", "")
-    return s
-
-def _debug_normalize_mode_token(tok: str | None) -> str:
-    t = (tok or "").strip().lower()
-    if t in {"", "none", "null", "false", "0", "legacy"}:
-        return "legacy"
-    if t in {"apo", "apo_only"}:
-        return "apo"
-    if t in {"holo", "holo_only"}:
-        return "holo"
-    if t in {"apo_vs_holo", "apo+holo", "both"}:
-        return "apo_vs_holo"
-    return f"unknown:{t}"
-
-
-def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
-    """Normalize APO/HOLO mode from config tokens."""
-
-    import os  # if not already imported
-
-    env_raw = os.environ.get("APO_HOLO_MODE")
-    raw_value = env_raw if env_raw is not None else cfg.get("APO_HOLO_MODE")
-    logging.info("[apo-holo.debug] env.APO_HOLO_MODE_raw=%r cfg.APO_HOLO_MODE_raw=%r", env_raw,
-                 cfg.get("APO_HOLO_MODE"))
-
-    token = _clean_mode_token(str(raw_value) if raw_value is not None else "")
-
-    if token in {"", "none", "legacy", "null", "false", "0"}:
-        mode, variants = "legacy", [None]
-    elif token == "apo":
-        mode, variants = "apo", ["APO"]
-    elif token == "holo":
-        mode, variants = "holo", ["HOLO"]
-    elif token in {"apovsholo", "apoandholo", "both"}:
-        mode, variants = "apo_vs_holo", ["APO", "HOLO"]
-    else:
-        logging.warning(
-            "[apo-holo.debug] unknown_mode=%r defaulting=apo_vs_holo", raw_value
-        )
-        mode, variants = "apo_vs_holo", ["APO", "HOLO"]
-
-    logging.info("[apo-holo] mode=%s expanded=%s", mode, variants)
-    return mode, variants
-
-
-
-# Put near other helpers
-def _variant_receptor_path(pdb_id: str, variant: str | None, cfg: dict) -> str | None:
-    # Return the cleaned receptor PDB path for a given variant if it exists, else None
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    rec = paths.receptor_cleaned_pdb(variant)
-    return str(rec) if rec.exists() else None
-
-
-def file_sha1(path: str) -> str:
-    import hashlib
-    h = hashlib.sha1()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-def delete_variant_trees(pdb_id: str, variant: str, cfg: dict) -> None:
-    # Delete processed receptor and docking trees for a specific variant (idempotent)
-    import shutil
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    proc_variant_root = paths.receptor_dir(variant).parent      # processed_pdbs/<PDB>/<VARIANT>/
-    dock_variant_root = paths.docked_variant_root(variant)      # docked/<PDB>/<VARIANT>/
-    for d in (proc_variant_root, dock_variant_root):
-        if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
-
-def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
-    """
-    If HOLO and APO cleaned receptors are byte-identical, delete HOLO and keep APO.
-    """
-    holo = _variant_receptor_path(pdb_id, "HOLO", cfg)
-    apo  = _variant_receptor_path(pdb_id, "APO",  cfg)
-
-    # log actual resolved paths and existence flags up-front.
-    apo_p = Path(apo) if apo else None
-    holo_p = Path(holo) if holo else None
-    apo_exists = apo_p.exists() if apo_p else False
-    holo_exists = holo_p.exists() if holo_p else False
-    logger = logging.getLogger()
-    logger.info(
-        "[apo-vs-holo] compare.dedup apo=%s exists=%s holo=%s exists=%s",
-        (norm(apo_p) if apo_p else "None"), ("T" if apo_exists else "F"),
-        (norm(holo_p) if holo_p else "None"), ("T" if holo_exists else "F"),
-    )
-
-    if not holo or not apo:
-        logging.warning(
-            "[apo-vs-holo] pdb_id=%s stage=dedup action=skip reason=missing_paths apo=%s holo=%s",
-            pdb_id,
-            apo,
-            holo,
-        )
-        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "missing_paths")
-        return
-    try:
-        holo_sha = file_sha1(holo)
-        apo_sha = file_sha1(apo)
-    except Exception as e:
-        logging.warning(
-            "[apo-vs-holo] pdb_id=%s stage=dedup action=skip reason=sha_error err=%s",
-            pdb_id,
-            e,
-        )
-        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "sha_error")
-        return
-
-    if holo_sha == apo_sha:
-        logging.info(
-            "[apo-vs-holo] identical receptors for %s; deleting HOLO (keeping APO) apo_sha=%s holo_sha=%s",
-            pdb_id,
-            apo_sha,
-            holo_sha,
-        )
-        delete_variant_trees(pdb_id, "HOLO", cfg)
-        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "deleted_postrun")
-    else:
-        logging.info(
-            "[apo-vs-holo] pdb_id=%s stage=dedup action=keep reason=not_identical apo_sha=%s holo_sha=%s",
-            pdb_id,
-            apo_sha,
-            holo_sha,
-        )
-        _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
-
-
-    
-    
 # ======================
 # Data models & utilities
 # ======================
@@ -623,151 +500,6 @@ class RetryManager:
             else:
                 p[k] = v
         return p
-
-
-@dataclass
-class BudgetGuard:
-    """Simple per-ligand wall-clock guard for retries/validation."""
-    max_seconds: float
-    _deadline: float = None
-
-    def __post_init__(self):
-        self._deadline = time.time() + float(self.max_seconds)
-
-    def expired(self) -> bool:
-        return time.time() >= self._deadline
-
-
-def _iter_pdbqt_models(pdbqt_path: str):
-    """
-    Yield individual MODEL..ENDMDL blocks from a (possibly multi-model) PDBQT.
-    If no MODEL/ENDMDL markers exist, yield the whole file once.
-    """
-    buf = []
-    saw_model = False
-    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if ln.startswith("MODEL"):
-                if buf:
-                    yield "".join(buf)
-                    buf = []
-                saw_model = True
-                buf.append(ln)
-            elif ln.startswith("ENDMDL"):
-                buf.append(ln)
-                yield "".join(buf)
-                buf = []
-                saw_model = True
-            else:
-                if saw_model:
-                    buf.append(ln)
-
-    # If we never saw a MODEL block, treat the whole file as one model
-    if not saw_model:
-        try:
-            with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f2:
-                yield f2.read()
-        except Exception:
-            yield ""
-
-
-def validate_first_valid_pose(
-    receptor_pdbqt: str,
-    ligand_pdbqt: str,
-    pocket_center: tuple[float, float, float],
-    surface_coords,
-    max_models: int = 3,
-    clash_threshold: float = 2.0,
-    clash_tol: int = 3,
-    dist_surf: float = 6.0,
-    dist_centroid: float = 4.5,
-):
-    """
-    Validate poses in order and return as soon as one passes.
-    Falls back to the last invalid result if none pass.
-    """
-    tmp_dir = Path(ligand_pdbqt).parent
-    best_invalid = None
-    count = 0
-
-    for idx, model_text in enumerate(_iter_pdbqt_models(ligand_pdbqt)):
-        if max_models and count >= int(max_models):
-            break
-        count += 1
-
-        tmp = tmp_dir / f"{Path(ligand_pdbqt).stem}.m{idx}.tmp.pdbqt"
-        try:
-            tmp.write_text(model_text, encoding="utf-8")
-        except Exception:
-            tmp = Path(ligand_pdbqt)
-
-        try:
-            res = validate_pose_pdbqt(
-                protein_pdbqt=receptor_pdbqt,
-                ligand_pdbqt=str(tmp),
-                pocket_center=pocket_center,
-                clash_threshold=clash_threshold,
-                CLASH_TOLERANCE=clash_tol,
-                DIST_THRESHOLD_SURFACE=dist_surf,
-                DIST_THRESHOLD_CENTROID=dist_centroid,
-                surface_atom_coords=surface_coords,
-            )
-        finally:
-            if tmp.name.endswith(".tmp.pdbqt"):
-                try:
-                    tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        if res.get("valid", False):
-            return res  # early exit on first valid
-
-        best_invalid = res  # keep the last invalid for diagnostics
-
-    return best_invalid or {"valid": False, "reason": "no_poses"}
-
-
-@dataclass
-class RecenterParams:
-    """Thresholds for early/fallback recenter heuristics."""
-    EARLY_RECENTER_RATIO: float = 0.70
-    EARLY_RECENTER_MIN_EVAL: int = 10
-    EARLY_RECENTER_FAR_A: float = 15.0
-    EARLY_RECENTER_MEDIAN_A: float = 10.0
-    ALLOW_BOX_EXPAND: bool = True
-    MAX_RECENTER_ATTEMPTS: int = 1  # tightened: fewer early recenter tries
-
-
-@dataclass
-class GlobalCenterGuard:
-    """
-    Gatekeeper for ANY global center change (early recenter, empty-stage fallback,
-    CenterSelector promotions). Supports a hard 'lock' after a validated control ligand.
-    """
-    max_global_switches: int = 2
-    global_switches: int = 0
-    switched_this_stage: bool = False
-    locked: bool = False
-
-    def reset_stage(self) -> None:
-        """Reset per-stage switch flag (call at the start of each stage)."""
-        self.switched_this_stage = False
-
-    def can_switch(self) -> bool:
-        """
-        True if a center change is allowed right now.
-        Respects: hard lock, one-per-stage, and global cap.
-        """
-        return (not self.locked) and (not self.switched_this_stage) and (self.global_switches < self.max_global_switches)
-
-    def mark_switch(self) -> None:
-        """Record that a center change just happened this stage."""
-        self.global_switches += 1
-        self.switched_this_stage = True
-
-    def lock(self) -> None:
-        """Hard-lock: disallow any further center changes for the remainder of the run."""
-        self.locked = True
 
 
 # >>> PATHS CLASS START
@@ -1402,87 +1134,6 @@ def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
         pass
 
 
-def _audit_variant_key(variant: str | None) -> str:
-    return (variant or "LEGACY").upper()
-
-
-def _ensure_apo_holo_variant_entry(cfg: Dict, pdb_id: str, variant: str | None):
-    if not cfg.get("AUDIT_JSON", True):
-        return None
-    store = cfg.setdefault("_APO_HOLO_AUDIT", {})
-    per_pdb = store.setdefault(pdb_id.upper(), {})
-    key = _audit_variant_key(variant)
-    entry = per_pdb.setdefault(
-        key,
-        {
-            "variant": key,
-            "env_token": (os.environ.get("APO_HOLO_VARIANT", "") or ""),
-            "records": [],
-            "dedup_decision": "pending",
-        },
-    )
-    entry["env_token"] = (os.environ.get("APO_HOLO_VARIANT", "") or "")
-    entry.setdefault("records", [])
-    entry.setdefault("dedup_decision", "pending")
-    return entry
-
-
-def _flush_apo_holo_audit(cfg: Dict, pdb_id: str) -> None:
-    if not cfg.get("AUDIT_JSON", True):
-        return
-    store = cfg.get("_APO_HOLO_AUDIT")
-    if not store:
-        return
-    payload = store.get(pdb_id.upper())
-    if not payload:
-        return
-    try:
-        out_root = docked_dir(pdb_id, variant=None, ph_tag=None, legacy=False)
-        out_root.mkdir(parents=True, exist_ok=True)
-        (out_root / "apo_holo_audit.json").write_text(json.dumps(payload, indent=2))
-    except Exception:
-        pass
-
-
-def _record_apo_holo_usage(
-    cfg: Dict,
-    pdb_id: str,
-    variant: str | None,
-    ph_label: str | None,
-    receptor_path: str | Path,
-) -> None:
-    entry = _ensure_apo_holo_variant_entry(cfg, pdb_id, variant)
-    if entry is None:
-        return
-    rec_path = Path(receptor_path)
-    exists_flag = rec_path.exists()
-    record = {
-        "ph_label": None if ph_label is None else str(ph_label),
-        "receptor_path": str(rec_path),
-        "exists": exists_flag,
-    }
-    if exists_flag:
-        try:
-            record["sha1"] = file_sha1(str(rec_path))
-        except Exception as err:
-            record["sha1_error"] = str(err)
-    entry.setdefault("records", []).append(record)
-    _flush_apo_holo_audit(cfg, pdb_id)
-
-
-def _record_apo_holo_decision(cfg: Dict, pdb_id: str, variant: str | None, decision: str) -> None:
-    entry = _ensure_apo_holo_variant_entry(cfg, pdb_id, variant)
-    if entry is None:
-        return
-    current = entry.get("dedup_decision")
-    if current in {None, "", "pending"}:
-        entry["dedup_decision"] = decision
-    elif current != decision:
-        history = entry.setdefault("decision_history", [])
-        history.append(decision)
-    _flush_apo_holo_audit(cfg, pdb_id)
-
-
 def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
     try:
         atoms = 0
@@ -1994,15 +1645,44 @@ def prepare_receptor(
                             ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                             ",".join(f"{p:.1f}" for p in ligand_ph_values),
                         )
+                        ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
                         try:
-                            enumerate_ligands_for_docking(
-                                requested_ph_values=ligand_ph_values,
-                                root_dir=None,
-                                microstate_dedup=True,
-                                force=False,
+                            ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+                        except Exception:
+                            ph_root_path = None
+
+                        logger.info(
+                            "[ph_ligand.context.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
+                            ph_root_cfg,
+                            str(ph_root_path) if ph_root_path is not None else "",
+                            ph_root_path.exists() if ph_root_path is not None else False,
+                        )
+                        _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(
+                            cfg, paths.pdb_id.upper(), paths, logger
+                        )
+                        ph_ligand_root = noncontrol_roots[0] if noncontrol_roots else None
+                        logger.info(
+                            "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
+                            paths.pdb_id,
+                            ph_ligand_root,
+                            ligand_ph_values,
+                        )
+                        if ph_ligand_root is None or not ph_ligand_root.exists():
+                            logger.info(
+                                "[ph_ligand.context.bridge.skip] no valid _PH_LIGAND_ROOT; skipping microstate priming",
                             )
-                        except Exception as e:
-                            logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                        else:
+                            try:
+                                enumerate_ligands_for_docking(
+                                    requested_ph_values=ligand_ph_values,
+                                    root_dir=ph_ligand_root,
+                                    microstate_dedup=True,
+                                    force=False,
+                                    cfg=cfg,
+                                    pdb_id=paths.pdb_id,
+                                )
+                            except Exception as e:
+                                logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
                     else:
                         logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
                 else:
@@ -2088,16 +1768,29 @@ def prepare_receptor(
                     ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                     ",".join(f"{p:.1f}" for p in ligand_ph_values),
                 )
-                try:
-                    # Let prep_ligands resolve the library and root dir from config
-                    enumerate_ligands_for_docking(
-                        requested_ph_values=ligand_ph_values,
-                        root_dir=None,
-                        microstate_dedup=True,
-                        force=False,
+                ph_root_cfg = (cfg.get("_PH_LIGAND_ROOT") or "").strip()
+                ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+
+                if ligand_ph_values and ph_root_path is not None and ph_root_path.exists():
+                    logger.info(
+                        "[ph_ligand.context.bridge] priming microstates at root=%s for window=%s",
+                        ph_root_path,
+                        ligand_ph_values,
                     )
-                except Exception as e:
-                    logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                    try:
+                        enumerate_ligands_for_docking(
+                            requested_ph_values=ligand_ph_values,
+                            root_dir=ph_root_path,
+                            microstate_dedup=True,
+                            force=False,
+                        )
+                    except Exception as e:
+                        logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                else:
+                    logger.info(
+                        "[ph_ligand.context.bridge.skip] no valid _PH_LIGAND_ROOT or empty window; "
+                        "skipping microstate priming"
+                    )
             else:
                 logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
         else:
@@ -2929,41 +2622,24 @@ def _resolve_test_mode(cfg) -> str:
     print(f"[test-mode] WARNING: Unknown TEST_MODE_ENABLE={raw!r}; treating as 'off'.")
     return "off"
 
-def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
-    """
-    Gathers candidate ligands, keeps existing validation/PAINS logic, and
-    filters the *non-control* pool to allowed library roots:
+def _dedup_index_roots(seq: list[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in seq:
+        if not candidate:
+            continue
+        path_obj = Path(candidate)
+        try:
+            key = str(path_obj.resolve())
+        except Exception:
+            key = str(path_obj)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path_obj)
+    return deduped
 
-      - TEST_MODE_ENABLE="off"      -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
-      - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
-      - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
 
-    Controls are *never* filtered out here.
-    LIBRARY_EXTRA_DIRS remain included (unchanged).
-    """
-    # Keep existing prep step for extracted controls (harmless if nothing to do)
-    prep_ligands_from_pdb(
-        ligand_output_dir=paths.ligand_output_dir,
-        ligands_mol2_dir=paths.ligands_mol2_dir,
-        prepped_ligands_dir=paths.prepped_ligands_dir,
-    )
-
-    def _dedup_index_roots(seq: list[Path]) -> list[Path]:
-        deduped: list[Path] = []
-        seen: set[str] = set()
-        for candidate in seq:
-            if not candidate:
-                continue
-            path_obj = Path(candidate)
-            try:
-                key = str(path_obj.resolve())
-            except Exception:
-                key = str(path_obj)
-            if key not in seen:
-                seen.add(key)
-                deduped.append(path_obj)
-        return deduped
-
+def _lib_roots_for_pdb(cfg: Dict, pdb_id: str, paths: Paths, logger: logging.Logger) -> tuple[list[Path], list[Path]]:
     extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
     extra_paths: list[Path] = []
     if extra_dirs:
@@ -2975,7 +2651,6 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
             if p.exists():
                 extra_paths.append(p)
 
-    pdb_id = paths.pdb_id.upper()
     subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
     test_mode = _resolve_test_mode(cfg)
 
@@ -3032,14 +2707,42 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         pdb_id,
         len(allowed_noncontrol_roots),
     )
-    # Record a primary non-control library root for PH-ligand mode
     if allowed_noncontrol_roots:
         cfg["_PH_LIGAND_ROOT"] = str(allowed_noncontrol_roots[0])
     else:
         cfg.pop("_PH_LIGAND_ROOT", None)
     cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
+    logger.info(
+        "[ph_ligand.roots] test_mode=%s pdb=%s ph_root=%s noncontrol_roots=%s",
+        test_mode,
+        pdb_id,
+        cfg.get("_PH_LIGAND_ROOT"),
+        cfg.get("_ALLOWED_NONCONTROL_ROOTS"),
+    )
     cfg["_TEST_MODE_EFFECTIVE"] = test_mode
+    return [], allowed_noncontrol_roots
 
+
+def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
+    """
+    Gathers candidate ligands, keeps existing validation/PAINS logic, and
+    filters the *non-control* pool to allowed library roots:
+
+      - TEST_MODE_ENABLE="off"      -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+      - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
+      - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+
+    Controls are *never* filtered out here.
+    LIBRARY_EXTRA_DIRS remain included (unchanged).
+    """
+    # Keep existing prep step for extracted controls (harmless if nothing to do)
+    prep_ligands_from_pdb(
+        ligand_output_dir=paths.ligand_output_dir,
+        ligands_mol2_dir=paths.ligands_mol2_dir,
+        prepped_ligands_dir=paths.prepped_ligands_dir,
+    )
+
+    _control_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
     per_index_roots: list[Path] = []
     if paths.prepped_ligands_dir:
         per_index_roots.append(paths.prepped_ligands_dir)
@@ -3081,8 +2784,16 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         microstate_roots = [r for r in resolved_existing if (r / "microstates.json").exists()]
         if microstate_roots:
             try:
-                ms_paths = enumerate_ligands_for_docking()
-                ms_filtered = [p for p in ms_paths if any(_under(p, root) for root in resolved_existing)]
+                all_ms: list[Path] = []
+                for root in microstate_roots:
+                    ms_paths = enumerate_ligands_for_docking(
+                        requested_ph_values=None,
+                        root_dir=root,
+                        microstate_dedup=True,
+                        force=False,
+                    )
+                    all_ms.extend(ms_paths)
+                ms_filtered = [p for p in all_ms if any(_under(p, root) for root in resolved_existing)]
                 candidates.extend(ms_filtered)
                 logger.info(
                     "[lib-index.microstate] roots=%d ligands=%d",
@@ -3182,11 +2893,10 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
     valid_pdbqt: Dict[str, Path] = {}
     for p in all_pdbqt_paths:
         try:
-            lib_root_for_checks = str(global_root if (global_root and global_root.exists()) else paths.prepped_ligands_dir.parent)
-            if is_valid_ligand(p, lib_root_for_checks):
+            if p.exists() and p.stat().st_size > 100:
                 valid_pdbqt[norm(p)] = p
             else:
-                logger.debug(f"Excluded malformed ligand (pdbqt check failed): {p}")
+                logger.debug(f"Excluded malformed ligand (missing or too small): {p}")
         except Exception:
             logger.debug(f"Excluded malformed ligand (exception): {p}")
 
@@ -4045,58 +3755,6 @@ def select_ligands_for_next(
         f"= {len(next_list)} total ({pct * 100:.5f}% of base={pool_n})."
     )
     return next_list
-
-
-def fallback_recentering_if_empty(
-        cfg: Dict,
-        pdb_id: str,
-        stage_name: str,
-        scores: Dict[str, float],
-        raw_docked_ligands: Dict[str, str],
-        receptor_pdbqt: str,
-        center: Tuple[float, float, float],
-        box_size: Tuple[float, float, float],
-        stage1_original: List[str],
-        logger: logging.Logger,
-        guard: GlobalCenterGuard,
-        control_anchor_hit: bool
-) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str]]:
-    """
-    If a stage yields no valid ligands, attempt a fallback recenter and restart stage1.
-    De-duped: will not fire if early recenter or CenterSelector already switched this stage,
-    or if a control anchor validated in this stage, or if global cap reached.
-    """
-    if scores:
-        return False, center, box_size, []
-    if control_anchor_hit:
-        logger.info("Empty-stage fallback skipped: control-anchored validation present earlier.")
-        return False, center, box_size, []
-    if not guard.can_switch():
-        logger.info("Empty-stage fallback skipped: global switch guard disallows further switches.")
-        return False, center, box_size, []
-
-    logger.warning(f"No valid ligands in {stage_name}. Attempting fallback recentering...")
-    # >>> DOCKED PATHS PATCH START
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    # >>> DOCKED PATHS PATCH END
-    fb_pose, new_center, _best_score, _chosen_lig = attempt_fallback_recenter(
-        fallback_ligands=raw_docked_ligands,
-        receptor_pdbqt=receptor_pdbqt,
-        docking_dir=str(paths.docked_pdb_root()),
-        stage_name=stage_name,
-        pocket_center=center,
-        logger=logger,
-        exclude_basenames=set(),
-    )
-    if new_center is None:
-        logger.warning("Fallback recovery failed.")
-        return False, center, box_size, []
-
-    new_box = tuple(min(float(cfg.get("BOX_SIZE_MAX_A", 28.0)), s) for s in box_size)
-    guard.mark_switch()  # counts as a global switch
-    logger.info("Re-running stage1 with new center after no-valid fallback. [global switch]")
-    return True, new_center, new_box, stage1_original[:]
-
 
 # ======================
 # Center selection (controls + discovery)
@@ -5268,11 +4926,31 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     {round(p, 1) for ph in ph_values for p in (float(ph) - 1.0, float(ph), float(ph) + 1.0)}
                 )
                 logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
-                enumerate_ligands_for_docking(
-                    requested_ph_values=ligand_window,
-                    microstate_dedup=True,
-                    force=False,
+
+                ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
+                try:
+                    ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+                except Exception:
+                    ph_root_path = None
+
+                logger.info(
+                    "[single.ph_ligand.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
+                    ph_root_cfg,
+                    str(ph_root_path) if ph_root_path is not None else "",
+                    ph_root_path.exists() if ph_root_path is not None else False,
                 )
+                if ph_root_path is not None and ph_root_path.exists():
+                    enumerate_ligands_for_docking(
+                        requested_ph_values=ligand_window,
+                        root_dir=ph_root_path,
+                        microstate_dedup=True,
+                        force=False,
+                    )
+                else:
+                    logger.info(
+                        "[single.ph_ligand.bridge.skip] no valid _PH_LIGAND_ROOT; "
+                        "skipping microstate priming for single-ligand mode"
+                    )
             except Exception as e:
                 logger.warning(f"[single.ph_ligand.skip] Could not run PH-ligand window for single mode: {e}")
         # ------------------------------------------------
@@ -5383,6 +5061,11 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
             ph_log.info("[ph_ligand.bridge] active: PH_LIGAND_MODE=context_window")
 
+            _ctrl_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
+                cfg, paths.pdb_id.upper(), paths, ph_log
+            )
+            ph_ligand_root = allowed_noncontrol_roots[0] if allowed_noncontrol_roots else None
+
             context_pHs: list[float] = []
             for tag in ph_tags:
                 for pH_num in _parse_ph_values_from_label(tag):
@@ -5401,12 +5084,26 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     ph_tags,
                 )
 
-                enumerate_ligands_for_docking(
-                    requested_ph_values=ligand_window,
-                    microstate_dedup=True,
-                    force=False,
-                    root_dir=ph_ligand_root,
+                ph_log.info(
+                    "[ph_ligand.bridge] pdb=%s root_dir=%s requested_ph=%s",
+                    pdb_id,
+                    ph_ligand_root,
+                    ligand_window,
                 )
+
+                if ph_ligand_root is None or not ph_ligand_root.exists():
+                    ph_log.warning(
+                        "[ph_ligand.prep.skip] _PH_LIGAND_ROOT missing or invalid; skipping ligand window prep"
+                    )
+                else:
+                    enumerate_ligands_for_docking(
+                        requested_ph_values=ligand_window,
+                        microstate_dedup=True,
+                        force=False,
+                        root_dir=ph_ligand_root,
+                        cfg=cfg,
+                        pdb_id=pdb_id,
+                    )
             else:
                 ph_log.warning(
                     "[ph_ligand.prep] no numeric pH values parsed from tags=%s; skipping ligand prep window",
@@ -5483,12 +5180,45 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                         ligand_window,
                     )
 
-                    enumerated = enumerate_ligands_for_docking(
-                        requested_ph_values=ligand_window,
-                        microstate_dedup=True,
-                        force=False,
-                        root_dir=ph_ligand_root,
+                    ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
+                    try:
+                        ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
+                    except Exception:
+                        ph_root_path = None
+
+                    ph_log.info(
+                        "[ph_ligand.context.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
+                        ph_root_cfg,
+                        str(ph_root_path) if ph_root_path is not None else "",
+                        ph_root_path.exists() if ph_root_path is not None else False,
                     )
+
+                    _ctrl_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
+                        cfg, paths.pdb_id.upper(), paths, ph_log
+                    )
+                    ph_bridge_root = allowed_noncontrol_roots[0] if allowed_noncontrol_roots else ph_ligand_root
+
+                    ph_log.info(
+                        "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
+                        paths.pdb_id,
+                        ph_bridge_root,
+                        ligand_window,
+                    )
+
+                    if ph_bridge_root is None or not ph_bridge_root.exists():
+                        ph_log.warning(
+                            "[ph_ligand.prep.skip] _PH_LIGAND_ROOT missing or invalid; skipping ligand window prep"
+                        )
+                        enumerated = []
+                    else:
+                        enumerated = enumerate_ligands_for_docking(
+                            requested_ph_values=ligand_window,
+                            microstate_dedup=True,
+                            force=False,
+                            root_dir=ph_bridge_root,
+                            cfg=cfg,
+                            pdb_id=pdb_id,
+                        )
 
                     if enumerated:
                         ligands = [str(p) for p in enumerated]

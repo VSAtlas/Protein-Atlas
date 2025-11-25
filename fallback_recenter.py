@@ -1,106 +1,206 @@
+from __future__ import annotations
 
-# >>> PATHS IMPORT START
+import logging
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
 from path_router import make_paths
-# >>> PATHS IMPORT END
+from pose_validation import validate_pose_pdbqt, attempt_fallback_recenter
 
-def general_fallback_recenter_if_needed(cfg, pdb_id, stage_name, scores, raw_docked_ligands,
-                                        receptor_pdbqt, center, box_size, logger, ligands_stage1_original):
+
+@dataclass
+class BudgetGuard:
+    """Simple per-ligand wall-clock guard for retries/validation."""
+    max_seconds: float
+    _deadline: float = None
+
+    def __post_init__(self):
+        self._deadline = time.time() + float(self.max_seconds)
+
+    def expired(self) -> bool:
+        return time.time() >= self._deadline
+
+
+def _iter_pdbqt_models(pdbqt_path: str):
     """
-    If a stage yields no valid ligands, try fallback recentering and redo stage1.
-    Returns (should_restart_stage1, new_center, new_box_size, ligands_to_redock)
+    Yield individual MODEL..ENDMDL blocks from a (possibly multi-model) PDBQT.
+    If no MODEL/ENDMDL markers exist, yield the whole file once.
+    """
+    buf = []
+    saw_model = False
+    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if ln.startswith("MODEL"):
+                if buf:
+                    yield "".join(buf)
+                    buf = []
+                saw_model = True
+                buf.append(ln)
+            elif ln.startswith("ENDMDL"):
+                buf.append(ln)
+                yield "".join(buf)
+                buf = []
+                saw_model = True
+            else:
+                if saw_model:
+                    buf.append(ln)
+
+    # If we never saw a MODEL block, treat the whole file as one model
+    if not saw_model:
+        try:
+            with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f2:
+                yield f2.read()
+        except Exception:
+            yield ""
+
+
+def validate_first_valid_pose(
+    receptor_pdbqt: str,
+    ligand_pdbqt: str,
+    pocket_center: tuple[float, float, float],
+    surface_coords,
+    max_models: int = 3,
+    clash_threshold: float = 2.0,
+    clash_tol: int = 3,
+    dist_surf: float = 6.0,
+    dist_centroid: float = 4.5,
+):
+    """
+    Validate poses in order and return as soon as one passes.
+    Falls back to the last invalid result if none pass.
+    """
+    tmp_dir = Path(ligand_pdbqt).parent
+    best_invalid = None
+    count = 0
+
+    for idx, model_text in enumerate(_iter_pdbqt_models(ligand_pdbqt)):
+        if max_models and count >= int(max_models):
+            break
+        count += 1
+
+        tmp = tmp_dir / f"{Path(ligand_pdbqt).stem}.m{idx}.tmp.pdbqt"
+        try:
+            tmp.write_text(model_text, encoding="utf-8")
+        except Exception:
+            tmp = Path(ligand_pdbqt)
+
+        try:
+            res = validate_pose_pdbqt(
+                protein_pdbqt=receptor_pdbqt,
+                ligand_pdbqt=str(tmp),
+                pocket_center=pocket_center,
+                clash_threshold=clash_threshold,
+                CLASH_TOLERANCE=clash_tol,
+                DIST_THRESHOLD_SURFACE=dist_surf,
+                DIST_THRESHOLD_CENTROID=dist_centroid,
+                surface_atom_coords=surface_coords,
+            )
+        finally:
+            if tmp.name.endswith(".tmp.pdbqt"):
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        if res.get("valid", False):
+            return res  # early exit on first valid
+
+        best_invalid = res  # keep the last invalid for diagnostics
+
+    return best_invalid or {"valid": False, "reason": "no_poses"}
+
+
+@dataclass
+class RecenterParams:
+    """Thresholds for early/fallback recenter heuristics."""
+    EARLY_RECENTER_RATIO: float = 0.70
+    EARLY_RECENTER_MIN_EVAL: int = 10
+    EARLY_RECENTER_FAR_A: float = 15.0
+    EARLY_RECENTER_MEDIAN_A: float = 10.0
+    ALLOW_BOX_EXPAND: bool = True
+    MAX_RECENTER_ATTEMPTS: int = 1  # tightened: fewer early recenter tries
+
+
+@dataclass
+class GlobalCenterGuard:
+    """
+    Gatekeeper for ANY global center change (early recenter, empty-stage fallback,
+    CenterSelector promotions). Supports a hard 'lock' after a validated control ligand.
+    """
+    max_global_switches: int = 2
+    global_switches: int = 0
+    switched_this_stage: bool = False
+    locked: bool = False
+
+    def reset_stage(self) -> None:
+        """Reset per-stage switch flag (call at the start of each stage)."""
+        self.switched_this_stage = False
+
+    def can_switch(self) -> bool:
+        """
+        True if a center change is allowed right now.
+        Respects: hard lock, one-per-stage, and global cap.
+        """
+        return (not self.locked) and (not self.switched_this_stage) and (self.global_switches < self.max_global_switches)
+
+    def mark_switch(self) -> None:
+        """Record that a center change just happened this stage."""
+        self.global_switches += 1
+        self.switched_this_stage = True
+
+    def lock(self) -> None:
+        """Hard-lock: disallow any further center changes for the remainder of the run."""
+        self.locked = True
+
+
+def fallback_recentering_if_empty(
+        cfg: Dict,
+        pdb_id: str,
+        stage_name: str,
+        scores: Dict[str, float],
+        raw_docked_ligands: Dict[str, str],
+        receptor_pdbqt: str,
+        center: Tuple[float, float, float],
+        box_size: Tuple[float, float, float],
+        stage1_original: List[str],
+        logger: logging.Logger,
+        guard: GlobalCenterGuard,
+        control_anchor_hit: bool
+) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str]]:
+    """
+    If a stage yields no valid ligands, attempt a fallback recenter and restart stage1.
+    De-duped: will not fire if early recenter or CenterSelector already switched this stage,
+    or if a control anchor validated in this stage, or if global cap reached.
     """
     if scores:
-        return False, center, box_size, None
+        return False, center, box_size, []
+    if control_anchor_hit:
+        logger.info("Empty-stage fallback skipped: control-anchored validation present earlier.")
+        return False, center, box_size, []
+    if not guard.can_switch():
+        logger.info("Empty-stage fallback skipped: global switch guard disallows further switches.")
+        return False, center, box_size, []
 
     logger.warning(f"No valid ligands in {stage_name}. Attempting fallback recentering...")
     # >>> DOCKED PATHS PATCH START
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    docking_dir = str(paths.docked_pdb_root())
-    fb_pose, new_center, best_score, chosen_ligand = attempt_fallback_recenter(
+    # >>> DOCKED PATHS PATCH END
+    fb_pose, new_center, _best_score, _chosen_lig = attempt_fallback_recenter(
         fallback_ligands=raw_docked_ligands,
         receptor_pdbqt=receptor_pdbqt,
-        docking_dir=docking_dir,
+        docking_dir=str(paths.docked_pdb_root()),
         stage_name=stage_name,
         pocket_center=center,
         logger=logger,
         exclude_basenames=set(),
     )
-    # >>> DOCKED PATHS PATCH END
-    if not fb_pose or new_center is None:
-        logger.warning("Fallback recovery failed. Ending docking for this protein.")
-        return False, center, box_size, None
+    if new_center is None:
+        logger.warning("Fallback recovery failed.")
+        return False, center, box_size, []
 
-    max_box = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
-    center = new_center
-    box_size = tuple(min(max_box, s) for s in box_size)
-    logger.info("Re-running stage1 with new center after no-valid fallback.")
-    return True, center, box_size, ligands_stage1_original[:]
-
-
-def early_recenter(stage_index, all_distances, scores, recenter_knobs, box_size, center,
-                         ligands_stage1_original, tried_centers, recenter_attempts, max_recenter_attempts,
-                         raw_docked_ligands, cfg, pdb_id, receptor_pdbqt, logger):
-    """
-    Stage-1 heuristic: decide whether to expand/recenter box early when results are systematically off.
-    Returns (should_redo_stage1, new_center, new_box_size, recenter_attempts, tried_centers, ligands_to_redock)
-    """
-    if stage_index != 0:
-        return False, center, box_size, recenter_attempts, tried_centers, None
-
-    evaluated = len(all_distances)
-    valid_count = len(scores)
-    if evaluated < recenter_knobs["EARLY_RECENTER_MIN_EVAL"]:
-        logger.info(f"Early recenter skipped: evaluated={evaluated} < {recenter_knobs['EARLY_RECENTER_MIN_EVAL']}.")
-        return False, center, box_size, recenter_attempts, tried_centers, None
-
-    far = sum(1 for d in all_distances if isinstance(d, (int, float)) and d > recenter_knobs["EARLY_RECENTER_FAR_A"])
-    far_ratio = far / evaluated if evaluated else 0.0
-    med_dist = float(np.median(all_distances)) if all_distances else 0.0
-
-    # One-time box expansion for borderline cases
-    if (recenter_knobs["ALLOW_BOX_EXPAND"] and 0.5 <= far_ratio < recenter_knobs["EARLY_RECENTER_RATIO"]
-            and 8.0 <= med_dist < recenter_knobs["EARLY_RECENTER_MEDIAN_A"] and valid_count == 0):
-        max_box = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
-        new_box = tuple(min(max_box, s + 4.0) for s in box_size)
-        if new_box != box_size:
-            logger.info(f"Borderline far_ratio={far_ratio:.2f}, median={med_dist:.1f} Å → expand box to {new_box} and redo stage1.")
-            return True, center, new_box, recenter_attempts, tried_centers, ligands_stage1_original[:]
-
-    # Recenter when clearly off and no valid poses
-    if (far_ratio >= recenter_knobs["EARLY_RECENTER_RATIO"]) and (med_dist >= recenter_knobs["EARLY_RECENTER_MEDIAN_A"]) and (valid_count == 0):
-        logger.warning(f"Early recenter trigger: far_ratio={far_ratio:.2f}, median={med_dist:.1f} Å, valid=0 → recentering.")
-        remaining = max(0, max_recenter_attempts - recenter_attempts)
-        while remaining > 0:
-            # >>> DOCKED PATHS PATCH START
-            paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-            docking_dir = str(paths.docked_pdb_root())
-            fb_pose, new_center, best_score, chosen_ligand = attempt_fallback_recenter(
-                fallback_ligands=raw_docked_ligands,
-                receptor_pdbqt=receptor_pdbqt,
-                docking_dir=docking_dir,
-                stage_name="stage1",
-                pocket_center=center,
-                logger=logger,
-                exclude_basenames=set()
-            )
-            # >>> DOCKED PATHS PATCH END
-            if new_center is None:
-                logger.warning("Fallback couldn’t produce a new center from remaining candidates.")
-                break
-
-            center_key = tuple(round(c, 1) for c in new_center)
-            if center_key in tried_centers:
-                logger.warning("Proposed center equals a previously tried center; trying next candidate...")
-                remaining -= 1
-                continue
-
-            tried_centers.add(center_key)
-            recenter_attempts += 1
-            center = new_center
-            max_box = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
-            box_size = tuple(min(max_box, s) for s in box_size)
-            logger.info("Re-running stage1 with new center and tightened box.")
-            return True, center, box_size, recenter_attempts, tried_centers, ligands_stage1_original[:]
-
-        logger.warning("Early recenter did not yield a new center; proceeding without recenter.")
-    return False, center, box_size, recenter_attempts, tried_centers, None
+    new_box = tuple(min(float(cfg.get("BOX_SIZE_MAX_A", 28.0)), s) for s in box_size)
+    guard.mark_switch()  # counts as a global switch
+    logger.info("Re-running stage1 with new center after no-valid fallback. [global switch]")
+    return True, new_center, new_box, stage1_original[:]

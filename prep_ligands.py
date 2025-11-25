@@ -261,7 +261,9 @@ def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
 def enumerate_ligands_for_docking(
     requested_ph_values: Optional[Collection[float]] = None,
     *,
-    root_dir: Optional[Path] = None,
+    cfg: Optional[Dict] = None,
+    pdb_id: Optional[str] = None,
+    root_dir: Optional[str | Path] = None,
     microstate_dedup: bool = True,
     force: bool = False,
 ) -> List[Path]:
@@ -282,50 +284,39 @@ def enumerate_ligands_for_docking(
         library's prepped_ligands directory.
     """
 
-    cfg = load_config("config.txt")
-    validate_config(cfg)
-    pdb_token = (
-        os.environ.get("PDB_ID")
-        or cfg.get("PDB_ID")
-        or cfg.get("TARGET_PDB")
-        or cfg.get("PDB")
-        or cfg.get("INPUT_PDB")
-        or cfg.get("PDB_FILE")
-        or ""
-    )
-    pdb_id = Path(str(pdb_token)).stem.upper() if pdb_token else "LIGPREP"
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    _ = cfg  # retained for call-site compatibility; path resolution is driven solely by root_dir.
+    pdb_label = (pdb_id or "LIGPREP").upper()
 
-    in_sdf_env = (os.environ.get("LIGPREP_IN_SDF", "") or "").strip() or None
-    in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
-    out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
+    if root_dir is None:
+        raise ValueError(
+            "enumerate_ligands_for_docking now requires root_dir; callers must pass a library root derived from path_router."
+        )
 
-    if root_dir is not None:
-        library_out_dir = Path(root_dir).resolve()
-        output_ligands_dir = library_out_dir
-        library_hint = library_out_dir.name.lower()
-    else:
-        output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else paths.prepped_ligands_dir
-        library_hint = output_ligands_dir.name.lower()
-        library_out_dir = output_ligands_dir
-
-    # library_hint currently comes from the output directory name (e.g. 'cah2')
-    # Allow overrides via environment / config, but keep the directory name as the default.
-    library_base: Optional[str] = library_hint
-
-    # Highest priority: explicit library name from env or config
-    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
-    library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip()
-    if library_env:
-        library_base = library_env.lower()
-    elif library_cfg:
-        library_base = library_cfg.lower()
-
-    # Final fallback: make sure we have something usable
-    library_base = (library_base or "ligprep").lower()
-    library_name = library_base
-
+    library_out_dir = Path(root_dir).resolve()
+    library_name_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    library_name = (library_name_env or library_out_dir.name).lower()
     registry_path = library_out_dir / "microstates.json"
+
+    requested_set: Optional[Set[float]] = None
+    if requested_ph_values:
+        requested_set = {float(ph) for ph in requested_ph_values}
+
+    logger.info(
+        "enumerate_ligands_for_docking: root_dir=%s ph_values=%s microstate_dedup=%s force=%s",
+        str(library_out_dir),
+        sorted(requested_set) if requested_set is not None else [],
+        microstate_dedup,
+        force,
+    )
+
+    logger.info(
+        "enumerate_ligands_for_docking: pdb=%s library=%s source=%s library_out_dir=%s registry=%s",
+        pdb_label,
+        library_name,
+        "root_dir",
+        library_out_dir,
+        registry_path,
+    )
 
     # Optional: restrict which ligands we prep when called via main.py.
     # Reuse the same ONLY parsing as the prep_ligands CLI:
@@ -336,10 +327,6 @@ def enumerate_ligands_for_docking(
     # Tokens like "1" become "rdk_0000001" via _normalize_only_token.
     only_set = _collect_only_from_env_and_cli(None)
     only_for_microstate: Optional[Set[str]] = only_set or None
-
-    requested_set: Optional[Set[float]] = None
-    if requested_ph_values:
-        requested_set = {float(ph) for ph in requested_ph_values}
 
     def _run_microstate_prep_for_phs(ph_values: Collection[float]) -> None:
         if not ph_values:
@@ -353,10 +340,8 @@ def enumerate_ligands_for_docking(
             only=only_for_microstate,
             ph_values=sorted(set(float(ph) for ph in ph_values)),
             microstate_dedup=True,
-            root_dir=library_out_dir if root_dir is not None else None,
+            root_dir=library_out_dir,
         )
-
-
 
     if requested_set is not None:
         if not registry_path.exists():
@@ -474,12 +459,8 @@ def enumerate_ligands_for_docking(
         if not include:
             continue
 
-        if "_valid_pdbqt" in globals():
-            is_valid = _valid_pdbqt(canonical_path, library_out_dir)
-        else:
-            is_valid = canonical_path.exists() and canonical_path.stat().st_size > 100
-
-        if is_valid:
+        # Lightweight sanity check only; heavy validation happens during prep
+        if canonical_path.exists() and canonical_path.stat().st_size > 100:
             result.add(canonical_path)
 
     if requested_set is None:
@@ -497,7 +478,6 @@ def enumerate_ligands_for_docking(
         )
 
     return sorted(result, key=lambda p: p.name)
-
 
 def _looks_like_monoatomic_ion_pdbqt(lines: List[str]) -> bool:
     atom_lines = [ln for ln in lines if ln.startswith(("ATOM", "HETATM"))]
@@ -3760,7 +3740,16 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
 # =========================
 
 def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
-    return path.exists() and path.stat().st_size > 100 and is_valid_ligand(path, log_dir=log_dir)
+    """
+    Lightweight sanity check for PDBQT files during docking enumeration.
+
+    We assume heavy validation has already happened at prep time.
+    Here we only enforce existence and a minimum size threshold.
+    """
+    try:
+        return path.exists() and path.stat().st_size > 100
+    except Exception:
+        return False
 
 
 def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None,
