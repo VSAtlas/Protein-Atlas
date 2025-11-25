@@ -49,8 +49,12 @@ from path_router import (
     Paths as RouterPaths,
     receptor_file,
     docked_dir,
-    load_ph_tags,
     config_dir as router_config_dir,
+)
+from ph_ensemble_docking import (
+    enumerate_ligands_for_ph_context,
+    init_ph_tags_and_manifest,
+    prewarm_ph_ligand_microstates,
 )
 from fallback_recenter import (
     BudgetGuard,
@@ -1319,52 +1323,6 @@ def _ph_ligand_mode(cfg: Mapping[str, Any]) -> str:
     if raw in ("", "off", "none", "false", "0"):
         return "off"
     return "context_window"
-
-
-def _parse_ph_values_from_label(label: Optional[str]) -> list[float]:
-    """
-    Parse one of our PH ensemble labels into a list of numeric pH values.
-
-    Handles simple tags like:
-        "pH7_0", "pH8_4"
-    and composite tags like:
-        "pH7_9+8_4+8_9-dup19"
-
-    Returns a list of floats (e.g. [7.9, 8.4, 8.9]) or an empty list
-    if no numeric pH values can be parsed.
-    """
-    vals: list[float] = []
-    if not label:
-        return vals
-
-    s = str(label).strip()
-    if not s:
-        return vals
-
-    # Strip leading "pH" (case-insensitive)
-    m = re.search(r"(?i)pH(.+)", s)
-    if m:
-        s = m.group(1)
-
-    # Drop any suffix after first "-" (e.g. "-dup19")
-    if "-" in s:
-        s = s.split("-", 1)[0]
-
-    # Split on "+", convert pieces like "7_9" -> 7.9
-    for part in s.split("+"):
-        part = part.strip()
-        if not part:
-            continue
-        part = part.replace("_", ".")
-        try:
-            ph = float(part)
-        except Exception:
-            continue
-        # Sanity range for pH values
-        if 0.0 < ph < 15.0:
-            vals.append(ph)
-
-    return vals
 
 
 # ----------------------
@@ -5021,30 +4979,10 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
 
-    if ph_enabled:
-        try:
-            _keys = sorted(list((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).keys()))
-            _len_here = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, []))
-            ph_log.info("[ph_ensemble.debug] map_keys=%s map_len[%s]=%d", ",".join(_keys), paths.pdb_id, _len_here)
-        except Exception:
-            pass
-
-        ph_tags = load_ph_tags(paths.pdb_id, variant=variant_token)
-        if not ph_tags:
-            ph_log.warning(
-                "[router.warn] ensemble.json had no members; skipping pdb=%s variant=%s",
-                paths.pdb_id,
-                variant_label,
-            )
-            return
-        canonical: list[tuple[str, str]] = []
-        for tag in ph_tags:
-            rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=tag, legacy=legacy_mode)
-            canonical.append((tag, str(rec_path)))
-        if canonical:
-            cfg.setdefault("_PH_ENSEMBLE_CANONICAL", {})[paths.pdb_id] = canonical
-    else:
-        ph_tags = [None]
+    ph_tags = init_ph_tags_and_manifest(cfg, paths.pdb_id, variant_token, legacy_mode)
+    if ph_enabled and not ph_tags:
+        # keep the early return behavior for empty ensembles
+        return
 
     ph_ligand_root = None
     ph_ligand_root_str = cfg.get("_PH_LIGAND_ROOT")
@@ -5054,64 +4992,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         except Exception:
             ph_ligand_root = None
 
-    # --- pH-ligand context integration ---
-    if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get("PH_ENSEMBLE"):
-        try:
-            from prep_ligands import enumerate_ligands_for_docking
-
-            ph_log.info("[ph_ligand.bridge] active: PH_LIGAND_MODE=context_window")
-
-            _ctrl_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
-                cfg, paths.pdb_id.upper(), paths, ph_log
-            )
-            ph_ligand_root = allowed_noncontrol_roots[0] if allowed_noncontrol_roots else None
-
-            context_pHs: list[float] = []
-            for tag in ph_tags:
-                for pH_num in _parse_ph_values_from_label(tag):
-                    context_pHs.append(pH_num)
-
-            if context_pHs:
-                ligand_window = sorted(
-                    {
-                        round(x, 1)
-                        for x in [p for ph in context_pHs for p in (ph - 1.0, ph, ph + 1.0)]
-                    }
-                )
-                ph_log.info(
-                    "[ph_ligand.prep] preparing ligands for window %s from tags=%s",
-                    ligand_window,
-                    ph_tags,
-                )
-
-                ph_log.info(
-                    "[ph_ligand.bridge] pdb=%s root_dir=%s requested_ph=%s",
-                    pdb_id,
-                    ph_ligand_root,
-                    ligand_window,
-                )
-
-                if ph_ligand_root is None or not ph_ligand_root.exists():
-                    ph_log.warning(
-                        "[ph_ligand.prep.skip] _PH_LIGAND_ROOT missing or invalid; skipping ligand window prep"
-                    )
-                else:
-                    enumerate_ligands_for_docking(
-                        requested_ph_values=ligand_window,
-                        microstate_dedup=True,
-                        force=False,
-                        root_dir=ph_ligand_root,
-                        cfg=cfg,
-                        pdb_id=pdb_id,
-                    )
-            else:
-                ph_log.warning(
-                    "[ph_ligand.prep] no numeric pH values parsed from tags=%s; skipping ligand prep window",
-                    ph_tags,
-                )
-        except Exception as e:
-            ph_log.warning(f"[ph_ligand.prep.skip] failed to initialize: {e}")
-    # -------------------------------------
+    prewarm_ph_ligand_microstates(cfg, ph_tags, ph_ligand_root)
 
     for ph_label in ph_tags:
         rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
@@ -5159,97 +5040,30 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         box_size = tuple(base_box)
         receptor_pdbqt = str(rec_path)
 
-        # --- Dynamic ligand enumeration for current pH context ---
-        if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window":
-            try:
-                from prep_ligands import enumerate_ligands_for_docking
+        enumerated = enumerate_ligands_for_ph_context(
+            cfg=cfg,
+            pdb_id=paths.pdb_id,
+            ph_label=ph_label,
+            ph_ligand_root=ph_ligand_root,
+        )
 
-                ph_values = _parse_ph_values_from_label(ph_label)
-                if not ph_values:
-                    ph_log.warning(
-                        "[ph_ligand.context] unable to parse numeric pH from ph_label=%s; using base ligands",
-                        ph_label,
-                    )
-                else:
-                    ph_num = sum(ph_values) / len(ph_values)
-                    ligand_window = [round(p, 1) for p in (ph_num - 1.0, ph_num, ph_num + 1.0)]
-                    ph_log.info(
-                        "[ph_ligand.context] ph_label=%s values=%s -> ligand window=%s",
-                        ph_label,
-                        ph_values,
-                        ligand_window,
-                    )
-
-                    ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
-                    try:
-                        ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
-                    except Exception:
-                        ph_root_path = None
-
-                    ph_log.info(
-                        "[ph_ligand.context.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
-                        ph_root_cfg,
-                        str(ph_root_path) if ph_root_path is not None else "",
-                        ph_root_path.exists() if ph_root_path is not None else False,
-                    )
-
-                    _ctrl_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
-                        cfg, paths.pdb_id.upper(), paths, ph_log
-                    )
-                    ph_bridge_root = allowed_noncontrol_roots[0] if allowed_noncontrol_roots else ph_ligand_root
-
-                    ph_log.info(
-                        "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
-                        paths.pdb_id,
-                        ph_bridge_root,
-                        ligand_window,
-                    )
-
-                    if ph_bridge_root is None or not ph_bridge_root.exists():
-                        ph_log.warning(
-                            "[ph_ligand.prep.skip] _PH_LIGAND_ROOT missing or invalid; skipping ligand window prep"
-                        )
-                        enumerated = []
-                    else:
-                        enumerated = enumerate_ligands_for_docking(
-                            requested_ph_values=ligand_window,
-                            microstate_dedup=True,
-                            force=False,
-                            root_dir=ph_bridge_root,
-                            cfg=cfg,
-                            pdb_id=pdb_id,
-                        )
-
-                    if enumerated:
-                        ligands = [str(p) for p in enumerated]
-                        heavy_atom_counts = {
-                            str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated
-                        }
-                        pains_flags = {
-                            k: base_pains_flags.get(
-                                k,
-                                base_pains_flags.get(Path(k).stem, False),
-                            )
-                            for k in ligands
-                        }
-                        ph_log.info(
-                            "[ph_ligand.selected] pdb_id=%s ph=%s ligands=%d",
-                            paths.pdb_id,
-                            ph_label,
-                            len(ligands),
-                        )
-                    else:
-                        ph_log.warning(
-                            "[ph_ligand.empty] pdb_id=%s ph=%s window=%s -> no microstates; falling back to base ligands",
-                            paths.pdb_id,
-                            ph_label,
-                            ligand_window,
-                        )
-            except Exception as e:
-                ph_log.warning(
-                    "[ph_ligand.context.skip] failed during pH-specific ligand enumeration: %s",
-                    e,
+        if enumerated:
+            ligands = [str(p) for p in enumerated]
+            heavy_atom_counts = {
+                str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated
+            }
+            pains_flags = {
+                k: base_pains_flags.get(
+                    k,
+                    base_pains_flags.get(Path(k).stem, False),
                 )
+                for k in ligands
+            }
+        else:
+            # keep ligands, heavy_atom_counts, pains_flags at their base values
+            ligands = base_ligands[:]
+            heavy_atom_counts = dict(base_heavy_atoms)
+            pains_flags = dict(base_pains_flags)
         # --------------------------------------------------------
 
 
