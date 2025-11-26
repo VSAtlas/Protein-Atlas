@@ -3690,12 +3690,13 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                             ph_label=ph_label,
                             variant=variant_env or None,
                         )
-                logger.info(
-                    f"[CENTER] Switched from {old} -> {center} ({decision.reason}, "
-                    f"SwitchScore={decision.switchscore:.2f}) [global switch]"
-                )
+                    logger.info(
+                        f"[CENTER] Switched from {old} -> {center} ({decision.reason}, "
+                        f"SwitchScore={decision.switchscore:.2f}) [global switch]"
+                    )
             except Exception as e:
                 logger.warning(f"CenterSelector failed gracefully: {e}")
+
 
             if ph_label:
                 ph_log.info(
