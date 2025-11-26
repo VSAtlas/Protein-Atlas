@@ -1,0 +1,332 @@
+<frozen importlib._bootstrap>:241: RuntimeWarning: to-Python converter for boost::shared_ptr<RDKit::FilterHierarchyMatcher> already registered; second conversion method ignored.
+MODELLER is working with license.
+[run] log_file=/stor/work/VDS_Beckham/atlas/code/protein_automation/logs/main_20251125_220208.log run_id=20251125_220208
+[cfg.run] run_id=20251125_220208 run_dir=/stor/work/VDS_Beckham/atlas/code/protein_automation/configs/20251125_220208
+[ph.mode] PH_ENSEMBLE=True
+[config] SINGLE_LIGAND effective='IMATINIB' (order=CLI>>)
+[config] SPECIFIED_PROTEINS effective=['1BN1'] (precedence: CLI>ENV>CFG)
+[config] FAST_MODE effective=True (exhaustiveness=1)
+current docking mode is  polypharmacology
+[filter.proteins] mode=on requested=1 present=1 missing=0 ? ['1BN1']
+Selected proteins (Specified Proteins Mode): 1BN1
+Working directory: /stor/work/VDS_Beckham/atlas/code/protein_automation
+Loaded config keys: ['OVERALL_DIR', 'INPUT_DIR', 'PROTEIN_DIR', 'LIGAND_DIR', 'LIGAND_EXTRACTED_DIR', 'LIGANDS_MOL2_DIR', 'OUTPUT_LIGANDS_DIR', 'OUTPUT_DIR', 'PDBQT_DIR', 'DOCKED_DIR', 'P2RANK_OUTPUT_DIR', 'PHENIX_CLEAN_SCRIPT', 'VINA_PATH', 'VINA_EXE', 'OPENBABEL_PATH', 'PYMOL_PATH', 'REDUCE_EXE', 'MGLTOOLS_PYTHON', 'PREPARE_LIGAND_SCRIPT', 'PREPARE_RECEPTOR_SCRIPT', 'P2RANK_PATH', 'CPU_ONLY', 'CPU', 'MAX_PARALLEL_JOBS', 'FORCE_REPROCESS', 'DOCKING_MODE', 'QUIET_CONSOLE', 'EARLY_RECENTER_RATIO', 'EARLY_RECENTER_MIN_EVAL', 'EARLY_RECENTER_FAR_A', 'EARLY_RECENTER_MEDIAN_A', 'ALLOW_BOX_EXPAND', 'MAX_RECENTER_ATTEMPTS', 'CONTROL_CENTER_POLICY', 'CONTROL_CENTER_CLOSE_MAX_A', 'CTRL_REDOCK_EXHAUSTIVENESS', 'CTRL_REDOCK_NMODES', 'BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY', 'BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING', 'EXTRACTED_LIGANDS_DIR', 'PREPPED_LIGANDS_DIR', 'PREPPED_LIGANDS_ROOT', 'PROPKA_EXE', 'MGLTOOLS_PATH', 'MGLTOOLS_DIR', 'PREPARE_LIGAND4', 'ADFRSUITE_BIN', 'PHENIX_DIR', 'PHENIX_LIB_PATH', 'REDUCE_LOCAL_CANDIDATE', 'REDUCE_HET_DICT', 'BABEL_LIBDIR', 'BABEL_DATADIR', 'PYMOL_EXE', 'FINAL_STAGE_POLY', 'FINAL_STAGE_DISC', 'REMOVE_WATERS', 'KEEP_WATERS_WITHIN_A', 'WATER_KEEP_POLICY', 'APO_HOLO_MODE', 'PH_ENSEMBLE', 'THREADS_PER_VINA_CTRL', 'CHAIN_PRUNE', 'CHAIN_POCKET_RADIUS_ANG', 'CHAIN_CONTACT_DIST_ANG', 'CHAIN_MIN_CONTACTS', 'CHAIN_KEEP_LIST', 'CHAIN_LOG_DECISIONS', 'FDA_MAPPING_CSV', 'BENCH_ANALYSIS_OUTDIR', 'BENCH_ONLY_EXTRACTED_CTRL_AND_RDK', 'BENCH_STAGE_NAME', 'NOLIG_CLEANED_PATTERN', 'DEFER_PYMOL', 'PYMOL_DEFER_QUEUE', 'PYMOL_PARALLEL', 'PYMOL_RENDER_WORKERS', 'PYMOL_RENDER_SOFT_CAP', 'PYMOL_RENDER_MODE', 'VIEWPORT_W', 'VIEWPORT_H', 'SURFACE_TRANSPARENCY', 'LABEL_TOP_N_RES', 'LABEL_CUTOFF_ANG', 'PYMOL_IMAGE_VARIANTS', 'PYMOL_IMAGE_INCLUDE_NATIVE', 'SCORE_TOL_KCAL', 'CENTER_TOL_A', 'RMSD_TOL_A', 'ANALYSIS_HTML_EXPECTED_ONLY', 'DEDUP_ID_PREFIX', 'DEDUP_ID_WIDTH', 'DEDUP_ID_SEED', 'BOX_SIZE_MAX_A', 'LOGS_DIR', 'IDENTIFY_LOG_BASENAME', 'IDENTIFY_MAPPING_CSV', 'IDENTIFY_UNMAPPED_CSV', 'IDENTIFY_MAX_WORKERS', 'IDENTIFY_HTTP_WORKERS', 'VINA_VERBOSITY', 'METABO_USE_SCAFFOLD_MATCH', 'METABO_FINGERPRINT_RADIUS', 'METABO_FINGERPRINT_BITS', 'PHENIX_CLEAN_OUTDIR', 'PHENIX_CLEAN_SUFFIX', 'POSE_CLASH_THRESHOLD_A', 'POSE_CLASH_TOLERANCE', 'POSE_DIST_SURFACE_MAX_A', 'POSE_DIST_CENTROID_MAX_A', 'POSE_HBOND_MAX_A', 'POSE_RMSD_TOL_A', 'POSE_MAX_MODELS', 'LIGAND_STATUS_LOG_BASENAME', 'LIGPREP_INTERMEDIATES_DIRNAME', 'LIGPREP_REFERENCE_DIRNAME', 'LIGPREP_QUARANTINE_DIRNAME', 'MALFORMED_LOG_BASENAME', 'USE_RDKIT_FOR_3D', 'OBABEL_THREADS', 'OBABEL_TIMEOUT_S', 'LIGPREP_CHUNK_SIZE', 'LIGPREP_PH', 'KEEP_NONPOLAR_H', 'MAX_HEAVY_ATOMS', 'MIN_ATOMS_FOR_DOCKING', 'MIN_PARENT_HEAVY', 'VINA_TIMEOUT_SEC', 'FILTER_VINA_STDOUT', 'DISCOVERY_SELECTION_PCTS', 'POLYPHARM_SELECTION_PCTS', 'SINGLE_LIGAND', 'SINGLE_LIGAND_SEARCH_ORDER', 'SINGLE_LIGAND_SKIP_GLOBAL', 'SINGLE_LIGAND_ALLOW_PREFIX', 'SINGLE_LIGAND_MANIFEST_ONLY', 'LIBRARY_SUBDIR_DEFAULT', 'TEST_MODE_ENABLE', 'TEST_LIBRARY_MAP', 'SPECIFIED_PROTEINS', 'LOG_LEVEL_FILE', 'LOG_TOPICS', 'LOG_LEVEL_CONSOLE', 'PH_RADIUS', 'PH_LIGAND_MODE', 'CONFIGS_DIR', 'RESET_CONFIGS', 'RUN_ID', 'CONFIG_RUN_DIR', 'SINGLE_LIGAND_SUGGESTIONS', 'ALLOW_FDA_FALLBACK', 'LIBRARY_MANIFEST_FILENAME', 'LIBRARY_MANIFEST_BUILD_ON_SCAN', '_EFFECTIVE_SINGLE_LIGAND', '_EFFECTIVE_SPECIFIED_PROTEINS', 'FAST_MODE', 'CENTER_MODE', 'CONTROL_BLACKLIST', 'CONTROL_MIN_HEAVY_ATOMS', 'CONTROL_ANCHOR_MIN_VALID_RATE', 'ALLOW_SWITCH_FROM_CONTROL', 'REQUIRE_CONTROL_FAILURE_TO_SWITCH', 'SWITCH_AWAY_FROM_CONTROL_MIN_BOOST', 'CONTROL_LOCK_SCORE_MAX', 'CONTROL_LOCK_MIN_HITS', 'CONTROL_LOCK_CENTER_MAX_DIST', 'CLUSTER_EPS_ANG', 'SWITCH_VALID_RATE_MIN', 'SWITCH_SCORE_IMPROVE_MIN', 'SWITCH_LE_GAIN_MIN', 'SWITCH_SCORE_THRESHOLD', 'SWITCH_SCORE_HYSTERESIS', 'MAX_GLOBAL_CENTER_SWITCHES', 'THREADS_PER_VINA', 'RMSD_FILTER_ANG', 'RMSD_MAX_MODELS', 'RETRY_NEAR_MISS', 'RETRY_EXHAUST_MULT', 'RETRY_DIST_THRESH', 'RETRY_SCORE_THRESH', 'ADAPTIVE_SHRINK_ENABLE', 'ADAPTIVE_SHRINK_MEDIAN_MAX', 'ADAPTIVE_SHRINK_DEC', 'ADAPTIVE_SHRINK_MIN_BOX', 'CHECKPOINT_ENABLE', 'PAINS_NAMES', 'RECEPTOR_SANITY_CHECK', 'AUDIT_JSON', 'SELF_RMSD_MAX_ANG', 'SELF_RMSD_REQUIRE_FOR_CONTROLS', 'EARLY_EXIT_MAX_MODELS', 'MAX_RETRY_SECONDS_PER_LIGAND']
+Proteins queued: 1
+Processing Proteins (holo):   0%|          | 0/1 [00:00<?, ?protein/s]2025-11-25 22:02:08,130 - INFO - Processing protein: 1BN1.pdb (id=1BN1)
+2025-11-25 22:02:08,134 - WARNING - [sanitize-collapse] conflict: kept 'AL5_A555.sanitized.protoB.rdkH.sdf', removed longer-run 'AL5_A555.sanitized.sanitized.sanitized.protoB.rdkH.sdf'
+2025-11-25 22:02:08,134 - WARNING - [sanitize-collapse] conflict: kept 'AL5_A555.sanitized.protoB.arom.sdf', removed longer-run 'AL5_A555.sanitized.sanitized.sanitized.protoB.arom.sdf'
+2025-11-25 22:02:08,137 - WARNING - [sanitize-collapse] conflict: kept 'AL5_A555.sanitized.arom.sdf', removed longer-run 'AL5_A555.sanitized.sanitized.sanitized.arom.sdf'
+2025-11-25 22:02:08,137 - WARNING - [sanitize-collapse] conflict: kept 'AL5_A555.sanitized.protoB.withH.mol2', removed longer-run 'AL5_A555.sanitized.sanitized.sanitized.protoB.withH.mol2'
+2025-11-25 22:02:08,138 - WARNING - [sanitize-collapse] conflict: kept 'AL5_A555.sanitized.protoB.rdkH.mol2', removed longer-run 'AL5_A555.sanitized.sanitized.sanitized.protoB.rdkH.mol2'
+2025-11-25 22:02:08,138 - WARNING - [sanitize-collapse] conflict: kept 'AL5_A555.sanitized.protoB.mol2', removed longer-run 'AL5_A555.sanitized.sanitized.sanitized.protoB.mol2'
+2025-11-25 22:02:08,148 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2025-11-25 22:02:08,150 - INFO - (1) elemfix BEFORE: metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/input_pdbs/1BN1.pdb
+2025-11-25 22:02:08,275 - INFO - Early text-level element fix applied to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/raw/1BN1_filtered.pdb
+2025-11-25 22:02:08,277 - WARNING - root - [extract.violation] file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/raw/1BN1_filtered.pdb will_extract_retain_list=HG,HOH,ZN
+2025-11-25 22:02:08,285 - INFO - root - Extracted 1 ligand residues to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw
+2025-11-25 22:02:08,300 - INFO - root - # chain  CA  near  min_d  contacts  keep  reason
+2025-11-25 22:02:08,300 - INFO - root -   A      257 yes     1.48    0       yes   near_pocket
+2025-11-25 22:02:08,315 - INFO - (5) strip_nonstandard BEFORE: metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/raw/1BN1_filtered_pruned.pdb
+2025-11-25 22:02:08,329 - INFO - root - Removed nonstandard residues (YAML-driven): ['AL5', 'HOH']
+2025-11-25 22:02:08,329 - INFO - root - Estimated pocket center: (-9.35, -1.32, 17.81)
+2025-11-25 22:02:08,331 - INFO - Removed 2 nonstandard residue lines.
+2025-11-25 22:02:08,332 - INFO - (5) strip_nonstandard AFTER:  metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_stripped.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_elemfix.pdb
+2025-11-25 22:02:08,440 - INFO - (1) elemfix AFTER:  metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_elemfix.pdb
+2025-11-25 22:02:08,440 - INFO - (2) modeller_fill BEFORE: metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_elemfix.pdb
+2025-11-25 22:02:08,525 - INFO - root - Running MODELLER to complete missing parts of /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_elemfix.pdb
+2025-11-25 22:02:08,760 - INFO - root - MODELLER filled PDB saved to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/modeller_filled.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/modeller_filled.pdb
+2025-11-25 22:02:08,849 - INFO - (2) modeller_fill AFTER:  metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/modeller_filled.pdb
+2025-11-25 22:02:08,881 - INFO - (6) phenix_clean AFTER:  metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1_cleaned.pdb
+2025-11-25 22:02:08,896 - INFO - (3) validate BEFORE: metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_debulked.pdb
+2025-11-25 22:02:08,928 - INFO - (3) validate AFTER:  metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.pdb
+[propka_wire] (3a) p2pqr BEFORE: metals=2 cofactors=0 waters=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.pdb
+2025-11-25 22:02:08,963 - INFO - propka_wire - (3a) p2pqr BEFORE: metals=2 cofactors=0 waters=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.pdb
+[propka_wire] [pdb2pqr.policy] keep_hetatoms=true policy=AUTO variant=HOLO metals_pre=2 cofactors_pre=0
+[propka_wire] [pdb2pqr] keep_hetatoms=true in=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.pdb out=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+[propka_wire] [pdb2pqr.policy] keep_hetatoms requested but CLI flag unavailable; TODO confirm support
+[propka_wire] [pdb2pqr] ph=7.00 out=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb pkas=False
+[propka_wire] (3b) p2pqr AFTER (raw): metals=0 cofactors=0 waters=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+2025-11-25 22:02:10,894 - INFO - propka_wire - (3b) p2pqr AFTER (raw): metals=0 cofactors=0 waters=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+[propka_wire] (3c) p2pqr AFTER (elemfix): metals=0 cofactors=0 waters=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+2025-11-25 22:02:11,080 - INFO - propka_wire - (3c) p2pqr AFTER (elemfix): metals=0 cofactors=0 waters=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+[propka_wire] [p2pqr.rescue] attempted=true reinserted=2 metals=2 cofactors=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+2025-11-25 22:02:11,093 - INFO - root - PDB2PQR succeeded at pH 7.00 -> /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+2025-11-25 22:02:11,098 - INFO - (4) reduce BEFORE: metals=2 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_validated.p7_0.pdb
+2025-11-25 22:02:11,680 - WARNING - root - [reduce] stage=Reduce#1 rc=1 flags=-FLIP -Quiet wrote_atoms=4054
+[proteinprep] Reduce/alt_protonation wrote=True -> /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_reduced.pdb
+2025-11-25 22:02:11,734 - INFO - (4) reduce AFTER:  metals=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_reduced.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/work/1BN1_reduced.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1_cleaned.pdb
+2025-11-25 22:02:12,118 - INFO - Cleaned receptor: /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1_cleaned.pdb
+2025-11-25 22:02:12,119 - INFO - (7) prepare_receptor4 BEFORE: metals=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1_cleaned.pdb
+2025-11-25 22:02:12,119 - INFO - (7) prepare_receptor4 AFTER:  metals=0 file=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1_cleaned.pdb (pdbqt not parsed)
+[proteinprep] cleaned receptor exists=True -> /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1_cleaned.pdb
+2025-11-25 22:02:15,062 - INFO - root - Prepared receptor with ADT prepare_receptor4.py.
+2025-11-25 22:02:15,080 - INFO - root - Saved ligand AL5 A555 to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw/AL5_A555.pdb (elements repaired)
+2025-11-25 22:02:15,080 - INFO - root - Ligands extracted and removed from /stor/work/VDS_Beckham/atlas/code/protein_automation/input_pdbs/1BN1.pdb.
+2025-11-25 22:02:15,080 - INFO - Extracted 1 ligands -> /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw
+2025-11-25 22:02:15,086 - INFO - Extracted 7 ligands -> /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw
+2025-11-25 22:02:15,087 - INFO - root - Starting ligand preparation from PDB files (crystal-safe, MOL2-first path)
+[ligprep-extracted] discovery_root=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw exists=True is_dir=True
+2025-11-25 22:02:15,089 - INFO - root - Found 2 PDB ligand file(s) under /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw
+[ligprep-extracted] test-mode enabled count=2 missing=0 keep=AL5_A555,AL5_A555.sanitized
+2025-11-25 22:02:15,092 - INFO - root - Processing: AL5_A555.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw/AL5_A555.sanitized.pdb
+2025-11-25 22:02:15,112 - INFO - root - Processing: AL5_A555.sanitized.pdb
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw/AL5_A555.sanitized.sanitized.pdb
+[cfg.emit] run=20251125_220208 pdb=1BN1 stage=ctrl_redock variant=HOLO ph=None
+           cfg_dir=/stor/work/VDS_Beckham/atlas/code/protein_automation/configs/20251125_220208/1BN1/HOLO/ctrl_redock receptor=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1.pdbqt out_root=/stor/work/VDS_Beckham/atlas/code/protein_automation/docked/1BN1/HOLO
+[cfg.emit] run=20251125_220208 pdb=1BN1 variant=HOLO ph=None stage=ctrl_redock ligand=AL5_A555 cfg_dir=/stor/work/VDS_Beckham/atlas/code/protein_automation/configs/20251125_220208/1BN1/HOLO/ctrl_redock docked_root=/stor/work/VDS_Beckham/atlas/code/protein_automation/docked/1BN1/HOLO path=/stor/work/VDS_Beckham/atlas/code/protein_automation/configs/20251125_220208/1BN1/HOLO/ctrl_redock/AL5_A555_ctrl_redock.txt overwrite=false bytes=519
+2025-11-25 22:02:20,080 - INFO - Initial box clamped to (24.0, 24.0, 24.0) (cap=28.0 A)
+[CENTER] source=control center=(-3.857, 5.196, 14.831) box=(24.0, 24.0, 24.0)
+2025-11-25 22:02:20,109 - WARNING - [holo.restore.regen] pdb=1BN1 variant=HOLO regen=True; rebuilding receptor PDBQT from /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1_cleaned.pdb -> /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/1BN1.pdbqt
+2025-11-25 22:02:21,014 - INFO - root - Prepared receptor with ADT prepare_receptor4.py.
+2025-11-25 22:02:21,021 - WARNING - root - [ion diff] present_pdb=[('HG', 'A:263'), ('ZN', 'A:262')] missing_in_pdbqt=[]
+[context_ph] INFO - select_ph: blended pH=8.4 span=2.90 → ensemble=[7.9, 8.4, 8.9]
+2025-11-25 22:02:21,080 - INFO - context_ph - select_ph: blended pH=8.4 span=2.90 → ensemble=[7.9, 8.4, 8.9]
+[ph_ensemble] [pHlogs] disabled
+[ph_ensemble] [ph.list] n=3 values=[7.9, 8.4, 8.9]
+[ph_ensemble] [ph.parallel] CPU=128 MAX_PARALLEL_JOBS=128 workers=128 threads_per_job=1 total_threads=128
+[ph_ensemble] [ph.member.start] ph=7.90 tag=1BN1_pH7_9
+[ph_ensemble] [ph.propka.call] ph=7.90 center=(0.000,0.000,0.000) r=1000000.00
+[ph_ensemble] [ph.member.start] ph=8.40 tag=1BN1_pH8_4
+[ph_ensemble] [ph.propka.call] ph=8.40 center=(0.000,0.000,0.000) r=1000000.00
+[ph_ensemble] [ph.member.start] ph=8.90 tag=1BN1_pH8_9
+[ph_ensemble] [ph.propka.call] ph=8.90 center=(0.000,0.000,0.000) r=1000000.00
+[propka_wire] [propka.exec] ph=8.90 wrote_pka=1 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 size=35566 cwd=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble
+[propka_wire] [propka.pka.stats] parsed_rows=82 unique_keys=164
+[propka_wire] [propka.pka.sample] A:16:ASP=4.03; :16:ASP=4.03; A:29:ASP=3.35; :29:ASP=3.35; A:31:ASP=2.91; :31:ASP=2.91; A:38:ASP=2.19; :38:ASP=2.19; A:49:ASP=3.36; :49:ASP=3.36
+[propka_wire] [propka.fingerprint] ph=8.90 file=1BN1_cleaned.pH8_90.pka size=35566 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 rows=164
+[propka_wire] [propka.pka.stats] parsed_rows=82 unique_keys=164
+[propka_wire] [propka.pka.sample] A:16:ASP=4.03; :16:ASP=4.03; A:29:ASP=3.35; :29:ASP=3.35; A:31:ASP=2.91; :31:ASP=2.91; A:38:ASP=2.19; :38:ASP=2.19; A:49:ASP=3.36; :49:ASP=3.36
+[propka_wire] [propka.exec] ph=8.40 wrote_pka=1 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 size=35566 cwd=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble
+[propka_wire] [propka.fingerprint] ph=8.90 file=1BN1_pH8_9.pka size=35566 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 rows=164
+[propka_wire] [propka.table.peek] propka3.5.1                                                                                  2025-11-25
+[propka_wire] [propka.table.peek] 
+[propka_wire] [propka.table.peek] -------------------------------------------------------------------------------
+[propka_wire] [propka.table.peek] --                                                                           --
+[propka_wire] [propka.table.peek] --  PROPKA: A PROTEIN PKA PREDICTOR                                          --
+[propka_wire] [propka.table.peek] --                                                                           --
+[propka_wire] [propka.table.peek] --  VERSION 1.0,  04/25/2004,  IOWA CITY                                     --
+[propka_wire] [propka.table.peek] --  BY HUI LI                                                                --
+[propka_wire] [propka.choice] ph=8.90 A1:HIS pKa=? delta=? -> HIS
+[propka_wire] [propka.choice] ph=8.90 A2:TRP pKa=? delta=? -> TRP
+[propka_wire] [propka.choice] ph=8.90 A3:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=8.90 A4:TYR pKa=13.30 delta=4.40 -> TYR
+[propka_wire] [propka.choice] ph=8.90 A5:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=8.90 A6:LYS pKa=10.66 delta=1.76 -> LYS
+[propka_wire] [propka.choice] ph=8.90 A7:HIS pKa=6.36 delta=-2.54 -> HIE
+[propka_wire] [propka.choice] ph=8.90 A8:ASN pKa=? delta=? -> ASN
+[propka_wire] [propka.choice] ph=8.90 A9:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=8.90 A10:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.90 A11:GLU pKa=3.77 delta=-5.13 -> GLU
+[propka_wire] [propka.choice] ph=8.90 A12:HIS pKa=6.22 delta=-2.68 -> HIE
+[propka_wire] [propka.choice] ph=8.90 A13:TRP pKa=? delta=? -> TRP
+[propka_wire] [propka.choice] ph=8.90 A14:HIS pKa=5.62 delta=-3.28 -> HIE
+[propka_wire] [propka.choice] ph=8.90 A15:LYS pKa=10.29 delta=1.39 -> LYS
+[propka_wire] [propka.choice] ph=8.90 A16:ASP pKa=4.03 delta=-4.87 -> ASP
+[propka_wire] [propka.choice] ph=8.90 A17:PHE pKa=? delta=? -> PHE
+[propka_wire] [propka.choice] ph=8.90 A18:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.90 A19:ILE pKa=? delta=? -> ILE
+[propka_wire] [propka.choice] ph=8.90 A20:ALA pKa=? delta=? -> ALA
+[propka_wire] [propka.choice] ph=8.90 A21:LYS pKa=10.21 delta=1.31 -> LYS
+[propka_wire] [propka.choice] ph=8.90 A22:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=8.90 A23:GLU pKa=3.73 delta=-5.17 -> GLU
+[propka_wire] [propka.choice] ph=8.90 A24:ARG pKa=10.92 delta=2.02 -> ARG
+[propka_wire] [propka.choice] ph=8.90 A25:GLN pKa=? delta=? -> GLN
+[propka_wire] [propka.choice] ph=8.90 A26:SER pKa=? delta=? -> SER
+[propka_wire] [propka.choice] ph=8.90 A27:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.90 A28:VAL pKa=? delta=? -> VAL
+[propka_wire] [propka.choice] ph=8.90 A29:ASP pKa=3.35 delta=-5.55 -> ASP
+[propka_wire] [propka.choice] ph=8.90 A30:ILE pKa=? delta=? -> ILE
+[propka_wire] [propka.choice] ph=8.90 A31:ASP pKa=2.91 delta=-5.99 -> ASP
+[propka_wire] [propka.choice] ph=8.90 A32:THR pKa=? delta=? -> THR
+[propka_wire] [propka.choice] ph=8.90 A33:HIS pKa=6.70 delta=-2.20 -> HIE
+[propka_wire] [propka.choice] ph=8.90 A34:THR pKa=? delta=? -> THR
+[propka_wire] [propka.choice] ph=8.90 A35:ALA pKa=? delta=? -> ALA
+[propka_wire] [propka.choice] ph=8.90 A36:LYS pKa=10.50 delta=1.60 -> LYS
+[propka_wire] [propka.choice] ph=8.90 A37:TYR pKa=10.25 delta=1.35 -> TYR
+[propka_wire] [propka.choice] ph=8.90 A38:ASP pKa=2.19 delta=-6.71 -> ASP
+[propka_wire] [propka.choice] ph=8.90 A39:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.90 A40:SER pKa=? delta=? -> SER
+[propka_wire] [propka.pka.stats] parsed_rows=82 unique_keys=164
+[propka_wire] [propka.pka.sample] A:16:ASP=4.03; :16:ASP=4.03; A:29:ASP=3.35; :29:ASP=3.35; A:31:ASP=2.91; :31:ASP=2.91; A:38:ASP=2.19; :38:ASP=2.19; A:49:ASP=3.36; :49:ASP=3.36
+[propka_wire] [propka.fingerprint] ph=8.40 file=1BN1_cleaned.pH8_40.pka size=35566 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 rows=164
+[propka_wire] [propka.exec] ph=7.90 wrote_pka=1 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 size=35566 cwd=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble
+[propka_wire] [propka.pka.stats] parsed_rows=82 unique_keys=164
+[propka_wire] [propka.pka.sample] A:16:ASP=4.03; :16:ASP=4.03; A:29:ASP=3.35; :29:ASP=3.35; A:31:ASP=2.91; :31:ASP=2.91; A:38:ASP=2.19; :38:ASP=2.19; A:49:ASP=3.36; :49:ASP=3.36
+[propka_wire] [propka.fingerprint] ph=8.40 file=1BN1_pH8_4.pka size=35566 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 rows=164
+[propka_wire] [propka.table.peek] propka3.5.1                                                                                  2025-11-25
+[propka_wire] [propka.table.peek] 
+[propka_wire] [propka.table.peek] -------------------------------------------------------------------------------
+[propka_wire] [propka.table.peek] --                                                                           --
+[propka_wire] [propka.table.peek] --  PROPKA: A PROTEIN PKA PREDICTOR                                          --
+[propka_wire] [propka.table.peek] --                                                                           --
+[propka_wire] [propka.table.peek] --  VERSION 1.0,  04/25/2004,  IOWA CITY                                     --
+[propka_wire] [propka.table.peek] --  BY HUI LI                                                                --
+[propka_wire] [propka.choice] ph=8.40 A1:HIS pKa=? delta=? -> HIS
+[propka_wire] [propka.choice] ph=8.40 A2:TRP pKa=? delta=? -> TRP
+[propka_wire] [propka.pka.stats] parsed_rows=82 unique_keys=164
+[propka_wire] [propka.choice] ph=8.40 A3:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.pka.sample] A:16:ASP=4.03; :16:ASP=4.03; A:29:ASP=3.35; :29:ASP=3.35; A:31:ASP=2.91; :31:ASP=2.91; A:38:ASP=2.19; :38:ASP=2.19; A:49:ASP=3.36; :49:ASP=3.36
+[propka_wire] [propka.choice] ph=8.40 A4:TYR pKa=13.30 delta=4.90 -> TYR
+[propka_wire] [propka.choice] ph=8.40 A5:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=8.40 A6:LYS pKa=10.66 delta=2.26 -> LYS
+[propka_wire] [propka.fingerprint] ph=7.90 file=1BN1_cleaned.pH7_90.pka size=35566 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 rows=164
+[propka_wire] [propka.choice] ph=8.40 A7:HIS pKa=6.36 delta=-2.04 -> HIE
+[propka_wire] [propka.choice] ph=8.40 A8:ASN pKa=? delta=? -> ASN
+[propka_wire] [propka.choice] ph=8.40 A9:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=8.40 A10:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.40 A11:GLU pKa=3.77 delta=-4.63 -> GLU
+[propka_wire] [propka.choice] ph=8.40 A12:HIS pKa=6.22 delta=-2.18 -> HIE
+[propka_wire] [propka.choice] ph=8.40 A13:TRP pKa=? delta=? -> TRP
+[propka_wire] [propka.choice] ph=8.40 A14:HIS pKa=5.62 delta=-2.78 -> HIE
+[propka_wire] [propka.choice] ph=8.40 A15:LYS pKa=10.29 delta=1.89 -> LYS
+[propka_wire] [propka.choice] ph=8.40 A16:ASP pKa=4.03 delta=-4.37 -> ASP
+[propka_wire] [propka.choice] ph=8.40 A17:PHE pKa=? delta=? -> PHE
+[propka_wire] [propka.choice] ph=8.40 A18:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.40 A19:ILE pKa=? delta=? -> ILE
+[propka_wire] [propka.choice] ph=8.40 A20:ALA pKa=? delta=? -> ALA
+[propka_wire] [propka.choice] ph=8.40 A21:LYS pKa=10.21 delta=1.81 -> LYS
+[propka_wire] [propka.choice] ph=8.40 A22:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=8.40 A23:GLU pKa=3.73 delta=-4.67 -> GLU
+[propka_wire] [propka.choice] ph=8.40 A24:ARG pKa=10.92 delta=2.52 -> ARG
+[propka_wire] [propka.choice] ph=8.40 A25:GLN pKa=? delta=? -> GLN
+[propka_wire] [propka.choice] ph=8.40 A26:SER pKa=? delta=? -> SER
+[propka_wire] [propka.choice] ph=8.40 A27:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.40 A28:VAL pKa=? delta=? -> VAL
+[propka_wire] [propka.choice] ph=8.40 A29:ASP pKa=3.35 delta=-5.05 -> ASP
+[propka_wire] [propka.choice] ph=8.40 A30:ILE pKa=? delta=? -> ILE
+[propka_wire] [propka.choice] ph=8.40 A31:ASP pKa=2.91 delta=-5.49 -> ASP
+[propka_wire] [propka.choice] ph=8.40 A32:THR pKa=? delta=? -> THR
+[propka_wire] [propka.choice] ph=8.40 A33:HIS pKa=6.70 delta=-1.70 -> HIE
+[propka_wire] [propka.choice] ph=8.40 A34:THR pKa=? delta=? -> THR
+[propka_wire] [propka.choice] ph=8.40 A35:ALA pKa=? delta=? -> ALA
+[propka_wire] [propka.choice] ph=8.40 A36:LYS pKa=10.50 delta=2.10 -> LYS
+[propka_wire] [propka.choice] ph=8.40 A37:TYR pKa=10.25 delta=1.85 -> TYR
+[propka_wire] [propka.choice] ph=8.40 A38:ASP pKa=2.19 delta=-6.21 -> ASP
+[propka_wire] [propka.choice] ph=8.40 A39:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=8.40 A40:SER pKa=? delta=? -> SER
+[propka_wire] [propka.pka.stats] parsed_rows=82 unique_keys=164
+[propka_wire] [propka.pka.sample] A:16:ASP=4.03; :16:ASP=4.03; A:29:ASP=3.35; :29:ASP=3.35; A:31:ASP=2.91; :31:ASP=2.91; A:38:ASP=2.19; :38:ASP=2.19; A:49:ASP=3.36; :49:ASP=3.36
+[propka_wire] [propka.fingerprint] ph=7.90 file=1BN1_pH7_9.pka size=35566 sha1=a99f59e185893207039cd38b9a85e86a91c8b6f2 rows=164
+[propka_wire] [propka.table.peek] propka3.5.1                                                                                  2025-11-25
+[propka_wire] [propka.table.peek] 
+[propka_wire] [propka.table.peek] -------------------------------------------------------------------------------
+[propka_wire] [propka.table.peek] --                                                                           --
+[propka_wire] [propka.table.peek] --  PROPKA: A PROTEIN PKA PREDICTOR                                          --
+[propka_wire] [propka.table.peek] --                                                                           --
+[propka_wire] [propka.table.peek] --  VERSION 1.0,  04/25/2004,  IOWA CITY                                     --
+[propka_wire] [propka.table.peek] --  BY HUI LI                                                                --
+[propka_wire] [propka.choice] ph=7.90 A1:HIS pKa=? delta=? -> HIS
+[propka_wire] [propka.choice] ph=7.90 A2:TRP pKa=? delta=? -> TRP
+[propka_wire] [propka.choice] ph=7.90 A3:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=7.90 A4:TYR pKa=13.30 delta=5.40 -> TYR
+[propka_wire] [propka.choice] ph=7.90 A5:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=7.90 A6:LYS pKa=10.66 delta=2.76 -> LYS
+[propka_wire] [propka.choice] ph=7.90 A7:HIS pKa=6.36 delta=-1.54 -> HIE
+[propka_wire] [propka.choice] ph=7.90 A8:ASN pKa=? delta=? -> ASN
+[propka_wire] [propka.choice] ph=7.90 A9:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=7.90 A10:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=7.90 A11:GLU pKa=3.77 delta=-4.13 -> GLU
+[propka_wire] [propka.choice] ph=7.90 A12:HIS pKa=6.22 delta=-1.68 -> HIE
+[propka_wire] [propka.choice] ph=7.90 A13:TRP pKa=? delta=? -> TRP
+[propka_wire] [propka.choice] ph=7.90 A14:HIS pKa=5.62 delta=-2.28 -> HIE
+[propka_wire] [propka.choice] ph=7.90 A15:LYS pKa=10.29 delta=2.39 -> LYS
+[propka_wire] [propka.choice] ph=7.90 A16:ASP pKa=4.03 delta=-3.87 -> ASP
+[propka_wire] [propka.choice] ph=7.90 A17:PHE pKa=? delta=? -> PHE
+[propka_wire] [propka.choice] ph=7.90 A18:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=7.90 A19:ILE pKa=? delta=? -> ILE
+[propka_wire] [propka.choice] ph=7.90 A20:ALA pKa=? delta=? -> ALA
+[propka_wire] [propka.choice] ph=7.90 A21:LYS pKa=10.21 delta=2.31 -> LYS
+[propka_wire] [propka.choice] ph=7.90 A22:GLY pKa=? delta=? -> GLY
+[propka_wire] [propka.choice] ph=7.90 A23:GLU pKa=3.73 delta=-4.17 -> GLU
+[propka_wire] [propka.choice] ph=7.90 A24:ARG pKa=10.92 delta=3.02 -> ARG
+[propka_wire] [propka.choice] ph=7.90 A25:GLN pKa=? delta=? -> GLN
+[propka_wire] [propka.choice] ph=7.90 A26:SER pKa=? delta=? -> SER
+[propka_wire] [propka.choice] ph=7.90 A27:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=7.90 A28:VAL pKa=? delta=? -> VAL
+[propka_wire] [propka.choice] ph=7.90 A29:ASP pKa=3.35 delta=-4.55 -> ASP
+[propka_wire] [propka.choice] ph=7.90 A30:ILE pKa=? delta=? -> ILE
+[propka_wire] [propka.choice] ph=7.90 A31:ASP pKa=2.91 delta=-4.99 -> ASP
+[propka_wire] [propka.choice] ph=7.90 A32:THR pKa=? delta=? -> THR
+[propka_wire] [propka.choice] ph=7.90 A33:HIS pKa=6.70 delta=-1.20 -> HIE
+[propka_wire] [propka.choice] ph=7.90 A34:THR pKa=? delta=? -> THR
+[propka_wire] [propka.choice] ph=7.90 A35:ALA pKa=? delta=? -> ALA
+[propka_wire] [propka.choice] ph=7.90 A36:LYS pKa=10.50 delta=2.60 -> LYS
+[propka_wire] [propka.choice] ph=7.90 A37:TYR pKa=10.25 delta=2.35 -> TYR
+[propka_wire] [propka.choice] ph=7.90 A38:ASP pKa=2.19 delta=-5.71 -> ASP
+[propka_wire] [propka.choice] ph=7.90 A39:PRO pKa=? delta=? -> PRO
+[propka_wire] [propka.choice] ph=7.90 A40:SER pKa=? delta=? -> SER
+[propka_wire] [propka.renames] ph=8.90 within_r=ALL n=10 A7:HIS->HIE A12:HIS->HIE A14:HIS->HIE A33:HIS->HIE A61:HIS->HIE A91:HIS->HIE A93:HIS->HIE A104:HIS->HIE A116:HIS->HIE A119:HIS->HIE
+[propka_wire] [propka.match] pKa_keys=82 (with_chain) + 82 (chainless)
+[propka_wire] [propka.states] scope=GLOBAL center=(0.000,0.000,0.000) r=ALL ph=8.90 n_renamed=170
+[propka_wire] [prestate.sha1] ph=8.90 file=1BN1_pH8_9.prestate.pdb atoms=4057 sha1=4fa836d25950b53d3e0a94f1ce52a496ab9305cb size=328697
+[propka_wire] [propka.states.bin] ph=8.90 ASP=19 ASH=0 GLU=13 GLH=0 HIS=1 HID=0 HIE=10 HIP=0 CYS=1 CYM=0 LYS=24 LYN=0 TYR=8
+[propka_wire] [propka.renames] ph=8.40 within_r=ALL n=10 A7:HIS->HIE A12:HIS->HIE A14:HIS->HIE A33:HIS->HIE A61:HIS->HIE A91:HIS->HIE A93:HIS->HIE A104:HIS->HIE A116:HIS->HIE A119:HIS->HIE
+[propka_wire] [propka.match] pKa_keys=82 (with_chain) + 82 (chainless)
+[propka_wire] [propka.states] scope=GLOBAL center=(0.000,0.000,0.000) r=ALL ph=8.40 n_renamed=170
+[propka_wire] [prestate.sha1] ph=8.40 file=1BN1_pH8_4.prestate.pdb atoms=4057 sha1=4fa836d25950b53d3e0a94f1ce52a496ab9305cb size=328697
+[propka_wire] [propka.states.bin] ph=8.40 ASP=19 ASH=0 GLU=13 GLH=0 HIS=1 HID=0 HIE=10 HIP=0 CYS=1 CYM=0 LYS=24 LYN=0 TYR=8
+[propka_wire] [propka.renames] ph=7.90 within_r=ALL n=10 A7:HIS->HIE A12:HIS->HIE A14:HIS->HIE A33:HIS->HIE A61:HIS->HIE A91:HIS->HIE A93:HIS->HIE A104:HIS->HIE A116:HIS->HIE A119:HIS->HIE
+[propka_wire] [propka.match] pKa_keys=82 (with_chain) + 82 (chainless)
+[propka_wire] [propka.states] scope=GLOBAL center=(0.000,0.000,0.000) r=ALL ph=7.90 n_renamed=170
+[propka_wire] [prestate.sha1] ph=7.90 file=1BN1_pH7_9.prestate.pdb atoms=4057 sha1=4fa836d25950b53d3e0a94f1ce52a496ab9305cb size=328697
+[propka_wire] [propka.states.bin] ph=7.90 ASP=19 ASH=0 GLU=13 GLH=0 HIS=1 HID=0 HIE=10 HIP=0 CYS=1 CYM=0 LYS=24 LYN=0 TYR=8
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.prestate.pdb
+2025-11-25 22:02:23,087 - WARNING - root - [reduce] stage=Reduce#1 rc=1 flags=-FLIP -Quiet wrote_atoms=4057
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH7_9.prestate.pdb
+2025-11-25 22:02:23,110 - WARNING - root - [reduce] stage=Reduce#1 rc=1 flags=-FLIP -Quiet wrote_atoms=4057
+Saved fixed PDB to /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.prestate.pdb
+2025-11-25 22:02:23,111 - WARNING - root - [reduce] stage=Reduce#1 rc=1 flags=-FLIP -Quiet wrote_atoms=4057
+2025-11-25 22:02:24,033 - INFO - root - Prepared receptor with ADT prepare_receptor4.py.
+2025-11-25 22:02:24,041 - WARNING - root - [ion diff] present_pdb=[('HG', 'A:263'), ('ZN', 'A:262')] missing_in_pdbqt=[]
+2025-11-25 22:02:24,066 - INFO - root - Prepared receptor with ADT prepare_receptor4.py.
+2025-11-25 22:02:24,067 - INFO - root - Prepared receptor with ADT prepare_receptor4.py.
+2025-11-25 22:02:24,075 - WARNING - root - [ion diff] present_pdb=[('HG', 'A:263'), ('ZN', 'A:262')] missing_in_pdbqt=[]
+2025-11-25 22:02:24,076 - WARNING - root - [ion diff] present_pdb=[('HG', 'A:263'), ('ZN', 'A:262')] missing_in_pdbqt=[]
+[ph_ensemble] [stage.A.prestate] ph=7.90 atoms=4057 sha1=4fa836d25950b53d3e0a94f1ce52a496ab9305cb bins=ASP=19 GLU=13 HIS=1 HIE=10 LYS=24 CYS=1 TYR=8
+[ph_ensemble] [withH.sha1] ph=7.90 sha1=898975750c5fcce50adcfc01721cac41ff1b641d
+[ph_ensemble] [stage.B.withH] ph=7.90 atoms=4057 sha1=898975750c5fcce50adcfc01721cac41ff1b641d pocket_H=2006 bins=ASP=19 GLU=13 HIS=1 HIE=10 LYS=24 CYS=1 TYR=8
+[ph_ensemble] [stage.C.pdbqt] ph=7.90 size=200028 path=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH7_9.pdbqt
+[ph_ensemble] [ensemble.step] ph=7.90 prestate=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH7_9.prestate.pdb withH=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH7_9.withH.pdb pdbqt=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH7_9.pdbqt
+[ph_ensemble] [stage.A.prestate] ph=8.40 atoms=4057 sha1=4fa836d25950b53d3e0a94f1ce52a496ab9305cb bins=ASP=19 GLU=13 HIS=1 HIE=10 LYS=24 CYS=1 TYR=8
+[ph_ensemble] [compare.prestate] ph=8.40 same_as_prev=True
+[ph_ensemble] [withH.sha1] ph=8.40 sha1=898975750c5fcce50adcfc01721cac41ff1b641d
+[ph_ensemble] [stage.B.withH] ph=8.40 atoms=4057 sha1=898975750c5fcce50adcfc01721cac41ff1b641d pocket_H=2006 bins=ASP=19 GLU=13 HIS=1 HIE=10 LYS=24 CYS=1 TYR=8
+[ph_ensemble] [compare.withH] ph=8.40 same_as_prev=True
+[ph_ensemble] [stage.C.pdbqt] ph=8.40 size=200028 path=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.pdbqt
+[ph_ensemble] [compare.pdbqt] ph=8.40 same_size_as_prev=True
+[ph_ensemble] [ensemble.step] ph=8.40 prestate=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.prestate.pdb withH=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.withH.pdb pdbqt=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.pdbqt
+[ph_ensemble] [stage.A.prestate] ph=8.90 atoms=4057 sha1=4fa836d25950b53d3e0a94f1ce52a496ab9305cb bins=ASP=19 GLU=13 HIS=1 HIE=10 LYS=24 CYS=1 TYR=8
+[ph_ensemble] [compare.prestate] ph=8.90 same_as_prev=True
+[ph_ensemble] [withH.sha1] ph=8.90 sha1=898975750c5fcce50adcfc01721cac41ff1b641d
+[ph_ensemble] [stage.B.withH] ph=8.90 atoms=4057 sha1=898975750c5fcce50adcfc01721cac41ff1b641d pocket_H=2006 bins=ASP=19 GLU=13 HIS=1 HIE=10 LYS=24 CYS=1 TYR=8
+[ph_ensemble] [compare.withH] ph=8.90 same_as_prev=True
+[ph_ensemble] [stage.C.pdbqt] ph=8.90 size=200028 path=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.pdbqt
+[ph_ensemble] [compare.pdbqt] ph=8.90 same_size_as_prev=True
+[ph_ensemble] [ensemble.step] ph=8.90 prestate=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.prestate.pdb withH=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.withH.pdb pdbqt=/stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.pdbqt
+[ph_ensemble] [dedupe.rename] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH7_9.pdbqt → /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH7_9+8_4+8_9-dup30.pdbqt
+[ph_ensemble] [dedupe.delete.pdbqt] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.pdbqt
+[ph_ensemble] [dedupe.delete.withH] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.withH.pdb
+[ph_ensemble] [dedupe.delete.prestate] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.prestate.pdb
+[ph_ensemble] [dedupe.delete.pka] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_4.pka
+[ph_ensemble] [dedupe.delete.pdbqt] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.pdbqt
+[ph_ensemble] [dedupe.delete.withH] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.withH.pdb
+[ph_ensemble] [dedupe.delete.prestate] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.prestate.pdb
+[ph_ensemble] [dedupe.delete.pka] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/1BN1_pH8_9.pka
+[ph_ensemble] [dedupe.group] sha=898975750c5f phs=7.90,8.40,8.90 canonical=7.90
+[ph_ensemble] [manifest.write] /stor/work/VDS_Beckham/atlas/code/protein_automation/processed_pdbs/1BN1/HOLO/receptor/ph_ensemble/ensemble.json
+2025-11-25 22:02:24,197 - ERROR - root - [apo-holo] FAILED pdb_id=1BN1 variant_label=holo; see failure log at /stor/work/VDS_Beckham/atlas/code/protein_automation/failed/1BN1.holo.log
+Processing Proteins (holo): 100%|##########| 1/1 [00:16<00:00, 16.07s/protein]Processing Proteins (holo): 100%|##########| 1/1 [00:16<00:00, 16.07s/protein]
+
+All proteins processed in 0.27 minutes.
+
+The following proteins failed. See per-PDB logs under: /stor/work/VDS_Beckham/atlas/code/protein_automation/failed
+  - 1BN1 (holo): UnboundLocalError — local variable 'stages' referenced before assignment
+      log: /stor/work/VDS_Beckham/atlas/code/protein_automation/failed/1BN1.holo.log
+Log -> /stor/work/VDS_Beckham/atlas/code/protein_automation/logs/main_20251125_220208.log
