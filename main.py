@@ -1082,19 +1082,26 @@ def _fingerprint_stage(cfg: Dict,
     }
 
 
-def _checkpoint_path(cfg: Dict, pdb_id: str, stage_name: str) -> Path:
-    ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
-    variant = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+def _checkpoint_path(
+    cfg: Dict,
+    pdb_id: str,
+    stage_name: str,
+    ph_label: Optional[str] = None,
+    variant: Optional[str] = None,
+) -> Path:
+    variant_token = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    root = docked_dir(pdb_id, variant=variant, ph_tag=ph_label, legacy=legacy_mode)
+    root = docked_dir(pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
     return root / f".ckpt_{stage_name}.json"
 
 
 def checkpoint_should_skip(cfg: Dict,
                            pdb_id: str,
                            stage_name: str,
-                           fingerprint: Dict[str, Any]) -> bool:
-    p = _checkpoint_path(cfg, pdb_id, stage_name)
+                           fingerprint: Dict[str, Any],
+                           ph_label: Optional[str] = None,
+                           variant: Optional[str] = None) -> bool:
+    p = _checkpoint_path(cfg, pdb_id, stage_name, ph_label=ph_label, variant=variant)
     if not p.exists():
         return False
     try:
@@ -1107,8 +1114,10 @@ def checkpoint_should_skip(cfg: Dict,
 def checkpoint_mark_done(cfg: Dict,
                          pdb_id: str,
                          stage_name: str,
-                         fingerprint: Dict[str, Any]) -> None:
-    p = _checkpoint_path(cfg, pdb_id, stage_name)
+                         fingerprint: Dict[str, Any],
+                         ph_label: Optional[str] = None,
+                         variant: Optional[str] = None) -> None:
+    p = _checkpoint_path(cfg, pdb_id, stage_name, ph_label=ph_label, variant=variant)
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
         p.write_text(json.dumps(fingerprint, indent=2))
@@ -1116,20 +1125,28 @@ def checkpoint_mark_done(cfg: Dict,
         pass
 
 
-def checkpoint_invalidate_from(cfg: Dict, pdb_id: str, stages: List[Dict], start_index: int) -> None:
+def checkpoint_invalidate_from(cfg: Dict, pdb_id: str, stages: List[Dict], start_index: int,
+                               ph_label: Optional[str] = None,
+                               variant: Optional[str] = None) -> None:
     for j in range(start_index, len(stages)):
         try:
-            _checkpoint_path(cfg, pdb_id, stages[j]["name"]).unlink(missing_ok=True)
+            _checkpoint_path(
+                cfg,
+                pdb_id,
+                stages[j]["name"],
+                ph_label=ph_label,
+                variant=variant,
+            ).unlink(missing_ok=True)
         except Exception:
             pass
 
 
-def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict):
+def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict, ph_label: Optional[str] = None,
+                     variant: Optional[str] = None):
     try:
         if not cfg.get("AUDIT_JSON", True):
             return
-        ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
-        variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+        variant_env = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
         legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
         out = docked_dir(pdb_id, variant=variant_env, ph_tag=ph_label, legacy=legacy_mode) / "audit.json"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -2667,16 +2684,14 @@ def _lib_roots_for_pdb(cfg: Dict, pdb_id: str, paths: Paths, logger: logging.Log
         pdb_id,
         len(allowed_noncontrol_roots),
     )
-    if allowed_noncontrol_roots:
-        cfg["_PH_LIGAND_ROOT"] = str(allowed_noncontrol_roots[0])
-    else:
-        cfg.pop("_PH_LIGAND_ROOT", None)
     cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
+
+    primary_root_str = str(allowed_noncontrol_roots[0]) if allowed_noncontrol_roots else None
     logger.info(
         "[ph_ligand.roots] test_mode=%s pdb=%s ph_root=%s noncontrol_roots=%s",
         test_mode,
         pdb_id,
-        cfg.get("_PH_LIGAND_ROOT"),
+        primary_root_str,
         cfg.get("_ALLOWED_NONCONTROL_ROOTS"),
     )
     cfg["_TEST_MODE_EFFECTIVE"] = test_mode
@@ -3023,6 +3038,7 @@ def run_one_stage(
     retry_mgr: RetryManager,
     control_lookup: Dict[str, Path],        # maps ligand basename -> crystal ref PDB
     budget_guards: Optional[Dict[str, BudgetGuard]] = None,  # external per-ligand guards
+    ph_label: Optional[str] = None,
 ) -> Tuple[
     Dict[str, float],
     List[str],
@@ -3039,7 +3055,6 @@ def run_one_stage(
     variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant_token = variant_env or None
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
 
     scores: Dict[str, float] = {}
@@ -4043,27 +4058,29 @@ def final_pose_validation_and_screenshots(
             logger.warning(f"Screenshot generation failed: {e}")
 
 
-def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str) -> str:
+def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str,
+                   ph_label: Optional[str] = None, variant: Optional[str] = None) -> str:
     """Build the expected pose path for a ligand at a given stage."""
     from pathlib import Path
     # >>> DOCKED PATHS PATCH START
     paths = make_paths(csv_cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    ph_label = (csv_cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
-    variant = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-    stage_dir = paths.docked_stage_dir(variant, stage_name, ph_label)
+    ph_token = (ph_label or "").strip() or None
+    variant_token = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+    stage_dir = paths.docked_stage_dir(variant_token, stage_name, ph_token)
     return str(stage_dir / f"{Path(lig_path).stem}_{stage_name}.pdbqt")
     # >>> DOCKED PATHS PATCH END
 
 
-def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, Dict]]) -> str:
+def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, Dict]],
+                     ph_label: Optional[str] = None, variant: Optional[str] = None) -> str:
     import csv, math
 
     # >>> DOCKED PATHS PATCH START
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
-    variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    ph_token = (ph_label or "").strip() or None
+    variant_env = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant_token = variant_env or None
-    dock_dir = paths.docked_variant_root(variant_token, ph_label)
+    dock_dir = paths.docked_variant_root(variant_token, ph_token)
     dock_dir.mkdir(parents=True, exist_ok=True)
     # >>> DOCKED PATHS PATCH END
 
@@ -4112,7 +4129,14 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
                 pains_hit = rec.get("pains_flag", False)
 
                 # Compute self-RMSD from the saved pose for this stage (if present)
-                pose_path = _pose_path_for(cfg, pdb_id, stage_name, lig)
+                pose_path = _pose_path_for(
+                    cfg,
+                    pdb_id,
+                    stage_name,
+                    lig,
+                    ph_label=ph_token,
+                    variant=variant_token,
+                )
                 if os.path.exists(pose_path):
                     try:
                         sr = compute_self_rmsd(pose_path)
@@ -4360,7 +4384,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     variant_token = variant_env or None
     variant_label = variant_env or "legacy"
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    active_ph_label = (cfg.get("_ACTIVE_PH_LABEL") or "").strip() or None
+    active_ph_label = None
 
     ion_audit_root: dict = cfg.setdefault("_ION_AUDIT", {})
     pdb_audit: dict = ion_audit_root.setdefault(paths.pdb_id, {})
@@ -4887,11 +4911,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 )
                 logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
 
-                ph_root_cfg = cfg.get("_PH_LIGAND_ROOT", "")
-                try:
-                    ph_root_path = Path(ph_root_cfg) if ph_root_cfg else None
-                except Exception:
-                    ph_root_path = None
+                _, noncontrol_roots_single = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
+                ph_root_path = noncontrol_roots_single[0] if noncontrol_roots_single else None
+                ph_root_cfg = str(ph_root_path) if ph_root_path else ""
 
                 logger.info(
                     "[single.ph_ligand.bridge] ph_root_cfg=%s ph_root_path=%s exists=%s",
@@ -4908,7 +4930,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     )
                 else:
                     logger.info(
-                        "[single.ph_ligand.bridge.skip] no valid _PH_LIGAND_ROOT; "
+                        "[single.ph_ligand.bridge.skip] no valid ph_ligand_root; "
                         "skipping microstate priming for single-ligand mode"
                     )
             except Exception as e:
@@ -4986,13 +5008,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         # keep the early return behavior for empty ensembles
         return
 
-    ph_ligand_root = None
-    ph_ligand_root_str = cfg.get("_PH_LIGAND_ROOT")
-    if ph_ligand_root_str:
-        try:
-            ph_ligand_root = Path(ph_ligand_root_str)
-        except Exception:
-            ph_ligand_root = None
+    # Resolve the primary non-control library root for pH ligands
+    _ctrl_roots_ph, noncontrol_roots_ph = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
+    ph_ligand_root = noncontrol_roots_ph[0] if noncontrol_roots_ph else None
 
     prewarm_ph_ligand_microstates(cfg, ph_tags, ph_ligand_root)
 
@@ -5029,11 +5047,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 str(rec_path),
             )
             continue
-
-        if ph_label:
-            cfg["_ACTIVE_PH_LABEL"] = ph_label
-        else:
-            cfg.pop("_ACTIVE_PH_LABEL", None)
 
         ligands = base_ligands[:]
         heavy_atom_counts = dict(base_heavy_atoms)
@@ -5136,7 +5149,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
             if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                 fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
-                if checkpoint_should_skip(cfg, paths.pdb_id, stage["name"], fp):
+                if checkpoint_should_skip(
+                    cfg,
+                    paths.pdb_id,
+                    stage["name"],
+                    fp,
+                    ph_label=ph_label,
+                    variant=variant_env or None,
+                ):
                     logger.info(f"[Checkpoint] Skipping {stage['name']} (fingerprint matched).")
                     i += 1
                     continue
@@ -5165,7 +5185,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
                 s1, v1, d1, rd1, inv1 = run_one_stage(
                     cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                    ctrls, logger, retry_mgr, control_lookup
+                    ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
                 )
 
                 try:
@@ -5206,7 +5226,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
                 s2, v2, d2, rd2, inv2 = run_one_stage(
                     cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                    non_ctrls, logger, retry_mgr, control_lookup
+                    non_ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
                 )
 
                 scores, validated, distances = ({**s1, **s2}, v1 + v2, d1 + d2)
@@ -5215,7 +5235,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             else:
                 scores, validated, distances, raw_docked, invalids = run_one_stage(
                     cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                    ligands, logger, retry_mgr, control_lookup
+                    ligands, logger, retry_mgr, control_lookup, ph_label=ph_label
                 )
 
             validated_ligands_last = validated
@@ -5302,11 +5322,18 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     promoted_this_stage = True
                     guard.mark_switch()
                     if bool(cfg.get("CHECKPOINT_ENABLE", True)):
-                        checkpoint_invalidate_from(cfg, paths.pdb_id, stages, start_index=i)
-                    logger.info(
-                        f"[CENTER] Switched from {old} -> {center} ({decision.reason}, "
-                        f"SwitchScore={decision.switchscore:.2f}) [global switch]"
-                    )
+                        checkpoint_invalidate_from(
+                            cfg,
+                            paths.pdb_id,
+                            stages,
+                            start_index=i,
+                            ph_label=ph_label,
+                            variant=variant_env or None,
+                        )
+                logger.info(
+                    f"[CENTER] Switched from {old} -> {center} ({decision.reason}, "
+                    f"SwitchScore={decision.switchscore:.2f}) [global switch]"
+                )
             except Exception as e:
                 logger.warning(f"CenterSelector failed gracefully: {e}")
 
@@ -5329,7 +5356,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 if restart:
                     ligands = redo_ligands
                     if bool(cfg.get("CHECKPOINT_ENABLE", True)):
-                        checkpoint_invalidate_from(cfg, paths.pdb_id, stages, start_index=0)
+                        checkpoint_invalidate_from(
+                            cfg,
+                            paths.pdb_id,
+                            stages,
+                            start_index=0,
+                            ph_label=ph_label,
+                            variant=variant_env or None,
+                        )
                     i = 0
                     continue
 
@@ -5361,7 +5395,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     if restart:
                         ligands = redo_ligands
                         if bool(cfg.get("CHECKPOINT_ENABLE", True)):
-                            checkpoint_invalidate_from(cfg, paths.pdb_id, stages, start_index=0)
+                            checkpoint_invalidate_from(
+                                cfg,
+                                paths.pdb_id,
+                                stages,
+                                start_index=0,
+                                ph_label=ph_label,
+                                variant=variant_env or None,
+                            )
                         i = 0
                         continue
                     else:
@@ -5400,7 +5441,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                 try:
                     fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
-                    checkpoint_mark_done(cfg, paths.pdb_id, stage["name"], fp)
+                    checkpoint_mark_done(
+                        cfg,
+                        paths.pdb_id,
+                        stage["name"],
+                        fp,
+                        ph_label=ph_label,
+                        variant=variant_env or None,
+                    )
                 except Exception:
                     pass
 
@@ -5414,7 +5462,13 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             score_history, cleaned_pdb, docking_mode, logger, ph_label
         )
 
-        csv_path = write_scores_csv(cfg, paths.pdb_id, score_history)
+        csv_path = write_scores_csv(
+            cfg,
+            paths.pdb_id,
+            score_history,
+            ph_label=ph_label,
+            variant=variant_env or None,
+        )
         logger.info(
             "[Scores] ph_label=%s summary=%s",
             ph_label if ph_label else "base",
@@ -5433,11 +5487,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 "stages": [s["name"] for s in stages],
                 "ph_label": ph_label,
             }
-            _write_audit_json(cfg, paths.pdb_id, summary)
+            _write_audit_json(cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None)
         except Exception as _e:
             logger.warning(f"Audit JSON write failed: {_e}")
-
-    cfg.pop("_ACTIVE_PH_LABEL", None)
 
 
 def _smoke_emit_config_demo() -> None:
@@ -5485,7 +5537,6 @@ def _smoke_emit_config_demo() -> None:
             lig_path.write_text("SMOKE", encoding="utf-8")
 
         ph_label = "pH6_7"
-        cfg["_ACTIVE_PH_LABEL"] = ph_label
         os.environ["APO_HOLO_VARIANT"] = "APO"
 
         receptor_path = receptor_file(paths.pdb_id, variant="APO", ph_tag=ph_label, legacy=False)
