@@ -19,7 +19,7 @@ from tqdm import tqdm
 # Copy the imports that run_one_stage relies on.
 # Easiest is to copy the relevant subset from main.py:
 from fallback_recenter import BudgetGuard, GlobalCenterGuard, RecenterParams
-from path_router import RouterPaths, make_paths
+from path_router import make_paths, RouterPaths
 from pose_validation import (
     validate_pose_pdbqt,
     extract_surface_atoms,
