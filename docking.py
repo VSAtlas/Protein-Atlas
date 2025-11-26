@@ -53,12 +53,17 @@ from input_and_export_functions import (
 )
 from library_index import LibraryIndex
 from logging_topics import make_protein_logger
+# collapse_sanitized_names lives in main.py and is not used here.
 from path_router import (
     RouterPaths,
     Paths,
     docked_dir,
     make_paths,
     receptor_file,
+)
+from single_ligand_index import (
+    _ensure_single_ligand_index,
+    _resolve_single_ligand,
 )
 from ph_ensemble_docking import (
     enumerate_ligands_for_ph_context,
