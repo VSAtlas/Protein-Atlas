@@ -76,6 +76,7 @@ from prep_ligands import (
 from protein_functions import detect_active_site
 from record_data import record_le, write_scores_csv
 from run_vina import run_docking_task, validate_all_poses
+from single_ligand_index import _ensure_single_ligand_index, _resolve_single_ligand
 
 
 
