@@ -52,7 +52,6 @@ from logging_topics import make_protein_logger
 from path_router import (
     RouterPaths,
     Paths,
-    collapse_sanitized_names,
     docked_dir,
     make_paths,
     receptor_file,
@@ -2729,11 +2728,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
     logger.info(f"[paths] base_id={base_id} -> pdb_id={pdb_id}")
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
-    # --- Canonicalize any runaway '.sanitized' filenames before we touch them ---
-    lig_raw_dir  = os.path.join(cfg['OUTPUT_DIR'], pdb_id, 'ligands_raw')
-    prepped_dir  = os.path.join(cfg['PREPPED_LIGANDS_DIR'], pdb_id)
-    collapse_sanitized_names([lig_raw_dir, prepped_dir], logger=logger)
-
     # ======================
     # Phase 1 – Variant & ion context
     # ======================
