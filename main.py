@@ -12,7 +12,7 @@
 # 8) Write per-protein score CSV
 
 from __future__ import annotations
-
+from activesite import extract_and_remove_ligands, get_atom_rules
 import sys, hashlib, re, logging, json, time, os, shutil, re
 from dataclasses import dataclass, field
 import datetime
