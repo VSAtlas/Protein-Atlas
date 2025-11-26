@@ -76,6 +76,7 @@ from pose_validation import (
     extract_surface_atoms,
     filter_and_rewrite_poses_by_rmsd,
     validate_pose_pdbqt,
+    _pose_centroid_from_pdbqt,
 )
 from prep_ligands import (
     enumerate_ligands_for_docking,
@@ -4271,21 +4272,13 @@ def run_one_stage(
                                 stage_retry["energy_range"] = float(cfg.get("NEAR_MISS_ENERGY_RANGE", stage_retry.get("energy_range", 4.0)))
 
                                 if bool(cfg.get("NEAR_MISS_RECENTER", True)):
-                                    # If near miss, try to recenter on best-scoring pose centroid
-                                    res = validate_pose_pdbqt(
-                                        receptor_pdbqt=receptor_pdbqt,
-                                        ligand_pdbqt=out_path,
-                                        pocket_center=center,
-                                        surface_coords=surface_coords,
-                                        clash_threshold=2.0,
-                                        clash_tol=3,
-                                        dist_surf=6.0,
-                                        dist_centroid=4.5,
-                                        max_models=int(cfg.get("EARLY_EXIT_MAX_MODELS", 3)),
-                                        best_pose_centroid=True,
-                                        early_exit=False,
-                                    )
-                                    cent = res.get("best_pose_centroid")
+                                    # If near miss, try to recenter on current pose centroid
+                                    try:
+                                        cent = _pose_centroid_from_pdbqt(str(out_path))
+                                    except Exception as _e:
+                                        logger.warning(f"[near-miss] failed to compute centroid for {lig_name}: {_e}")
+                                        cent = None
+
                                     if cent and isinstance(cent, (list, tuple)) and len(cent) == 3:
                                         try:
                                             center_nm = tuple(float(x) for x in cent)
