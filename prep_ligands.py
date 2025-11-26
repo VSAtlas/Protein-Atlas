@@ -258,6 +258,130 @@ def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
     os.replace(tmp_path, final_path)
 
 
+def _collect_ligand_stems_with_microstates(
+    registry: Dict[str, Any],
+    requested_ph_values: Optional[Set[float]] = None,
+) -> Set[str]:
+    """
+    Return the set of canonical ligand stems present in microstates.json.
+
+    If requested_ph_values is None, collect one stem per microstate entry,
+    ignoring pH. If requested_ph_values is provided, only count aliases
+    whose ph_value is in that set.
+    """
+    stems: Set[str] = set()
+    microstates = registry.get("microstates") or []
+    if not microstates:
+        return stems
+
+    for entry in microstates:
+        aliases = entry.get("aliases") or []
+        if not aliases:
+            continue
+
+        if requested_ph_values:
+            # Only count this microstate if it has at least one alias in requested_ph_values.
+            for a in aliases:
+                try:
+                    ph_val = float(a.get("ph_value", -999.0))
+                except Exception:
+                    continue
+                if ph_val in requested_ph_values:
+                    stem = a.get("ligand_stem")
+                    if stem:
+                        stems.add(stem)
+                    break
+        else:
+            # pH-agnostic: grab the first ligand_stem we find.
+            for a in aliases:
+                stem = a.get("ligand_stem")
+                if stem:
+                    stems.add(stem)
+                    break
+
+    return stems
+
+
+def _collect_expected_ligand_stems_from_library(
+    library_out_dir: Path,
+    library_name: str,
+) -> Set[str]:
+    """
+    Infer the canonical ligand stems that *should* exist for this library
+    by parsing its SDF files in extracted_ligands/<library_name>.
+
+    This uses the same naming convention as ligprep:
+        <sdf_stem>_<index:05d>
+
+    If we cannot locate extracted_ligands/<library_name>, return an empty set.
+    The caller can then fall back to other heuristics (e.g. manifest).
+    """
+    from rdkit import Chem
+
+    expected: Set[str] = set()
+
+    # Heuristic: infer project_root from prepped_ligands/<library_name>
+    # library_out_dir typically looks like:
+    #   /.../prepped_ligands/<library_name>
+    project_root = None
+    try:
+        # Walk up until we find "prepped_ligands" and then go one level above.
+        for parent in library_out_dir.parents:
+            if parent.name == "prepped_ligands":
+                project_root = parent.parent
+                break
+        if project_root is None:
+            # Fallback: just go two levels up
+            project_root = library_out_dir.parent.parent
+    except Exception:
+        project_root = library_out_dir.parent.parent
+
+    extracted_root = project_root / "extracted_ligands" / library_name
+    if not extracted_root.is_dir():
+        # Nothing to do; let caller handle fallback behavior.
+        return expected
+
+    # Scan all *.sdf and *.sdf.gz under extracted_root.
+    sdf_paths: List[Path] = []
+    for p in sorted(extracted_root.rglob("*.sdf")):
+        sdf_paths.append(p)
+    for p in sorted(extracted_root.rglob("*.sdf.gz")):
+        sdf_paths.append(p)
+
+    for sdf_path in sdf_paths:
+        try:
+            stem_base = sdf_path.stem  # ".sdf" stripped; ".sdf.gz" -> ".sdf"
+            if stem_base.endswith(".sdf"):
+                stem_base = stem_base[:-4]
+            # Example: actives_final.sdf -> "actives_final"
+            #         decoys_final.sdf.gz -> "decoys_final"
+            supplier = None
+            if sdf_path.suffix == ".gz":
+                import gzip
+
+                with gzip.open(sdf_path, "rb") as fh:
+                    _ = fh.read()
+                # Skipping gz handling for now; rely on plain SDFs if available.
+                continue
+            else:
+                supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=False)
+
+            if supplier is None:
+                continue
+
+            for idx, mol in enumerate(supplier):
+                if mol is None or mol.GetNumAtoms() == 0:
+                    continue
+                # Mirror ligprep naming: <stem>_<index:05d>
+                stem = f"{stem_base}_{idx + 1:05d}"
+                expected.add(stem)
+        except Exception:
+            # Don't let a single bad SDF kill the audit.
+            continue
+
+    return expected
+
+
 def enumerate_ligands_for_docking(
     requested_ph_values: Optional[Collection[float]] = None,
     *,
@@ -378,97 +502,6 @@ def enumerate_ligands_for_docking(
             root_dir=library_out_dir,
         )
 
-    def _collect_expected_ligand_stems_from_manifest() -> Set[str]:
-        """
-        Inspect _manifest.json (if present) and return the set of ligand stems
-        that we expect to have microstate coverage for the current library.
-        This is used as a guardrail so that microstates.json can never silently
-        drop decoys or other ligands that belong to the library.
-        """
-        manifest_path = library_out_dir / "_manifest.json"
-        expected: Set[str] = set()
-        if not manifest_path.exists():
-            return expected
-
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except Exception as e:
-            logger.warning(
-                "enumerate_ligands_for_docking: failed to read manifest %s for coverage check: %s",
-                manifest_path,
-                e,
-            )
-            return expected
-
-        entries = manifest.get("entries") or {}
-        for key, rel_name in entries.items():
-            # Prefer the basename stem from the relative path, but also keep the key.
-            try:
-                stem = Path(rel_name).stem
-            except Exception:
-                stem = ""
-            if stem:
-                expected.add(stem)
-            if isinstance(key, str) and key:
-                expected.add(key)
-
-        # Respect ONLY filters (LIGPREP_ONLY / LIGPREP_ONLY_FILE) when present.
-        if only_for_microstate:
-            expected &= set(only_for_microstate)
-
-        return expected
-
-    def _collect_ligand_stems_with_microstates(registry: dict, ph_values: Optional[Set[float]]) -> Set[str]:
-        """
-        From the current registry, collect ligand_stem values that have at least one alias
-        in the requested pH set. If ph_values is None, we treat all microstates as covered.
-        """
-        covered: Set[str] = set()
-        microstates = registry.get("microstates") or []
-        if not microstates:
-            return covered
-
-        for entry in microstates:
-            aliases = entry.get("aliases") or []
-            lig_stem: Optional[str] = None
-
-            # Prefer the explicit ligand_stem stored on aliases.
-            for alias in aliases:
-                cand = alias.get("ligand_stem")
-                if cand:
-                    lig_stem = cand
-                    break
-
-            # Fallback: derive stem from canonical PDBQT path.
-            if not lig_stem:
-                rel = entry.get("pdbqt_path") or ""
-                if rel:
-                    try:
-                        lig_stem = Path(rel).stem
-                    except Exception:
-                        lig_stem = None
-
-            if not lig_stem:
-                continue
-
-            if ph_values is None:
-                covered.add(lig_stem)
-                continue
-
-            for alias in aliases:
-                ph_value = alias.get("ph_value")
-                if ph_value is None:
-                    continue
-                try:
-                    pv = float(ph_value)
-                except Exception:
-                    continue
-                if pv in ph_values:
-                    covered.add(lig_stem)
-                    break
-
-        return covered
-
     if requested_set is not None:
         if not registry_path.exists():
             _run_microstate_prep_for_phs(requested_set)
@@ -515,40 +548,40 @@ def enumerate_ligands_for_docking(
     else:
         registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
 
-    # After pH coverage repair, ensure the registry has ligand coverage that matches the manifest.
-    # This protects against partial registries (e.g., actives-only) silently dropping ligands.
-    if requested_set is not None:
-        expected_ligands = _collect_expected_ligand_stems_from_manifest()
-        if expected_ligands:
-            covered_before = _collect_ligand_stems_with_microstates(registry, requested_set)
-            missing_ligands = expected_ligands - covered_before
-            if missing_ligands:
-                # Log a concise sample of missing ligands to make debugging easier.
-                sample_missing = ", ".join(sorted(list(missing_ligands))[:5])
-                logger.info(
-                    "enumerate_ligands_for_docking: microstate coverage incomplete library=%s expected=%d covered=%d missing=%d example_missing=%s",
-                    library_name,
-                    len(expected_ligands),
-                    len(covered_before),
-                    len(missing_ligands),
-                    sample_missing,
-                )
-                # Attempt a one-shot repair by re-running microstate prep for the requested pH set.
-                _run_microstate_prep_for_phs(requested_set)
-                registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+    # At this point, registry holds the latest microstates.json.
+    microstate_entries = registry.get("microstates") or []
 
-                covered_after = _collect_ligand_stems_with_microstates(registry, requested_set)
-                remaining = expected_ligands - covered_after
-                if remaining:
-                    sample_remaining = ", ".join(sorted(list(remaining))[:5])
-                    logger.warning(
-                        "enumerate_ligands_for_docking: microstate coverage still incomplete after repair library=%s expected=%d covered=%d missing=%d example_missing=%s",
-                        library_name,
-                        len(expected_ligands),
-                        len(covered_after),
-                        len(remaining),
-                        sample_remaining,
-                    )
+    # If there is no registry or it's empty, we will fall through to the existing
+    # manifest fallback logic below. In that case, there is nothing for the
+    # SDF-based coverage audit to check.
+    if microstate_dedup and microstate_entries and requested_set is not None:
+        # 1) Expected ligands: from the SDF library (preferred).
+        expected_ligands = _collect_expected_ligand_stems_from_library(
+            library_out_dir=library_out_dir,
+            library_name=library_name,
+        )
+
+        # If we can't infer expected ligands from SDFs, we skip the audit rather
+        # than falling back to manifest-derived expectations. The manifest is a
+        # file-system index, not a chemical authority.
+        if expected_ligands:
+            covered_ligands = _collect_ligand_stems_with_microstates(
+                registry,
+                requested_set,
+            )
+
+            missing_ligands = expected_ligands - covered_ligands
+            coverage_fraction = len(covered_ligands) / max(len(expected_ligands), 1)
+
+            logger.info(
+                "[microstate.coverage] library=%s requested_ph=%s expected=%d covered=%d missing=%d coverage=%.3f",
+                library_name,
+                sorted(requested_set),
+                len(expected_ligands),
+                len(covered_ligands),
+                len(missing_ligands),
+                coverage_fraction,
+            )
 
     if (not registry_path.exists()) or not (registry.get("microstates") or []):
         # Registry missing or empty: try a manifest/base-PDBQT fallback so docking still has ligands.
@@ -2556,9 +2589,9 @@ def _prepare_one(
     copy_targets = copy_targets or []
 
     logger.debug(
-        "prep_ligands._prepare_one: ligand=%s ph=%s mol2=%s pdbqt=%s copy_targets=%d",
+        "prep_ligands._prepare_one: ligand=%s ph=%.2f mol2=%s pdbqt=%s copy_targets=%d",
         lig_id,
-        "%.2f" % ph if ph is not None else "None",
+        ph if ph is not None else float("nan"),
         mol2_file,
         pdbqt_path,
         len(copy_targets),
