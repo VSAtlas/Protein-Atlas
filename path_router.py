@@ -692,6 +692,10 @@ class Paths:
         return expand_variants(mode)
 
 
+# Back-compat alias: some modules still expect RouterPaths
+RouterPaths = Paths
+
+
 # ---------------------------
 # Factory (required signature)
 # ---------------------------
