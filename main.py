@@ -33,20 +33,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from input_and_export_functions import (
     load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, emit_vina_config as _emit_vina_config_impl, record_score, score_key, _to_bool, init_config_run_dir
-)
-from protein_functions import detect_active_site
-from activesite import extract_and_remove_ligands, get_atom_rules
-from prep_ligands import prep_ligands_from_pdb, is_valid_ligand, enumerate_ligands_for_docking
-from pose_validation import (
-    validate_pose_pdbqt, extract_surface_atoms, attempt_fallback_recenter,
-    filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
-)
-from run_vina import run_docking_task, validate_all_poses
-from checkpoints import (
-    checkpoint_should_skip,
-    checkpoint_mark_done,
-    checkpoint_invalidate_from,
+    extract_best_score, emit_vina_config as _emit_vina_config_impl, _to_bool, init_config_run_dir
 )
 from docking import (
     norm,
@@ -67,19 +54,7 @@ from path_router import (
     docked_dir,
     config_dir as router_config_dir,
 )
-from ph_ensemble_docking import (
-    enumerate_ligands_for_ph_context,
-    init_ph_tags_and_manifest,
-    prewarm_ph_ligand_microstates,
-)
-from fallback_recenter import (
-    BudgetGuard,
-    RecenterParams,
-    GlobalCenterGuard,
-    validate_first_valid_pose,
-    fallback_recentering_if_empty,
-)
-from record_data import record_le, write_scores_csv
+from fallback_recenter import RecenterParams
 from apo_holo_mode import (
     resolve_apo_holo_mode,
     _debug_normalize_mode_token,

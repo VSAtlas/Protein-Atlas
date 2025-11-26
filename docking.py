@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import traceback
+import numpy as np
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -45,7 +46,7 @@ from fallback_recenter import (
     fallback_recentering_if_empty,
     validate_first_valid_pose,
 )
-from input_and_export_functions import extract_best_score, record_score, score_key
+from input_and_export_functions import _to_bool, extract_best_score, record_score, score_key
 from library_index import LibraryIndex
 from logging_topics import make_protein_logger
 from path_router import (
