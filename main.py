@@ -43,7 +43,19 @@ from pose_validation import (
     filter_and_rewrite_poses_by_rmsd, compute_self_rmsd
 )
 from run_vina import run_docking_task, validate_all_poses
-from docking import RetryManager, run_one_stage
+from checkpoints import (
+    checkpoint_should_skip,
+    checkpoint_mark_done,
+    checkpoint_invalidate_from,
+)
+from docking import (
+    norm,
+    _fingerprint_stage,
+    select_ligands_for_next,
+    final_pose_validation_and_screenshots,
+    RetryManager,
+    run_one_stage,
+)
 from path_router import (
     expand_variants,
     make_paths,
@@ -471,11 +483,6 @@ def collapse_sanitized_names(root_dirs: Iterable[str],
 # >>> PATHS CLASS START
 Paths = RouterPaths
 # >>> PATHS CLASS END
-
-
-def norm(p: str | Path) -> str:
-    """Normalize path to a clean, forward-slash string for logs & keys."""
-    return os.path.abspath(str(p)).replace("\\", "/")
 
 # --- Single-ligand ---
 def _parse_single_from_cli(argv) -> str:
@@ -988,103 +995,6 @@ def build_control_lookup(paths: Paths) -> dict:
             chosen[base] = picked
 
     return chosen
-
-
-# --------- improved checkpointing (fingerprinted) ---------
-def _file_md5(path: str, blocksize: int = 1 << 20) -> Optional[str]:
-    try:
-        h = hashlib.md5()
-        with open(path, "rb") as f:
-            while True:
-                b = f.read(blocksize)
-                if not b:
-                    break
-                h.update(b)
-        return h.hexdigest()
-    except Exception:
-        return None
-
-
-def _round_tuple(t: Tuple[float, float, float], ndp: int = 1) -> Tuple[float, float, float]:
-    return tuple(None if (x is None) else round(float(x), ndp) for x in t)
-
-
-def _fingerprint_stage(cfg: Dict,
-                       receptor_pdbqt: str,
-                       center: Tuple[float, float, float],
-                       box_size: Tuple[float, float, float],
-                       stage: Dict) -> Dict[str, Any]:
-    rec_hash = _file_md5(receptor_pdbqt) if receptor_pdbqt else None
-    stage_keys = ["name", "size", "exhaustiveness", "energy_range", "num_modes", "seed"]
-    stage_core = {k: stage.get(k) for k in stage_keys if k in stage}
-    return {
-        "receptor_md5": rec_hash,
-        "center": _round_tuple(center, 1),
-        "box_size": _round_tuple(box_size, 1),
-        "stage": stage_core,
-        "vina_exe": str(cfg.get("VINA_EXE", "")),
-        "threads_per_vina": int(cfg.get("THREADS_PER_VINA", 1)),
-        "version_tag": "ckpt_v2",
-    }
-
-
-def _checkpoint_path(
-    cfg: Dict,
-    pdb_id: str,
-    stage_name: str,
-    ph_label: Optional[str] = None,
-    variant: Optional[str] = None,
-) -> Path:
-    variant_token = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-    legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    root = docked_dir(pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
-    return root / f".ckpt_{stage_name}.json"
-
-
-def checkpoint_should_skip(cfg: Dict,
-                           pdb_id: str,
-                           stage_name: str,
-                           fingerprint: Dict[str, Any],
-                           ph_label: Optional[str] = None,
-                           variant: Optional[str] = None) -> bool:
-    p = _checkpoint_path(cfg, pdb_id, stage_name, ph_label=ph_label, variant=variant)
-    if not p.exists():
-        return False
-    try:
-        prev = json.loads(p.read_text())
-    except Exception:
-        return False
-    return prev == fingerprint
-
-
-def checkpoint_mark_done(cfg: Dict,
-                         pdb_id: str,
-                         stage_name: str,
-                         fingerprint: Dict[str, Any],
-                         ph_label: Optional[str] = None,
-                         variant: Optional[str] = None) -> None:
-    p = _checkpoint_path(cfg, pdb_id, stage_name, ph_label=ph_label, variant=variant)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        p.write_text(json.dumps(fingerprint, indent=2))
-    except Exception:
-        pass
-
-
-def checkpoint_invalidate_from(cfg: Dict, pdb_id: str, stages: List[Dict], start_index: int,
-                               ph_label: Optional[str] = None,
-                               variant: Optional[str] = None) -> None:
-    for j in range(start_index, len(stages)):
-        try:
-            _checkpoint_path(
-                cfg,
-                pdb_id,
-                stages[j]["name"],
-                ph_label=ph_label,
-                variant=variant,
-            ).unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 def _write_audit_json(cfg: Dict, pdb_id: str, summary: Dict, ph_label: Optional[str] = None,
@@ -3052,51 +2962,6 @@ def early_recenter_decision(
     return False, center, box_size, [], attempts_used
 
 
-def select_ligands_for_next(
-        docking_mode: str,
-        i: int,
-        stages: List[Dict],
-        scores: Dict[str, float],
-        logger: logging.Logger,
-        base_pool_n: Optional[int] = None,          #  if provided, select % of this
-        force_include: Optional[set] = None         #  always add these
-) -> List[str]:
-    if not scores:
-        # Still allow force-carry if provided and next stage exists
-        return sorted(force_include) if force_include else []
-
-    schedule = {
-        "discovery": [1.0, 0.1, 0.01, 0.001, 0.001],
-        "polypharmacology": [1.0, 0.05, 0.005],   # i=1 -> next is stage3 uses 0.5%
-    }.get(docking_mode, [1.0] * len(stages))
-
-    pct = schedule[i + 1] if i + 1 < len(schedule) else 0.01
-
-    # Use provided base if given (e.g., Stage1 pool size) -- otherwise fall back to valid-count
-    pool_n = base_pool_n if (base_pool_n is not None) else len(scores)
-
-    # Select K by the base pool, but cap at the number of valid scores available
-    k_target = max(1, int(pool_n * pct))
-    k = max(1, min(k_target, len(scores)))
-
-    # take best k from valid scores
-    next_list = [l for l, _ in sorted(scores.items(), key=lambda kv: kv[1])[:k]]
-
-    # Force-carry: add any requested ligands (e.g., extracted controls) to the next stage
-    if force_include:
-        # maintain stable order: extend with any forced ligands not already selected
-        in_set = set(next_list)
-        forced_add = [l for l in sorted(force_include) if l not in in_set]
-        next_list.extend(forced_add)
-        if forced_add:
-            logger.info(f"[Force-carry] Added {len(forced_add)} extracted ligands to next stage.")
-
-    logger.info(
-        f"Selected {k} by score (+{len(force_include or [])} forced) "
-        f"= {len(next_list)} total ({pct * 100:.5f}% of base={pool_n})."
-    )
-    return next_list
-
 # ======================
 # Center selection (controls + discovery)
 # ======================
@@ -3324,104 +3189,6 @@ class CenterSelector:
                               reason=f"promote_new_center score={best_score:.2f}",
                               switchscore=best_score,
                               promoted=True)
-
-
-# ======================
-# Phase 7-8: Finalization
-# ======================
-def final_pose_validation_and_screenshots(
-        cfg: Dict,
-        pdb_id: str,
-        stages: List[Dict],
-        receptor_pdbqt: str,
-        center: Tuple[float, float, float],
-        validated_ligands_last: List[str],
-        score_history: Dict[str, Dict[str, Dict]],
-        cleaned_pdb: str,
-        docking_mode: str,
-        logger: logging.Logger,
-        ph_label: Optional[str] = None,
-) -> None:
-    if not validated_ligands_last:
-        return
-
-    # >>> DOCKED PATHS PATCH START
-    variant = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    # >>> DOCKED PATHS PATCH END
-    last_stage = stages[-1]["name"]
-    stage_dir = paths.docked_stage_dir(variant, last_stage, ph_label)
-    final_surface = extract_surface_atoms(pdbqt_path=receptor_pdbqt, center=center)
-
-    if docking_mode == "polypharmacology":
-        final_scores = score_history.get(last_stage, {})
-        top_ligs = sorted(final_scores.items(), key=score_key)[:20]
-        validated_ligands_last = [lig for lig, _ in top_ligs]
-        logger.info(f"[Polypharmacology] Selected top {len(validated_ligands_last)} ligands for images/validation.")
-
-    for lig in validated_ligands_last:
-        out_path = stage_dir / f"{Path(lig).stem}_{last_stage}.pdbqt"
-        if not out_path.exists():
-            logger.warning(f"Pose file not found for {os.path.basename(lig)} -- likely filtered earlier.")
-            continue
-        try:
-            filter_and_rewrite_poses_by_rmsd(
-                str(out_path),
-                rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
-                max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
-            )
-        except Exception as e:
-            logger.warning(f"Final RMSD filtering failed: {e}")
-
-        best_model, best_valid_score = validate_all_poses(
-            pdbqt_path=str(out_path),
-            receptor_pdbqt=receptor_pdbqt,
-            center=center,
-            surface_coords=final_surface,
-            validate_fn=validate_pose_pdbqt
-        )
-        if best_model:
-            record_score(score_history, last_stage, lig, best_valid_score, True, reason="rescued_best_pose")
-            print(f"{Path(lig).name} | {last_stage} rescued: {best_valid_score:.2f} kcal/mol (valid)")
-        else:
-            try:
-                fallback_score = extract_best_score(str(out_path))
-                record_score(score_history, last_stage, lig, fallback_score, False, reason="all_poses_invalid")
-            except Exception:
-                record_score(score_history, last_stage, lig, None, False, reason="all_poses_invalid_no_score")
-            print(f"{Path(lig).name} | all poses invalid (kept for logs)")
-
-        try:
-            import subprocess
-            top = validated_ligands_last[0]
-            pose = stage_dir / f"{Path(top).stem}_{last_stage}.pdbqt"
-            if pose.exists():
-                out_prefix_root = paths.docked_variant_root(variant, ph_label)
-                out_prefix = out_prefix_root / "top_pose"
-                out_prefix.parent.mkdir(parents=True, exist_ok=True)
-
-                # -- PyMOL screenshot block (Option A: -r + -d python) --
-                cap_py = Path(__file__).with_name("capture_pose.py")
-
-                py_cfg = str(cfg.get("PYMOL_PATH", "")).strip()
-                pymol_exe = py_cfg if (py_cfg and Path(py_cfg).is_file()) else (shutil.which("pymol") or "pymol")
-
-                d_arg = f"""python
-                from __main__ import capture_pose
-                capture_pose({repr(cleaned_pdb)}, {repr(str(pose))}, {repr(str(out_prefix))})
-                python end
-                quit
-                """
-
-                # -cq keeps PyMOL headless/quiet; keep -r to load helper script
-                cmd = [pymol_exe, "-cq", "-r", str(cap_py), "-d", d_arg]
-                print("Running PyMOL:", cmd)
-                res = subprocess.run(cmd, capture_output=True, text=True)
-                print("PyMOL stdout:", res.stdout)
-                print("PyMOL stderr:", res.stderr)
-
-        except Exception as e:
-            logger.warning(f"Screenshot generation failed: {e}")
 
 
 def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str,
