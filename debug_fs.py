@@ -86,7 +86,7 @@ def _files_identical(a: str, b: str) -> bool:
         return False
 
 def collapse_sanitized_names(
-    root_dirs: Iterable[str],
+    root_dirs: Iterable[object],
     exts: Set[str] = {".pdb", ".sdf", ".mol2", ".pdbqt"},
     logger=None,
 ) -> None:
@@ -97,9 +97,12 @@ def collapse_sanitized_names(
       - if different, keep the canonical (shortest run) and delete the longer-run file; warn.
     """
     for root in root_dirs:
-        if not root or not os.path.isdir(root):
+        if not root:
             continue
-        for dirpath, _, files in os.walk(root):
+        root_str = os.fspath(root)
+        if not os.path.isdir(root_str):
+            continue
+        for dirpath, _, files in os.walk(root_str):
             for fn in files:
                 ext = os.path.splitext(fn)[1].lower()
                 if ext not in exts:
@@ -109,8 +112,8 @@ def collapse_sanitized_names(
                     continue
                 src = os.path.join(dirpath, fn)
                 dst = os.path.join(dirpath, new_fn)
-                rel_src = os.path.relpath(src, root)
-                rel_dst = os.path.relpath(dst, root)
+                rel_src = os.path.relpath(src, root_str)
+                rel_dst = os.path.relpath(dst, root_str)
                 try:
                     if os.path.exists(dst):
                         if _files_identical(src, dst):
@@ -137,3 +140,48 @@ def collapse_sanitized_names(
                         logger.error(
                             f"[sanitize-collapse] failed on '{rel_src}' -> '{rel_dst}': {e}"
                         )
+
+
+def collapse_sanitized_names_for_cfg(cfg, logger=None) -> None:
+    """
+    Convenience wrapper used from main.py.
+
+    Given the ConfigDict (or plain dict) `cfg`, gather all relevant
+    directories that may contain '.sanitized' filenames and call
+    collapse_sanitized_names(...) on them.
+
+    This should be a thin wrapper: no new behavior beyond picking
+    the right roots and delegating to collapse_sanitized_names.
+    """
+    candidate_keys = [
+        "PREPPED_LIGANDS_DIR",
+        "PREPPED_LIGANDS_ROOT",
+        "OUTPUT_LIGANDS_DIR",
+        "LIGAND_DIR",
+        "LIGANDS_MOL2_DIR",
+        "OUTPUT_DIR",
+        "PDBQT_DIR",
+    ]
+
+    roots = []
+    # Support both dict-style and attribute-style access.
+    for key in candidate_keys:
+        val = None
+        if hasattr(cfg, "get"):
+            try:
+                val = cfg.get(key)  # ConfigDict path
+            except Exception:
+                val = None
+        if val is None:
+            # Fallback to attribute-style (cfg.PREPPED_LIGANDS_DIR, etc.)
+            val = getattr(cfg, key, None)
+        if val:
+            roots.append(os.fspath(val))
+
+    if not roots:
+        return
+
+    if logger:
+        logger.info("[sanitize-collapse] scanning %d roots: %s", len(roots), roots)
+
+    collapse_sanitized_names(roots, logger=logger)
