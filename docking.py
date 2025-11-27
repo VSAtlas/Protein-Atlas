@@ -17,7 +17,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from input_and_export_functions import emit_vina_config
+from input_and_export_functions import (
+    load_inputs,
+    validate_config,
+    define_docking_stages,
+    write_score_summary_to_csv,
+    extract_best_score,
+    emit_vina_config,
+    emit_vina_config as _emit_vina_config_impl,
+    record_score,
+    score_key,
+    _to_bool,
+    init_config_run_dir,
+)
 from rdkit.Chem import rdMolAlign
 from tqdm import tqdm
 
@@ -44,11 +56,6 @@ from fallback_recenter import (
     validate_first_valid_pose,
 )
 from docking_centering import CenterDecision, CenterSelector
-from input_and_export_functions import (
-    load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, emit_vina_config as _emit_vina_config_impl, record_score, score_key, _to_bool, init_config_run_dir, 
-     _to_bool, extract_best_score, record_score, score_key,
-)
 from logging_topics import make_protein_logger
 # collapse_sanitized_names lives in main.py and is not used here.
 from path_router import (
@@ -1430,6 +1437,9 @@ def run_one_stage(
             logger.warning(f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}")
             return None
 
+    # NOTE:
+    # This nested compute_rmsd intentionally shadows the generic compute_rmsd imported from docking_ligands.
+    # It adds extra logging and redock-specific behavior for controls in run_one_stage without changing the module-level helper.
     def compute_rmsd(ref_path: str, docked_path: str) -> float:
         """
         Heavy-atom RMSD using RDKit's BestRMS *only*.
