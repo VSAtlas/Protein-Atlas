@@ -1,0 +1,530 @@
+"""Microstate registry helpers and ligand enumeration logic."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+from pathlib import Path
+from typing import Any, Collection, Dict, List, Optional, Set
+
+from path_router import make_paths
+from rdkit import Chem
+
+logger = logging.getLogger(__name__)
+
+_ONLY_TOKEN_RE = re.compile(r"[0-9]{1,7}")
+
+
+def _normalize_only_token(tok: str) -> Optional[str]:
+    """
+    Accepts things like 'rdk_0004931', 'rdk_4931', '0004931', '4931'.
+    Returns canonical 'rdk_0004931' or None if it can't be parsed.
+    """
+    if not tok:
+        return None
+    t = tok.strip().lower().replace(",", " ")
+    if not t:
+        return None
+    m = _ONLY_TOKEN_RE.search(t)
+    if not m:
+        return None
+    n = m.group(0)
+    try:
+        i = int(n)
+    except Exception:
+        return None
+    if i < 0 or i > 9_999_999:
+        return None
+    return f"rdk_{i:07d}"
+
+
+def _collect_only_from_env_and_cli(cli_only: Optional[List[str]] = None) -> Set[str]:
+    """
+    Merge LIGPREP_ONLY (env), LIGPREP_ONLY_FILE (env path), and --only (CLI list).
+    Normalize all tokens to 'rdk_0000000'. Empty/invalid tokens are ignored.
+    """
+    out: Set[str] = set()
+
+    env_only = os.environ.get("LIGPREP_ONLY", "")
+    if env_only:
+        for raw in re.split(r"[,\s]+", env_only.strip()):
+            norm = _normalize_only_token(raw)
+            if norm:
+                out.add(norm)
+
+    env_file = os.environ.get("LIGPREP_ONLY_FILE", "")
+    if env_file:
+        try:
+            with open(env_file, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    for raw in re.split(r"[,\s]+", line.strip()):
+                        norm = _normalize_only_token(raw)
+                        if norm:
+                            out.add(norm)
+        except Exception as e:
+            logging.warning("[test-mode] could not read LIGPREP_ONLY_FILE=%s: %s", env_file, e)
+
+    if cli_only:
+        for raw in cli_only:
+            for tok in re.split(r"[,\s]+", raw.strip()):
+                norm = _normalize_only_token(tok)
+                if norm:
+                    out.add(norm)
+
+    return out
+
+
+def load_microstate_registry(library_out_dir: Path, library_name: str) -> tuple[dict, dict]:
+    """
+    Load or initialize the microstate registry for a given library.
+    Returns a dict with keys: version, library, microstates (list) and an index mapping microstate_id -> entry.
+    """
+    registry_path = library_out_dir / "microstates.json"
+    default_registry = {
+        "version": 1,
+        "library": library_name,
+        "microstates": [],
+    }
+
+    registry = default_registry.copy()
+    if registry_path.exists():
+        try:
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logging.warning("[microstate] registry_load_failed path=%s err=%s", registry_path, e)
+            registry = default_registry.copy()
+        else:
+            if registry.get("library") and registry["library"] != library_name:
+                logging.warning(
+                    "[microstate] registry_library_mismatch path=%s expected=%s found=%s",
+                    registry_path,
+                    library_name,
+                    registry.get("library"),
+                )
+
+    microstate_index: Dict[str, dict] = {}
+    for entry in registry.get("microstates", []) or []:
+        microstate_id = entry.get("microstate_id")
+        if microstate_id:
+            microstate_index[microstate_id] = entry
+
+    return registry, microstate_index
+
+
+def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
+    """Save the microstate registry to microstates.json atomically."""
+
+    tmp_path = library_out_dir / "microstates.json.tmp"
+    final_path = library_out_dir / "microstates.json"
+    payload = json.dumps(registry, indent=2, sort_keys=True)
+    tmp_path.write_text(payload, encoding="utf-8")
+    os.replace(tmp_path, final_path)
+
+
+def _collect_ligand_stems_with_microstates(
+    registry: Dict[str, Any],
+    requested_ph_values: Optional[Set[float]] = None,
+) -> Set[str]:
+    """
+    Return the set of canonical ligand stems present in microstates.json.
+    """
+
+    stems: Set[str] = set()
+    microstates = registry.get("microstates") or []
+    if not microstates:
+        return stems
+
+    for entry in microstates:
+        aliases = entry.get("aliases") or []
+        if not aliases:
+            continue
+
+        if requested_ph_values:
+            for a in aliases:
+                try:
+                    ph_val = float(a.get("ph_value", -999.0))
+                except Exception:
+                    continue
+                if ph_val in requested_ph_values:
+                    stem = a.get("ligand_stem")
+                    if stem:
+                        stems.add(stem)
+                    break
+        else:
+            for a in aliases:
+                stem = a.get("ligand_stem")
+                if stem:
+                    stems.add(stem)
+                    break
+
+    return stems
+
+
+def _collect_expected_ligand_stems_from_library(
+    library_out_dir: Path,
+    library_name: str,
+) -> Set[str]:
+    """
+    Infer canonical ligand stems expected for a library by parsing extracted SDFs.
+    """
+
+    expected: Set[str] = set()
+
+    project_root = None
+    try:
+        for parent in library_out_dir.parents:
+            if parent.name == "prepped_ligands":
+                project_root = parent.parent
+                break
+        if project_root is None:
+            project_root = library_out_dir.parent.parent
+    except Exception:
+        project_root = library_out_dir.parent.parent
+
+    extracted_root = project_root / "extracted_ligands" / library_name
+    if not extracted_root.is_dir():
+        return expected
+
+    sdf_paths: List[Path] = []
+    for p in sorted(extracted_root.rglob("*.sdf")):
+        sdf_paths.append(p)
+    for p in sorted(extracted_root.rglob("*.sdf.gz")):
+        sdf_paths.append(p)
+
+    for sdf_path in sdf_paths:
+        try:
+            stem_base = sdf_path.stem
+            if stem_base.endswith(".sdf"):
+                stem_base = stem_base[:-4]
+            supplier = None
+            if sdf_path.suffix == ".gz":
+                import gzip
+
+                with gzip.open(sdf_path, "rb") as fh:
+                    _ = fh.read()
+                continue
+            else:
+                supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=False)
+
+            if supplier is None:
+                continue
+
+            for idx, mol in enumerate(supplier):
+                if mol is None or mol.GetNumAtoms() == 0:
+                    continue
+                stem = f"{stem_base}_{idx + 1:05d}"
+                expected.add(stem)
+        except Exception:
+            continue
+
+    return expected
+
+
+def enumerate_ligands_for_docking(
+    requested_ph_values: Optional[Collection[float]] = None,
+    *,
+    cfg: Optional[Dict] = None,
+    pdb_id: Optional[str] = None,
+    root_dir: Optional[str | Path] = None,
+    microstate_dedup: bool = True,
+    force: bool = False,
+) -> List[Path]:
+    """Enumerate canonical ligand PDBQTs for docking, deduplicated at the microstate level."""
+
+    from prep_ligands_bulk import prep_ligands_with_mgltools  # lazy import to avoid circular
+
+    _ = cfg
+    pdb_label = (pdb_id or "LIGPREP").upper()
+
+    root_dir_path = Path(root_dir).resolve() if root_dir is not None else None
+    out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
+
+    library_hint: Optional[str] = None
+    if root_dir_path is not None:
+        library_hint = root_dir_path.name.lower()
+    elif out_dir_env:
+        library_hint = Path(out_dir_env).name.lower()
+
+    library_env = (os.environ.get("LIGPREP_LIBRARY", "") or "").strip()
+    library_cfg = (cfg.get("LIGPREP_LIBRARY", "") or "").strip() if cfg else ""
+
+    library_base: Optional[str] = library_hint
+    if not library_base:
+        if library_env:
+            library_base = library_env.lower()
+        elif library_cfg:
+            library_base = library_cfg.lower()
+
+    library_name = (library_base or "ligprep").lower()
+
+    prepped_root_env = (os.environ.get("PREPPED_LIGANDS_ROOT", "") or "").strip()
+    if prepped_root_env:
+        prepped_root = Path(prepped_root_env).resolve()
+    else:
+        try:
+            paths = make_paths(cfg, base_id=pdb_label, pdb_file=f"{pdb_label}.pdb") if cfg is not None else None
+            prepped_root = (
+                paths.prepped_ligands_dir.parent if paths is not None else Path("prepped_ligands").resolve()
+            )
+        except Exception:
+            prepped_root = Path("prepped_ligands").resolve()
+
+    if root_dir_path is not None:
+        library_out_dir = root_dir_path
+        library_source = "root_dir"
+    else:
+        library_out_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_root / library_name
+        library_source = "config/env"
+
+    registry_path = library_out_dir / "microstates.json"
+
+    requested_set: Optional[Set[float]] = None
+    if requested_ph_values:
+        requested_set = {float(ph) for ph in requested_ph_values}
+
+    logger.info(
+        "enumerate_ligands_for_docking: root_dir=%s ph_values=%s microstate_dedup=%s force=%s",
+        str(root_dir_path) if root_dir_path is not None else "",
+        sorted(requested_set) if requested_set is not None else [],
+        microstate_dedup,
+        force,
+    )
+
+    logger.info(
+        "enumerate_ligands_for_docking: pdb=%s library_hint=%s library_env=%s library_cfg=%s resolved_library=%s "
+        "prepped_root=%s library_out_dir=%s registry=%s source=%s",
+        pdb_label,
+        library_hint,
+        library_env,
+        library_cfg,
+        library_name,
+        str(prepped_root),
+        library_out_dir,
+        registry_path,
+        library_source,
+    )
+
+    only_set = _collect_only_from_env_and_cli(None)
+    only_for_microstate: Optional[Set[str]] = only_set or None
+
+    def _run_microstate_prep_for_phs(ph_values: Collection[float]) -> None:
+        if not ph_values:
+            return
+        logger.info(
+            "enumerate_ligands_for_docking: running microstate prep for missing pH values: %s",
+            ",".join(f"{ph:.2f}" for ph in sorted(set(ph_values))),
+        )
+        prep_ligands_with_mgltools(
+            force=False,
+            only=only_for_microstate,
+            ph_values=sorted(set(float(ph) for ph in ph_values)),
+            microstate_dedup=True,
+            root_dir=library_out_dir,
+        )
+
+    if requested_set is not None:
+        if not registry_path.exists():
+            _run_microstate_prep_for_phs(requested_set)
+        registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+        existing_ph_values: Set[float] = set()
+        for entry in registry.get("microstates", []) or []:
+            for alias in entry.get("aliases", []) or []:
+                ph_value = alias.get("ph_value")
+                if ph_value is None:
+                    continue
+                try:
+                    existing_ph_values.add(float(ph_value))
+                except Exception:
+                    continue
+
+        logger.info(
+            "enumerate_ligands_for_docking: library=%s requested_ph=%s existing_ph=%s",
+            library_name,
+            ",".join(f"{p:.2f}" for p in sorted(requested_set)),
+            ",".join(f"{p:.2f}" for p in sorted(existing_ph_values)),
+        )
+
+        missing = requested_set - existing_ph_values
+        if missing:
+            logger.info(
+                "enumerate_ligands_for_docking: library=%s missing_ph=%s (will trigger microstate prep)",
+                library_name,
+                ",".join(f"{p:.2f}" for p in sorted(missing)),
+            )
+        else:
+            logger.info(
+                "enumerate_ligands_for_docking: library=%s no missing_ph; microstates already cover requested pH values",
+                library_name,
+            )
+        if missing:
+            logger.info(
+                "enumerate_ligands_for_docking: requested_ph=%s missing_ph=%s",
+                sorted(requested_set),
+                sorted(missing),
+            )
+            _run_microstate_prep_for_phs(missing)
+            registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+    else:
+        registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+
+    microstate_entries = registry.get("microstates") or []
+
+    if microstate_dedup and microstate_entries and requested_set is not None:
+        expected_ligands = _collect_expected_ligand_stems_from_library(
+            library_out_dir=library_out_dir,
+            library_name=library_name,
+        )
+
+        if expected_ligands:
+            covered_ligands = _collect_ligand_stems_with_microstates(
+                registry,
+                requested_set,
+            )
+
+            missing_ligands = expected_ligands - covered_ligands
+            coverage_fraction = len(covered_ligands) / max(len(expected_ligands), 1)
+
+            logger.info(
+                "[microstate.coverage] library=%s requested_ph=%s expected=%d covered=%d missing=%d coverage=%.3f",
+                library_name,
+                sorted(requested_set),
+                len(expected_ligands),
+                len(covered_ligands),
+                len(missing_ligands),
+                coverage_fraction,
+            )
+
+    if (not registry_path.exists()) or not (registry.get("microstates") or []):
+        if not registry_path.exists():
+            logger.warning(
+                "enumerate_ligands_for_docking: no microstate registry found at %s",
+                registry_path,
+            )
+        else:
+            logger.warning(
+                "enumerate_ligands_for_docking: microstate registry %s has no entries; attempting manifest fallback",
+                registry_path,
+            )
+
+        manifest_path = library_out_dir / "_manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except Exception as e:
+                logger.warning(
+                    "enumerate_ligands_for_docking: failed to read manifest %s: %s; returning empty list",
+                    manifest_path,
+                    e,
+                )
+                return []
+
+            entries = manifest.get("entries") or {}
+            pdbqt_paths: List[Path] = []
+            for key, rel_name in entries.items():
+                p = library_out_dir / rel_name
+                try:
+                    if p.exists() and p.stat().st_size > 100:
+                        pdbqt_paths.append(p)
+                    else:
+                        logger.debug(
+                            "enumerate_ligands_for_docking: skipping manifest entry %s -> %s (missing or too small)",
+                            key,
+                            p,
+                        )
+                except OSError:
+                    logger.debug(
+                        "enumerate_ligands_for_docking: skipping manifest entry %s -> %s (stat failed)",
+                        key,
+                        p,
+                    )
+
+            if pdbqt_paths:
+                logger.info(
+                    "enumerate_ligands_for_docking: manifest fallback returning %d PDBQT(s) (ignoring requested_ph_values=%s)",
+                    len(pdbqt_paths),
+                    "any" if requested_set is None else sorted(requested_set),
+                )
+                return sorted(pdbqt_paths, key=lambda p: p.name)
+
+        logger.warning(
+            "enumerate_ligands_for_docking: no usable microstates or manifest entries; returning empty list",
+        )
+        return []
+
+    result: Set[Path] = set()
+    total_microstates = len(registry.get("microstates", []) or [])
+
+    sample_limit = 20
+    sample_count = 0
+
+    for entry in registry.get("microstates", []) or []:
+        rel_path = entry.get("pdbqt_path")
+        if not rel_path:
+            continue
+
+        aliases = entry.get("aliases", []) or []
+        canonical_path = library_out_dir / rel_path
+
+        include = requested_set is None
+        selected_alias: Optional[dict] = None
+        if requested_set is not None:
+            for alias in aliases:
+                ph_value = alias.get("ph_value")
+                if ph_value is None:
+                    continue
+                try:
+                    pv = float(ph_value)
+                except Exception:
+                    continue
+                if pv in requested_set:
+                    include = True
+                    selected_alias = alias
+                    break
+        else:
+            if aliases:
+                selected_alias = aliases[0]
+
+        if not include:
+            continue
+
+        if canonical_path.exists() and canonical_path.stat().st_size > 100:
+            if sample_count < sample_limit:
+                logger.info(
+                    "enumerate_ligands_for_docking.selection: stem=%s ph_label=%s ph_value=%s microstate_id=%s pdbqt=%s",
+                    (selected_alias or {}).get("ligand_stem"),
+                    (selected_alias or {}).get("ph_label"),
+                    (selected_alias or {}).get("ph_value"),
+                    entry.get("microstate_id"),
+                    canonical_path,
+                )
+                sample_count += 1
+            result.add(canonical_path)
+
+    if requested_set is None:
+        logger.info(
+            "enumerate_ligands_for_docking: mode=all_ph microstates=%d included=%d",
+            total_microstates,
+            len(result),
+        )
+    else:
+        logger.info(
+            "enumerate_ligands_for_docking: mode=filtered ph_values=%s microstates=%d included=%d",
+            sorted(requested_set),
+            total_microstates,
+            len(result),
+        )
+
+    return sorted(result, key=lambda p: p.name)
+
+
+__all__ = [
+    "load_microstate_registry",
+    "save_microstate_registry",
+    "_collect_ligand_stems_with_microstates",
+    "_collect_expected_ligand_stems_from_library",
+    "_collect_only_from_env_and_cli",
+    "enumerate_ligands_for_docking",
+]

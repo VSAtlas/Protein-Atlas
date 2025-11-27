@@ -311,7 +311,7 @@ if __name__ == "__main__":
 # 2) Crystal direct-path:
 #    python prep_ligands.py --extracted --only-extracted /home/michael/atlas/code/protein_automation/processed_pdbs/1BN1/ligands_raw/AL5_A555.pdb --test-extracted
 # 3) Optional import/compile:
-#    python -m py_compile prep_ligands.py prep_ligands_bulk.py prep_ligands_crystal.py
+#    python -m py_compile prep_ligands.py prep_ligands_bulk.py prep_ligands_bulk_sdf.py prep_ligands_microstates.py prep_ligands_crystal.py
 #    python - << "PY"
 #    import prep_ligands
 #    from prep_ligands import prep_ligands_with_mgltools, prep_ligands_from_pdb, enumerate_ligands_for_docking

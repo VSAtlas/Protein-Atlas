@@ -14,7 +14,7 @@ from activesite import (
 )
 from rdkit import Chem
 
-from prep_ligands_bulk import (
+from prep_ligands_common import (
     EXCLUDE_CRYSTAL_ADDITIVES,
     MIN_ATOMS_FOR_DOCKING,
     QUARANTINE_DIRNAME,
