@@ -22,6 +22,30 @@ def norm(p: str | Path) -> str:
     return os.path.abspath(str(p)).replace("\\", "/")
 
 
+def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None):
+    """
+    Yield .pdbqt files with a directory-first strategy:
+      - files directly under `root`
+      - then files under first-level subdirs (filter via `allowed_subdirs` if provided)
+    Falls back to recursive glob if any listing fails to keep things robust.
+    """
+    try:
+        if not root or not root.exists():
+            return
+        for p in root.glob("*.pdbqt"):
+            yield p
+        for d in root.iterdir():
+            if not d.is_dir():
+                continue
+            if allowed_subdirs is not None and d.name not in allowed_subdirs:
+                continue
+            for p in d.glob("*.pdbqt"):
+                yield p
+    except Exception:
+        for p in root.rglob("*.pdbqt"):
+            yield p
+
+
 def select_ligands_for_next(
         docking_mode: str,
         i: int,

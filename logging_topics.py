@@ -21,7 +21,7 @@ from input_and_export_functions import _to_bool
 #     topics (plus untagged messages, unless restricted elsewhere).
 DEFAULT_MUTED_TAGS: set[str] = {
     # Very noisy internal debug topics
-    "vina.call",
+    #"vina.call",
     "cfg.emit",
     "emit.debug",
     "propka.choice",

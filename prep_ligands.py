@@ -293,7 +293,16 @@ if __name__ == "__main__":
         print("Exposed intermediates under:", prepped_root)
         sys.exit(0)
 
-    prep_ligands_with_mgltools(force=args.force, only=(only_set if only_set else None))
+    prep_ligands_with_mgltools(
+        force=args.force,
+        only=(only_set if only_set else None),
+        in_sdf=args.in_sdf,
+        in_sdf_dir=args.in_sdf_dir,
+        in_pdb_dir=args.in_pdb_dir,
+        mol2_dir=args.mol2_dir,
+        out_pdbqt_dir=args.out_pdbqt_dir,
+        status_log=args.status_log,
+    )
 
 # Acceptance tests (manual, keep behavior unchanged):
 # 1) Bulk subset:

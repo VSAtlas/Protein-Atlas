@@ -16,6 +16,9 @@ from path_router import Paths, docked_dir, receptor_file
 from protein_functions import detect_active_site
 from run_vina import run_docking_task
 
+# NEW: ligand helpers used for control selection and redock RMSD
+from docking_ligands import _is_readable_ref, compute_rmsd
+
 
 # [ions] audit classification tokens
 _ION_AUDIT_METALS = {

@@ -3421,21 +3421,50 @@ def _valid_pdbqt(path: Path, log_dir: Path) -> bool:
         return False
 
 
-def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] = None,
-                               ph_values: Optional[List[float]] = None,
-                               microstate_dedup: bool = False,
-                               root_dir: Optional[Path] = None):
-    microstate_registry: Dict[str, Any] | None = None
-    microstate_index: Dict[str, dict] | None = None
-    alias_index: Dict[Tuple[str, str, float], dict] | None = None
-    microstate_registry_dirty = False
-    library_out_dir: Path | None = None
-    microstates_dir: Path | None = None
+def _env_bool(name: str, default: Any) -> bool:
+    v = os.environ.get(name)
+    return (str(v).strip().lower() in {"1", "true", "yes", "on"}) if v is not None else bool(default)
 
-    # also honor an env var as a fallback (useful in batch/HPC)
-    if not force:
+def _env_int(name: str, default: Any) -> int:
+    v = os.environ.get(name)
+    return int(v) if v not in (None, "") else int(default)
+
+def _env_float(name: str, default: Any) -> float:
+    v = os.environ.get(name)
+    return float(v) if v not in (None, "") else float(default)
+
+def _sanitize_ligand_name_for_filename(name: str) -> str:
+    name = name.strip()
+    name = name.replace(" ", "_")
+    name = re.sub(r"[^A-Za-z0-9_.+-]+", "_", name)
+    return name[:80] or "ligand"
+
+def _relative_to_output(path: Path, output_dir: Path) -> str:
+    try:
+        return str(path.relative_to(output_dir))
+    except Exception:
+        return path.name
+
+def _bulk_init_config_and_paths(
+    *,
+    force: bool,
+    microstate_dedup: bool,
+    ph_values: Optional[List[float]],
+    in_sdf: Optional[Path],
+    in_sdf_dir: Optional[Path],
+    in_pdb_dir: Optional[Path],
+    mol2_dir: Optional[Path],
+    out_pdbqt_dir: Optional[Path],
+    status_log: Optional[Path],
+    root_dir: Optional[Path],
+) -> Dict[str, Any]:
+    """Phase 1: initialize config, effective paths, and environment-driven overrides."""
+    ctx: Dict[str, Any] = {}
+    force_flag = force
+    if not force_flag:
         env_force = os.environ.get("LIGPREP_FORCE", "").strip().lower()
-        force = env_force in {"1", "true", "yes", "y"}
+        force_flag = env_force in {"1", "true", "yes", "y"}
+    ctx["force"] = force_flag
 
     print("Starting ligand preparation")
 
@@ -3444,6 +3473,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
 
     cfg = load_config("config.txt")
     validate_config(cfg)
+    ctx["cfg"] = cfg
     pdb_token = (
         os.environ.get("PDB_ID")
         or cfg.get("PDB_ID")
@@ -3455,19 +3485,15 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     )
     pdb_id = Path(str(pdb_token)).stem.upper() if pdb_token else "LIGPREP"
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    #
+    ctx["paths"] = paths
 
+    ctx["in_sdf_env"] = (os.environ.get("LIGPREP_IN_SDF", "") or "").strip() or None
+    ctx["in_sdf_dir_env"] = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
+    ctx["in_pdb_dir_env"] = (os.environ.get("LIGPREP_IN_PDB_DIR", "") or "").strip() or None
+    ctx["mol2_dir_env"] = (os.environ.get("LIGPREP_MOL2_DIR", "") or "").strip() or None
+    ctx["out_dir_env"] = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
+    ctx["status_log_env"] = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
 
-    # ---------- resolve overrideable effective paths ----------
-    # read ENV once here; CLI (if used) will populate these env vars in __main__
-    in_sdf_env = (os.environ.get("LIGPREP_IN_SDF", "") or "").strip() or None
-    in_sdf_dir_env = (os.environ.get("LIGPREP_IN_SDF_DIR", "") or "").strip() or None
-    in_pdb_dir_env = (os.environ.get("LIGPREP_IN_PDB_DIR", "") or "").strip() or None
-    mol2_dir_env = (os.environ.get("LIGPREP_MOL2_DIR", "") or "").strip() or None
-    out_dir_env = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
-    status_log_env = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
-
-    # default to config when not overridden
     ligands_raw_dir = paths.ligand_output_dir
     prepped_lig_dir = paths.prepped_ligands_dir
     ligands_mol2_root = paths.ligands_mol2_dir
@@ -3481,15 +3507,15 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         prepped_ligands_dir = output_ligands_dir
         library_hint = prepped_ligands_dir.name.lower()
     else:
-        output_ligands_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_lig_dir
+        output_ligands_dir = Path(ctx["out_dir_env"]).resolve() if ctx["out_dir_env"] else prepped_lig_dir
         prepped_ligands_dir = output_ligands_dir
         library_hint = prepped_ligands_dir.name.lower()
 
     if library_env:
         library_base = library_env.lower()
-    elif in_sdf_env:
+    elif ctx["in_sdf_env"]:
         try:
-            in_sdf_path = Path(in_sdf_env).resolve()
+            in_sdf_path = Path(ctx["in_sdf_env"]).resolve()
             detected = ""
             parts = list(in_sdf_path.parts)
             for idx, part in enumerate(parts):
@@ -3503,8 +3529,9 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         library_base = library_hint
     library_base = (library_base or library_hint or "ligprep").lower()
     library_name = library_base
+    ctx["library_name"] = library_name
 
-    if root_dir is not None and not in_sdf_dir_env:
+    if root_dir is not None and not ctx["in_sdf_dir_env"]:
         project_root = None
         for parent in root_dir.parents:
             if parent.name == "prepped_ligands":
@@ -3520,34 +3547,34 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         else:
             ligand_extracted_dir = ligands_raw_dir
     else:
-        ligand_extracted_dir = Path(in_sdf_dir_env).resolve() if in_sdf_dir_env else ligands_raw_dir
+        ligand_extracted_dir = Path(ctx["in_sdf_dir_env"]).resolve() if ctx["in_sdf_dir_env"] else ligands_raw_dir
+    ctx["ligand_extracted_dir"] = ligand_extracted_dir
 
-    if mol2_dir_env:
-        ligands_mol2_dir = Path(mol2_dir_env).resolve()
+    if ctx["mol2_dir_env"]:
+        ligands_mol2_dir = Path(ctx["mol2_dir_env"]).resolve()
     else:
         ligands_mol2_dir = Path(ligands_mol2_root) / library_base
+    ctx["ligands_mol2_dir"] = ligands_mol2_dir
 
     if not library_env and root_dir is None:
         os.environ["LIGPREP_LIBRARY"] = library_base
 
-    is_fda_library = (library_hint == "fda")
-    # direct all malformed logs for this protein to its prepped_ligands dir
-    global MALFORMED_DIR
+    ctx["is_fda_library"] = (library_hint == "fda")
 
+    global MALFORMED_DIR
     MALFORMED_DIR = prepped_ligands_dir
-    # create working/output dirs
+
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
     ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
 
-    library_out_dir = prepped_ligands_dir
-
+    ctx["library_out_dir"] = prepped_ligands_dir
     if microstate_dedup:
-        microstates_dir = library_out_dir / "microstates"
+        microstates_dir = prepped_ligands_dir / "microstates"
         microstates_dir.mkdir(parents=True, exist_ok=True)
-        microstate_registry, microstate_index = load_microstate_registry(library_out_dir, library_name)
+        microstate_registry, microstate_index = load_microstate_registry(prepped_ligands_dir, library_name)
         microstate_registry_dirty = False
 
-        alias_index = {}
+        alias_index: Dict[Tuple[str, str, float], dict] = {}
         for entry in microstate_registry.get("microstates", []) or []:
             for alias in entry.get("aliases", []) or []:
                 try:
@@ -3559,98 +3586,81 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 except Exception:
                     continue
                 alias_index[key] = entry
+        ctx["microstates_dir"] = microstates_dir
+        ctx["microstate_registry"] = microstate_registry
+        ctx["microstate_index"] = microstate_index
+        ctx["alias_index"] = alias_index
+        ctx["microstate_registry_dirty"] = microstate_registry_dirty
+    else:
+        ctx["microstates_dir"] = None
+        ctx["microstate_registry"] = None
+        ctx["microstate_index"] = None
+        ctx["alias_index"] = None
+        ctx["microstate_registry_dirty"] = False
 
-    if microstate_dedup and ph_values is not None and microstate_registry is not None:
+    if microstate_dedup and ph_values is not None and ctx.get("microstate_registry") is not None:
         logger.info(
             "prep_ligands: microstate_dedup init library=%s out_dir=%s existing_microstates=%d",
             library_name,
-            library_out_dir,
-            len(microstate_registry.get("microstates", []) or []),
+            prepped_ligands_dir,
+            len(ctx["microstate_registry"].get("microstates", []) or []),
         )
 
     def _maybe_save_microstate_registry(force: bool = False) -> None:
-        nonlocal microstate_registry_dirty
+        if not microstate_dedup or ctx.get("microstate_registry") is None or ctx.get("library_out_dir") is None:
+            return
+        microstate_registry_local = ctx["microstate_registry"]
+        microstate_list = microstate_registry_local.get("microstates") or []
+        alias_count = sum(len(entry.get("aliases") or []) for entry in microstate_list)
+        if microstate_dedup:
+            if microstate_list:
+                logger.info(
+                    "prep_ligands: microstate_dedup summary library=%s out_dir=%s microstates=%d aliases=%d",
+                    library_name,
+                    ctx["library_out_dir"],
+                    len(microstate_list),
+                    alias_count,
+                )
+            else:
+                logger.warning(
+                    "prep_ligands: microstate_dedup summary library=%s out_dir=%s microstates=%d aliases=%d (EMPTY REGISTRY)",
+                    library_name,
+                    ctx["library_out_dir"],
+                    len(microstate_list),
+                    alias_count,
+                )
+        if ctx.get("microstate_registry_dirty") or force:
+            save_microstate_registry(ctx["library_out_dir"], microstate_registry_local)
+            ctx["microstate_registry_dirty"] = False
 
-        if microstate_dedup and microstate_registry is not None and library_out_dir is not None:
-            try:
-                microstates = microstate_registry.get("microstates") or []
-                alias_count = 0
-                for entry in microstates:
-                    alias_count += len(entry.get("aliases") or [])
+    ctx["maybe_save_microstate_registry"] = _maybe_save_microstate_registry
 
-                if microstate_dedup:
-                    if microstates:
-                        logger.info(
-                            "prep_ligands: microstate_dedup summary library=%s out_dir=%s microstates=%d aliases=%d",
-                            library_name,
-                            library_out_dir,
-                            len(microstates),
-                            alias_count,
-                        )
-                    else:
-                        logger.warning(
-                            "prep_ligands: microstate_dedup summary library=%s out_dir=%s microstates=%d aliases=%d (EMPTY REGISTRY)",
-                            library_name,
-                            library_out_dir,
-                            len(microstates),
-                            alias_count,
-                        )
-            except Exception:
-                pass
-
-            if microstate_registry_dirty or force:
-                save_microstate_registry(library_out_dir, microstate_registry)
-                microstate_registry_dirty = False
-
-
-    # emit a compact audit banner (single line)
     print(
         "[paths.effective]"
-        f" in_sdf={in_sdf_env or 'None'}"
+        f" in_sdf={ctx['in_sdf_env'] or 'None'}"
         f" in_sdf_dir={ligand_extracted_dir}"
-        f" in_pdb_dir={in_pdb_dir_env or 'None'}"
+        f" in_pdb_dir={ctx['in_pdb_dir_env'] or 'None'}"
         f" mol2_dir={ligands_mol2_dir}"
         f" out_pdbqt_dir={output_ligands_dir}"
-        f" status_log={(status_log_env or cfg.get('LIGAND_STATUS_LOG_BASENAME', 'ligand_prep_status.tsv'))}"
+        f" status_log={(ctx['status_log_env'] or cfg.get('LIGAND_STATUS_LOG_BASENAME', 'ligand_prep_status.tsv'))}"
     )
 
-    # env > config precedence for toggles/ints
-    def _env_bool(name, default):
-        v = os.environ.get(name)
-        return (str(v).strip().lower() in {"1", "true", "yes", "on"}) if v is not None else bool(default)
+    ctx["USE_RDKIT_FOR_3D"] = _env_bool("USE_RDKIT_FOR_3D", cfg.get("USE_RDKIT_FOR_3D", True))
+    ctx["OBABEL_THREADS"] = _env_int("OBABEL_THREADS", cfg.get("OBABEL_THREADS", 50))
+    ctx["OBABEL_TIMEOUT_S"] = _env_int("OBABEL_TIMEOUT_S", cfg.get("OBABEL_TIMEOUT_S", 900))
+    ctx["CHUNK_SIZE"] = _env_int("LIGPREP_CHUNK_SIZE", cfg.get("LIGPREP_CHUNK_SIZE", 200))
+    ctx["LIGPREP_PH"] = _env_float("LIGPREP_PH", cfg.get("LIGPREP_PH", 7.4))
+    ctx["KEEP_NONPOLAR_H"] = _env_int("KEEP_NONPOLAR_H", cfg.get("KEEP_NONPOLAR_H", 1))
+    ctx["MAX_HEAVY_ATOMS"] = _env_int("MAX_HEAVY_ATOMS", cfg.get("MAX_HEAVY_ATOMS", 1200))
+    ctx["MIN_ATOMS_FOR_DOCKING"] = _env_int("MIN_ATOMS_FOR_DOCKING", cfg.get("MIN_ATOMS_FOR_DOCKING", 5))
+    ctx["MIN_PARENT_HEAVY"] = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
+    ctx["MIN_TORS_DOF"] = _env_int("MIN_TORS_DOF", cfg.get("MIN_TORS_DOF", 0))
 
-    def _env_int(name, default):
-        v = os.environ.get(name)
-        return int(v) if v not in (None, "") else int(default)
-
-    def _env_float(name, default):
-        v = os.environ.get(name)
-        return float(v) if v not in (None, "") else float(default)
-
-    def _sanitize_ligand_name_for_filename(name: str) -> str:
-        name = name.strip()
-        name = name.replace(" ", "_")
-        name = re.sub(r"[^A-Za-z0-9_.+-]+", "_", name)
-        return name[:80] or "ligand"
-
-    USE_RDKIT_FOR_3D = _env_bool("USE_RDKIT_FOR_3D", cfg.get("USE_RDKIT_FOR_3D", True))
-    OBABEL_THREADS = _env_int("OBABEL_THREADS", cfg.get("OBABEL_THREADS", 50))
-    OBABEL_TIMEOUT_S = _env_int("OBABEL_TIMEOUT_S", cfg.get("OBABEL_TIMEOUT_S", 900))
-    CHUNK_SIZE = _env_int("LIGPREP_CHUNK_SIZE", cfg.get("LIGPREP_CHUNK_SIZE", 200))
-    LIGPREP_PH = _env_float("LIGPREP_PH", cfg.get("LIGPREP_PH", 7.4))
-    KEEP_NONPOLAR_H = _env_int("KEEP_NONPOLAR_H", cfg.get("KEEP_NONPOLAR_H", 1))
-    MAX_HEAVY_ATOMS = _env_int("MAX_HEAVY_ATOMS", cfg.get("MAX_HEAVY_ATOMS", 1200))
-    MIN_ATOMS_FOR_DOCKING = _env_int("MIN_ATOMS_FOR_DOCKING", cfg.get("MIN_ATOMS_FOR_DOCKING", 5))
-    MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
-    # ---------- resolve numeric/env knobs you already had ----------
-    MIN_TORS_DOF = _env_int("MIN_TORS_DOF", cfg.get("MIN_TORS_DOF", 0))
-    MIN_PARENT_HEAVY = _env_int("MIN_PARENT_HEAVY", cfg.get("MIN_PARENT_HEAVY", 8))
-
-    
     if ph_values is not None and len(ph_values) > 0:
         eff_ph_values = [float(x) for x in ph_values]
     else:
-        eff_ph_values = [float(LIGPREP_PH)]
+        eff_ph_values = [float(ctx["LIGPREP_PH"])]
+    ctx["eff_ph_values"] = eff_ph_values
 
     multiple_ph = ph_values is not None and len(eff_ph_values) > 1
     use_ph_subdirs = ph_values is not None
@@ -3658,31 +3668,26 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     ph_summary = ",".join(f"{ph:.1f}" for ph in eff_ph_values)
     print(f"[ligprep] ph_schedule source={ph_source} values={ph_summary} multiple={multiple_ph}")
     logger.info("prep_ligands: pH schedule eff_ph_values=%s", eff_ph_values)
+
     output_ligands_dir.mkdir(parents=True, exist_ok=True)
-    # If someone pointed MOL2s at 'prepped_ligands', redirect to 'ligands_mol2' (compat warning).
     if "prepped_ligands" in str(ligands_mol2_dir):
         suggested = Path(str(ligands_mol2_dir).replace("prepped_ligands", "ligands_mol2")).resolve()
         logging.warning("[compat] LIGANDS_MOL2_DIR points at prepped_ligands; redirecting to %s", suggested)
         ligands_mol2_dir = suggested
+        ctx["ligands_mol2_dir"] = ligands_mol2_dir
 
     ligands_mol2_dir.mkdir(parents=True, exist_ok=True)
 
-    def _relative_to_output(path: Path) -> str:
-        try:
-            return str(path.relative_to(output_ligands_dir))
-        except Exception:
-            return path.name
-
-    # Banner: show exactly where things will land for this run
-    print(f"[ligprep] sdf_dir={ligands_mol2_dir / '_rdkit_embedded_sdf'} "
-          f"mol2_dir={ligands_mol2_dir} "
-          f"pdbqt_dir={output_ligands_dir}")
+    print(
+        f"[ligprep] sdf_dir={ligands_mol2_dir / '_rdkit_embedded_sdf'} "
+        f"mol2_dir={ligands_mol2_dir} "
+        f"pdbqt_dir={output_ligands_dir}"
+    )
 
     mgltools_python = cfg["MGLTOOLS_PYTHON"]
     mgltools_path = cfg["MGLTOOLS_PATH"]
     obabel_cfg = cfg["OPENBABEL_PATH"]
 
-    # Linux-safe obabel resolution
     obabel_exe = obabel_cfg
     obabel_exe_short = get_short_path_name(obabel_exe)
 
@@ -3709,36 +3714,57 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         raise FileNotFoundError(f"prepare_ligand4.py not found at {prepare_script} (set PREPARE_LIGAND4 in config.txt)")
     prepare_script_short = get_short_path_name(str(prepare_script.resolve()))
 
-    # Per-target status log (SDF pipeline)
-    status_log = (
-        Path(status_log_env).resolve()
-        if (status_log_env and Path(status_log_env).suffix)
-        else (output_ligands_dir / (status_log_env or cfg.get("LIGAND_STATUS_LOG_BASENAME", "ligand_prep_status.tsv")))
+    status_log_path = (
+        Path(ctx["status_log_env"]).resolve()
+        if (ctx["status_log_env"] and Path(ctx["status_log_env"]).suffix)
+        else (output_ligands_dir / (ctx["status_log_env"] or cfg.get("LIGAND_STATUS_LOG_BASENAME", "ligand_prep_status.tsv")))
     )
 
-    if only:
+    ctx.update({
+        "mgltools_python_short": mgltools_python_short,
+        "prepare_script_short": prepare_script_short,
+        "obabel_exe_short": obabel_exe_short,
+        "status_log": status_log_path,
+        "output_ligands_dir": output_ligands_dir,
+        "prepped_ligands_dir": prepped_ligands_dir,
+        "library_hint": library_hint,
+        "microstate_dedup": microstate_dedup,
+        "use_ph_subdirs": use_ph_subdirs,
+        "ph_values": ph_values,
+        "in_sdf": in_sdf,
+        "in_sdf_dir": in_sdf_dir,
+        "in_pdb_dir": in_pdb_dir,
+        "mol2_dir": mol2_dir,
+        "out_pdbqt_dir": out_pdbqt_dir,
+    })
+    return ctx
+def _bulk_select_unit_sdfs(ctx: Dict[str, Any], only_set: Optional[Set[str]]) -> Tuple[List[Path], Optional[Set[str]], bool]:
+    """Phase 2: inspect per-ligand SDFs, handle true test-mode branch, and return unit sdf metadata."""
+    ligands_mol2_dir = ctx["ligands_mol2_dir"]
+    output_ligands_dir = ctx["output_ligands_dir"]
+    rdkit_unit_sdf_dir = ligands_mol2_dir / "_rdkit_embedded_sdf"
+    unit_sdfs = sorted(rdkit_unit_sdf_dir.glob("*.sdf")) if rdkit_unit_sdf_dir.is_dir() else []
+
+    in_sdf_env = ctx["in_sdf_env"]
+    in_pdb_dir_env = ctx["in_pdb_dir_env"]
+    has_only = bool(only_set)
+    microstate_dedup = ctx["microstate_dedup"]
+    ph_values = ctx.get("ph_values")
+
+    if only_set:
         logging.info(
             "[ligprep] ONLY-set active for library=%s count=%d sample=%s",
-            library_name,
-            len(only),
-            ",".join(sorted(list(only))[:10]),
+            ctx["library_name"],
+            len(only_set),
+            ",".join(sorted(list(only_set))[:10]),
         )
     else:
         logging.info(
             "[ligprep] ONLY-set empty; full library will be processed for library=%s",
-            library_name,
+            ctx["library_name"],
         )
 
-    # =========================
-    # TRUE TEST-MODE: prefer per-ligand SDFs and filter by ONLY
-    # =========================
-    rdkit_unit_sdf_dir = ligands_mol2_dir / "_rdkit_embedded_sdf"
-    unit_sdfs = sorted(rdkit_unit_sdf_dir.glob("*.sdf")) if rdkit_unit_sdf_dir.is_dir() else []
-
-    # Only allow “true test-mode” when NO explicit SDF or PDB input was specified.
     test_mode_allowed = (in_sdf_env is None) and (in_pdb_dir_env is None)
-    has_only = bool(only)
-
     use_unit_sdf_test_mode = (
         unit_sdfs
         and test_mode_allowed
@@ -3752,12 +3778,9 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             "[test-mode] using legacy unit-SDF pipeline (microstate_dedup=False or no ph_values); "
             "bulk SDF path is disabled."
         )
-        # Build the candidate SDF list
         selected_sdfs: List[Path]
-        if only:
-            # only is already normalized to canonical rdk_{7d} by _collect_only_from_env_and_cli
-            requested_ids = sorted(only)
-            # map requested ids to files (only those that exist)
+        if only_set:
+            requested_ids = sorted(only_set)
             selected_sdfs = [
                 rdkit_unit_sdf_dir / f"{rid}.sdf"
                 for rid in requested_ids
@@ -3768,8 +3791,6 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 for rid in requested_ids
                 if not (rdkit_unit_sdf_dir / f"{rid}.sdf").exists()
             ]
-
-            # diagnostics (bounded)
             print(
                 f"[test-mode] enabled only_count={len(requested_ids)} "
                 f"sample={','.join(requested_ids[:10])}"
@@ -3778,18 +3799,16 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 f"[test-mode] selected_sdf_count={len(selected_sdfs)} missing={len(missing)}"
                 + (f" first_missing={','.join(missing[:10])}" if missing else "")
             )
-
             if len(selected_sdfs) == 0:
                 print(
                     "[test-mode] No requested per-ligand SDFs found. "
                     "Nothing to do; exiting cleanly."
                 )
-                return
+                ctx["maybe_save_microstate_registry"](force=True)
+                return unit_sdfs, only_set, True
         else:
-            # ONLY not set: prefer all per-ligand SDFs instead of bulk
             selected_sdfs = unit_sdfs
 
-        # Optional cleanup of existing PDBQTs for the selected subset (before scheduling)
         clean_env = os.environ.get("LIGPREP_CLEAN", "").strip().lower() in {
             "1",
             "true",
@@ -3813,7 +3832,6 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                     ",".join(cleaned[:20]),
                 )
 
-        # Convert the selected SDFs to MOL2 using Open Babel
         mol2_files: List[Path] = []
         for sdf_in in selected_sdfs:
             sdf_name = sdf_in.name
@@ -3824,7 +3842,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             ok, stderr_text = _sdf_to_mol2(
                 sdf_in,
                 mol2_out,
-                obabel_exe_short,
+                ctx["obabel_exe_short"],
                 timeout_sec=max(60, LIGPREP_OBABEL_TIMEOUT_SEC),
             )
             if not ok:
@@ -3834,14 +3852,12 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 continue
             mol2_files.append(mol2_out)
 
-        # If ONLY set, show concise banner of the subset that will be scheduled
-        if only:
+        if only_set:
             sample = ",".join(sorted({Path(p).stem for p in mol2_files})[:10])
             print(
                 f"[test-mode] scheduling_only={len(mol2_files)} sample={sample}"
             )
 
-        # ===== Schedule only the selected MOL2s for PDBQT (same logic as bulk path) =====
         print(
             f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) "
             f"into {output_ligands_dir}"
@@ -3862,13 +3878,13 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 futures.append(
                     ex.submit(
                         _prepare_one,
-                        mgltools_python_short,
-                        prepare_script_short,
+                        ctx["mgltools_python_short"],
+                        ctx["prepare_script_short"],
                         mol2_file,
                         pdbqt_path,
-                        obabel_exe_short=obabel_exe_short,
+                        obabel_exe_short=ctx["obabel_exe_short"],
                         status_log_dir=output_ligands_dir,
-                        ph=eff_ph_values[0],  # or whatever you’re using for test-mode
+                        ph=ctx["eff_ph_values"][0],
                     )
                 )
 
@@ -3885,10 +3901,9 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             f"[test-mode] finished: ok={ok_count} fail={fail_count} "
             f"scheduled={len(futures)}"
         )
+        ctx["maybe_save_microstate_registry"](force=True)
+        return unit_sdfs, only_set, True
 
-        # Done with per-ligand “test-mode” path; avoid touching bulk SDFs.
-        _maybe_save_microstate_registry(force=True)
-        return
     if unit_sdfs and test_mode_allowed and has_only and microstate_dedup and ph_values is not None:
         print(
             "[test-mode] per-ligand SDFs detected but microstate_dedup=True with ph_values; "
@@ -3898,29 +3913,23 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
         print(
             "[test-mode] per-ligand SDFs present but ONLY not set; using bulk ligprep path instead"
         )
-
     elif unit_sdfs and not test_mode_allowed:
-        # Helpful breadcrumb so you know why test-mode was skipped.
         print(
             "[test-mode] per-ligand SDFs present at "
             f"{rdkit_unit_sdf_dir} but skipping because explicit input was provided: "
             f"in_sdf={in_sdf_env!r}, in_pdb_dir={in_pdb_dir_env!r}"
         )
-    # =========================
-    # END test-mode, fall back to legacy bulk-SDF path below
-    # =========================
+    return unit_sdfs, only_set, False
+def _bulk_generate_mol2_files(ctx: Dict[str, Any], only_set: Optional[Set[str]]) -> List[Path]:
+    """Phase 3: convert bulk SDFs (or explicit overrides) into MOL2 files."""
+    ligand_extracted_dir = ctx["ligand_extracted_dir"]
+    in_sdf_env = ctx["in_sdf_env"]
+    ligands_mol2_dir = ctx["ligands_mol2_dir"]
+    obabel_exe_short = ctx["obabel_exe_short"]
+    output_ligands_dir = ctx["output_ligands_dir"]
+    _maybe_save = ctx["maybe_save_microstate_registry"]
 
-
-    # : crystal-safe dispatch (takes precedence over bulk scan when in_sdf not set)
-    if in_pdb_dir_env and not in_sdf_env:
-        result = prep_ligands_from_pdb(Path(in_pdb_dir_env).resolve(), ligands_mol2_dir, output_ligands_dir)
-        _maybe_save_microstate_registry(force=True)
-        return result
-
-    # single-file override; else scan directory as before
     sdf_files = [Path(in_sdf_env).resolve()] if in_sdf_env else list(ligand_extracted_dir.glob("*.sdf"))
-
-    # Guard: skip bulk docking output SDFs (e.g. *_docked_vina.sdf)
     initial_count = len(sdf_files)
     sdf_files = [p for p in sdf_files if "docked" not in p.name.lower()]
     skipped = initial_count - len(sdf_files)
@@ -3934,13 +3943,17 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
     print(f"Found {len(sdf_files)} SDF file(s)")
 
     if not sdf_files:
-        _maybe_save_microstate_registry(force=True)
-        return
+        _maybe_save(force=True)
+        return []
+
+    all_mol2_files: List[Path] = []
+    use_rdkit = ctx["USE_RDKIT_FOR_3D"]
+    obabel_threads = ctx["OBABEL_THREADS"]
+    obabel_timeout = ctx["OBABEL_TIMEOUT_S"]
+    chunk_size = ctx["CHUNK_SIZE"]
 
     for sdf_file in sdf_files:
         print(f"=== Processing SDF: {sdf_file.name} ===")
-
-        # immediately normalize SDF names to avoid '.sanitized.sanitized'
         norm_sdf = collapse_sanitized_once(Path(sdf_file))
         if norm_sdf != Path(sdf_file):
             try:
@@ -3950,19 +3963,17 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             except Exception as e:
                 logging.warning("[tidy] unable to normalize SDF %s: %s", sdf_file, e)
         sdf_abs = Path(sdf_file).resolve()
-
         sdf_abs = sdf_file.resolve()
-
+        mol2_files: List[Path]
         max_workers = max(1, int(os.environ.get("CPU", "8")))
-
-        if USE_RDKIT_FOR_3D:
+        if use_rdkit:
             print("Using RDKit ETKDG for 3D with parent-picking; OBabel only for format conversion ")
             mol2_files = rdkit_embed_sdf_to_mol2(
                 sdf_abs,
                 ligands_mol2_dir,
                 obabel_exe=obabel_exe_short,
                 max_workers=max_workers,
-                only_set=only,
+                only_set=only_set,
             )
         else:
             print("Using OBabel --gen3d; pre-cleaning SDF to parent-only ")
@@ -3974,7 +3985,7 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
                 continue
             mol2_files = convert_sdf_to_mol2_split_parallel(
                 cleaned_sdf, ligands_mol2_dir, obabel_exe_short,
-                threads=OBABEL_THREADS, timeout_sec=OBABEL_TIMEOUT_S, chunk_size=CHUNK_SIZE
+                threads=obabel_threads, timeout_sec=obabel_timeout, chunk_size=chunk_size
             )
 
         if not mol2_files:
@@ -3990,366 +4001,410 @@ def prep_ligands_with_mgltools(*, force: bool = False, only: Optional[Set[str]] 
             print("No MOL2 files produced; skipping this SDF.")
             continue
 
-
-        # ----- TEST MODE FILTERING (ONLY-set) -----
-        if only:
+        if only_set:
             stems = {Path(p).stem for p in mol2_files}
-            requested = set(only)
-            # Filter down
+            requested = set(only_set)
             mol2_files = [p for p in mol2_files if Path(p).stem in requested]
-
-            # Diagnostics banner (single, concise line)
             sample = sorted(list(requested))[:10]
             remain = len(mol2_files)
             logging.info("[test-mode] enabled count=%d remain=%d sample=%s", len(requested), remain, ",".join(sample))
             print(f"[test-mode] enabled count={len(requested)} remain={remain} sample={','.join(sample)}")
-
-            # Warn once about missing
             missing = sorted(list(requested - stems))
             if missing:
                 logging.warning("[test-mode] requested ligands not found among MOL2s: %s",
                                 ",".join(missing[:20]) + ("..." if len(missing) > 20 else ""))
-
-            # Early exit if nothing remains
             if not mol2_files:
                 print("[test-mode] No requested ligands were found. Nothing to do; exiting cleanly.")
-                _maybe_save_microstate_registry(force=True)
-                return
+                _maybe_save(force=True)
+                return []
 
+        all_mol2_files.extend(mol2_files)
+    return all_mol2_files
+def _bulk_prepare_pdbqts(ctx: Dict[str, Any], mol2_files: List[Path]) -> List[Path]:
+    """Phase 4: normalize MOL2s, run MGLTools/ADT prep, and update microstate metadata."""
+    if not mol2_files:
+        return []
+    output_ligands_dir = ctx["output_ligands_dir"]
+    status_log = ctx["status_log"]
+    mgltools_python_short = ctx["mgltools_python_short"]
+    prepare_script_short = ctx["prepare_script_short"]
+    obabel_exe_short = ctx["obabel_exe_short"]
+    is_fda_library = ctx["is_fda_library"]
+    microstate_dedup = ctx["microstate_dedup"]
+    ph_values = ctx.get("ph_values")
+    eff_ph_values = ctx["eff_ph_values"]
+    use_ph_subdirs = ctx["use_ph_subdirs"]
+    ligands_mol2_dir = ctx["ligands_mol2_dir"]
+    library_out_dir = ctx["library_out_dir"]
+    microstate_registry = ctx.get("microstate_registry")
+    microstate_index = ctx.get("microstate_index")
+    alias_index = ctx.get("alias_index")
+    microstates_dir = ctx.get("microstates_dir")
+    library_name = ctx["library_name"]
+    force = ctx["force"]
+    relative_output = lambda path: _relative_to_output(path, output_ligands_dir)
 
+    print(
+        f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) into {output_ligands_dir}"
+    )
+    max_workers = max(1, int(os.environ.get("CPU", "8")))
+    futures = []
+    future_relpaths: Dict[Any, str] = {}
+    resume_skips = 0
+    resume_examples: List[str] = []
+    ligprep_debug_seen = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for mol2_file in mol2_files:
+            norm_mol2 = collapse_sanitized_once(Path(mol2_file))
+            if norm_mol2 != mol2_file:
+                try:
+                    norm_mol2.write_bytes(Path(mol2_file).read_bytes())
+                    mol2_file = norm_mol2
+                    logging.info("[tidy] normalized double-sanitized -> %s", mol2_file.name)
+                except Exception as e:
+                    logging.warning("[tidy] unable to normalize %s: %s", mol2_file, e)
 
-        print(f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) into {output_ligands_dir}")
-        max_workers = max(1, int(os.environ.get("CPU", "8")))
-        futures = []
-        future_relpaths: Dict[Any, str] = {}
-        ok_count = 0
-        fail_count = 0
-        resume_skips = 0
-        resume_examples: List[str] = []
-        ligprep_debug_seen = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            for mol2_file in mol2_files:
-                norm_mol2 = collapse_sanitized_once(Path(mol2_file))
-                if norm_mol2 != mol2_file:
+            mol2_input = Path(mol2_file)
+            rdk_stem = mol2_input.stem
+            lig_stem = rdk_stem
+            if not is_fda_library:
+                name_path = mol2_input.with_suffix(".name")
+                name_exists = name_path.exists()
+                parent_name_raw: str = ""
+                try:
+                    if name_exists:
+                        parent_name_raw = name_path.read_text(encoding="utf-8", errors="ignore").strip()
+                        if parent_name_raw:
+                            lig_stem = _sanitize_ligand_name_for_filename(parent_name_raw)
+                except Exception as e:
+                    logging.warning("[ligprep] unable to read .name for %s: %s", mol2_input.name, e)
+                if ligprep_debug_seen < 5:
+                    print(
+                        f"[ligprep-debug] mol2={mol2_input.name} is_fda={is_fda_library} "
+                        f"name_path_exists={name_exists} parent_name_raw={parent_name_raw!r} "
+                        f"lig_stem={lig_stem}"
+                    )
+                    ligprep_debug_seen += 1
+
+            rdkit_mol_for_microstate: Optional[Chem.Mol] = None
+            sdf_for_microstate: Optional[Path] = None
+
+            if microstate_dedup and ph_values is not None:
+                embedded_sdf_dir = ligands_mol2_dir / "_rdkit_embedded_sdf"
+                try:
+                    candidate_sdf = embedded_sdf_dir / f"{rdk_stem}.sdf"
+                    if candidate_sdf.exists():
+                        sdf_for_microstate = candidate_sdf
+                except Exception:
+                    sdf_for_microstate = None
+                if sdf_for_microstate is not None and sdf_for_microstate.exists():
                     try:
-                        norm_mol2.write_bytes(Path(mol2_file).read_bytes())
-                        mol2_file = norm_mol2
-                        logging.info("[tidy] normalized double-sanitized -> %s", mol2_file.name)
-                    except Exception as e:
-                        logging.warning("[tidy] unable to normalize %s: %s", mol2_file, e)
-
-                mol2_input = Path(mol2_file)
-                rdk_stem = mol2_input.stem
-                lig_stem = rdk_stem
-                if not is_fda_library:
-                    name_path = mol2_input.with_suffix(".name")
-                    name_exists = name_path.exists()
-                    parent_name_raw: str = ""
-                    try:
-                        if name_exists:
-                            parent_name_raw = name_path.read_text(encoding="utf-8", errors="ignore").strip()
-                            if parent_name_raw:
-                                lig_stem = _sanitize_ligand_name_for_filename(parent_name_raw)
-                    except Exception as e:
-                        logging.warning("[ligprep] unable to read .name for %s: %s", mol2_input.name, e)
-                    if ligprep_debug_seen < 5:
-                        print(
-                            f"[ligprep-debug] mol2={mol2_input.name} is_fda={is_fda_library} "
-                            f"name_path_exists={name_exists} parent_name_raw={parent_name_raw!r} "
-                            f"lig_stem={lig_stem}"
+                        rdkit_mol_for_microstate = Chem.MolFromMolFile(
+                            str(sdf_for_microstate),
+                            sanitize=False,
+                            removeHs=False,
                         )
-                        ligprep_debug_seen += 1
-
-                rdkit_mol_for_microstate: Optional[Chem.Mol] = None
-                sdf_for_microstate: Optional[Path] = None
-
-                if microstate_dedup and ph_values is not None:
-                    # Prefer per-ligand SDFs from the RDKit-embedded directory for microstate IDs.
-                    # These should have the same stem as the MOL2 (e.g., rdk_0000001.sdf).
-                    embedded_sdf_dir = ligands_mol2_dir / "_rdkit_embedded_sdf"
-
-                    try:
-                        candidate_sdf = embedded_sdf_dir / f"{rdk_stem}.sdf"
-                        if candidate_sdf.exists():
-                            sdf_for_microstate = candidate_sdf
-                    except Exception:
-                        sdf_for_microstate = None
-
-                    # 1) Try to load RDKit Mol from the SDF first
-                    if sdf_for_microstate is not None and sdf_for_microstate.exists():
-                        try:
-                            rdkit_mol_for_microstate = Chem.MolFromMolFile(
-                                str(sdf_for_microstate),
-                                sanitize=False,
-                                removeHs=False,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "[microstate] rdkit_load_failed_sdf file=%s ligand=%s err=%s",
-                                sdf_for_microstate,
-                                lig_stem,
-                                e,
-                            )
-
-                    # 2) Fallback: try the MOL2 if SDF-based load failed or was not available
-                    if rdkit_mol_for_microstate is None:
-                        try:
-                            rdkit_mol_for_microstate = Chem.MolFromMol2File(
-                                str(mol2_input),
-                                sanitize=False,
-                                removeHs=False,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "[microstate] rdkit_load_failed_mol2 file=%s ligand=%s err=%s",
-                                mol2_input,
-                                lig_stem,
-                                e,
-                            )
-
-                    # 3) Final load status logging
-                    if rdkit_mol_for_microstate is not None:
-                        logger.debug(
-                            "[microstate] rdkit_load_ok ligand=%s sdf=%s mol2=%s",
-                            lig_stem,
-                            str(sdf_for_microstate) if sdf_for_microstate is not None else "None",
-                            str(mol2_input),
-                        )
-                    else:
+                    except Exception as e:
                         logger.warning(
-                            "[microstate] rdkit_mol None for ligand=%s (sdf=%s mol2=%s)",
+                            "[microstate] rdkit_load_failed_sdf file=%s ligand=%s err=%s",
+                            sdf_for_microstate,
                             lig_stem,
-                            str(sdf_for_microstate) if sdf_for_microstate is not None else "None",
-                            str(mol2_input),
+                            e,
                         )
-
-                for ph_value in eff_ph_values:
-                    ph_label = _ph_label(ph_value) if use_ph_subdirs else None
-                    ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
-                    ph_out_dir.mkdir(parents=True, exist_ok=True)
-
-                    dedup_active = (
-                        microstate_dedup
-                        and ph_values is not None
-                        and microstate_registry is not None
-                        and microstate_index is not None
-                        and microstates_dir is not None
-                    )
-
-                    microstate_entry: dict | None = None
-                    microstate_id: str | None = None
-                    canonical_path: Path | None = None
-                    use_canonical_as_primary = False
-                    copy_targets: List[Path] = []
-
-                    # Key for this ligand/pH combination
-                    alias_key = (
+                if rdkit_mol_for_microstate is None:
+                    try:
+                        rdkit_mol_for_microstate = Chem.MolFromMol2File(
+                            str(mol2_input),
+                            sanitize=False,
+                            removeHs=False,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[microstate] rdkit_load_failed_mol2 file=%s ligand=%s err=%s",
+                            mol2_input,
+                            lig_stem,
+                            e,
+                        )
+                if rdkit_mol_for_microstate is not None:
+                    logger.debug(
+                        "[microstate] rdkit_load_ok ligand=%s sdf=%s mol2=%s",
                         lig_stem,
-                        ph_label or "",
-                        float(ph_value),
+                        str(sdf_for_microstate) if sdf_for_microstate is not None else "None",
+                        str(mol2_input),
+                    )
+                else:
+                    logger.warning(
+                        "[microstate] rdkit_mol None for ligand=%s (sdf=%s mol2=%s)",
+                        lig_stem,
+                        str(sdf_for_microstate) if sdf_for_microstate is not None else "None",
+                        str(mol2_input),
                     )
 
-                    # 1) If we've already seen this exact ligand+ph combination in a previous run,
-                    #    reuse its microstate entry and canonical path. Do NOT add a duplicate alias.
-                    if dedup_active and alias_index is not None:
-                        existing_entry = alias_index.get(alias_key)
-                        if existing_entry is not None:
-                            microstate_entry = existing_entry
-                            canonical_rel = microstate_entry.get("pdbqt_path")
-                            if canonical_rel:
-                                canonical_path = library_out_dir / canonical_rel
-                                if canonical_path.exists():
-                                    use_canonical_as_primary = True
+            for ph_value in eff_ph_values:
+                ph_label = _ph_label(ph_value) if use_ph_subdirs else None
+                ph_out_dir = output_ligands_dir / ph_label if ph_label else output_ligands_dir
+                ph_out_dir.mkdir(parents=True, exist_ok=True)
 
-                    # 2) Otherwise, use microstate_id-based dedup and add a new alias.
-                    if (
-                        dedup_active
-                        and microstate_entry is None
-                        and rdkit_mol_for_microstate is not None
-                    ):
-                        microstate_id = compute_microstate_id(rdkit_mol_for_microstate)
-                        microstate_key = microstate_id
+                dedup_active = (
+                    microstate_dedup
+                    and ph_values is not None
+                    and microstate_registry is not None
+                    and microstate_index is not None
+                    and microstates_dir is not None
+                )
+
+                microstate_entry: dict | None = None
+                microstate_id: str | None = None
+                canonical_path: Path | None = None
+                use_canonical_as_primary = False
+                copy_targets: List[Path] = []
+
+                alias_key = (
+                    lig_stem,
+                    ph_label or "",
+                    float(ph_value),
+                )
+
+                if dedup_active and alias_index is not None:
+                    existing_entry = alias_index.get(alias_key)
+                    if existing_entry is not None:
+                        microstate_entry = existing_entry
+                        canonical_rel = microstate_entry.get("pdbqt_path")
+                        if canonical_rel:
+                            canonical_path = library_out_dir / canonical_rel
+                            if canonical_path.exists():
+                                use_canonical_as_primary = True
+
+                if (
+                    dedup_active
+                    and microstate_entry is None
+                    and rdkit_mol_for_microstate is not None
+                ):
+                    microstate_id = compute_microstate_id(rdkit_mol_for_microstate)
+                    microstate_key = microstate_id
+                    canonical_smiles = None
+                    formal_charge = None
+                    try:
+                        _h_mol = Chem.AddHs(rdkit_mol_for_microstate, addCoords=False)
+                        canonical_smiles = Chem.MolToSmiles(_h_mol, canonical=True)
+                        formal_charge = Chem.GetFormalCharge(rdkit_mol_for_microstate)
+                    except Exception:
                         canonical_smiles = None
                         formal_charge = None
-                        try:
-                            _h_mol = Chem.AddHs(rdkit_mol_for_microstate, addCoords=False)
-                            canonical_smiles = Chem.MolToSmiles(_h_mol, canonical=True)
-                            formal_charge = Chem.GetFormalCharge(rdkit_mol_for_microstate)
-                        except Exception:
-                            canonical_smiles = None
-                            formal_charge = None
-                        microstate_entry = microstate_index.get(microstate_id)
-                        microstate_status = "existing"
-                        if microstate_entry is None:
-                            canonical_name = f"{lig_stem}__ms_{microstate_id}.pdbqt"
-                            canonical_rel_path = f"microstates/{canonical_name}"
-                            canonical_path = microstates_dir / canonical_name
-                            microstate_entry = {
-                                "microstate_id": microstate_id,
-                                "pdbqt_path": canonical_rel_path,
-                                "aliases": [],
-                            }
-                            logger.debug(
-                                "[microstate] new_microstate library=%s ligand=%s microstate_id=%s canonical=%s",
-                                library_name,
-                                lig_stem,
-                                microstate_id,
-                                canonical_name,
-                            )
-                            logger.info(
-                                "microstate_dedup: new microstate key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
-                                microstate_key,
-                                microstate_id,
-                                lig_stem,
-                                ph_label,
-                                ph_value,
-                                canonical_smiles,
-                                formal_charge,
-                            )
-                            microstate_registry["microstates"].append(microstate_entry)
-                            microstate_index[microstate_id] = microstate_entry
-                            use_canonical_as_primary = True
-                            microstate_status = "new"
-                            microstate_registry_dirty = True
-                        else:
-                            canonical_rel = microstate_entry.get("pdbqt_path")
-                            if canonical_rel:
-                                canonical_path = library_out_dir / canonical_rel
-                                if not canonical_path.exists():
-                                    use_canonical_as_primary = True
-                            logger.debug(
-                                "[microstate] reuse_microstate library=%s ligand=%s microstate_id=%s canonical=%s",
-                                library_name,
-                                lig_stem,
-                                microstate_id,
-                                microstate_entry.get("pdbqt_path"),
-                            )
-                            logger.info(
-                                "microstate_dedup: reuse key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
-                                microstate_key,
-                                microstate_id,
-                                lig_stem,
-                                ph_label,
-                                ph_value,
-                                canonical_smiles,
-                                formal_charge,
-                            )
-
-                        if microstate_entry is not None:
-                            alias = {
-                                "ligand_stem": lig_stem,
-                                "ph_label": ph_label or "",
-                                "ph_value": float(ph_value),
-                            }
-                            if alias not in microstate_entry.get("aliases", []):
-                                microstate_entry.setdefault("aliases", []).append(alias)
-                                logger.debug(
-                                    "microstate_dedup: add_alias stem=%s ph_label=%s ph_value=%.2f microstate_id=%s",
-                                    lig_stem,
-                                    ph_label,
-                                    ph_value,
-                                    microstate_entry.get("microstate_id"),
-                                )
-                                microstate_registry_dirty = True
-                            # update alias_index so subsequent runs see this mapping
-                            if alias_index is not None:
-                                alias_index[alias_key] = microstate_entry
-
-                    if use_ph_subdirs and ph_label:
-                        base, _, rest = lig_stem.partition("_")
-                        if rest:
-                            lig_stem_ph = f"{base}{ph_label}_{rest}"
-                        else:
-                            lig_stem_ph = f"{lig_stem}{ph_label}"
-                        pdbqt_name = f"{lig_stem_ph}.pdbqt"
-                    else:
-                        pdbqt_name = f"{lig_stem}.pdbqt"
-
-                    pdbqt_path = ph_out_dir / pdbqt_name
-
-                    if dedup_active and canonical_path and not canonical_path.exists() and pdbqt_path.exists():
-                        try:
-                            canonical_path.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(pdbqt_path, canonical_path)
-                        except Exception as e:
-                            logging.debug("[microstate] canonical_copy_resume_failed src=%s dest=%s err=%s", pdbqt_path, canonical_path, e)
-
-                    primary_pdbqt_path = pdbqt_path
-                    if dedup_active and canonical_path and use_canonical_as_primary:
-                        primary_pdbqt_path = canonical_path
-                        copy_targets.append(pdbqt_path)
-
-                    try:
-                        pdbqt_rel = _relative_to_output(pdbqt_path)
-                    except Exception:
-                        pdbqt_rel = pdbqt_path.name
-
-                    resume_skip = (
-                        not force
-                        and pdbqt_path.exists()
-                        and pdbqt_path.stat().st_size > 100
-                        and is_valid_ligand(pdbqt_path, log_dir=output_ligands_dir)
-                    )
-                    if use_canonical_as_primary:
-                        resume_skip = False
-                    if resume_skip:
-                        logging.info(
-                            "[resume] Valid PDBQT exists, skipping: %s ph=%.2f",
-                            pdbqt_path, ph_value,
+                    microstate_entry = microstate_index.get(microstate_id)
+                    if microstate_entry is None:
+                        canonical_name = f"{lig_stem}__ms_{microstate_id}.pdbqt"
+                        canonical_rel_path = f"microstates/{canonical_name}"
+                        canonical_path = microstates_dir / canonical_name
+                        microstate_entry = {
+                            "microstate_id": microstate_id,
+                            "pdbqt_path": canonical_rel_path,
+                            "aliases": [],
+                        }
+                        logger.debug(
+                            "[microstate] new_microstate library=%s ligand=%s microstate_id=%s canonical=%s",
+                            library_name,
+                            lig_stem,
+                            microstate_id,
+                            canonical_name,
                         )
-                        resume_skips += 1
-                        if len(resume_examples) < 10:
-                            resume_examples.append(pdbqt_rel)
-                        continue
+                        logger.info(
+                            "microstate_dedup: new microstate key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
+                            microstate_key,
+                            microstate_id,
+                            lig_stem,
+                            ph_label,
+                            ph_value,
+                            canonical_smiles,
+                            formal_charge,
+                        )
+                        microstate_registry["microstates"].append(microstate_entry)
+                        microstate_index[microstate_id] = microstate_entry
+                        use_canonical_as_primary = True
+                        ctx["microstate_registry_dirty"] = True
+                    else:
+                        canonical_rel = microstate_entry.get("pdbqt_path")
+                        if canonical_rel:
+                            canonical_path = library_out_dir / canonical_rel
+                            if not canonical_path.exists():
+                                use_canonical_as_primary = True
+                        logger.debug(
+                            "[microstate] reuse_microstate library=%s ligand=%s microstate_id=%s canonical=%s",
+                            library_name,
+                            lig_stem,
+                            microstate_id,
+                            microstate_entry.get("pdbqt_path"),
+                        )
+                        logger.info(
+                            "microstate_dedup: reuse key=%s microstate_id=%s stem=%s ph_label=%s ph_value=%.2f smiles=%s charge=%s",
+                            microstate_key,
+                            microstate_id,
+                            lig_stem,
+                            ph_label,
+                            ph_value,
+                            canonical_smiles,
+                            formal_charge,
+                        )
 
-                    if force and pdbqt_path.exists():
-                        logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_rel)
+                    if microstate_entry is not None:
+                        alias = {
+                            "ligand_stem": lig_stem,
+                            "ph_label": ph_label or "",
+                            "ph_value": float(ph_value),
+                        }
+                        if alias not in microstate_entry.get("aliases", []):
+                            microstate_entry.setdefault("aliases", []).append(alias)
+                            logger.debug(
+                                "microstate_dedup: add_alias stem=%s ph_label=%s ph_value=%.2f microstate_id=%s",
+                                lig_stem,
+                                ph_label,
+                                ph_value,
+                                microstate_entry.get("microstate_id"),
+                            )
+                            ctx["microstate_registry_dirty"] = True
+                        if alias_index is not None:
+                            alias_index[alias_key] = microstate_entry
 
-                    logger.debug(
-                        "prep_ligands: scheduling ligand prep stem=%s ph=%.2f",
-                        lig_stem,
-                        ph_value,
-                    )
-                    fut = ex.submit(
-                        _prepare_one,
-                        mgltools_python_short, prepare_script_short,
-                        mol2_input, primary_pdbqt_path,
-                        obabel_exe_short=obabel_exe_short,
-                        status_log_dir=output_ligands_dir,
-                        ph=ph_value,
-                        copy_targets=copy_targets,
-                    )
-                    futures.append(fut)
-                    future_relpaths[fut] = pdbqt_rel
-
-            total = len(futures)
-            for i, fut in enumerate(as_completed(futures), 1):
-                name, status = fut.result()
-                lig_stem = Path(name).stem
-                relpath = future_relpaths.get(fut, f"{lig_stem}.pdbqt")
-                if status == "ok":
-                    ok_count += 1
-                    try:
-                        _append_prep_status(status_log, lig_stem, "OK", "", relpath)
-                    except Exception:
-                        pass
+                if use_ph_subdirs and ph_label:
+                    base, _, rest = lig_stem.partition("_")
+                    if rest:
+                        lig_stem_ph = f"{base}{ph_label}_{rest}"
+                    else:
+                        lig_stem_ph = f"{lig_stem}{ph_label}"
+                    pdbqt_name = f"{lig_stem_ph}.pdbqt"
                 else:
-                    fail_count += 1
+                    pdbqt_name = f"{lig_stem}.pdbqt"
+
+                pdbqt_path = ph_out_dir / pdbqt_name
+
+                if dedup_active and canonical_path and not canonical_path.exists() and pdbqt_path.exists():
                     try:
-                        _append_prep_status(status_log, lig_stem, "FAIL", status, relpath)
-                    except Exception:
-                        pass
-                if i % 100 == 0 or status != "ok":
-                    print(f"[{i}/{total}] {name}: {status}")
-            try:
-                print(
-                    f"[ligprep] scheduled={len(futures)} resume_skips={resume_skips} force={force} "
-                    f"examples_skipped={resume_examples[:5]}"
+                        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(pdbqt_path, canonical_path)
+                    except Exception as e:
+                        logging.debug("[microstate] canonical_copy_resume_failed src=%s dest=%s err=%s", pdbqt_path, canonical_path, e)
+
+                primary_pdbqt_path = pdbqt_path
+                if dedup_active and canonical_path and use_canonical_as_primary:
+                    primary_pdbqt_path = canonical_path
+                    copy_targets.append(pdbqt_path)
+
+                try:
+                    pdbqt_rel = relative_output(pdbqt_path)
+                except Exception:
+                    pdbqt_rel = pdbqt_path.name
+
+                resume_skip = (
+                    not force
+                    and pdbqt_path.exists()
+                    and pdbqt_path.stat().st_size > 100
+                    and is_valid_ligand(pdbqt_path, log_dir=output_ligands_dir)
                 )
+                if use_canonical_as_primary:
+                    resume_skip = False
+                if resume_skip:
+                    logging.info(
+                        "[resume] Valid PDBQT exists, skipping: %s ph=%.2f",
+                        pdbqt_path, ph_value,
+                    )
+                    resume_skips += 1
+                    if len(resume_examples) < 10:
+                        resume_examples.append(pdbqt_rel)
+                    continue
+
+                if force and pdbqt_path.exists():
+                    logging.info("[force] Overwriting existing PDBQT: %s", pdbqt_rel)
+
+                logger.debug(
+                    "prep_ligands: scheduling ligand prep stem=%s ph=%.2f",
+                    lig_stem,
+                    ph_value,
+                )
+                fut = ex.submit(
+                    _prepare_one,
+                    mgltools_python_short, prepare_script_short,
+                    mol2_input, primary_pdbqt_path,
+                    obabel_exe_short=obabel_exe_short,
+                    status_log_dir=output_ligands_dir,
+                    ph=ph_value,
+                    copy_targets=copy_targets,
+                )
+                futures.append(fut)
+                future_relpaths[fut] = pdbqt_rel
+
+    total = len(futures)
+    result_paths: List[Path] = []
+    for i, fut in enumerate(as_completed(futures), 1):
+        name, status = fut.result()
+        lig_stem = Path(name).stem
+        relpath = future_relpaths.get(fut, f"{lig_stem}.pdbqt")
+        result_paths.append(Path(output_ligands_dir) / relpath)
+        if status == "ok":
+            try:
+                _append_prep_status(status_log, lig_stem, "OK", "", relpath)
             except Exception:
                 pass
+        else:
+            try:
+                _append_prep_status(status_log, lig_stem, "FAIL", status, relpath)
+            except Exception:
+                pass
+        if i % 100 == 0 or status != "ok":
+            print(f"[{i}/{total}] {name}: {status}")
+    try:
+        print(
+            f"[ligprep] scheduled={len(futures)} resume_skips={resume_skips} force={force} "
+            f"examples_skipped={resume_examples[:5]}"
+        )
+    except Exception:
+        pass
+    return result_paths
 
-    _maybe_save_microstate_registry(force=True)
+
+def prep_ligands_with_mgltools(
+    *,
+    force: bool = False,
+    only: Optional[Set[str]] = None,
+    ph_values: Optional[List[float]] = None,
+    microstate_dedup: bool = False,
+    in_sdf: Optional[Path] = None,
+    in_sdf_dir: Optional[Path] = None,
+    in_pdb_dir: Optional[Path] = None,
+    mol2_dir: Optional[Path] = None,
+    out_pdbqt_dir: Optional[Path] = None,
+    status_log: Optional[Path] = None,
+    root_dir: Optional[Path] = None,
+) -> None:
+    ctx = _bulk_init_config_and_paths(
+        force=force,
+        microstate_dedup=microstate_dedup,
+        ph_values=ph_values,
+        in_sdf=in_sdf,
+        in_sdf_dir=in_sdf_dir,
+        in_pdb_dir=in_pdb_dir,
+        mol2_dir=mol2_dir,
+        out_pdbqt_dir=out_pdbqt_dir,
+        status_log=status_log,
+        root_dir=root_dir,
+    )
+    cfg = ctx["cfg"]
+    unit_sdfs, only_set, test_mode_done = _bulk_select_unit_sdfs(ctx, only)
+    if test_mode_done:
+        return
+    if ctx["in_pdb_dir_env"] and not ctx["in_sdf_env"]:
+        result = prep_ligands_from_pdb(
+            Path(ctx["in_pdb_dir_env"]).resolve(),
+            ctx["ligands_mol2_dir"],
+            ctx["output_ligands_dir"],
+        )
+        ctx["maybe_save_microstate_registry"](force=True)
+        return result
+    mol2_files = _bulk_generate_mol2_files(ctx, only_set)
+    if not mol2_files:
+        ctx["maybe_save_microstate_registry"](force=True)
+        return
+    _bulk_prepare_pdbqts(ctx, mol2_files)
+    ctx["maybe_save_microstate_registry"](force=True)
 
     def _as_path(p) -> Path:
         return p if isinstance(p, Path) else Path(p)
