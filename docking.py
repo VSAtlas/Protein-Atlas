@@ -133,10 +133,7 @@ _docking._read_any_lig = _read_any_lig
 _docking.validate_ligand = validate_ligand
 
 
-def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
-    # ======================
-    # Phase 0 – ID & path setup
-    # ======================
+def _phase0_setup_paths_and_logger(cfg: Dict, pdb_file: str) -> Tuple[Paths, str, logging.Logger]:
     base_id = os.path.splitext(pdb_file)[0]
     pdb_id = re.sub(r'(?i)_cleaned$', '', base_id)
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=os.path.basename(pdb_file))
@@ -144,14 +141,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
     logger.info(f"[paths] base_id={base_id} -> pdb_id={pdb_id}")
     logger.info(f"Processing protein: {pdb_file} (id={pdb_id})")
-    # ======================
-    # Phase 1 – Variant & ion context
-    # ======================
+    return paths, pdb_id, logger
+
+
+def _phase1_variant_and_ion_context(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[str, Optional[str], str, dict, dict, bool, Path]:
     variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant_token = variant_env or None
     variant_label = variant_env or "legacy"
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    active_ph_label = None
 
     ion_audit_root: dict = cfg.setdefault("_ION_AUDIT", {})
     pdb_audit: dict = ion_audit_root.setdefault(paths.pdb_id, {})
@@ -200,12 +197,38 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         receptor_target,
         receptor_target.exists(),
     )
+    return variant_env, variant_token, variant_label, pdb_audit, clean_audit, legacy_mode, receptor_target
 
-    # ======================
-    # Phase 2 – Receptor prep (with ion summary)
-    # ======================
 
-    # 2) Protein prep (re-use if cached)
+def _phase2_to4_receptor_and_center(
+    cfg: Dict,
+    paths: Paths,
+    logger: logging.Logger,
+    variant_env: str,
+    variant_token: Optional[str],
+    variant_label: str,
+    pdb_audit: dict,
+    clean_audit: dict,
+    legacy_mode: bool,
+    receptor_target: Path,
+    active_ph_label: Optional[str],
+) -> Tuple[
+    Optional[str],
+    Optional[str],
+    dict,
+    dict,
+    Optional[Tuple[float, float, float]],
+    Optional[Tuple[float, float, float]],
+    str,
+    List[str],
+    Dict[str, Path],
+]:
+    control_stems: List[str] = []
+    control_lookup: Dict[str, Path] = {}
+    center: Optional[Tuple[float, float, float]] = None
+    box_size: Optional[Tuple[float, float, float]] = None
+    center_source = "none"
+
     logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
     cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
     provenance = getattr(prepare_receptor, "last_provenance", None)
@@ -217,7 +240,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     logger.info("[receptor.clean.provenance] created_by=%s", provenance)
     if not cleaned_pdb or not receptor_pdbqt:
         logger.warning("Skipping protein due to prep failure.")
-        return
+        return cleaned_pdb, None, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
 
     cleaned_hist = "none"
     if cleaned_pdb:
@@ -284,9 +307,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             cleaned_pdb,
         )
 
-    # ======================
-    # Phase 3 – Crystallographic ligand extraction / control setup
-    # ======================
     _lig_count, control_stems = extract_ligands_to_nolig(paths, logger)
     try:
         from prep_ligands import prep_ligands_from_pdb
@@ -310,11 +330,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
     control_lookup = build_control_lookup(paths)
 
-    # ======================
-    # Phase 4 – Pocket detection and initial center/box
-    # ======================
-    # 3) Pocket detection
-    center, box_size, center_source = None, None, "none"
     try:
         sel_center, sel_box = select_center_via_control_redock(
             cfg,
@@ -332,7 +347,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         center, box_size, center_source = sel_center, sel_box, "control"
         logger.info(f"[control-redock] Using control-derived center {center} with box {box_size}")
     else:
-        # P2Rank last resort (controls absent or all redocks failed)
         c2, b2 = detect_active_site(cleaned_pdb)
         if c2:
             box_size = tuple(min(28.0, float(s)) for s in b2)
@@ -341,9 +355,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             logger.info(f"[P2Rank] Using P2Rank center {center} with box {box_size}")
         else:
             logger.error("Active-site detection failed (no usable controls, P2Rank returned None).")
-            return
+            return cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
     if center is None:
-        return
+        return cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
 
     try:
         import automate_protein_prep as _auto_prep_mod
@@ -370,17 +384,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     pocket_err,
                 )
 
-    # Override control-box size from config (keeps existing 24 A default)
     if center_source == "control":
         side = float(cfg.get("CONTROL_BOX_A", 24.0))
         box_size = (side, side, side)
 
-    # clamp initial box once to keep Vina happy (detect_pocket already caps P2Rank path)
     box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
     box_size = tuple(min(box_cap, float(s)) for s in box_size)
     logger.info(f"Initial box clamped to {box_size} (cap={box_cap} A)")
 
-    # explicit console breadcrumb so you don't need to open logs
     try:
         c_print = tuple(round(float(x), 3) for x in center)
         b_print = tuple(round(float(x), 1) for x in box_size)
@@ -388,7 +399,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     except Exception:
         pass
 
-    # HOLO-only restore of metals/cofactors, now that center/box_size are known
     metals_added = 0
     cofactors_added = 0
     regen = False
@@ -476,12 +486,10 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     audit_err,
                 )
 
-
-    # Preflight HOLO skip: avoid redundant HOLO work when receptors are byte-identical to APO
     resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
     if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
-        apo_clean = _variant_receptor_path(pdb_id, "APO", cfg)
-        holo_clean = cleaned_pdb or _variant_receptor_path(pdb_id, "HOLO", cfg)
+        apo_clean = _variant_receptor_path(paths.pdb_id, "APO", cfg)
+        holo_clean = cleaned_pdb or _variant_receptor_path(paths.pdb_id, "HOLO", cfg)
         apo_path = Path(apo_clean) if apo_clean else None
         holo_path = Path(holo_clean) if holo_clean else None
         apo_exists = apo_path.exists() if apo_path else False
@@ -490,13 +498,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         if not apo_exists or not holo_exists:
             logger.warning(
                 "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=missing_paths apo=%s holo=%s",
-                pdb_id,
+                paths.pdb_id,
                 apo_clean,
                 holo_clean,
             )
-            _record_apo_holo_decision(cfg, pdb_id, "HOLO", "missing_paths")
+            _record_apo_holo_decision(cfg, paths.pdb_id, "HOLO", "missing_paths")
         else:
-            # >>> path+exists breadcrumb just before SHA calculation <<<
             logger.info(
                 "[apo-vs-holo] compare.preflight apo=%s exists=%s holo=%s exists=%s",
                 norm(apo_path), ("T" if apo_exists else "F"),
@@ -508,21 +515,20 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             except Exception as hash_err:
                 logger.warning(
                     "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=sha_error err=%s",
-                    pdb_id,
+                    paths.pdb_id,
                     hash_err,
                 )
-                _record_apo_holo_decision(cfg, pdb_id, "HOLO", "sha_error")
+                _record_apo_holo_decision(cfg, paths.pdb_id, "HOLO", "sha_error")
             else:
                 if apo_sha == holo_sha:
                     logger.info(
                         "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=skip reason=identical apo_sha=%s holo_sha=%s",
-                        pdb_id,
+                        paths.pdb_id,
                         apo_sha,
                         holo_sha,
                     )
-                    # [ions] dedup audit guard
                     audit_root = cfg.get("_ION_AUDIT", {})
-                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(pdb_id)
+                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(paths.pdb_id)
                     warn_needed = False
                     if isinstance(pdb_entry, dict):
                         input_info = pdb_entry.get("input_counts", {})
@@ -535,50 +541,56 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     if warn_needed:
                         logger.warning(
                             "[apo-vs-holo] unexpected_identical_after_ion_policy pdb=%s apo_sha=%s holo_sha=%s",
-                            pdb_id,
+                            paths.pdb_id,
                             apo_sha,
                             holo_sha,
                         )
                     if receptor_pdbqt:
-                        _record_apo_holo_usage(cfg, pdb_id, variant_token, None, receptor_pdbqt)
-                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "skipped_preflight")
+                        _record_apo_holo_usage(cfg, paths.pdb_id, variant_token, None, receptor_pdbqt)
+                    _record_apo_holo_decision(cfg, paths.pdb_id, "HOLO", "skipped_preflight")
                     try:
-                        delete_variant_trees(pdb_id, "HOLO", cfg)
+                        delete_variant_trees(paths.pdb_id, "HOLO", cfg)
                     except Exception as cleanup_err:
                         logger.warning(
                             "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=cleanup_warn err=%s",
-                            pdb_id,
+                            paths.pdb_id,
                             cleanup_err,
                         )
-                    return
+                    return cleaned_pdb, None, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
                 else:
                     logger.info(
                         "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=not_identical apo_sha=%s holo_sha=%s",
-                        pdb_id,
+                        paths.pdb_id,
                         apo_sha,
                         holo_sha,
                     )
-                    _record_apo_holo_decision(cfg, pdb_id, "HOLO", "not_identical")
-                    # (regen-aware rebuild happens earlier when HOLO restore requests it)
+                    _record_apo_holo_decision(cfg, paths.pdb_id, "HOLO", "not_identical")
+
+    return cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
 
 
-
-
-    # ======================
-    # Phase 5 – pH ensemble manifest (global protein-level)
-    # ======================
-    # >>> PH ENSEMBLE (GLOBAL) START
+def _phase5_ph_ensemble_global(
+    cfg: Dict,
+    paths: Paths,
+    logger: logging.Logger,
+    variant_env: str,
+    variant_token: Optional[str],
+    legacy_mode: bool,
+    cleaned_pdb: Optional[str],
+    receptor_pdbqt: Optional[str],
+    center: Optional[Tuple[float, float, float]],
+    box_size: Optional[Tuple[float, float, float]],
+) -> Tuple[Optional[str], Optional[str]]:
+    active_ph_label = None
     if bool(cfg.get("PH_ENSEMBLE", False)):
         try:
             from context_ph import select_ph_values_for_protonation
             from ph_ensemble import build_ph_ensemble
 
-            # Pull raw list from context_ph on the **raw input PDB** (header intact)
             raw_vals = select_ph_values_for_protonation(str(paths.input_pdb_path))
             logger.info("[ph.ctx.raw] path=%s values=%s", str(paths.input_pdb_path),
                         ",".join(f"{v:.2f}" for v in (raw_vals or [])))
 
-            # Round to 0.1 and clamp to [3.0, 10.5]; dedupe + sort
             ph_values = sorted({max(3.0, min(10.5, round(float(x), 1))) for x in (raw_vals or [])})
             if not ph_values:
                 logger.warning("[ph.ctx.fallback] context list empty -> using [7.0]")
@@ -587,7 +599,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             logger.info("[ph.list] n=%d values=%s", len(ph_values),
                         ",".join(f"{v:.1f}" for v in ph_values))
 
-            # GLOBAL scope: use the propka_wire sentinel (radius >= 1e6)
             manifest_path = build_ph_ensemble(
                 pdb_id=paths.pdb_id,
                 cleaned_receptor_pdb=str(Path(cleaned_pdb)),
@@ -603,19 +614,35 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
         except Exception as e:
             logger.warning("[ph_ensemble.skip] error=%s", e)
-    # >>> PH ENSEMBLE (GLOBAL) END
+    return receptor_pdbqt, active_ph_label
 
-    # ======================
-    # Phase 6 – Ligand prep & filtering
-    # ======================
-    # 4) Ligand prep & filtering
+
+def _phase6_to8_ligands_and_docking(
+    cfg: Dict,
+    paths: Paths,
+    logger: logging.Logger,
+    pdb_id: str,
+    variant_env: str,
+    variant_token: Optional[str],
+    variant_label: str,
+    legacy_mode: bool,
+    cleaned_pdb: Optional[str],
+    receptor_pdbqt: Optional[str],
+    center: Optional[Tuple[float, float, float]],
+    box_size: Optional[Tuple[float, float, float]],
+    stages: List[Dict],
+    params: RecenterParams,
+    control_stems: List[str],
+    control_lookup: Dict[str, Path],
+    pdb_audit: dict,
+    clean_audit: dict,
+    active_ph_label: Optional[str],
+) -> None:
     cfg.setdefault("_EFFECTIVE_SINGLE_LIGAND", "")
     single_ligand_hit: Optional[Path] = None
     cfg.pop("_SINGLE_RESOLVED_PATH", None)
-    # --- Single-ligand mode (if active) --------------------------------------
     if cfg["_EFFECTIVE_SINGLE_LIGAND"]:
         _ensure_single_ligand_index(cfg, paths, logger)
-        # Provide per-protein paths to resolver
         cfg.setdefault("paths", {})
         cfg["paths"]["prepped_ligands_dir"] = str(paths.prepped_ligands_dir)
 
@@ -665,7 +692,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         pains_flags = {}
         logger.info(f"[single] Active ? docking only: {single_ligand_hit.name} (heavy={ha})")
 
-        # --- PH-ligand support for single-ligand mode ---
         if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get("PH_ENSEMBLE_IN_PREP"):
             try:
                 from prep_ligands import enumerate_ligands_for_docking
@@ -702,17 +728,13 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     )
             except Exception as e:
                 logger.warning(f"[single.ph_ligand.skip] Could not run PH-ligand window for single mode: {e}")
-        # ------------------------------------------------
     else:
         ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
 
-    # (skipped in single-ligand mode)
     if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
-        # Force-inject control PDBQTs if they exist on disk but weren't selected
         ctrl_stems_lower = {s.lower() for s in control_stems}
 
         prepped_control_pdbqts = []
-        # Re-scan now that prep_ligands_from_pdb has run
         scan_roots = [paths.prepped_ligands_dir]
         if cfg.get("OUTPUT_LIGANDS_DIR"):
             try:
@@ -734,7 +756,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
         if missing_controls:
             logger.info(f"[Controls] Adding {len(missing_controls)} prepared control(s) to Stage1.")
-            # Front-load controls
             ligands = [str(p) for p in missing_controls] + ligands
             for p in missing_controls:
                 try:
@@ -742,9 +763,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 except Exception:
                     heavy_atom_counts.setdefault(str(p), 0)
 
-
-
-    # --- Normalize & de-dupe Stage1 ligand list (keep order) ---
     def _norm_dedupe(seq):
         seen = set()
         out = []
@@ -763,19 +781,14 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
     base_center = tuple(center)
     base_box = tuple(box_size)
 
-    # ======================
-    # Phase 7 – pH/variant loop (core docking)
-    # ======================
     ph_log = logging.getLogger("ph_ensemble")
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
 
     ph_tags = init_ph_tags_and_manifest(cfg, paths.pdb_id, variant_token, legacy_mode)
     if ph_enabled and not ph_tags:
-        # keep the early return behavior for empty ensembles
         return
 
-    # Resolve the primary non-control library root for pH ligands
     _ctrl_roots_ph, noncontrol_roots_ph = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
     ph_ligand_root = noncontrol_roots_ph[0] if noncontrol_roots_ph else None
 
@@ -842,12 +855,9 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                 for k in ligands
             }
         else:
-            # keep ligands, heavy_atom_counts, pains_flags at their base values
             ligands = base_ligands[:]
             heavy_atom_counts = dict(base_heavy_atoms)
             pains_flags = dict(base_pains_flags)
-        # --------------------------------------------------------
-
 
         ctrl_stems_lower = {s.lower() for s in control_stems}
         ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
@@ -1104,7 +1114,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             except Exception as e:
                 logger.warning(f"CenterSelector failed gracefully: {e}")
 
-
             if ph_label:
                 ph_log.info(
                     "[ph_ensemble.dock.scores] pdb_id=%s variant=%s ph=%s stage=%s valid=%d invalid=%d",
@@ -1222,9 +1231,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
 
             i += 1
 
-        # ======================
-        # Phase 8 – Summary outputs & cleanup
-        # ======================
         final_pose_validation_and_screenshots(
             cfg, paths.pdb_id, stages, receptor_pdbqt, center, validated_ligands_last,
             score_history, cleaned_pdb, docking_mode, logger, ph_label
@@ -1258,6 +1264,63 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
             _write_audit_json(cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None)
         except Exception as _e:
             logger.warning(f"Audit JSON write failed: {_e}")
+
+
+def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
+    paths, pdb_id, logger = _phase0_setup_paths_and_logger(cfg, pdb_file)
+    variant_env, variant_token, variant_label, pdb_audit, clean_audit, legacy_mode, receptor_target = _phase1_variant_and_ion_context(cfg, paths, logger)
+    active_ph_label = None
+
+    cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, _center_source, control_stems, control_lookup = _phase2_to4_receptor_and_center(
+        cfg,
+        paths,
+        logger,
+        variant_env,
+        variant_token,
+        variant_label,
+        pdb_audit,
+        clean_audit,
+        legacy_mode,
+        receptor_target,
+        active_ph_label,
+    )
+    if not receptor_pdbqt or center is None or box_size is None:
+        return
+
+    receptor_pdbqt, active_ph_label = _phase5_ph_ensemble_global(
+        cfg,
+        paths,
+        logger,
+        variant_env,
+        variant_token,
+        legacy_mode,
+        cleaned_pdb,
+        receptor_pdbqt,
+        center,
+        box_size,
+    )
+
+    _phase6_to8_ligands_and_docking(
+        cfg,
+        paths,
+        logger,
+        pdb_id,
+        variant_env,
+        variant_token,
+        variant_label,
+        legacy_mode,
+        cleaned_pdb,
+        receptor_pdbqt,
+        center,
+        box_size,
+        stages,
+        params,
+        control_stems,
+        control_lookup,
+        pdb_audit,
+        clean_audit,
+        active_ph_label,
+    )
 
 def _map_reason_to_category(reason: str) -> str:
     if not reason:
