@@ -26,3 +26,12 @@ malformed_ligands*.txt
 __pycache__/
 *.pyc
 *.log
+# Atlas generated / large data directories
+input_pdbs/
+docked/
+processed_pdbs/
+extracted_ligands/
+input_ligands/
+prepped_ligands/
+ligands_mol2/
+logs/

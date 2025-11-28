@@ -51,7 +51,8 @@ def _pose_path_for(csv_cfg: Dict, pdb_id: str, stage_name: str, lig_path: str,
 
 
 def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, Dict]],
-                     ph_label: Optional[str] = None, variant: Optional[str] = None) -> str:
+                     ph_label: Optional[str] = None, variant: Optional[str] = None, *,
+                     csv_prefix: str = "") -> str:
     import csv, math
 
     # >>> DOCKED PATHS PATCH START
@@ -68,7 +69,9 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
     include_variant = bool(variant_value)
 
     # --- Wide summary (unchanged shape) ---
-    csv_out_wide = str(dock_dir / "docking_score_summary.csv")
+    long_name = f"{csv_prefix}docking_score_long.csv"
+    summary_name = f"{csv_prefix}docking_score_summary.csv"
+    csv_out_wide = str(dock_dir / summary_name)
     flat = {}
     for stage_name, stage_map in score_history.items():
         flat[stage_name] = {}
@@ -87,7 +90,7 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
     )
 
     # --- Long format with self_rmsd added ---
-    csv_out_long = str(dock_dir / "docking_score_long.csv")
+    csv_out_long = str(dock_dir / long_name)
     with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         header = ["run_id"]

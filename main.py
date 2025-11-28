@@ -455,41 +455,60 @@ def _dedupe_order(seq: Iterable[str]) -> list[str]:
             out.append(x)
     return out
 
+
+
+from typing import Iterable
+
 def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
     """
     Resolve requested PDB IDs with precedence CLI > ENV > CFG.
+
     CLI:
-      --pdb 2HYY        (repeatable)
-      --pdbs 2HYY,3ERT  (comma/space separated)
-      --2HYY            (QoL: any --<4char> alnum)
-    ENV: ONLY_PDBS="2HYY 3ERT"
-    CFG: SPECIFIED_PROTEINS: JSON list or string "2HYY, 3ERT"
+      --pdb  XIAP        (repeatable)
+      -pdb   XIAP        (short form, repeatable)
+      --pdbs "XIAP,1BN1" (comma/space separated)
+      -pdbs  "XIAP 1BN1" (short form)
+      --XIAP, -XIAP      (QoL: any --<4char> alnum)
+      XIAP, xiap.pdb     (bare tokens)
+
+    ENV:
+      ONLY_PDBS="XIAP 1BN1"
+
+    CFG:
+      SPECIFIED_PROTEINS: JSON list or string "XIAP, 1BN1"
+
     Returns: (normalized_ids, source or "")
     """
-    # --- CLI ---
     cli_ids: list[str] = []
+    consumed_value_idx: set[int] = set()
 
-    # --pdb (repeatable)
+    # --- --pdb / -pdb (repeatable) ---
     i = 0
     while i < len(argv):
-        if argv[i] == "--pdb" and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
-            nid = _norm_pdb_id(argv[i + 1])
-            if nid:
-                cli_ids.append(nid)
+        tok = argv[i]
+        if tok in ("--pdb", "-pdb"):
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                nid = _norm_pdb_id(argv[i + 1])
+                if nid:
+                    cli_ids.append(nid)
+                    consumed_value_idx.add(i + 1)
             i += 2
             continue
         i += 1
 
-    # --pdbs "A B,C"
-    try:
-        if "--pdbs" in argv:
-            j = argv.index("--pdbs")
-            if j + 1 < len(argv) and not argv[j + 1].startswith("-"):
-                cli_ids.extend(_split_ids(argv[j + 1]))
-    except Exception:
-        pass
+    # --- --pdbs / -pdbs "XIAP,1BN1" ---
+    for flag in ("--pdbs", "-pdbs"):
+        try:
+            if flag in argv:
+                j = argv.index(flag)
+                if j + 1 < len(argv) and not argv[j + 1].startswith("-"):
+                    cli_ids.extend(_split_ids(argv[j + 1]))
+                    consumed_value_idx.add(j + 1)
+        except Exception:
+            # be robust to weird argv
+            pass
 
-    # QoL: --2HYY / -2HYY style (exact length, starts with '-' or '--', next 4 alnum)
+    # --- QoL: --XIAP / -XIAP style (exact length, 4-char alnum) ---
     for tok in argv:
         low = tok.lower()
         # don't treat fast/-fast/--fast as a PDB short-form token
@@ -500,11 +519,44 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
             if nid:
                 cli_ids.append(nid)
 
+    # --- Bare tokens: XIAP, xiap.pdb, XIAP_cleaned.pdb ---
+    #
+    # We skip:
+    #   - argv[0] (script name)
+    #   - tokens we've already consumed as values to known flags
+    #   - anything starting with '-' (flags)
+    #
+    for idx, tok in enumerate(argv[1:], start=1):
+        if idx in consumed_value_idx:
+            continue
+        if tok.startswith("-"):
+            continue
 
+        base = os.path.basename(tok)
+
+        # Strip common suffix patterns
+        lower = base.lower()
+        if lower.endswith("_cleaned.pdb"):
+            core = base[:-len("_cleaned.pdb")]
+        elif lower.endswith(".pdb"):
+            core = base[:-4]
+        else:
+            core = base
+
+        core = core.strip()
+        if not core:
+            continue
+
+        # Require exactly 4 alnum chars to avoid grabbing e.g. run-id strings
+        if len(core) == 4 and core.isalnum():
+            nid = _norm_pdb_id(core)
+            if nid:
+                cli_ids.append(nid)
 
     if cli_ids:
         return _dedupe_order(cli_ids), "CLI"
 
+    # --- ENV ---
     env_val = os.environ.get("ONLY_PDBS", "").strip()
     if env_val:
         return _dedupe_order(_split_ids(env_val)), "ENV"
@@ -522,6 +574,7 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
         return _dedupe_order(_split_ids(s)), "CFG"
 
     return [], ""
+
 
 
 
@@ -880,24 +933,36 @@ def main() -> None:
     if test_mode != "off":
         raw_map = cfg.get("TEST_LIBRARY_MAP", {})
         test_map = _coerce_test_map(raw_map)
-        test_keys = {k[:4] for k in test_map.keys()}
+
+        # Normalize all TEST_LIBRARY_MAP keys to canonical 4-char uppercase PDB IDs.
+        # This makes matching robust to case and minor suffix differences.
+        test_keys = set()
+        for k in getattr(test_map, "keys", lambda: [])():
+            nid = _norm_pdb_id(str(k))
+            if nid:
+                test_keys.add(nid)
+
         if test_keys:
             kept, skipped = [], []
             for f in pdb_files:
                 nid = _norm_pdb_id(f)
-                if nid and nid.upper()[:4] in test_keys:
+                if nid and nid in test_keys:
                     kept.append(f)
                 else:
                     skipped.append(f)
 
             if skipped:
-                print(f"[test-mode] Enabled mode={test_mode}; restricting to {len(kept)} PDBs from TEST_LIBRARY_MAP keys.")
+                print(
+                    f"[test-mode] Enabled mode={test_mode}; restricting to "
+                    f"{len(kept)} PDBs from TEST_LIBRARY_MAP keys."
+                )
                 for s in skipped:
                     print(f"[test-mode] Skipping {s} (not in TEST_LIBRARY_MAP).")
 
             pdb_files = kept
         else:
             print("[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied.")
+
 
     # Normalize any repeated '.sanitized' tokens in ligand filenames
     sanitize_logger = logging.getLogger("sanitize")

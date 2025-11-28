@@ -624,7 +624,7 @@ def _phase5_ph_ensemble_global(
     return receptor_pdbqt, active_ph_label
 
 
-def _phase6_to8_ligands_and_docking(
+def _run_ligand_pipeline_subrun(
     cfg: Dict,
     paths: Paths,
     logger: logging.Logger,
@@ -641,10 +641,20 @@ def _phase6_to8_ligands_and_docking(
     params: RecenterParams,
     control_stems: List[str],
     control_lookup: Dict[str, Path],
-    pdb_audit: dict,
-    clean_audit: dict,
-    active_ph_label: Optional[str],
+    *,
+    run_mode: Optional[str],
+    csv_prefix: str,
+    stage_name_prefix: str,
 ) -> None:
+    """
+    Run the existing ligands + multi-stage docking pipeline once,
+    but parameterized by:
+      - run_mode: None | "dud" | "fda"
+      - csv_prefix: "" or "dud_"
+      - stage_name_prefix: "" or "dud_"
+    Variant and pH behavior must remain unchanged: only the final stage
+    component gets the prefix.
+    """
     cfg.setdefault("_EFFECTIVE_SINGLE_LIGAND", "")
     single_ligand_hit: Optional[Path] = None
     cfg.pop("_SINGLE_RESOLVED_PATH", None)
@@ -711,7 +721,14 @@ def _phase6_to8_ligands_and_docking(
                 )
                 logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
 
-                _, noncontrol_roots_single = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
+                ph_override_single = "dud" if run_mode == "dud" else None
+                _, noncontrol_roots_single = _lib_roots_for_pdb(
+                    cfg,
+                    paths.pdb_id.upper(),
+                    paths,
+                    logger,
+                    test_mode_override=ph_override_single,
+                )
                 ph_root_path = noncontrol_roots_single[0] if noncontrol_roots_single else None
                 ph_root_cfg = str(ph_root_path) if ph_root_path else ""
 
@@ -736,7 +753,12 @@ def _phase6_to8_ligands_and_docking(
             except Exception as e:
                 logger.warning(f"[single.ph_ligand.skip] Could not run PH-ligand window for single mode: {e}")
     else:
-        ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(cfg, paths, logger)
+        ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(
+            cfg,
+            paths,
+            logger,
+            run_mode=run_mode,
+        )
 
     if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
         ctrl_stems_lower = {s.lower() for s in control_stems}
@@ -794,12 +816,35 @@ def _phase6_to8_ligands_and_docking(
 
     ph_tags = init_ph_tags_and_manifest(cfg, paths.pdb_id, variant_token, legacy_mode)
     if ph_enabled and not ph_tags:
+        logger.info(
+            "[subrun.ph] run_mode=%s ph_enabled=True but no ph_tags; skipping PH run",
+            run_mode or "None",
+        )
         return
 
-    _ctrl_roots_ph, noncontrol_roots_ph = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
+    ph_test_mode_override = "dud" if run_mode == "dud" else None
+    _ctrl_roots_ph, noncontrol_roots_ph = _lib_roots_for_pdb(
+        cfg,
+        paths.pdb_id.upper(),
+        paths,
+        logger,
+        test_mode_override=ph_test_mode_override,
+    )
     ph_ligand_root = noncontrol_roots_ph[0] if noncontrol_roots_ph else None
 
+    logger.info(
+        "[subrun.ph] run_mode=%s ph_tags=%s ph_ligand_root=%s override=%s",
+        run_mode or "None",
+        ",".join(ph_tags) if ph_tags else "(none)",
+        str(ph_ligand_root) if ph_ligand_root else "(none)",
+        ph_test_mode_override or "(none)",
+    )
     prewarm_ph_ligand_microstates(cfg, ph_tags, ph_ligand_root)
+
+    stages_for_run = [
+        {**stage, "name": f"{stage_name_prefix}{stage['name']}"}
+        for stage in stages
+    ]
 
     for ph_label in ph_tags:
         rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
@@ -927,9 +972,9 @@ def _phase6_to8_ligands_and_docking(
         retry_mgr = RetryManager()
 
         i = 0
-        while i < len(stages):
+        while i < len(stages_for_run):
             guard.reset_stage()
-            stage = stages[i]
+            stage = stages_for_run[i]
 
             if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                 fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
@@ -1109,7 +1154,7 @@ def _phase6_to8_ligands_and_docking(
                         checkpoint_invalidate_from(
                             cfg,
                             paths.pdb_id,
-                            stages,
+                            stages_for_run,
                             start_index=i,
                             ph_label=ph_label,
                             variant=variant_env or None,
@@ -1143,7 +1188,7 @@ def _phase6_to8_ligands_and_docking(
                         checkpoint_invalidate_from(
                             cfg,
                             paths.pdb_id,
-                            stages,
+                            stages_for_run,
                             start_index=0,
                             ph_label=ph_label,
                             variant=variant_env or None,
@@ -1170,7 +1215,7 @@ def _phase6_to8_ligands_and_docking(
             except Exception as _e:
                 logger.warning(f"Adaptive shrink skipped: {_e}")
 
-            if i < len(stages) - 1:
+            if i < len(stages_for_run) - 1:
                 if not scores:
                     restart, center, box_size, redo_ligands = fallback_recentering_if_empty(
                         cfg, paths.pdb_id, stage['name'], scores, raw_docked,
@@ -1182,7 +1227,7 @@ def _phase6_to8_ligands_and_docking(
                             checkpoint_invalidate_from(
                                 cfg,
                                 paths.pdb_id,
-                                stages,
+                                stages_for_run,
                                 start_index=0,
                                 ph_label=ph_label,
                                 variant=variant_env or None,
@@ -1195,7 +1240,7 @@ def _phase6_to8_ligands_and_docking(
                 use_stage1_base = (docking_mode == "polypharmacology" and i == 1)
 
                 rescue = []
-                if i < len(stages) - 1:
+                if i < len(stages_for_run) - 1:
                     for lig, (sc, reason) in invalids.items():
                         if sc is not None and "self_rmsd_" in str(reason).lower() and sc <= float(
                                 cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0)):
@@ -1205,7 +1250,7 @@ def _phase6_to8_ligands_and_docking(
                 selected = select_ligands_for_next(
                     docking_mode,
                     i,
-                    stages,
+                    stages_for_run,
                     scores,
                     logger,
                     base_pool_n=(len(stage1_original) if use_stage1_base else None),
@@ -1219,7 +1264,7 @@ def _phase6_to8_ligands_and_docking(
                 else:
                     ligands = selected
                 if not ligands:
-                    logger.warning(f"No ligands selected for {stages[i + 1]['name']}; stopping.")
+                    logger.warning(f"No ligands selected for {stages_for_run[i + 1]['name']}; stopping.")
                     break
 
             if bool(cfg.get("CHECKPOINT_ENABLE", True)):
@@ -1239,7 +1284,7 @@ def _phase6_to8_ligands_and_docking(
             i += 1
 
         final_pose_validation_and_screenshots(
-            cfg, paths.pdb_id, stages, receptor_pdbqt, center, validated_ligands_last,
+            cfg, paths.pdb_id, stages_for_run, receptor_pdbqt, center, validated_ligands_last,
             score_history, cleaned_pdb, docking_mode, logger, ph_label
         )
 
@@ -1249,6 +1294,7 @@ def _phase6_to8_ligands_and_docking(
             score_history,
             ph_label=ph_label,
             variant=variant_env or None,
+            csv_prefix=csv_prefix,
         )
         logger.info(
             "[Scores] ph_label=%s summary=%s",
@@ -1265,12 +1311,116 @@ def _phase6_to8_ligands_and_docking(
                 "n_valid_last_stage": len(validated_ligands_last),
                 "switch_history": getattr(selector, "switch_history", []),
                 "global_switches": guard.global_switches,
-                "stages": [s["name"] for s in stages],
+                "stages": [s["name"] for s in stages_for_run],
                 "ph_label": ph_label,
             }
             _write_audit_json(cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None)
         except Exception as _e:
             logger.warning(f"Audit JSON write failed: {_e}")
+
+
+def _phase6_to8_ligands_and_docking(
+    cfg: Dict,
+    paths: Paths,
+    logger: logging.Logger,
+    pdb_id: str,
+    variant_env: str,
+    variant_token: Optional[str],
+    variant_label: str,
+    legacy_mode: bool,
+    cleaned_pdb: Optional[str],
+    receptor_pdbqt: Optional[str],
+    center: Optional[Tuple[float, float, float]],
+    box_size: Optional[Tuple[float, float, float]],
+    stages: List[Dict],
+    params: RecenterParams,
+    control_stems: List[str],
+    control_lookup: Dict[str, Path],
+) -> None:
+    test_mode = _resolve_test_mode(cfg)
+
+    if test_mode != "fda+dud":
+
+        logger.info(
+            "[subrun] mode=%s run_mode=None csv_prefix='' stage_prefix='' (single subrun)",
+            test_mode,
+        )
+        _run_ligand_pipeline_subrun(
+                cfg,
+                paths,
+                logger,
+                pdb_id,
+                variant_env,
+                variant_token,
+                variant_label,
+                legacy_mode,
+                cleaned_pdb,
+                receptor_pdbqt,
+                center,
+                box_size,
+                stages,
+                params,
+                control_stems,
+                control_lookup,
+                run_mode=None,
+                csv_prefix="",
+                stage_name_prefix="",
+        )
+        return
+
+    logger.info(
+        "[subrun] mode=fda+dud -> running DUD-only subrun then FDA-only subrun "
+        "(stage_prefix='dud_' for DUD only)"
+    )
+
+
+    # fda+dud: 1) DUD-only sub-run, 2) FDA-only sub-run
+
+    # DUD: use run_mode="dud", stage and CSV prefixes "dud_"
+    _run_ligand_pipeline_subrun(
+        cfg,
+        paths,
+        logger,
+        pdb_id,
+        variant_env,
+        variant_token,
+        variant_label,
+        legacy_mode,
+        cleaned_pdb,
+        receptor_pdbqt,
+        center,
+        box_size,
+        stages,
+        params,
+        control_stems,
+        control_lookup,
+        run_mode="dud",
+        csv_prefix="dud_",
+        stage_name_prefix="dud_",
+    )
+
+    # FDA: run_mode="fda", no prefixes (standard behavior)
+    _run_ligand_pipeline_subrun(
+        cfg,
+        paths,
+        logger,
+        pdb_id,
+        variant_env,
+        variant_token,
+        variant_label,
+        legacy_mode,
+        cleaned_pdb,
+        receptor_pdbqt,
+        center,
+        box_size,
+        stages,
+        params,
+        control_stems,
+        control_lookup,
+        run_mode="fda",
+        csv_prefix="",
+        stage_name_prefix="",
+    )
 
 
 def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
@@ -1324,9 +1474,6 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         params,
         control_stems,
         control_lookup,
-        pdb_audit,
-        clean_audit,
-        active_ph_label,
     )
 
 def _map_reason_to_category(reason: str) -> str:

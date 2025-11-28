@@ -221,7 +221,14 @@ def _dedup_index_roots(seq: list[Path]) -> list[Path]:
     return deduped
 
 
-def _lib_roots_for_pdb(cfg: Dict, pdb_id: str, paths: Paths, logger: logging.Logger) -> tuple[list[Path], list[Path]]:
+def _lib_roots_for_pdb(
+    cfg: Dict,
+    pdb_id: str,
+    paths: Paths,
+    logger: logging.Logger,
+    *,
+    test_mode_override: Optional[str] = None,
+) -> tuple[list[Path], list[Path]]:
     extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
     extra_paths: list[Path] = []
     if extra_dirs:
@@ -234,7 +241,7 @@ def _lib_roots_for_pdb(cfg: Dict, pdb_id: str, paths: Paths, logger: logging.Log
                 extra_paths.append(p)
 
     subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
-    test_mode = _resolve_test_mode(cfg)
+    test_mode = test_mode_override or _resolve_test_mode(cfg)
 
     maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
     test_map: Dict[str, str] = {}
@@ -303,7 +310,13 @@ def _lib_roots_for_pdb(cfg: Dict, pdb_id: str, paths: Paths, logger: logging.Log
     return [], allowed_noncontrol_roots
 
 
-def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
+def prepare_and_filter_ligands(
+    cfg: Dict,
+    paths: Paths,
+    logger: logging.Logger,
+    *,
+    run_mode: Optional[str] = None,
+) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
     """
     Gathers candidate ligands, keeps existing validation/PAINS logic, and
     filters the *non-control* pool to allowed library roots:
@@ -312,9 +325,22 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
       - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
       - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
 
+    run_mode:
+      - None: preserve TEST_MODE_ENABLE semantics (off / dud / fda+dud)
+      - "dud": force DUD-only by using the mapped subdir only
+      - "fda": force FDA-only by using the default library only
+
     Controls are *never* filtered out here.
     LIBRARY_EXTRA_DIRS remain included (unchanged).
     """
+    overall_mode = _resolve_test_mode(cfg)
+    if run_mode == "dud":
+        effective_mode = "dud"
+    elif run_mode == "fda":
+        effective_mode = "off"
+    else:
+        effective_mode = overall_mode
+
     # Keep existing prep step for extracted controls (harmless if nothing to do)
     prep_ligands_from_pdb(
         ligand_output_dir=paths.ligand_output_dir,
@@ -322,7 +348,13 @@ def prepare_and_filter_ligands(cfg: Dict, paths: Paths, logger: logging.Logger) 
         prepped_ligands_dir=paths.prepped_ligands_dir,
     )
 
-    _control_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
+    _control_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
+        cfg,
+        paths.pdb_id.upper(),
+        paths,
+        logger,
+        test_mode_override=effective_mode,
+    )
     per_index_roots: list[Path] = []
     if paths.prepped_ligands_dir:
         per_index_roots.append(paths.prepped_ligands_dir)
