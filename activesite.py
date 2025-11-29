@@ -6,9 +6,9 @@ from pathlib import Path
 import hashlib
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
-# >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
-# >>> PATHS IMPORT END
+
+logger = logging.getLogger(__name__)
 
 
 # Load config
@@ -1461,15 +1461,29 @@ def _canon_pdb_id_from_path(pdb_path: str) -> str:
     # Drop legacy suffixes like _nolig, _nolig_cleaned, _cleaned
     return re.sub(r'(?i)(_nolig(_cleaned)?|_cleaned)$', '', stem).upper()
 def main(pdb_file):
-    stem   = os.path.splitext(os.path.basename(pdb_file))[0]
+    exists = os.path.exists(pdb_file)
+    size = os.path.getsize(pdb_file) if exists else -1
+    stem = os.path.splitext(os.path.basename(pdb_file))[0]
+    logger.info(
+        "[activesite.main] entry pdb_file=%s exists=%s size=%s stem=%s",
+        pdb_file,
+        exists,
+        size,
+        stem,
+    )
     pdb_id = _canon_pdb_id_from_path(pdb_file)
+
+    logger.info(
+        "[activesite.main] canon_pdb_id=%s from=%s",
+        pdb_id,
+        pdb_file,
+    )
 
     paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
 
 
     variant = _default_variant(config)
     ph_token = None
-    # >>> ACTIVE SITE PATHS PATCH START
     variant  = (variant or None)
     ph_token = (ph_token or None) if 'ph_token' in locals() else None
 
@@ -1479,7 +1493,14 @@ def main(pdb_file):
     ligands_raw_dir  = paths.ligand_output_dir
     p2rank_work_dir  = paths.work_dir / "p2rank"
     pockets_json_out = p2rank_work_dir / "pockets.json"
-    # >>> ACTIVE SITE PATHS PATCH END
+
+    logger.info(
+        "[activesite.main] paths base_id=%s receptor_cleaned=%s ligands_raw_dir=%s work_dir=%s",
+        pdb_id,
+        receptor_cleaned,
+        ligands_raw_dir,
+        paths.work_dir,
+    )
 
     receptor_cleaned.parent.mkdir(parents=True, exist_ok=True)
     receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1491,11 +1512,57 @@ def main(pdb_file):
     ligands_dir = ligands_raw_dir
     try:
         temp_fixed_pdb_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(pdb_file, temp_fixed_pdb_path)
+
+        # Prefer the canonical input PDB (HOLO) for ligand-based box detection.
+        # Fallback to the passed-in pdb_file if input_pdb_path is missing.
+        src_from_paths = getattr(paths, "input_pdb_path", None)
+        if src_from_paths and Path(src_from_paths).exists():
+            src_pdb_for_box = Path(src_from_paths)
+        else:
+            src_pdb_for_box = Path(pdb_file)
+
+        logging.info(
+                "[activesite.main] using src_pdb_for_box=%s (exists=%s) to build %s",
+                src_pdb_for_box,
+                src_pdb_for_box.exists(),
+                temp_fixed_pdb_path,
+        )
+
+        shutil.copyfile(str(src_pdb_for_box), temp_fixed_pdb_path)
         logging.info(f"Copied PDB for fixing: {temp_fixed_pdb_path}")
         fix_pdb_elements(str(temp_fixed_pdb_path))
 
-        ligands, ligand_coords = extract_and_remove_ligands(str(temp_fixed_pdb_path), pdb_cleaned, str(ligands_dir))
+        ligands, ligand_coords = extract_and_remove_ligands(
+                str(temp_fixed_pdb_path),
+                pdb_cleaned,
+                str(ligands_dir),
+        )
+
+        n_lig = len(ligands) if ligands else 0
+        logger.info(
+            "[activesite.main] extract_and_remove_ligands in=%s out=%s ligands_dir=%s n_ligands=%s",
+            temp_fixed_pdb_path,
+            pdb_cleaned,
+            ligands_dir,
+            n_lig,
+        )
+        if ligands:
+            logger.debug(
+                "[activesite.main] ligand_keys=%s",
+                list(ligands.keys()),
+            )
+        try:
+            lig_files = sorted(Path(ligands_dir).glob("*.pdb"))
+            logger.debug(
+                "[activesite.main] ligands_dir_pdb_files=%s",
+                [p.name for p in lig_files],
+            )
+        except Exception as e:
+            logger.warning(
+                "[activesite.main] unable to list ligands_dir=%s err=%s",
+                ligands_dir,
+                e,
+            )
 
         if ligands:
             logging.info(f"Ligands removed for {pdb_file}. Ranking ligands by contacts...")
@@ -1537,14 +1604,28 @@ def main(pdb_file):
                 logging.warning("No ligands ranked, fallback to P2Rank.")
                 center, box_size = get_box_from_p2rank_csv(pdb_cleaned)
         else:
-            logging.info(f"No ligands in {pdb_cleaned}. Using P2Rank instead.")
+            logger.info(
+                "[activesite.main] no_ligands_after_extract pdb_cleaned=%s ligands_dir=%s",
+                pdb_cleaned,
+                ligands_dir,
+            )
             center, box_size = get_box_from_p2rank_csv(pdb_cleaned)
 
         if center and box_size:
             logging.info(f"{pdb_cleaned}: center={center}, box_size={box_size}")
+            logger.info(
+                "[activesite.main] success center=%s box=%s pdb_cleaned=%s",
+                center,
+                box_size,
+                pdb_cleaned,
+            )
             return center, box_size
         else:
             logging.warning(f"Box not determined for {pdb_cleaned}")
+            logger.error(
+                "[activesite.main] failure center=None box=None pdb_cleaned=%s",
+                pdb_cleaned,
+            )
             return None, None
 
     finally:
