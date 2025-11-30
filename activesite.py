@@ -1546,6 +1546,12 @@ def main(pdb_file):
             ligands_dir,
             n_lig,
         )
+
+
+        # Default assumption: box comes from P2Rank unless we successfully use ligand coords.
+        source = "p2rank"
+
+
         if ligands:
             logger.debug(
                 "[activesite.main] ligand_keys=%s",
@@ -1599,6 +1605,7 @@ def main(pdb_file):
                     center, box_size = get_box_from_p2rank_csv(pdb_cleaned)
                 else:
                     center, box_size = compute_box_from_ligand_coords(top_ligand_coords)
+                    source = "ligand_top"
 
             else:
                 logging.warning("No ligands ranked, fallback to P2Rank.")
@@ -1618,6 +1625,13 @@ def main(pdb_file):
                 center,
                 box_size,
                 pdb_cleaned,
+            )
+            logging.info(
+                "[active-site] source=%s receptor=%s center=%s size=%s",
+                source,  # e.g. "ligand_top" or "p2rank"
+                receptor_pdbqt_path,
+                center,
+                box_size,
             )
             return center, box_size
         else:

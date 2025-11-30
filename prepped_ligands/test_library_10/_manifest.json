@@ -1,0 +1,27 @@
+{
+  "entries": {
+    "test_lig_01": "test_lig_01.pdbqt",
+    "test_lig_02": "test_lig_02.pdbqt",
+    "test_lig_03": "test_lig_03.pdbqt",
+    "test_lig_04": "test_lig_04.pdbqt",
+    "test_lig_05": "test_lig_05.pdbqt",
+    "test_lig_06": "test_lig_06.pdbqt",
+    "test_lig_07": "test_lig_07.pdbqt",
+    "test_lig_08": "test_lig_08.pdbqt",
+    "test_lig_09": "test_lig_09.pdbqt",
+    "test_lig_10": "test_lig_10.pdbqt"
+  },
+  "filenames": {
+    "test_lig_01.pdbqt": "test_lig_01.pdbqt",
+    "test_lig_02.pdbqt": "test_lig_02.pdbqt",
+    "test_lig_03.pdbqt": "test_lig_03.pdbqt",
+    "test_lig_04.pdbqt": "test_lig_04.pdbqt",
+    "test_lig_05.pdbqt": "test_lig_05.pdbqt",
+    "test_lig_06.pdbqt": "test_lig_06.pdbqt",
+    "test_lig_07.pdbqt": "test_lig_07.pdbqt",
+    "test_lig_08.pdbqt": "test_lig_08.pdbqt",
+    "test_lig_09.pdbqt": "test_lig_09.pdbqt",
+    "test_lig_10.pdbqt": "test_lig_10.pdbqt"
+  },
+  "mtime": 1764461834.667729
+}
