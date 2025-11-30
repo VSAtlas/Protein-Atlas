@@ -230,6 +230,36 @@ def _ensure_router_roots() -> RouterRoots:
     global _ROUTER_ROOTS
     if _ROUTER_ROOTS is None:
         _ROUTER_ROOTS = _load_router_roots()
+        return _ROUTER_ROOTS
+
+    try:
+        env_over = os.environ.get("OVERALL_DIR")
+        env_out = os.environ.get("OUTPUT_DIR")
+        env_docked = os.environ.get("DOCKED_DIR")
+        env_configs = os.environ.get("CONFIGS_DIR")
+
+        mismatch = False
+        if env_over and Path(env_over).expanduser() != _ROUTER_ROOTS.overall:
+            mismatch = True
+        if env_out and Path(env_out).expanduser() != _ROUTER_ROOTS.processed:
+            mismatch = True
+        if env_docked and Path(env_docked).expanduser() != _ROUTER_ROOTS.docked:
+            mismatch = True
+        if env_configs and Path(env_configs).expanduser() != _ROUTER_ROOTS.configs:
+            mismatch = True
+
+        if mismatch:
+            _ROUTER_ROOTS = _load_router_roots()
+        else:
+            try:
+                default_cfg_path = _default_config_path()
+                if not (_ROUTER_ROOTS.overall / "config.txt").exists() and default_cfg_path.exists():
+                    _ROUTER_ROOTS = _load_router_roots()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     return _ROUTER_ROOTS
 
 

@@ -1,0 +1,75 @@
+run_id: '20251130_230130'
+status: completed
+command:
+  argv: /home/michael/atlas/code/protein_automation/main.py -pdb TEST -fast
+  pdb_selection_mode: TEST_LIBRARY_MAP
+  TEST_MODE_ENABLE: dud
+  PH_ENSEMBLE_ENABLE: true
+git:
+  repo: git@github.com:VSAtlas/protein-stuff.git
+  branch: main
+  commit: c2724f03d038e7eee007bc8fb90f0860e5160182
+  dirty: true
+paths:
+  run_dir: /home/michael/atlas/code/protein_automation/configs/20251130_230130
+  log_file: /home/michael/atlas/code/protein_automation/logs/main_20251130_230130.log
+  docked_dir: /home/michael/atlas/code/protein_automation/docked
+  input_pdb_dir: /home/michael/atlas/code/protein_automation/input_pdbs
+  processed_pdb_dir: /home/michael/atlas/code/protein_automation/processed_pdbs
+  prepped_ligands_dir: /home/michael/atlas/code/protein_automation/prepped_ligands
+  config_file: run_config.yaml
+timing:
+  created_at: '2025-11-30T23:01:30Z'
+  started_at: '2025-11-30T23:01:30Z'
+  finished_at: '2025-11-30T23:02:02Z'
+  wall_time_sec: 32.839
+resources:
+  host: wnx0021408
+  n_cores: 128
+  ram_gb: 503.71
+  gpu: null
+summary:
+  total_proteins_scheduled: 1
+  total_proteins_completed: 1
+  total_proteins_failed: 0
+proteins:
+  TEST|LEGACY|pH7_0:
+    pdb_id: TEST
+    library: test_library_10
+    variant: LEGACY
+    ph: pH7_0
+    status: completed
+    error: null
+    timing:
+      started_at: '2025-11-30T23:01:56Z'
+      finished_at: '2025-11-30T23:02:02Z'
+      wall_time_sec: 6.653
+    stages:
+      prep:
+        status: completed
+        error: null
+        timing:
+          started_at: null
+          finished_at: null
+          wall_time_sec: null
+      pocket_detection:
+        status: completed
+        error: null
+        timing:
+          started_at: null
+          finished_at: null
+          wall_time_sec: null
+      docking:
+        status: completed
+        error: null
+        timing:
+          started_at: null
+          finished_at: null
+          wall_time_sec: null
+      postprocessing:
+        status: completed
+        error: null
+        timing:
+          started_at: null
+          finished_at: null
+          wall_time_sec: null

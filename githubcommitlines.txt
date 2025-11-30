@@ -22,5 +22,45 @@ git switch -c "$branch" 2>/dev/null || git switch "$branch"
 git push -u origin "$branch"
 
 
+
+
+JUST push and commit
+git add .
+git commit -m "michael 11/29/2025"
+git push origin main
+
+
+
+
+PULL WITH REBASE IF  YOU HAVE UNCOMMITTED WORK THAT IS READY
+# Make sure you're on the right branch
+git checkout main
+
+# Commit your changes
+git add .
+git commit -m "Describe what you did"
+
+# Pull the latest remote commits, rebasing your work on top
+git pull --rebase origin main
+git add <fixed files>
+git rebase --continue
+git push origin main
+
+
+STASH IF  YOU HAVE UNCOMMITTED WORK THAT IS NOT  READY
+git checkout main
+
+# Save your WIP changes
+git stash push -m "WIP before pulling main"
+
+# Now pull latest
+git pull --rebase origin main
+
+# Re-apply your WIP on top
+git stash pop
+
+
+
+
 PULL from most recent codex 
 git fetch origin --prune && latest=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' 'refs/remotes/origin/codex/*' | head -n1) && [ -n "$latest" ] && local=${latest#origin/} && (git show-ref --verify --quiet "refs/heads/$local" && git switch "$local" || git switch -c "$local" --track "$latest") && git pull --ff-only || echo "No origin/codex/* branches found."

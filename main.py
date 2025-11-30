@@ -28,6 +28,13 @@ from logging_topics import (
     make_protein_logger,
     bootstrap_root_logging,
 )
+from run_manifest import (
+    finalize_run_manifest,
+    init_run_manifest,
+    update_manifest_for_protein_failure,
+    update_manifest_for_protein_start,
+    update_manifest_for_protein_success,
+)
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -780,6 +787,14 @@ def main() -> None:
     print(f"[cfg.run] run_id={cfg['RUN_ID']} run_dir={cfg['CONFIG_RUN_DIR']}")
     print(f"[ph.mode] PH_ENSEMBLE={cfg.get('PH_ENSEMBLE', False)}")
 
+    global_start = time.time()
+
+    # Best-effort manifest initialization
+    try:
+        init_run_manifest(cfg, run_id, sys.argv, log_path)
+    except Exception:
+        logging.warning("Failed to initialize run_manifest.yaml", exc_info=True)
+
     # --- Single-ligand config (ported) ---------------------------------------
     cfg.setdefault("SINGLE_LIGAND", "")
     cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global")
@@ -933,6 +948,12 @@ def main() -> None:
     if test_mode != "off":
         raw_map = cfg.get("TEST_LIBRARY_MAP", {})
         test_map = _coerce_test_map(raw_map)
+        try:
+            cfg["_TEST_LIBRARY_CANONICAL"] = {
+                str(k).upper(): str(v) for k, v in getattr(test_map, "items", lambda: [])()
+            }
+        except Exception:
+            cfg["_TEST_LIBRARY_CANONICAL"] = {}
 
         # Normalize all TEST_LIBRARY_MAP keys to canonical 4-char uppercase PDB IDs.
         # This makes matching robust to case and minor suffix differences.
@@ -962,6 +983,8 @@ def main() -> None:
             pdb_files = kept
         else:
             print("[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied.")
+    else:
+        cfg["_TEST_LIBRARY_CANONICAL"] = {}
 
 
     # Normalize any repeated '.sanitized' tokens in ligand filenames
@@ -1038,11 +1061,46 @@ def main() -> None:
 
             for pdb_file in pdb_files:
                 pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
+                pdb_start = time.time()
 
                 try:
+                    library_name = None
+                    try:
+                        if test_mode != "off":
+                            lib_map = cfg.get("_TEST_LIBRARY_CANONICAL", {}) or {}
+                            library_name = lib_map.get(pdb_id)
+                        if not library_name:
+                            library_name = cfg.get("LIBRARY_SUBDIR_DEFAULT")
+                    except Exception:
+                        library_name = cfg.get("LIBRARY_SUBDIR_DEFAULT")
+
+                    try:
+                        update_manifest_for_protein_start(
+                            cfg, run_id, pdb_id, label, library_name
+                        )
+                    except Exception:
+                        logging.warning(
+                            "Failed to update run_manifest for start of %s (%s)",
+                            pdb_id,
+                            label,
+                            exc_info=True,
+                        )
+
                     # Main per-PDB work
                     process_one_protein(cfg_v, pdb_file, stages, params)
 
+                    pdb_elapsed = time.time() - pdb_start
+                    try:
+                        update_manifest_for_protein_success(
+                            cfg, run_id, pdb_id, label, pdb_elapsed
+                        )
+                    except Exception:
+                        logging.warning(
+                            "Failed to update run_manifest for success of %s (%s)",
+                            pdb_id,
+                            label,
+                            exc_info=True,
+                        )
 
                 except Exception as exc:
                     # Per-PDB failure handling
@@ -1078,6 +1136,18 @@ def main() -> None:
                         (pdb_id, label, str(fail_log_path), exc_type, exc_msg)
                     )
 
+                    try:
+                        update_manifest_for_protein_failure(
+                            cfg, run_id, pdb_id, label, fail_log_path
+                        )
+                    except Exception:
+                        logging.warning(
+                            "Failed to update run_manifest for failure of %s (%s)",
+                            pdb_id,
+                            label,
+                            exc_info=True,
+                        )
+
                 finally:
                     # Always advance the progress bar, even if this PDB failed
                     bar.update(1)
@@ -1094,6 +1164,13 @@ def main() -> None:
             )
     else:
         print("\nNo proteins recorded as failed.")
+
+    try:
+        finalize_run_manifest(
+            cfg, run_id, start_time=global_start, failed_entries=failed_entries
+        )
+    except Exception:
+        logging.warning("Failed to finalize run_manifest.yaml", exc_info=True)
 
     if plan_only:
         sys.exit(0)

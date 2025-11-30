@@ -74,6 +74,11 @@ from ph_ensemble_docking import (
     init_ph_tags_and_manifest,
     prewarm_ph_ligand_microstates,
 )
+from run_manifest import (
+    update_manifest_for_protein_failure,
+    update_manifest_for_protein_start,
+    update_manifest_for_protein_success,
+)
 from pose_validation import (
     attempt_fallback_recenter,
     compute_self_rmsd,
@@ -814,6 +819,18 @@ def _run_ligand_pipeline_subrun(
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
 
+    manifest_run_id = cfg.get("RUN_ID")
+    library_for_manifest = None
+    try:
+        mode_for_manifest = _resolve_test_mode(cfg)
+        if mode_for_manifest != "off":
+            lib_map = cfg.get("_TEST_LIBRARY_CANONICAL", {}) or {}
+            library_for_manifest = lib_map.get(paths.pdb_id.upper())
+        if not library_for_manifest:
+            library_for_manifest = cfg.get("LIBRARY_SUBDIR_DEFAULT")
+    except Exception:
+        library_for_manifest = cfg.get("LIBRARY_SUBDIR_DEFAULT")
+
     ph_tags = init_ph_tags_and_manifest(cfg, paths.pdb_id, variant_token, legacy_mode)
     if ph_enabled and not ph_tags:
         logger.info(
@@ -847,6 +864,25 @@ def _run_ligand_pipeline_subrun(
     ]
 
     for ph_label in ph_tags:
+        ph_start_ts = time.time()
+        try:
+            update_manifest_for_protein_start(
+                cfg,
+                manifest_run_id or "",
+                paths.pdb_id,
+                variant_label,
+                library_for_manifest,
+                ph_tag=ph_label,
+            )
+        except Exception:
+            ph_log.warning(
+                "[run-manifest.skip] pdb=%s variant=%s ph=%s reason=start",
+                paths.pdb_id,
+                variant_label,
+                ph_label if ph_label else "base",
+                exc_info=True,
+            )
+
         rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
         out_root = docked_dir(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
         ph_print = ph_label or "(none)"
@@ -878,348 +914,328 @@ def _run_ligand_pipeline_subrun(
                 ph_print,
                 str(rec_path),
             )
+            try:
+                update_manifest_for_protein_failure(
+                    cfg,
+                    manifest_run_id or "",
+                    paths.pdb_id,
+                    variant_label,
+                    rec_path,
+                    ph_tag=ph_label,
+                )
+            except Exception:
+                ph_log.warning(
+                    "[run-manifest.skip] pdb=%s variant=%s ph=%s reason=receptor-missing",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                    exc_info=True,
+                )
             continue
 
-        ligands = base_ligands[:]
-        heavy_atom_counts = dict(base_heavy_atoms)
-        pains_flags = dict(base_pains_flags)
-        center = tuple(base_center)
-        box_size = tuple(base_box)
-        receptor_pdbqt = str(rec_path)
-
-        enumerated = enumerate_ligands_for_ph_context(
-            cfg=cfg,
-            pdb_id=paths.pdb_id,
-            ph_label=ph_label,
-            ph_ligand_root=ph_ligand_root,
-        )
-
-        if enumerated:
-            ligands = [str(p) for p in enumerated]
-            heavy_atom_counts = {
-                str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated
-            }
-            pains_flags = {
-                k: base_pains_flags.get(
-                    k,
-                    base_pains_flags.get(Path(k).stem, False),
-                )
-                for k in ligands
-            }
-        else:
+        try:
+    
             ligands = base_ligands[:]
             heavy_atom_counts = dict(base_heavy_atoms)
             pains_flags = dict(base_pains_flags)
-
-        ctrl_stems_lower = {s.lower() for s in control_stems}
-        ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
-        min_ha = int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10))
-
-        def _is_control_path(p: str) -> bool:
-            stem = Path(p).stem.split("_stage")[0]
-            if stem.upper() in ctrl_blacklist:
-                return False
-            if stem.lower() not in ctrl_stems_lower:
-                return False
-            ha = heavy_atom_counts.get(p)
-            return (ha is None) or (ha >= min_ha)
-
-        ctrls = [p for p in ligands if _is_control_path(p)]
-        non_ctrls = [p for p in ligands if not _is_control_path(p)]
-        if ctrls:
-            ligands = ctrls + non_ctrls
-            logger.info(
-                f"[Controls] Front-loading {len(ctrls)} controls. "
-                f"First wave: {[Path(x).name for x in ligands[:int(cfg.get('MAX_PARALLEL_JOBS', 1))]]}"
+            center = tuple(base_center)
+            box_size = tuple(base_box)
+            receptor_pdbqt = str(rec_path)
+    
+            enumerated = enumerate_ligands_for_ph_context(
+                cfg=cfg,
+                pdb_id=paths.pdb_id,
+                ph_label=ph_label,
+                ph_ligand_root=ph_ligand_root,
             )
-
-        present_ctrls = [
-            Path(l).stem.split("_stage")[0].lower()
-            for l in ligands
-            if Path(l).stem.split("_stage")[0].lower() in ctrl_stems_lower
-        ]
-
-        if not present_ctrls:
-            logger.warning(
-                "[Controls] No control ligands present in Stage1 ligand list -- "
-                "self-RMSD/locking will not be possible. (Check prep errors above.)"
-            )
-        if not ligands:
-            logger.warning("No valid ligands after filtering; skipping protein.")
-            continue
-
-        selector = CenterSelector(cfg, logger, control_stems, heavy_atom_counts, center)
-        guard = GlobalCenterGuard(
-            max_global_switches=int(cfg.get("MAX_GLOBAL_CENTER_SWITCHES", 2))
-        )
-
-        stage1_original = ligands[:]
-
-        control_stems_lower = {s.lower() for s in control_stems}
-        forced_extracted_for_stage3 = {
-            lig for lig in stage1_original
-            if Path(lig).stem.split("_stage")[0].lower() in control_stems_lower
-        }
-        logger.info(
-            f"[Force-carry] Extracted ligands earmarked for Stage3: {len(forced_extracted_for_stage3)}"
-        )
-
-        score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
-        validated_ligands_last: List[str] = []
-        recenter_attempts = 0
-        docking_mode = cfg.get("DOCKING_MODE", "discovery").lower()
-
-        retry_mgr = RetryManager()
-
-        i = 0
-        while i < len(stages_for_run):
-            guard.reset_stage()
-            stage = stages_for_run[i]
-
-            if bool(cfg.get("CHECKPOINT_ENABLE", True)):
-                fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
-                if checkpoint_should_skip(
-                    cfg,
-                    paths.pdb_id,
-                    stage["name"],
-                    fp,
-                    ph_label=ph_label,
-                    variant=variant_env or None,
-                ):
-                    logger.info(f"[Checkpoint] Skipping {stage['name']} (fingerprint matched).")
-                    i += 1
-                    continue
-
-            if not ligands:
-                logger.warning(f"No ligands to dock at {stage['name']}; stopping for this protein.")
-                break
-
-            logger.info(f"Starting {stage['name']} with {len(ligands)} ligands...")
-            if ph_label:
-                stage_dir = paths.docked_stage_dir(variant_env or None, stage["name"], ph_label)
-                ph_log.info(
-                    "[ph_ensemble.dock.stage] pdb_id=%s variant=%s ph=%s stage=%s receptor=%s out=%s",
-                    paths.pdb_id,
-                    variant_label,
-                    ph_label,
-                    stage["name"],
-                    receptor_pdbqt,
-                    str(stage_dir),
-                )
-
-            if i == 0 and ctrls and non_ctrls:
+    
+            if enumerated:
+                ligands = [str(p) for p in enumerated]
+                heavy_atom_counts = {
+                    str(p): _count_heavy_atoms_from_pdbqt(p) for p in enumerated
+                }
+                pains_flags = {
+                    k: base_pains_flags.get(
+                        k,
+                        base_pains_flags.get(Path(k).stem, False),
+                    )
+                    for k in ligands
+                }
+            else:
+                ligands = base_ligands[:]
+                heavy_atom_counts = dict(base_heavy_atoms)
+                pains_flags = dict(base_pains_flags)
+    
+            ctrl_stems_lower = {s.lower() for s in control_stems}
+            ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
+            min_ha = int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10))
+    
+            def _is_control_path(p: str) -> bool:
+                stem = Path(p).stem.split("_stage")[0]
+                if stem.upper() in ctrl_blacklist:
+                    return False
+                if stem.lower() not in ctrl_stems_lower:
+                    return False
+                ha = heavy_atom_counts.get(p)
+                return (ha is None) or (ha >= min_ha)
+    
+            ctrls = [p for p in ligands if _is_control_path(p)]
+            non_ctrls = [p for p in ligands if not _is_control_path(p)]
+            if ctrls:
+                ligands = ctrls + non_ctrls
                 logger.info(
-                    f"Stage1 two-wave: {len(ctrls)} controls first, then {len(non_ctrls)} others."
+                    f"[Controls] Front-loading {len(ctrls)} controls. "
+                    f"First wave: {[Path(x).name for x in ligands[:int(cfg.get('MAX_PARALLEL_JOBS', 1))]]}"
                 )
-
-                s1, v1, d1, rd1, inv1 = run_one_stage(
-                    cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                    ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
+    
+            present_ctrls = [
+                Path(l).stem.split("_stage")[0].lower()
+                for l in ligands
+                if Path(l).stem.split("_stage")[0].lower() in ctrl_stems_lower
+            ]
+    
+            if not present_ctrls:
+                logger.warning(
+                    "[Controls] No control ligands present in Stage1 ligand list -- "
+                    "self-RMSD/locking will not be possible. (Check prep errors above.)"
                 )
-
-                try:
-                    dec = selector.consider_switch(stage['name'], s1, v1, rd1, receptor_pdbqt, center, guard)
-                    if dec.promoted and dec.new_center is not None:
-                        old = center
-                        center = dec.new_center
-                        guard.mark_switch()
+            if not ligands:
+                logger.warning("No valid ligands after filtering; skipping protein.")
+                continue
+    
+            selector = CenterSelector(cfg, logger, control_stems, heavy_atom_counts, center)
+            guard = GlobalCenterGuard(
+                max_global_switches=int(cfg.get("MAX_GLOBAL_CENTER_SWITCHES", 2))
+            )
+    
+            stage1_original = ligands[:]
+    
+            control_stems_lower = {s.lower() for s in control_stems}
+            forced_extracted_for_stage3 = {
+                lig for lig in stage1_original
+                if Path(lig).stem.split("_stage")[0].lower() in control_stems_lower
+            }
+            logger.info(
+                f"[Force-carry] Extracted ligands earmarked for Stage3: {len(forced_extracted_for_stage3)}"
+            )
+    
+            score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
+            validated_ligands_last: List[str] = []
+            recenter_attempts = 0
+            docking_mode = cfg.get("DOCKING_MODE", "discovery").lower()
+    
+            retry_mgr = RetryManager()
+    
+            i = 0
+            while i < len(stages_for_run):
+                guard.reset_stage()
+                stage = stages_for_run[i]
+    
+                if bool(cfg.get("CHECKPOINT_ENABLE", True)):
+                    fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
+                    if checkpoint_should_skip(
+                        cfg,
+                        paths.pdb_id,
+                        stage["name"],
+                        fp,
+                        ph_label=ph_label,
+                        variant=variant_env or None,
+                    ):
+                        logger.info(f"[Checkpoint] Skipping {stage['name']} (fingerprint matched).")
+                        i += 1
+                        continue
+    
+                if not ligands:
+                    logger.warning(f"No ligands to dock at {stage['name']}; stopping for this protein.")
+                    break
+    
+                logger.info(f"Starting {stage['name']} with {len(ligands)} ligands...")
+                if ph_label:
+                    stage_dir = paths.docked_stage_dir(variant_env or None, stage["name"], ph_label)
+                    ph_log.info(
+                        "[ph_ensemble.dock.stage] pdb_id=%s variant=%s ph=%s stage=%s receptor=%s out=%s",
+                        paths.pdb_id,
+                        variant_label,
+                        ph_label,
+                        stage["name"],
+                        receptor_pdbqt,
+                        str(stage_dir),
+                    )
+    
+                if i == 0 and ctrls and non_ctrls:
+                    logger.info(
+                        f"Stage1 two-wave: {len(ctrls)} controls first, then {len(non_ctrls)} others."
+                    )
+    
+                    s1, v1, d1, rd1, inv1 = run_one_stage(
+                        cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
+                        ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
+                    )
+    
+                    try:
+                        dec = selector.consider_switch(stage['name'], s1, v1, rd1, receptor_pdbqt, center, guard)
+                        if dec.promoted and dec.new_center is not None:
+                            old = center
+                            center = dec.new_center
+                            guard.mark_switch()
+                            logger.info(
+                                f"[CENTER] Switched before library run: {old} -> {center} ({dec.reason}) [global switch]"
+                            )
+                    except Exception as e:
+                        logger.warning(f"CenterSelector (controls-only) failed gracefully: {e}")
+    
+                    lock_score_max = float(cfg.get("CONTROL_LOCK_SCORE_MAX", -6.0))
+                    lock_min_hits = int(cfg.get("CONTROL_LOCK_MIN_HITS", 1))
+                    lock_center_max = float(cfg.get("CONTROL_LOCK_CENTER_MAX_DIST", 4.0))
+                    qualified_controls = []
+    
+                    for lig in v1:
+                        stem = Path(lig).stem.split("_stage")[0].lower()
+                        ha = heavy_atom_counts.get(lig)
+                        if stem in control_stems_lower and (ha is None or ha >= min_ha):
+                            sc = s1.get(lig)
+                            if sc is not None and np.isfinite(sc) and sc <= lock_score_max:
+                                pose_path = rd1.get(lig)
+                                c = CenterSelector._pdbqt_centroid(pose_path) if pose_path else None
+                                if c is not None and np.linalg.norm(c - np.array(center, float)) <= lock_center_max:
+                                    qualified_controls.append(lig)
+    
+                    if len(qualified_controls) >= lock_min_hits and not guard.locked:
+                        guard.lock()
                         logger.info(
-                            f"[CENTER] Switched before library run: {old} -> {center} ({dec.reason}) [global switch]"
+                            "[CONTROL-LOCK] Early lock from controls-only wave "
+                            f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} A); "
+                            "future center switches disabled."
                         )
-                except Exception as e:
-                    logger.warning(f"CenterSelector (controls-only) failed gracefully: {e}")
-
-                lock_score_max = float(cfg.get("CONTROL_LOCK_SCORE_MAX", -6.0))
+    
+                    s2, v2, d2, rd2, inv2 = run_one_stage(
+                        cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
+                        non_ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
+                    )
+    
+                    scores, validated, distances = ({**s1, **s2}, v1 + v2, d1 + d2)
+                    raw_docked = {**rd1, **rd2}
+                    invalids = {**inv1, **inv2}
+                else:
+                    scores, validated, distances, raw_docked, invalids = run_one_stage(
+                        cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
+                        ligands, logger, retry_mgr, control_lookup, ph_label=ph_label
+                    )
+    
+                validated_ligands_last = validated
+    
+                def _is_control(lig: str) -> bool:
+                    stem = Path(lig).stem.split("_stage")[0].lower()
+                    if stem.upper() in {s.strip().upper() for s in cfg.get("CONTROL_BLACKLIST", "").split(",") if s.strip()}:
+                        return False
+                    ha = heavy_atom_counts.get(lig)
+                    if ha is not None and ha < int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10)):
+                        return False
+                    return stem in {s.lower() for s in control_stems}
+    
+                control_anchor_hit = any(_is_control(lig) for lig in validated)
+    
+                lock_score_max = float(cfg.get("CONTROL_LOCK_SCORE_MAX", float("inf")))
                 lock_min_hits = int(cfg.get("CONTROL_LOCK_MIN_HITS", 1))
                 lock_center_max = float(cfg.get("CONTROL_LOCK_CENTER_MAX_DIST", 4.0))
+    
                 qualified_controls = []
-
-                for lig in v1:
-                    stem = Path(lig).stem.split("_stage")[0].lower()
-                    ha = heavy_atom_counts.get(lig)
-                    if stem in control_stems_lower and (ha is None or ha >= min_ha):
-                        sc = s1.get(lig)
-                        if sc is not None and np.isfinite(sc) and sc <= lock_score_max:
-                            pose_path = rd1.get(lig)
-                            c = CenterSelector._pdbqt_centroid(pose_path) if pose_path else None
-                            if c is not None and np.linalg.norm(c - np.array(center, float)) <= lock_center_max:
-                                qualified_controls.append(lig)
-
+                for lig in validated:
+                    if not _is_control(lig):
+                        continue
+                    sc = scores.get(lig)
+                    if sc is None or not np.isfinite(sc):
+                        continue
+                    if sc > lock_score_max:
+                        continue
+                    pose_path = raw_docked.get(lig)
+                    if not pose_path:
+                        continue
+                    c = CenterSelector._pdbqt_centroid(pose_path)
+                    if c is None:
+                        continue
+                    if np.linalg.norm(c - np.array(center, float)) <= lock_center_max:
+                        qualified_controls.append(lig)
+    
                 if len(qualified_controls) >= lock_min_hits and not guard.locked:
                     guard.lock()
                     logger.info(
-                        "[CONTROL-LOCK] Early lock from controls-only wave "
-                        f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} A); "
-                        "future center switches disabled."
+                        "[CONTROL-LOCK] Control(s) validated with strong confidence "
+                        f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} Ang); "
+                        "center is now anchored; future center switches are disabled."
                     )
-
-                s2, v2, d2, rd2, inv2 = run_one_stage(
-                    cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                    non_ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
-                )
-
-                scores, validated, distances = ({**s1, **s2}, v1 + v2, d1 + d2)
-                raw_docked = {**rd1, **rd2}
-                invalids = {**inv1, **inv2}
-            else:
-                scores, validated, distances, raw_docked, invalids = run_one_stage(
-                    cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                    ligands, logger, retry_mgr, control_lookup, ph_label=ph_label
-                )
-
-            validated_ligands_last = validated
-
-            def _is_control(lig: str) -> bool:
-                stem = Path(lig).stem.split("_stage")[0].lower()
-                if stem.upper() in {s.strip().upper() for s in cfg.get("CONTROL_BLACKLIST", "").split(",") if s.strip()}:
-                    return False
-                ha = heavy_atom_counts.get(lig)
-                if ha is not None and ha < int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10)):
-                    return False
-                return stem in {s.lower() for s in control_stems}
-
-            control_anchor_hit = any(_is_control(lig) for lig in validated)
-
-            lock_score_max = float(cfg.get("CONTROL_LOCK_SCORE_MAX", float("inf")))
-            lock_min_hits = int(cfg.get("CONTROL_LOCK_MIN_HITS", 1))
-            lock_center_max = float(cfg.get("CONTROL_LOCK_CENTER_MAX_DIST", 4.0))
-
-            qualified_controls = []
-            for lig in validated:
-                if not _is_control(lig):
-                    continue
-                sc = scores.get(lig)
-                if sc is None or not np.isfinite(sc):
-                    continue
-                if sc > lock_score_max:
-                    continue
-                pose_path = raw_docked.get(lig)
-                if not pose_path:
-                    continue
-                c = CenterSelector._pdbqt_centroid(pose_path)
-                if c is None:
-                    continue
-                if np.linalg.norm(c - np.array(center, float)) <= lock_center_max:
-                    qualified_controls.append(lig)
-
-            if len(qualified_controls) >= lock_min_hits and not guard.locked:
-                guard.lock()
-                logger.info(
-                    "[CONTROL-LOCK] Control(s) validated with strong confidence "
-                    f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} Ang); "
-                    "center is now anchored; future center switches are disabled."
-                )
-
-            try:
-                processed = {norm(x) for x in ligands}
-                valid_set = {norm(x) for x in scores.keys()}
-                invalid_set = {norm(x) for x in invalids.keys()}
-                both = valid_set & invalid_set
-                missing = processed - (valid_set | invalid_set)
-                if both or missing:
-                    logger.error(
-                        f"Invariant violation at {stage['name']}: both={len(both)}, missing={len(missing)}"
-                    )
-                    if both:
+    
+                try:
+                    processed = {norm(x) for x in ligands}
+                    valid_set = {norm(x) for x in scores.keys()}
+                    invalid_set = {norm(x) for x in invalids.keys()}
+                    both = valid_set & invalid_set
+                    missing = processed - (valid_set | invalid_set)
+                    if both or missing:
                         logger.error(
-                            "Ligands marked both valid & invalid: "
-                            + ", ".join(os.path.basename(x) for x in list(both)[:10])
+                            f"Invariant violation at {stage['name']}: both={len(both)}, missing={len(missing)}"
                         )
-                    if missing:
-                        logger.error(
-                            "Ligands missing from results: "
-                            + ", ".join(os.path.basename(x) for x in list(missing)[:10])
-                        )
-            except Exception as _e:
-                logger.warning(f"Invariant check failed: {_e}")
-
-            for lig, sc in scores.items():
-                record_score(score_history, stage['name'], lig, sc, True)
-                record_le(score_history, stage['name'], lig, sc, heavy_atom_counts)
-            for lig, (sc, reason) in invalids.items():
-                record_score(score_history, stage['name'], lig, sc, False, reason=reason)
-                record_le(score_history, stage['name'], lig, sc, heavy_atom_counts)
-
-            promoted_this_stage = False
-            try:
-                decision = selector.consider_switch(
-                    stage['name'], scores, validated, raw_docked, receptor_pdbqt, center, guard
-                )
-                if decision.promoted and decision.new_center is not None:
-                    old = center
-                    center = decision.new_center
-                    promoted_this_stage = True
-                    guard.mark_switch()
-                    if bool(cfg.get("CHECKPOINT_ENABLE", True)):
-                        checkpoint_invalidate_from(
-                            cfg,
-                            paths.pdb_id,
-                            stages_for_run,
-                            start_index=i,
-                            ph_label=ph_label,
-                            variant=variant_env or None,
-                        )
-                    logger.info(
-                        f"[CENTER] Switched from {old} -> {center} ({decision.reason}, "
-                        f"SwitchScore={decision.switchscore:.2f}) [global switch]"
-                    )
-            except Exception as e:
-                logger.warning(f"CenterSelector failed gracefully: {e}")
-
-            if ph_label:
-                ph_log.info(
-                    "[ph_ensemble.dock.scores] pdb_id=%s variant=%s ph=%s stage=%s valid=%d invalid=%d",
-                    paths.pdb_id,
-                    variant_label,
-                    ph_label,
-                    stage["name"],
-                    len(scores),
-                    len(invalids),
-                )
-
-            if not promoted_this_stage:
-                restart, center, box_size, redo_ligands, recenter_attempts = early_recenter_decision(
-                    i, scores, distances, box_size, center, stage1_original, recenter_attempts, params,
-                    cfg, paths.pdb_id, receptor_pdbqt, logger, raw_docked, guard, control_anchor_hit
-                )
-                if restart:
-                    ligands = redo_ligands
-                    if bool(cfg.get("CHECKPOINT_ENABLE", True)):
-                        checkpoint_invalidate_from(
-                            cfg,
-                            paths.pdb_id,
-                            stages_for_run,
-                            start_index=0,
-                            ph_label=ph_label,
-                            variant=variant_env or None,
-                        )
-                    i = 0
-                    continue
-
-            try:
-                if cfg.get("ADAPTIVE_SHRINK_ENABLE", True) and validated:
-                    med = (
-                        float(np.median([d for d in distances if isinstance(d, (int, float))]))
-                        if distances
-                        else None
-                    )
-                    if (med is not None) and (med < float(cfg.get("ADAPTIVE_SHRINK_MEDIAN_MAX", 4.0))):
-                        dec = float(cfg.get("ADAPTIVE_SHRINK_DEC", 4.0))
-                        min_box = float(cfg.get("ADAPTIVE_SHRINK_MIN_BOX", 14.0))
-                        new_box = tuple(max(min_box, s - dec) for s in box_size)
-                        if new_box != box_size:
-                            logger.info(
-                                f"Adaptive shrink: median dist {med:.2f} A -> box {box_size} -> {new_box}"
+                        if both:
+                            logger.error(
+                                "Ligands marked both valid & invalid: "
+                                + ", ".join(os.path.basename(x) for x in list(both)[:10])
                             )
-                            box_size = new_box
-            except Exception as _e:
-                logger.warning(f"Adaptive shrink skipped: {_e}")
-
-            if i < len(stages_for_run) - 1:
-                if not scores:
-                    restart, center, box_size, redo_ligands = fallback_recentering_if_empty(
-                        cfg, paths.pdb_id, stage['name'], scores, raw_docked,
-                        receptor_pdbqt, center, box_size, stage1_original, logger, guard, control_anchor_hit
+                        if missing:
+                            logger.error(
+                                "Ligands missing from results: "
+                                + ", ".join(os.path.basename(x) for x in list(missing)[:10])
+                            )
+                except Exception as _e:
+                    logger.warning(f"Invariant check failed: {_e}")
+    
+                for lig, sc in scores.items():
+                    record_score(score_history, stage['name'], lig, sc, True)
+                    record_le(score_history, stage['name'], lig, sc, heavy_atom_counts)
+                for lig, (sc, reason) in invalids.items():
+                    record_score(score_history, stage['name'], lig, sc, False, reason=reason)
+                    record_le(score_history, stage['name'], lig, sc, heavy_atom_counts)
+    
+                promoted_this_stage = False
+                try:
+                    decision = selector.consider_switch(
+                        stage['name'], scores, validated, raw_docked, receptor_pdbqt, center, guard
+                    )
+                    if decision.promoted and decision.new_center is not None:
+                        old = center
+                        center = decision.new_center
+                        promoted_this_stage = True
+                        guard.mark_switch()
+                        if bool(cfg.get("CHECKPOINT_ENABLE", True)):
+                            checkpoint_invalidate_from(
+                                cfg,
+                                paths.pdb_id,
+                                stages_for_run,
+                                start_index=i,
+                                ph_label=ph_label,
+                                variant=variant_env or None,
+                            )
+                        logger.info(
+                            f"[CENTER] Switched from {old} -> {center} ({decision.reason}, "
+                            f"SwitchScore={decision.switchscore:.2f}) [global switch]"
+                        )
+                except Exception as e:
+                    logger.warning(f"CenterSelector failed gracefully: {e}")
+    
+                if ph_label:
+                    ph_log.info(
+                        "[ph_ensemble.dock.scores] pdb_id=%s variant=%s ph=%s stage=%s valid=%d invalid=%d",
+                        paths.pdb_id,
+                        variant_label,
+                        ph_label,
+                        stage["name"],
+                        len(scores),
+                        len(invalids),
+                    )
+    
+                if not promoted_this_stage:
+                    restart, center, box_size, redo_ligands, recenter_attempts = early_recenter_decision(
+                        i, scores, distances, box_size, center, stage1_original, recenter_attempts, params,
+                        cfg, paths.pdb_id, receptor_pdbqt, logger, raw_docked, guard, control_anchor_hit
                     )
                     if restart:
                         ligands = redo_ligands
@@ -1234,89 +1250,165 @@ def _run_ligand_pipeline_subrun(
                             )
                         i = 0
                         continue
-                    else:
-                        break
-
-                use_stage1_base = (docking_mode == "polypharmacology" and i == 1)
-
-                rescue = []
-                if i < len(stages_for_run) - 1:
-                    for lig, (sc, reason) in invalids.items():
-                        if sc is not None and "self_rmsd_" in str(reason).lower() and sc <= float(
-                                cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0)):
-                            rescue.append((sc, lig))
-                    rescue = [lig for _, lig in sorted(rescue)[:int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]]
-
-                selected = select_ligands_for_next(
-                    docking_mode,
-                    i,
-                    stages_for_run,
-                    scores,
-                    logger,
-                    base_pool_n=(len(stage1_original) if use_stage1_base else None),
-                    force_include=(forced_extracted_for_stage3 if use_stage1_base else None)
-                )
-
-                if rescue:
-                    sel_set = set(selected)
-                    rescue_unique = [r for r in rescue if r not in sel_set]
-                    ligands = rescue_unique + selected
-                else:
-                    ligands = selected
-                if not ligands:
-                    logger.warning(f"No ligands selected for {stages_for_run[i + 1]['name']}; stopping.")
-                    break
-
-            if bool(cfg.get("CHECKPOINT_ENABLE", True)):
+    
                 try:
-                    fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
-                    checkpoint_mark_done(
-                        cfg,
-                        paths.pdb_id,
-                        stage["name"],
-                        fp,
-                        ph_label=ph_label,
-                        variant=variant_env or None,
+                    if cfg.get("ADAPTIVE_SHRINK_ENABLE", True) and validated:
+                        med = (
+                            float(np.median([d for d in distances if isinstance(d, (int, float))]))
+                            if distances
+                            else None
+                        )
+                        if (med is not None) and (med < float(cfg.get("ADAPTIVE_SHRINK_MEDIAN_MAX", 4.0))):
+                            dec = float(cfg.get("ADAPTIVE_SHRINK_DEC", 4.0))
+                            min_box = float(cfg.get("ADAPTIVE_SHRINK_MIN_BOX", 14.0))
+                            new_box = tuple(max(min_box, s - dec) for s in box_size)
+                            if new_box != box_size:
+                                logger.info(
+                                    f"Adaptive shrink: median dist {med:.2f} A -> box {box_size} -> {new_box}"
+                                )
+                                box_size = new_box
+                except Exception as _e:
+                    logger.warning(f"Adaptive shrink skipped: {_e}")
+    
+                if i < len(stages_for_run) - 1:
+                    if not scores:
+                        restart, center, box_size, redo_ligands = fallback_recentering_if_empty(
+                            cfg, paths.pdb_id, stage['name'], scores, raw_docked,
+                            receptor_pdbqt, center, box_size, stage1_original, logger, guard, control_anchor_hit
+                        )
+                        if restart:
+                            ligands = redo_ligands
+                            if bool(cfg.get("CHECKPOINT_ENABLE", True)):
+                                checkpoint_invalidate_from(
+                                    cfg,
+                                    paths.pdb_id,
+                                    stages_for_run,
+                                    start_index=0,
+                                    ph_label=ph_label,
+                                    variant=variant_env or None,
+                                )
+                            i = 0
+                            continue
+                        else:
+                            break
+    
+                    use_stage1_base = (docking_mode == "polypharmacology" and i == 1)
+    
+                    rescue = []
+                    if i < len(stages_for_run) - 1:
+                        for lig, (sc, reason) in invalids.items():
+                            if sc is not None and "self_rmsd_" in str(reason).lower() and sc <= float(
+                                    cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0)):
+                                rescue.append((sc, lig))
+                        rescue = [lig for _, lig in sorted(rescue)[:int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]]
+    
+                    selected = select_ligands_for_next(
+                        docking_mode,
+                        i,
+                        stages_for_run,
+                        scores,
+                        logger,
+                        base_pool_n=(len(stage1_original) if use_stage1_base else None),
+                        force_include=(forced_extracted_for_stage3 if use_stage1_base else None)
                     )
-                except Exception:
-                    pass
-
-            i += 1
-
-        final_pose_validation_and_screenshots(
-            cfg, paths.pdb_id, stages_for_run, receptor_pdbqt, center, validated_ligands_last,
-            score_history, cleaned_pdb, docking_mode, logger, ph_label
-        )
-
-        csv_path = write_scores_csv(
-            cfg,
-            paths.pdb_id,
-            score_history,
-            ph_label=ph_label,
-            variant=variant_env or None,
-            csv_prefix=csv_prefix,
-        )
-        logger.info(
-            "[Scores] ph_label=%s summary=%s",
-            ph_label if ph_label else "base",
-            csv_path,
-        )
-
-        try:
-            summary = {
-                "pdb_id": paths.pdb_id,
-                "center": tuple(map(float, center)) if center else None,
-                "box_size": tuple(map(float, box_size)) if box_size else None,
-                "n_ligands_stage1": len(stage1_original),
-                "n_valid_last_stage": len(validated_ligands_last),
-                "switch_history": getattr(selector, "switch_history", []),
-                "global_switches": guard.global_switches,
-                "stages": [s["name"] for s in stages_for_run],
-                "ph_label": ph_label,
-            }
-            _write_audit_json(cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None)
-        except Exception as _e:
-            logger.warning(f"Audit JSON write failed: {_e}")
+    
+                    if rescue:
+                        sel_set = set(selected)
+                        rescue_unique = [r for r in rescue if r not in sel_set]
+                        ligands = rescue_unique + selected
+                    else:
+                        ligands = selected
+                    if not ligands:
+                        logger.warning(f"No ligands selected for {stages_for_run[i + 1]['name']}; stopping.")
+                        break
+    
+                if bool(cfg.get("CHECKPOINT_ENABLE", True)):
+                    try:
+                        fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
+                        checkpoint_mark_done(
+                            cfg,
+                            paths.pdb_id,
+                            stage["name"],
+                            fp,
+                            ph_label=ph_label,
+                            variant=variant_env or None,
+                        )
+                    except Exception:
+                        pass
+    
+                i += 1
+    
+            final_pose_validation_and_screenshots(
+                cfg, paths.pdb_id, stages_for_run, receptor_pdbqt, center, validated_ligands_last,
+                score_history, cleaned_pdb, docking_mode, logger, ph_label
+            )
+    
+            csv_path = write_scores_csv(
+                cfg,
+                paths.pdb_id,
+                score_history,
+                ph_label=ph_label,
+                variant=variant_env or None,
+                csv_prefix=csv_prefix,
+            )
+            logger.info(
+                "[Scores] ph_label=%s summary=%s",
+                ph_label if ph_label else "base",
+                csv_path,
+            )
+    
+            try:
+                summary = {
+                    "pdb_id": paths.pdb_id,
+                    "center": tuple(map(float, center)) if center else None,
+                    "box_size": tuple(map(float, box_size)) if box_size else None,
+                    "n_ligands_stage1": len(stage1_original),
+                    "n_valid_last_stage": len(validated_ligands_last),
+                    "switch_history": getattr(selector, "switch_history", []),
+                    "global_switches": guard.global_switches,
+                    "stages": [s["name"] for s in stages_for_run],
+                    "ph_label": ph_label,
+                }
+                _write_audit_json(cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None)
+            except Exception as _e:
+                logger.warning(f"Audit JSON write failed: {_e}")
+    
+            try:
+                update_manifest_for_protein_success(
+                    cfg,
+                    manifest_run_id or "",
+                    paths.pdb_id,
+                    variant_label,
+                    time.time() - ph_start_ts,
+                    ph_tag=ph_label,
+                )
+            except Exception:
+                ph_log.warning(
+                    "[run-manifest.skip] pdb=%s variant=%s ph=%s reason=success",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                    exc_info=True,
+                )
+        except Exception:
+            try:
+                update_manifest_for_protein_failure(
+                    cfg,
+                    manifest_run_id or "",
+                    paths.pdb_id,
+                    variant_label,
+                    None,
+                    ph_tag=ph_label,
+                )
+            except Exception:
+                ph_log.warning(
+                    "[run-manifest.skip] pdb=%s variant=%s ph=%s reason=fail",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                    exc_info=True,
+                )
+            raise
 
 
 def _phase6_to8_ligands_and_docking(
