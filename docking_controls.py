@@ -20,6 +20,15 @@ from run_vina import run_docking_task
 from docking_ligands import _is_readable_ref, compute_rmsd
 
 
+def _canonical_ctrl_base_from_stem(stem: str) -> str:
+    """
+    Normalize control ligand stems so variants like `LIG_A301.sanitized.protoB` map to `LIG_A301`.
+    Drops any _stage suffix and trims trailing .sanitized chains.
+    """
+    stem = stem.split("_stage")[0]
+    return stem.split(".sanitized")[0]
+
+
 # [ions] audit classification tokens
 _ION_AUDIT_METALS = {
     "ZN",
@@ -61,7 +70,7 @@ def build_control_lookup(paths: Paths) -> dict:
             ext = p.suffix.lower()
             if ext not in prefs:
                 continue
-            base = p.stem.split("_stage")[0]
+            base = _canonical_ctrl_base_from_stem(p.stem)
             by_base.setdefault(base, {})
             by_base[base][ext] = p
 
@@ -545,7 +554,9 @@ def select_center_via_control_redock(
     centroids = {}
     for p in ctrl_pdbs:
         c = _centroid_from_pdb(p)
-        if c: centroids[p.stem.split("_stage")[0]] = c
+        if c:
+            base = _canonical_ctrl_base_from_stem(p.stem)
+            centroids[base] = c
 
     bases = list(centroids.keys())
     coords = [centroids[b] for b in bases]
@@ -598,11 +609,19 @@ def select_center_via_control_redock(
     cand_pdbqts = []
     logger.info(f"[control-redock] search_prepped_dirs={[str(d) for d in prepped_dirs]}")
 
+
+    logger.info(f"[control-redock.debug] centroids_keys={list(centroids.keys())}")
+    logger.info(f"[control-redock.debug] control_lookup_keys={list(control_lookup.keys())}")
+
     seen = set()
     for root in prepped_dirs:
         if not root or not _Path(root).exists(): continue
         for p in _Path(root).glob("*.pdbqt"):
-            base = p.stem.split("_stage")[0].split(".sanitized")[0]
+            stem = p.stem.split("_stage")[0]
+            # Only accept basename.sanitized.pdbqt as control candidates to avoid duplicated variants.
+            if stem.count(".sanitized") != 1:
+                continue
+            base = _canonical_ctrl_base_from_stem(stem)
             if base in centroids and base in control_lookup and base not in seen:
                 cand_pdbqts.append(p); seen.add(base)
     logger.info(f"[control-redock] candidates={len(cand_pdbqts)}")
@@ -649,7 +668,8 @@ def select_center_via_control_redock(
 
     if not parallel_enabled:
         for lig_pdbqt in cand_pdbqts:
-            base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
+            stem = lig_pdbqt.stem.split("_stage")[0]
+            base = _canonical_ctrl_base_from_stem(stem)
             center = centroids.get(base)
             if not center:
                 ref = control_lookup.get(base)
@@ -724,7 +744,8 @@ def select_center_via_control_redock(
         cfg_payload = dict(cfg)
         jobs = []
         for order, lig_pdbqt in enumerate(cand_pdbqts):
-            base = lig_pdbqt.stem.split("_stage")[0].split(".sanitized")[0]
+            stem = lig_pdbqt.stem.split("_stage")[0]
+            base = _canonical_ctrl_base_from_stem(stem)
             center = centroids.get(base)
             if not center:
                 ref = control_lookup.get(base)

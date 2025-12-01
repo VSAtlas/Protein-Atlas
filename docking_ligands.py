@@ -666,26 +666,77 @@ def _read_any_lig(path: str):
     """
     mol = None
     loader = "unknown"
+    sanitize = True
+    sanitize_failed = False
+    load_err = None
     ext = os.path.splitext(path)[1].lower()
+    _rlog = logging.getLogger("rmsd")
 
     try:
         if ext in (".sdf", ".sd"):
             loader = "SDMolSupplier"
+            sanitize = True
             suppl = Chem.SDMolSupplier(path, removeHs=False, sanitize=True)
             mol = next((m for m in suppl if m is not None), None)
         elif ext in (".mol2",):
             loader = "MolFromMol2File"
+            sanitize = True
             mol = Chem.MolFromMol2File(path, sanitize=True, removeHs=False)
+        elif ext in (".pdbqt",):
+            loader = "MolFromPDBFile(pdbqt)"
+            sanitize = False
+            mol = Chem.MolFromPDBFile(path, sanitize=False, removeHs=False, proximityBonding=True)
+            if mol is not None:
+                try:
+                    Chem.SanitizeMol(mol)
+                except Exception as e:
+                    sanitize_failed = True
+                    if _rlog:
+                        _rlog.warning(f"[read_any] sanitize failed for path='{path}' err={e!r}")
         elif ext in (".pdb",):
             loader = "MolFromPDBFile"
+            sanitize = True
             # If you use proximityBonding or flavor flags elsewhere, keep them consistent here.
-            mol = Chem.MolFromPDBFile(path, sanitize=True, removeHs=False, proximityBonding=True)
+            try:
+                mol = Chem.MolFromPDBFile(path, sanitize=True, removeHs=False, proximityBonding=True)
+            except Exception as e:
+                load_err = e
+                mol = None
+            if mol is None:
+                try:
+                    with open(path, "rt", errors="ignore") as fh:
+                        head = fh.read(1024)
+                except Exception:
+                    head = ""
+                looks_like_pdbqt = ("REMARK VINA" in head) or ("TORSDOF" in head) or ("ROOT" in head)
+                if looks_like_pdbqt:
+                    if _rlog:
+                        _rlog.warning(
+                            f"[read_any] PDBQT fallback for path='{path}' (sanitize=True failed; retry sanitize=False)"
+                        )
+                    loader = "MolFromPDBFile(pdbqt-fallback)"
+                    sanitize = False
+                    try:
+                        mol = Chem.MolFromPDBFile(path, sanitize=False, removeHs=False, proximityBonding=True)
+                    except Exception as e:
+                        load_err = e
+                        mol = None
+                    if mol is not None:
+                        try:
+                            Chem.SanitizeMol(mol)
+                        except Exception as e:
+                            sanitize_failed = True
+                            if _rlog:
+                                _rlog.warning(f"[read_any] sanitize failed for path='{path}' err={e!r}")
         else:
             loader = "auto"
+            sanitize = True
             mol = Chem.MolFromMolFile(path, sanitize=True, removeHs=False)  # last-ditch; or return None
     except Exception as e:
-        logging.getLogger("rmsd").info(f"[read_any] loader={loader} path='{path}' load_failed={e}")
+        load_err = e if load_err is None else load_err
         mol = None
+    if (mol is None) and (load_err is None):
+        load_err = "load_returned_None"
 
     # ──  single debug line about what we actually loaded ───────────────────
     try:
@@ -700,10 +751,14 @@ def _read_any_lig(path: str):
                 inchikey = inchi.MolToInchiKey(mol)
             except Exception:
                 inchikey = "NA"
-            _rlog.info(f"[read_any] loader={loader} path='{path}' atoms={mol.GetNumAtoms()} "
-                       f"heavy={mol.GetNumHeavyAtoms()} formula={formula} inchikey={inchikey}")
+            extra = " sanitize_failed=True" if sanitize_failed else ""
+            _rlog.info(f"[read_any] loader={loader} sanitize={sanitize} path='{path}'{extra} "
+                       f"atoms={mol.GetNumAtoms()} heavy={mol.GetNumHeavyAtoms()} formula={formula} inchikey={inchikey}")
         elif _rlog:
-            _rlog.info(f"[read_any] loader={loader} path='{path}' mol=None")
+            if (mol is None) and (load_err is not None):
+                _rlog.info(f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None err={load_err!r}")
+            else:
+                _rlog.info(f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None")
     except Exception:
         pass
     # ───────────────────────────────────────────────────────────────────────────
@@ -721,6 +776,7 @@ def _is_readable_ref(pth: Path) -> bool:
 
 def compute_rmsd(ref_path: str, docked_path: str) -> float:
     """Heavy-atom RMSD using best mapping; supports PDB/SDF/MOL2 refs and adds a minimal MCS fallback."""
+    _rlog = logging.getLogger("rmsd")
     ref = _read_any_lig(ref_path)
     dock = _read_any_lig(docked_path)
     if not ref or not dock:
@@ -728,26 +784,45 @@ def compute_rmsd(ref_path: str, docked_path: str) -> float:
 
     # 1) Fast path: RDKit best alignment
     try:
-        return float(rdMolAlign.GetBestRMS(ref, dock))
-    except Exception:
-        pass
+        rmsd = float(rdMolAlign.GetBestRMS(ref, dock))
+        if _rlog:
+            _rlog.info(f"[rmsd.best] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A")
+        return rmsd
+    except Exception as e:
+        if _rlog:
+            _rlog.warning(
+                f"[rmsd.best] failed ref='{ref_path}' dock='{docked_path}' err={e!r}; falling back to MCS"
+            )
 
     # 2) Tiny, robust fallback via MCS
     try:
+        # Ensure ring info for potentially unsanitized PDBQT-derived mols
+        Chem.FastFindRings(ref)
+        Chem.FastFindRings(dock)
+
         mcs = rdFMCS.FindMCS([ref, dock],
                              ringMatchesRingOnly=True,
                              completeRingsOnly=True,
                              matchValences=True)
         patt = Chem.MolFromSmarts(mcs.smartsString)
         if patt is None:
+            if _rlog:
+                _rlog.warning(f"[rmsd.mcs] no SMARTS pattern for ref='{ref_path}' dock='{docked_path}'")
             return float("inf")
         ref_match = ref.GetSubstructMatch(patt)
         dock_match = dock.GetSubstructMatch(patt)
         if not ref_match or not dock_match or (len(ref_match) != len(dock_match)):
+            if _rlog:
+                _rlog.warning(f"[rmsd.mcs] match-fail ref='{ref_path}' dock='{docked_path}'")
             return float("inf")
         amap = list(zip(dock_match, ref_match))  # (probe->ref)
-        return float(rdMolAlign.AlignMol(dock, ref, atomMap=amap))
-    except Exception:
+        rmsd = float(rdMolAlign.AlignMol(dock, ref, atomMap=amap))
+        if _rlog:
+            _rlog.info(f"[rmsd.mcs] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A atoms={len(amap)}")
+        return rmsd
+    except Exception as e:
+        if _rlog:
+            _rlog.warning(f"[rmsd.mcs] failed ref='{ref_path}' dock='{docked_path}' err={e!r}")
         return float("inf")
 
 
