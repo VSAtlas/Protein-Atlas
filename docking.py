@@ -78,6 +78,7 @@ from run_manifest import (
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
+    update_manifest_for_pocket_detection,
 )
 from pose_validation import (
     attempt_fallback_recenter,
@@ -359,14 +360,14 @@ def _phase2_to4_receptor_and_center(
         center, box_size, center_source = sel_center, sel_box, "control"
         logger.info(f"[control-redock] Using control-derived center {center} with box {box_size}")
     else:
-        c2, b2 = detect_active_site(cleaned_pdb)
+        c2, b2, src = detect_active_site(cleaned_pdb)
         if c2:
             box_size = tuple(min(28.0, float(s)) for s in b2)
             center = c2
-            center_source = "p2rank"
-            logger.info(f"[P2Rank] Using P2Rank center {center} with box {box_size}")
+            center_source = src or "activesite"
+            logger.info("[active-site] Using center %s with box %s source=%s", center, box_size, center_source)
         else:
-            logger.error("Active-site detection failed (no usable controls, P2Rank returned None).")
+            logger.error("Active-site detection failed (no usable controls, active-site returned None).")
             return cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
     if center is None:
         return cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
@@ -410,6 +411,46 @@ def _phase2_to4_receptor_and_center(
         print(f"[CENTER] source={center_source} center={c_print} box={b_print}")
     except Exception:
         pass
+
+    # --- manifest: record pocket detection metadata (best-effort) ---
+    try:
+        manifest_run_id = cfg.get("RUN_ID")
+        logger.debug(
+            "[run-manifest.pocket_detection.call] run_id=%s pdb=%s variant=%s ph=%s method=%s center=%r box=%r",
+            manifest_run_id,
+            paths.pdb_id,
+            variant_label,
+            active_ph_label,
+            center_source,
+            center,
+            box_size,
+        )
+        if manifest_run_id:
+            update_manifest_for_pocket_detection(
+                cfg,
+                str(manifest_run_id),
+                paths.pdb_id,
+                variant_label,
+                ph_tag=active_ph_label,
+                method=center_source,
+                center=center,
+                box_size=box_size,
+            )
+        else:
+            logger.debug(
+                "[run-manifest.pocket_detection.skip] no RUN_ID for pdb=%s variant=%s ph=%s",
+                paths.pdb_id,
+                variant_label,
+                active_ph_label,
+            )
+    except Exception:
+        logger.warning(
+            "[run-manifest.pocket_detection.error] pdb=%s variant=%s ph=%s",
+            paths.pdb_id,
+            variant_label,
+            active_ph_label,
+            exc_info=True,
+        )
 
     metals_added = 0
     cofactors_added = 0

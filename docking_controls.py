@@ -826,10 +826,10 @@ def detect_pocket(cleaned_pdb: str,
                   logger: logging.Logger) -> Tuple[
     Optional[Tuple[float,float,float]],
     Optional[Tuple[float,float,float]],
-    str  # source ("control" | "p2rank" | "none")
+    str  # source ("control" | "ligand_top" | "p2rank" | "activesite" | "none")
 ]:
     """
-    Prefer control ligands for docking center/box. If none, fall back to P2Rank.
+    Prefer control ligands for docking center/box. If none, fall back to the active-site module.
     """
     def _his_counts_within(pdb_path: str, center_xyz: tuple[float,float,float], r: float = 6.0) -> tuple[int,int,int]:
         HID = HIE = HIP = 0
@@ -889,7 +889,7 @@ def detect_pocket(cleaned_pdb: str,
                 dz = centers[i][2] - centers[j][2]
                 d = float((dx*dx + dy*dy + dz*dz) ** 0.5)
                 if d > dmax: dmax = d
-    policy = "first" if ctrl_files else "p2rank"
+    policy = "first" if ctrl_files else "activesite"
     logger.info("[control-centers] n=%d max?=%.2f A policy=%s", len(ctrl_files), dmax, policy)
 
     # Back-compat (read-only): if none found, check legacy sibling <PDB>_NOLIG/ligands_raw
@@ -920,16 +920,27 @@ def detect_pocket(cleaned_pdb: str,
             logger.info("[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d", hid, hie, hip, 0)
             return ctrl_center, box_size, "control"
 
-    # 2) Fallback to P2Rank
-    center, box_size = detect_active_site(cleaned_pdb)
+    # 2) Fallback to active-site module (ligand-based or P2Rank)
+    center = box_size = None
+    src = None
+
+    try:
+        center, box_size, src = detect_active_site(cleaned_pdb)
+    except Exception as exc:
+        logger.error("Active-site detection raised exception: %s", exc)
+        center = box_size = None
+        src = None
+
     if center:
         box_size = tuple(min(28.0, float(s)) for s in box_size)
-        logger.info(f"[P2Rank] Using P2Rank center {center} with box {box_size}")
+        source = src or "activesite"
+        logger.info("[active-site] Using center %s with box %s source=%s",
+                    center, box_size, source)
         hid, hie, hip = _his_counts_within(cleaned_pdb, center, r=6.0)
         logger.info("[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d", hid, hie, hip, 0)
-        return center, box_size, "p2rank"
+        return center, box_size, source
     else:
-        logger.error("Active-site detection failed (no controls, P2Rank returned None).")
+        logger.error("Active-site detection failed (no controls, active-site returned None).")
         return None, None, "none"
 
 

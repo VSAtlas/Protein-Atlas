@@ -35,3 +35,6 @@ input_ligands/
 prepped_ligands/
 ligands_mol2/
 logs/
+
+# Run manifests
+/manifests/

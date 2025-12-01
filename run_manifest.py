@@ -52,6 +52,8 @@ def _default_stage_entry() -> Dict[str, Any]:
         "status": "pending",
         "error": None,
         "timing": {"started_at": None, "finished_at": None, "wall_time_sec": None},
+        # Arbitrary stage-specific metadata (e.g., pocket detection info)
+        "details": {},
     }
 
 
@@ -70,7 +72,7 @@ def _default_protein_entry() -> Dict[str, Any]:
 
 def _refresh_summary(manifest: MutableMapping[str, Any]) -> None:
     proteins = manifest.get("proteins")
-    if not isinstance(proteins, Mapping):
+    if not isinstance(proteins, MutableMapping):
         manifest["summary"] = {
             "total_proteins_scheduled": 0,
             "total_proteins_completed": 0,
@@ -78,51 +80,125 @@ def _refresh_summary(manifest: MutableMapping[str, Any]) -> None:
         }
         return
 
-    # Best-effort dedupe: if any pH-tagged entry exists for (pdb,variant),
-    # drop the corresponding |base entry so summaries align with pH ensembles.
     try:
+        # Phase A: scan entries and classify base vs pH-tagged
         ph_pairs: set[tuple[str, str]] = set()
-        for key in proteins:
-            parts = str(key).split("|", 2)
+        base_entries: dict[tuple[str, str], str] = {}
+        for key, entry in proteins.items():
+            raw_key = str(key)
+            parts = raw_key.split("|", 2)
             if len(parts) != 3:
                 continue
             pdb_part, variant_part, ph_token = parts
             if ph_token and ph_token != "base":
                 ph_pairs.add((pdb_part, variant_part))
+            elif ph_token == "base":
+                base_entries[(pdb_part, variant_part)] = raw_key
 
-        base_keys_to_drop: list[str] = []
-        for k, _ in list(proteins.items()):
-            parts = str(k).split("|", 2)
-            if len(parts) != 3:
+        # Phase B: promote pocket-detection details from base to pH entries
+        for pdb_part, variant_part in ph_pairs:
+            base_key = base_entries.get((pdb_part, variant_part))
+            if not base_key:
                 continue
-            pdb_part, variant_part, ph_token = parts
-            if ph_token == "base" and (pdb_part, variant_part) in ph_pairs:
-                base_keys_to_drop.append(k)
+
+            base_entry = proteins.get(base_key)
+            if not isinstance(base_entry, MutableMapping):
+                continue
+
+            base_stages = base_entry.get("stages") or {}
+            if not isinstance(base_stages, MutableMapping):
+                base_stages = {}
+
+            base_pocket = base_stages.get("pocket_detection") or {}
+            if not isinstance(base_pocket, MutableMapping):
+                base_pocket = {}
+            base_details = base_pocket.get("details") or {}
+            if not isinstance(base_details, MutableMapping) or not base_details:
+                continue
+
+            promoted_ph_tags: list[str] = []
+            for key2, entry2 in proteins.items():
+                raw_key2 = str(key2)
+                parts2 = raw_key2.split("|", 2)
+                if len(parts2) != 3:
+                    continue
+                pdb2, var2, ph2 = parts2
+                if (pdb2, var2) != (pdb_part, variant_part):
+                    continue
+                if ph2 == "base":
+                    continue
+
+                if not isinstance(entry2, MutableMapping):
+                    continue
+
+                stages2 = entry2.setdefault("stages", {})
+                if not isinstance(stages2, MutableMapping):
+                    stages2 = {}
+                    entry2["stages"] = stages2
+
+                pocket2 = stages2.get("pocket_detection")
+                if not isinstance(pocket2, MutableMapping):
+                    pocket2 = _default_stage_entry()
+                    stages2["pocket_detection"] = pocket2
+
+                details2 = pocket2.get("details")
+                if not isinstance(details2, MutableMapping):
+                    details2 = {}
+                pocket2["details"] = details2
+
+                for dk, dv in base_details.items():
+                    details2.setdefault(dk, dv)
+
+                if base_pocket.get("status") == "completed":
+                    pocket2.setdefault("status", "completed")
+                    pocket2.setdefault("error", None)
+
+                promoted_ph_tags.append(ph2)
+
+            if promoted_ph_tags:
+                try:
+                    logging.debug(
+                        "[run-manifest.pocket_detection.promote] pdb=%s variant=%s ph_tags=%s",
+                        pdb_part,
+                        variant_part,
+                        sorted(set(promoted_ph_tags)),
+                    )
+                except Exception:
+                    logging.warning(
+                        "[run-manifest] Failed to log pocket_detection promotion pdb=%s variant=%s",
+                        pdb_part,
+                        variant_part,
+                    )
+
+        # Phase C: drop base entries when pH-tagged entries exist
+        base_keys_to_drop: list[str] = []
+        for pdb_part, variant_part in ph_pairs:
+            base_key = base_entries.get((pdb_part, variant_part))
+            if base_key:
+                base_keys_to_drop.append(base_key)
 
         for k in base_keys_to_drop:
             proteins.pop(k, None)
+
+        total = len(proteins)
+        completed = 0
+        failed = 0
+        for entry in proteins.values():
+            status = entry.get("status") if isinstance(entry, Mapping) else None
+            if status == "completed":
+                completed += 1
+            elif status == "failed":
+                failed += 1
+
+        manifest["summary"] = {
+            "total_proteins_scheduled": total,
+            "total_proteins_completed": completed,
+            "total_proteins_failed": failed,
+        }
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to dedupe proteins for summary", exc_info=True
+            "[run-manifest] Failed to refresh summary (promotion + dedupe)", exc_info=True
         )
-
-    total = len(proteins)
-    completed = 0
-    failed = 0
-    for entry in proteins.values():
-        status = None
-        if isinstance(entry, Mapping):
-            status = entry.get("status")
-        if status == "completed":
-            completed += 1
-        elif status == "failed":
-            failed += 1
-
-    manifest["summary"] = {
-        "total_proteins_scheduled": total,
-        "total_proteins_completed": completed,
-        "total_proteins_failed": failed,
-    }
 
 
 def _load_manifest(manifest_path: Path) -> Optional[Dict[str, Any]]:
@@ -357,14 +433,15 @@ def _ensure_protein(
         for stage_key in STAGE_KEYS:
             stage_entry = stages.get(stage_key)
             if not isinstance(stage_entry, MutableMapping):
-                stages[stage_key] = _default_stage_entry()
-                continue
+                stage_entry = _default_stage_entry()
+                stages[stage_key] = stage_entry
             stage_entry.setdefault("status", "pending")
             stage_entry.setdefault("error", None)
             stage_entry.setdefault(
                 "timing",
                 {"started_at": None, "finished_at": None, "wall_time_sec": None},
             )
+            stage_entry.setdefault("details", {})
 
     entry["pdb_id"] = str(pdb_id).upper()
     entry["variant"] = (variant_label or "legacy").strip().upper() or "LEGACY"
@@ -484,6 +561,25 @@ def _extract_error_from_fail_log(fail_log_path: Optional[Path]) -> str:
         return "<unknown error>"
 
 
+def _coerce_vec3(value: Any) -> Optional[list[float]]:
+    """
+    Best-effort: normalize a 3-vector (center/box) into a JSON/YAML-friendly
+    [x, y, z] list of floats. Returns None on failure.
+    """
+    if value is None:
+        return None
+    try:
+        seq = list(value)
+    except Exception:
+        return None
+    if len(seq) < 3:
+        return None
+    try:
+        return [float(seq[0]), float(seq[1]), float(seq[2])]
+    except Exception:
+        return None
+
+
 def update_manifest_for_protein_failure(
     cfg: Mapping[str, Any],
     run_id: str,
@@ -514,6 +610,128 @@ def update_manifest_for_protein_failure(
             variant_label,
             ph_tag if ph_tag is not None else "base",
             run_id,
+            exc_info=True,
+        )
+
+
+def update_manifest_for_pocket_detection(
+    cfg: Mapping[str, Any],
+    run_id: str,
+    pdb_id: str,
+    variant_label: Optional[str],
+    *,
+    ph_tag: Optional[str],
+    method: Optional[str],
+    center: Optional[Any],
+    box_size: Optional[Any],
+) -> None:
+    """
+    Record pocket-detection method + geometry under the pocket_detection stage
+    for a given (pdb, variant, pH) context.
+
+    Best-effort only: any error logs a WARNING and is otherwise ignored.
+    """
+    ph_label = ph_tag if ph_tag is not None else "base"
+    try:
+        if not run_id:
+            logging.debug(
+                "[run-manifest.pocket_detection.skip] no run_id pdb=%s variant=%s ph=%s",
+                pdb_id,
+                variant_label,
+                ph_label,
+            )
+            return
+
+        logging.debug(
+            "[run-manifest.pocket_detection.request] run_id=%s pdb=%s variant=%s ph=%s method=%s center=%r box=%r",
+            run_id,
+            pdb_id,
+            variant_label,
+            ph_label,
+            method,
+            center,
+            box_size,
+        )
+
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.pocket_detection.skip] manifest missing run_id=%s path=%s pdb=%s variant=%s ph=%s",
+                run_id,
+                manifest_path,
+                pdb_id,
+                variant_label,
+                ph_label,
+            )
+            return
+
+        entry = _ensure_protein(manifest, pdb_id, variant_label, ph_tag)
+
+        stages = entry.setdefault("stages", {})
+        pocket_stage = stages.get("pocket_detection")
+        if not isinstance(pocket_stage, MutableMapping):
+            pocket_stage = _default_stage_entry()
+            stages["pocket_detection"] = pocket_stage
+
+        details = pocket_stage.get("details")
+        if not isinstance(details, MutableMapping):
+            details = {}
+        pocket_stage["details"] = details
+
+        existing_method = details.get("method")
+        method_raw = (method or "").strip()
+        if not method_raw and existing_method is not None:
+            try:
+                method_raw = str(existing_method).strip()
+            except Exception:
+                method_raw = ""
+        method_str = method_raw or None
+        center_vec = _coerce_vec3(center)
+        box_vec = _coerce_vec3(box_size)
+
+        if method_str is not None:
+            details["method"] = method_str
+        if center_vec is not None:
+            details["center"] = [round(float(x), 3) for x in center_vec]
+        if box_vec is not None:
+            details["box_size"] = [round(float(x), 1) for x in box_vec]
+
+        if method_str and center_vec and box_vec:
+            pocket_stage.setdefault("status", "completed")
+            pocket_stage.setdefault("error", None)
+            logging.info(
+                "[run-manifest.pocket_detection.ok] run_id=%s pdb=%s variant=%s ph=%s method=%s center=%s box=%s",
+                run_id,
+                pdb_id,
+                variant_label,
+                ph_label,
+                method_str,
+                details.get("center"),
+                details.get("box_size"),
+            )
+        else:
+            logging.info(
+                "[run-manifest.pocket_detection.partial] run_id=%s pdb=%s variant=%s ph=%s method=%s center=%r box=%r",
+                run_id,
+                pdb_id,
+                variant_label,
+                ph_label,
+                method_str,
+                center,
+                box_size,
+            )
+
+        _refresh_summary(manifest)
+        _write_manifest(manifest_path, manifest)
+
+    except Exception:
+        logging.warning(
+            "[run-manifest.pocket_detection.error] run_id=%s pdb=%s variant=%s ph=%s",
+            run_id,
+            pdb_id,
+            variant_label,
+            ph_label,
             exc_info=True,
         )
 

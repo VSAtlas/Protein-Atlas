@@ -7,6 +7,7 @@ import hashlib
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
 from path_router import make_paths, expand_variants
+from run_manifest import update_manifest_for_pocket_detection
 
 logger = logging.getLogger(__name__)
 
@@ -1583,7 +1584,7 @@ def main(pdb_file):
 
                 ligand_output_dir = str(ligands_dir)
                 os.makedirs(ligand_output_dir, exist_ok=True)
-                ligand_path = os.path.join(ligand_output_dir, f"{pdb_id}_top_ligand.pdb")
+                ligand_path = os.path.join(ligand_output_dir, f"{pdb_id}.pdb")
                 with open(ligand_path, 'w') as f:
                     f.writelines(ligands[top_ligand_key])
                 logging.info(f"Top ligand saved to {ligand_path}")
@@ -1633,14 +1634,50 @@ def main(pdb_file):
                 center,
                 box_size,
             )
-            return center, box_size
+            try:
+                run_id = config.get("RUN_ID")
+                logging.debug(
+                    "[run-manifest.pocket_detection.call] run_id=%s pdb=%s variant=%s ph=%s method=%s center=%r box=%r",
+                    run_id,
+                    pdb_id,
+                    variant,
+                    None,
+                    source,
+                    center,
+                    box_size,
+                )
+                if run_id:
+                    update_manifest_for_pocket_detection(
+                        config,
+                        str(run_id),
+                        pdb_id,
+                        variant,
+                        ph_tag=None,
+                        method=source,
+                        center=center,
+                        box_size=box_size,
+                    )
+                else:
+                    logging.debug(
+                        "[run-manifest.pocket_detection.skip] no RUN_ID for pdb=%s variant=%s ph=%s",
+                        pdb_id,
+                        variant,
+                        None,
+                    )
+            except Exception as exc:
+                logging.warning(
+                    "[run-manifest.skip] active-site pdb=%s err=%s",
+                    pdb_id,
+                    exc,
+                )
+            return center, box_size, source
         else:
             logging.warning(f"Box not determined for {pdb_cleaned}")
             logger.error(
                 "[activesite.main] failure center=None box=None pdb_cleaned=%s",
                 pdb_cleaned,
             )
-            return None, None
+            return None, None, source
 
     finally:
         try:
