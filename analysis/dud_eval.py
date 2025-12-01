@@ -457,6 +457,12 @@ LIGFILE_CANDIDATES = [
     "pose_path","output_ligand","output_ligand_path","file","filepath","filename",
     "pdbqt_path","pdbqt","out_path"
 ]
+# We now support both DUD-specific and legacy score CSV names.
+# Prefer the DUD-prefixed name when both exist.
+CSV_BASENAMES = (
+    "dud_docking_score_long.csv",  # new DUD runs (preferred)
+    "docking_score_long.csv",      # legacy name (fallback)
+)
 
 def guess_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     lower = {c.lower(): c for c in df.columns}
@@ -1292,9 +1298,65 @@ def main():
                 return True
             return False
 
+        def _record_basenames(base_path: Path) -> None:
+            """
+            Try all CSV_BASENAMES at base_path, e.g. base_path / name,
+            in order. The first existing file wins via _record().
+            """
+            nonlocal picked
+            for basename in CSV_BASENAMES:
+                if picked is not None:
+                    break
+                candidate = base_path / basename
+                _record(candidate)
+
+        def _scan_tree(root: Path) -> None:
+            """
+            Look for CSV_BASENAMES starting at root.
+
+            Search order:
+            1) root/<basename> for each basename in CSV_BASENAMES.
+            2) root/<variant>/<basename> (variant is any subdir name).
+            3) root/<variant>/<pH>/<basename> (pH is any sub-subdir name).
+            We stop as soon as _record() finds a hit.
+            """
+            nonlocal picked
+
+            # 1) root/<basename>
+            if picked is None:
+                _record_basenames(root)
+
+            # 2) root/<variant>/<basename> and 3) root/<variant>/<pH>/<basename>
+            if picked is not None:
+                return
+
+            if not root.is_dir():
+                return
+
+            for variant_dir in sorted(root.iterdir()):
+                if picked is not None:
+                    break
+                if not variant_dir.is_dir():
+                    continue
+
+                # 2) docked/<PDB>/<VARIANT>/<basename>
+                _record_basenames(variant_dir)
+
+                if picked is not None:
+                    break
+
+                # 3) docked/<PDB>/<VARIANT>/<pH>/<basename>
+                for ph_dir in sorted(variant_dir.iterdir()):
+                    if picked is not None:
+                        break
+                    if not ph_dir.is_dir():
+                        continue
+                    _record_basenames(ph_dir)
+
         if not cfg:
-            candidate = fallback_dir / "docking_score_long.csv"
-            _record(candidate)
+            _record_basenames(fallback_dir)
+            if picked is None:
+                _scan_tree(fallback_dir)
         else:
             try:
                 # >>> PATHS INIT START
@@ -1305,8 +1367,9 @@ def main():
                 # >>> PATHS INIT END
             except Exception as exc:
                 dbg("WARN", "resolve", f"pdb={pdb_id} router_err={exc}")
-                candidate = fallback_dir / "docking_score_long.csv"
-                _record(candidate)
+                _record_basenames(fallback_dir)
+                if picked is None:
+                    _scan_tree(fallback_dir)
             else:
                 # >>> DOCKED INPUT PATHS PATCH START
                 docked_root_cfg = paths.docked_pdb_root()
@@ -1315,23 +1378,39 @@ def main():
                 # >>> DOCKED INPUT PATHS PATCH END
 
                 if docked_root_cfg.exists():
-                    if _record(long_csv):
-                        pass
-                    else:
+                    # 1) Try path_router's long_csv location, but with both basenames
+                    for basename in CSV_BASENAMES:
+                        if picked is not None:
+                            break
+                        candidate = long_csv.with_name(basename)
+                        _record(candidate)
+
+                    # 2) If still nothing, try variant roots (and their pH subdirs)
+                    if picked is None:
                         for variant in variants:
                             variant_root = paths.docked_variant_root(variant)
-                            candidate = variant_root / "docking_score_long.csv"
-                            if _record(candidate):
+                            _record_basenames(variant_root)
+                            if picked is not None:
                                 break
+                            if variant_root.is_dir():
+                                for ph_dir in sorted(variant_root.iterdir()):
+                                    if picked is not None:
+                                        break
+                                    if ph_dir.is_dir():
+                                        _record_basenames(ph_dir)
+
+                    # 3) Final fallback: CLI fallback_dir (includes nested scan)
                     if picked is None:
-                        candidate = fallback_dir / "docking_score_long.csv"
-                        _record(candidate)
+                        _scan_tree(fallback_dir)
+
                     # Touch summary path to exercise router (no fallback to summary file for eval)
-                    summary_csv.exists()
+                    try:
+                        summary_csv.exists()
+                    except Exception:
+                        pass
                 else:
                     dbg("WARN", "resolve", f"pdb={pdb_id} docked_root_missing root={docked_root_cfg}")
-                    candidate = fallback_dir / "docking_score_long.csv"
-                    _record(candidate)
+                    _record_basenames(fallback_dir)
 
         if picked is not None:
             dbg("DEBUG", "resolve", f"pdb={pdb_id} tried={len(candidates_tried)} candidates={candidates_tried}")
@@ -1349,11 +1428,13 @@ def main():
     # discover targets
     targets: List[Tuple[str, Path]] = []
 
-    if (docked_root / "docking_score_long.csv").exists():
-        csv_path = _resolve_docking_csv(docked_root.name, docked_root)
-        if csv_path is not None:
-            targets.append((docked_root.name, csv_path))
+    # Single-target mode: if docked_root itself looks like a PDB-specific root
+    # (i.e. _resolve_docking_csv finds something under it), treat it as a single target.
+    csv_path = _resolve_docking_csv(docked_root.name, docked_root)
+    if csv_path is not None:
+        targets.append((docked_root.name, csv_path))
     elif docked_root.is_dir():
+        # Multi-target mode: docked_root contains subdirectories per PDB_ID
         for sub in sorted(docked_root.iterdir()):
             if not sub.is_dir():
                 continue
@@ -1362,7 +1443,7 @@ def main():
                 targets.append((sub.name, csv_path))
 
     if not targets:
-        dbg("ERROR", "discover", f"no docking_score_long.csv under {docked_root}")
+        dbg("ERROR", "discover", f"no docking_score_long.csv / dud_docking_score_long.csv under {docked_root}")
         raise SystemExit(2)
 
     dbg("INFO", "discover", f"targets={len(targets)} root={docked_root}")

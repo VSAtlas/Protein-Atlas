@@ -1,33 +1,22 @@
 Control Log Scan Summary
-n_targets_total: 23
-n_logs_scanned: 23
+n_targets_total: 12
+n_logs_scanned: 12
 n_logs_missing: 0
-scanned_ok: 1BN1,1Q5K,1QCF,1T46,2GQG,2HYY,2WGJ,3CS9,3DKF,3ERT,3G0E,3M2W,3OG7,3SFF,3WZD,3WZE,4AG8,4ASD,4GRL,4MCH,4XV2,5MO4,6GQ6
+scanned_ok: 1BCD,1BN1,1MV9,1SJ0,1T46,1XL2,2AA2,2HV5,2I78,2OF2,2OWB,3LAN
 missing_logs: (none)
-totals: redock_lines=27 control_centers_found=20 report_rows=27
+totals: redock_lines=0 control_centers_found=0 report_rows=0
 
 Per-target counts
 pdb_id  centers_found  redock_lines  report_rows
-  1BN1              1             1            1
-  1Q5K              1             2            2
-  1QCF              1             1            1
-  1T46              1             1            1
-  2GQG              1             2            2
-  2HYY              1             4            4
-  2WGJ              1             1            1
-  3CS9              1             4            4
-  3DKF              1             1            1
-  3ERT              1             1            1
-  3G0E              0             0            0
-  3M2W              1             1            1
-  3OG7              1             0            0
-  3SFF              1             1            1
-  3WZD              1             1            1
-  3WZE              1             1            1
-  4AG8              1             0            0
-  4ASD              0             0            0
-  4GRL              1             0            0
-  4MCH              1             1            1
-  4XV2              1             2            2
-  5MO4              1             2            2
-  6GQ6              0             0            0
+  1BCD              0             0            0
+  1BN1              0             0            0
+  1MV9              0             0            0
+  1SJ0              0             0            0
+  1T46              0             0            0
+  1XL2              0             0            0
+  2AA2              0             0            0
+  2HV5              0             0            0
+  2I78              0             0            0
+  2OF2              0             0            0
+  2OWB              0             0            0
+  3LAN              0             0            0

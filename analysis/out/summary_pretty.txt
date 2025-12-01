@@ -1,9 +1,11 @@
-         run_id                                 target_name library_name pdb_id      N n_actives  actives_fraction ROC_AUC PR_AUC logAUC logAUC_adj BEDROC_alpha_20  EF@1%  EF@2% EF@5% EF@10%
-20251114_121332 PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   2GQG 11,212       296          0.026400   0.749  0.082  0.301      0.156           0.259  4.058  5.242 4.659  3.987
-20251114_121332 PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   2HYY 11,212       296          0.026400   0.702  0.248  0.391      0.247           0.402 21.983 14.712 7.022  4.325
-20251114_121332           HEPATOCYTE GROWTH FACTOR RECEPTOR          met   2WGJ  2,812       247          0.087838   0.773  0.267  0.319      0.174           0.367  6.505  5.082 3.633  2.998
-20251114_121332 PROTO-ONCOGENE TYROSINE-PROTEIN KINASE ABL1         abl1   3CS9 11,212       296          0.026400   0.677  0.199  0.351      0.206           0.358 17.248 12.852 6.617  3.717
-20251114_121332           PROTEIN (ESTROGEN RECEPTOR ALPHA)         esr1   3ERT 12,544       627          0.049984   0.757  0.163  0.306      0.161           0.276  8.963  6.217 3.701  2.872
-20251114_121332       MAST/STEM CELL GROWTH FACTOR RECEPTOR          kit   3G0E 10,861       252          0.023202   0.765  0.080  0.301      0.156           0.211  7.908  4.568 3.175  3.175
-20251114_121332                   AKAP9-BRAF FUSION PROTEIN         braf   3OG7  9,469       251          0.026508   0.833  0.207  0.422      0.277           0.404 19.061 12.176 7.019  4.900
-20251114_121332       SERINE/THREONINE-PROTEIN KINASE B-RAF         braf   4XV2  9,506       254          0.026720   0.820  0.149  0.380      0.236           0.358 14.576  9.652 5.988  4.880
+Apo
+variant    pH          run_id                                             target_name library_name pdb_id      N n_actives  actives_fraction ROC_AUC PR_AUC logAUC logAUC_adj BEDROC_alpha_20  EF@1%  EF@2% EF@5% EF@10%
+    APO pH7_0 20251128_214459                                   CARBONIC ANHYDRASE II                1BCD 32,545       835          0.025657   0.642  0.045  0.221      0.076           0.138  3.118  3.173 2.276  1.952
+    APO pH7_0 20251128_214459 RXR RETINOID X RECEPTOR, NUCLEAR RECEPTOR COACTIVATOR 2                1MV9  7,869       162          0.020587   0.823  0.383  0.529      0.385           0.538 30.128 20.110 9.641  6.172
+    APO pH7_2 20251128_214459                                       ESTROGEN RECEPTOR         esr1   1SJ0 33,991     1,255          0.036922   0.761  0.196  0.349      0.204           0.338 11.073  8.603 5.194  3.968
+    APO pH6_5 20251128_214459                                    PROTEASE RETROPEPSIN                1XL2 37,673     1,395          0.037029   0.715  0.075  0.249      0.104           0.170  2.006  2.439 2.537  2.416
+    APO pH7_5 20251128_214459                              MINERALOCORTICOID RECEPTOR                2AA2  5,433       193          0.035524   0.548  0.126  0.229      0.085           0.197  8.862  4.907 2.484  2.281
+    APO pH7_0 20251128_214459                                        ALDOSE REDUCTASE                2HV5  9,356       220          0.023514   0.681  0.057  0.256      0.111           0.182  5.429  4.321 2.999  2.635
+    APO pH7_0 20251128_214459                                 DIPEPTIDYL PEPTIDASE IV                2I78 42,452     1,079          0.025417   0.579  0.031  0.173      0.028           0.073  1.111  1.020 0.982  1.140
+    APO pH8_5 20251128_214459              PROTO-ONCOGENE TYROSINE-PROTEIN KINASE LCK                2OF2 28,539       683          0.023932   0.803  0.121  0.353      0.208           0.304  9.823  7.464 5.271  4.422
+    APO pH7_5 20251128_214459                    SERINE/THREONINE-PROTEIN KINASE PLK1                2OWB  7,034       155          0.022036   0.571  0.032  0.191      0.046           0.121  4.538  3.540 2.063  1.743
