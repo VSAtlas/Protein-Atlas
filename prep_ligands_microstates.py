@@ -2,17 +2,80 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Collection, Dict, List, Optional, Set
+from typing import Any, Collection, Dict, List, Optional, Set, Union
 
 from path_router import make_paths
 from rdkit import Chem
 
 logger = logging.getLogger(__name__)
+
+
+def compute_microstate_id_from_pdbqt(pdbqt_path: Union[str, Path]) -> str:
+    """
+    Compute a microstate identifier directly from a prepared PDBQT file.
+
+    We derive the ID from the ATOM/HETATM records only, so it depends on:
+      - Atom identity / order
+      - Atom types and partial charges
+      - Bonding / connectivity as encoded in the atom records
+
+    and ignores comments, REMARKs, and ROOT/ENDROOT blocks.
+
+    Any change in protonation, tautomer, formal charge, or atom typing should
+    change the ID. Bitwise-identical PDBQTs (e.g., identical microstate at
+    different pH) will share an ID.
+    """
+    path = Path(pdbqt_path)
+    try:
+        with path.open("rt", encoding="utf-8", errors="replace") as fh:
+            atom_lines: list[str] = []
+            for line in fh:
+                if line.startswith(("ATOM", "HETATM")):
+                    atom_lines.append(line.rstrip("\r\n"))
+    except Exception as e:
+        logger.warning(
+            "[microstate] compute_microstate_id_from_pdbqt_failed path=%s err=%s",
+            path, e,
+        )
+        return ""
+
+    if not atom_lines:
+        # Fallback: hash entire file if no ATOM/HETATM lines are present
+        try:
+            payload = path.read_bytes()
+        except Exception as e:
+            logger.warning(
+                "[microstate] compute_microstate_id_from_pdbqt_readbytes_failed path=%s err=%s",
+                path, e,
+            )
+            return ""
+    else:
+        payload = ("\n".join(atom_lines)).encode("utf-8")
+
+    h = hashlib.sha1(payload).hexdigest()
+    microstate_id = h[:16]
+    logger.debug(
+        "[microstate] pdbqt_id path=%s id=%s n_atom_lines=%d",
+        path.name, microstate_id, len(atom_lines),
+    )
+    return microstate_id
+
+
+def compute_microstate_id(pdbqt_path: Union[str, Path]) -> str:
+    """
+    Backwards-compatible wrapper used by prep_ligands_bulk.
+
+    Note: The signature has changed: we now accept a PDBQT path instead of an
+    RDKit Mol and derive the microstate ID from the PDBQT content.
+    """
+    return compute_microstate_id_from_pdbqt(pdbqt_path)
+
 
 _ONLY_TOKEN_RE = re.compile(r"[0-9]{1,7}")
 

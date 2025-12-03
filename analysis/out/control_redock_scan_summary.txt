@@ -1,22 +1,27 @@
 Control Log Scan Summary
-n_targets_total: 12
-n_logs_scanned: 12
+n_targets_total: 17
+n_logs_scanned: 17
 n_logs_missing: 0
-scanned_ok: 1BCD,1BN1,1MV9,1SJ0,1T46,1XL2,2AA2,2HV5,2I78,2OF2,2OWB,3LAN
+scanned_ok: 1BCD,1H00,1L2S,1LI4,1MV9,1SJ0,1SQT,1XL2,2AA2,2AM9,2CNK,2HV5,2I78,2OF2,2OJG,2OWB,TEST
 missing_logs: (none)
-totals: redock_lines=0 control_centers_found=0 report_rows=0
+totals: redock_lines=9 control_centers_found=12 report_rows=9
 
 Per-target counts
 pdb_id  centers_found  redock_lines  report_rows
-  1BCD              0             0            0
-  1BN1              0             0            0
-  1MV9              0             0            0
-  1SJ0              0             0            0
-  1T46              0             0            0
-  1XL2              0             0            0
+  1BCD              1             1            1
+  1H00              1             0            0
+  1L2S              1             0            0
+  1LI4              1             1            1
+  1MV9              1             1            1
+  1SJ0              1             1            1
+  1SQT              1             0            0
+  1XL2              1             1            1
   2AA2              0             0            0
+  2AM9              1             4            4
+  2CNK              1             0            0
   2HV5              0             0            0
   2I78              0             0            0
   2OF2              0             0            0
+  2OJG              1             0            0
   2OWB              0             0            0
-  3LAN              0             0            0
+  TEST              1             0            0

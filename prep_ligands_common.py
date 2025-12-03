@@ -1515,7 +1515,7 @@ def _prepare_one(
             logging.warning("[ligprep] ADT wrote fewer atoms (%d -> %d); invoking OBabel MOL2->PDBQT fallback",
                             _in_atoms, _out_atoms)
             if obabel_exe_short:
-                ok_ob = _pdbqt_from_mol2_via_obabel(Path(proto_mol2), pdbqt_path, obabel_exe_short)
+                ok_ob = _pdbqt_from_mol2_via_obabel(mol2_for_mgl, pdbqt_path, obabel_exe_short)
                 logging.info("[ligprep] ADT altpath (via OBabel) OK=%s", ok_ob)
                 writer_final = "obabel"
                 rescue_used = True

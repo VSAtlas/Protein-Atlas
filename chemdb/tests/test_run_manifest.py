@@ -1,3 +1,5 @@
+"""Tests for run_manifest._refresh_summary variant/pH dedup logic."""
+
 from __future__ import annotations
 
 from run_manifest import _refresh_summary

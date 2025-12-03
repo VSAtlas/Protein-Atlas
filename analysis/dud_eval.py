@@ -1428,19 +1428,33 @@ def main():
     # discover targets
     targets: List[Tuple[str, Path]] = []
 
-    # Single-target mode: if docked_root itself looks like a PDB-specific root
-    # (i.e. _resolve_docking_csv finds something under it), treat it as a single target.
-    csv_path = _resolve_docking_csv(docked_root.name, docked_root)
-    if csv_path is not None:
-        targets.append((docked_root.name, csv_path))
-    elif docked_root.is_dir():
-        # Multi-target mode: docked_root contains subdirectories per PDB_ID
+    if docked_root.is_dir():
+        # Multi-target first: treat docked_root as parent of many PDBs
         for sub in sorted(docked_root.iterdir()):
             if not sub.is_dir():
                 continue
-            csv_path = _resolve_docking_csv(sub.name, sub)
+            pdb_id = sub.name
+
+            # Option B: skip stale docked runs with no corresponding input PDB
+            pdb_path = Path("input_pdbs") / f"{pdb_id}.pdb"
+            if not pdb_path.exists():
+                dbg("WARN", "discover.skip", f"pdb={pdb_id} reason=no_input_pdb path={pdb_path}")
+                continue
+
+            csv_path = _resolve_docking_csv(pdb_id, sub)
             if csv_path is not None:
-                targets.append((sub.name, csv_path))
+                targets.append((pdb_id, csv_path))
+
+        # If we didn't find anything under subdirectories, fall back to single-target mode
+        if not targets:
+            csv_path = _resolve_docking_csv(docked_root.name, docked_root)
+            if csv_path is not None:
+                targets.append((docked_root.name, csv_path))
+    else:
+        # Non-directory path: treat as a single PDB-specific root
+        csv_path = _resolve_docking_csv(docked_root.name, docked_root)
+        if csv_path is not None:
+            targets.append((docked_root.name, csv_path))
 
     if not targets:
         dbg("ERROR", "discover", f"no docking_score_long.csv / dud_docking_score_long.csv under {docked_root}")
