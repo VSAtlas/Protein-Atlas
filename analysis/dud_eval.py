@@ -97,6 +97,23 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from path_router import make_paths, expand_variants
+from library_index import LibraryIndex
+
+_LIB_INDEX_CACHE: Dict[Tuple[str, str], LibraryIndex] = {}
+
+
+def _get_library_index(root: Path, manifest_filename: str) -> LibraryIndex:
+    """
+    Return a cached LibraryIndex for a given prepped-ligands root + manifest filename.
+    This avoids re-reading the same manifest for every target.
+    """
+    key = (str(root.resolve()), manifest_filename)
+    idx = _LIB_INDEX_CACHE.get(key)
+    if idx is None:
+        idx = LibraryIndex(manifest_filename=manifest_filename)
+        idx.load([root])
+        _LIB_INDEX_CACHE[key] = idx
+    return idx
 
 
 
@@ -260,6 +277,92 @@ def _read_pdb_header_lines(pdb_path: Path) -> List[str]:
     return lines
 
 
+def _infer_library_name_via_manifest(
+    target_id: str,
+    ligand_basenames: Set[str],
+    roots: List[Path],
+    cfg: Dict,
+) -> str:
+    """
+    Fast path: infer library name using a pre-built manifest under prepped_ligands.
+
+    Strategy:
+      - For each existing root that has a manifest file (default: _manifest.json),
+        load a LibraryIndex for that root.
+      - For a bounded sample of ligand basenames, look up each basename in the
+        manifest via LibraryIndex.lookup_filename.
+      - Each hit yields a relative path like "abl1/ABL1_active_10.pdbqt";
+        treat the first path component ("abl1") as the library name and count votes.
+      - If there is a unique best library with >0 votes, return it.
+      - Otherwise, return "" so the caller can fall back to the legacy scan.
+    """
+    if not ligand_basenames:
+        return ""
+
+    manifest_filename = cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
+    if not manifest_filename:
+        manifest_filename = "_manifest.json"
+    manifest_filename = str(manifest_filename)
+
+    sample_names = sorted(ligand_basenames)
+    max_sample = 200
+    if len(sample_names) > max_sample:
+        sample_names = sample_names[:max_sample]
+
+    overall_counts: Dict[str, int] = {}
+
+    for root in roots:
+        if not root or not root.exists():
+            continue
+        manifest_path = root / manifest_filename
+        if not manifest_path.exists():
+            dbg("DEBUG", "library",
+                f"pdb={target_id} manifest_missing={manifest_path}")
+            continue
+
+        try:
+            idx = _get_library_index(root, manifest_filename)
+        except Exception as exc:
+            dbg("WARN", "library",
+                f"pdb={target_id} manifest_load_failed root={root} err={exc}")
+            continue
+
+        for name in sample_names:
+            base = os.path.basename(name)
+            if not base:
+                continue
+            hit = idx.lookup_filename(base, roots=[root])
+            if not hit:
+                continue
+            try:
+                rel = hit.relative_to(root)
+            except Exception:
+                rel = hit
+            parts = rel.as_posix().split("/")
+            if not parts:
+                continue
+            lib_name = parts[0].strip()
+            if not lib_name:
+                continue
+            overall_counts[lib_name] = overall_counts.get(lib_name, 0) + 1
+
+    if not overall_counts:
+        return ""
+
+    best_lib, best_count = max(overall_counts.items(), key=lambda kv: (kv[1], kv[0]))
+    n_best = sum(1 for c in overall_counts.values() if c == best_count)
+    if best_count <= 0 or n_best != 1:
+        dbg("WARN", "library",
+            f"pdb={target_id} manifest_votes ambiguous best_count={best_count} "
+            f"candidates={len(overall_counts)}")
+        return ""
+
+    dbg("INFO", "library",
+        f"pdb={target_id} picked='{best_lib}' method='manifest_entries' "
+        f"matches={best_count}")
+    return best_lib
+
+
 def infer_library_name(target_id: str,
                        ligand_basenames: Set[str],
                        *,
@@ -271,8 +374,9 @@ def infer_library_name(target_id: str,
     No per-PDB subdirectory is expected.
 
     Preference:
-      1) (currently no json but might make one in the future) manifest.json at library root with "library_name"/"name"/"library"/"label"
-      2) filename-overlap between docked basenames and files in <library> (non-recursive; optional shallow)
+      1) Global prepped-ligands manifest via LibraryIndex (fast path).
+      2) manifest.json at library root with "library_name"/"name"/"library"/"label"
+      3) filename-overlap between docked basenames and files in <library> (non-recursive; optional shallow)
     """
 
     # --- gather candidate roots from CLI override + config
@@ -305,6 +409,16 @@ def infer_library_name(target_id: str,
             f"sample={list(sorted(ligand_basenames))[:3]}")
     else:
         dbg("DEBUG", "library", f"pdb={target_id} docked_basenames_n=0")
+
+    # 1) Fast path: try prepped-ligands manifest via LibraryIndex (if present).
+    manifest_choice = _infer_library_name_via_manifest(
+        target_id,
+        ligand_basenames,
+        roots,
+        cfg,
+    )
+    if manifest_choice:
+        return manifest_choice
 
     def _manifest_label(manifest_path: Path) -> Optional[str]:
         try:
