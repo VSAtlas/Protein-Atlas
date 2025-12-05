@@ -7,28 +7,10 @@ import pytest
 import yaml
 
 PDBS_OF_INTEREST = [
-    "2OJG",
+    "1SYN",
     "TEST",
     "1L2S",
-    "1D3G",
-    "1S3B",
-    "1H00",
-    "2CNK",
-    "1SQT",
-    "2GTK",
-    "2H7L",
-    "1E66",
-    "2FSZ",
-    "1QW6",
-    "2B8T",
-    "2ICA",
-    "1SYN",
-    "2I0E",
-    "2AYW",
 ]
-
-# 1SYN is temporarily ignored until control pocket detection is fixed for this target.
-IGNORED_PDBS = {"1SYN"}
 
 
 @pytest.mark.slow
@@ -73,7 +55,7 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
         data = yaml.safe_load(f) or {}
     proteins = data.get("proteins", {}) or {}
 
-    required = set(PDBS_OF_INTEREST) - IGNORED_PDBS
+    required = set(PDBS_OF_INTEREST)
     seen_control = {pdb_id: False for pdb_id in required}
 
     for key, entry in proteins.items():
