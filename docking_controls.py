@@ -464,16 +464,26 @@ def _ctrl_redock_job(payload: dict) -> dict:
         stage_info,
         int(payload["threads_per_job"]),
         logger=None,
-        variant=payload["variant"],
-        ph_token=payload["ph"],
-        legacy=payload["legacy"],
-        skip_manifest_if_exists=bool(payload.get("skip_manifest", False)),
+        variant=payload.get("variant"),
+        ph_token=payload.get("ph"),
+        legacy=bool(payload.get("legacy")),
+    )
+    job_logger = logging.getLogger("control-redock")
+    job_logger.info(
+        "[control-redock.job] base=%s order=%d lig=%s center=%s box=%s conf=%s out=%s",
+        payload.get("base"),
+        int(payload.get("order", -1)),
+        payload.get("ligand_name"),
+        payload.get("center"),
+        payload.get("box_size"),
+        conf_path,
+        out_path,
     )
     try:
         _, score = run_docking_task(
             payload["vina_exe"],
             str(conf_path),
-            payload["ligand_name"],
+            payload["ligand_path"],
             str(out_path),
         )
     except Exception:
@@ -630,8 +640,17 @@ def select_center_via_control_redock(
         logger.warning("[control-redock] No prepped control PDBQTs found; redock impossible (will fall back).")
         return None, None
 
-    ex = int(cfg.get("CTRL_REDOCK_EXHAUSTIVENESS", 24)) #AAA CHANGE FOR test RUNS
-    nm = int(cfg.get("CTRL_REDOCK_NMODES", 9)) # AAA CHANGE FOR test RUNS
+    def _build_ctrl_stage_info() -> dict[str, Any]:
+        info = {
+            "exhaustiveness": int(cfg.get("CTRL_REDOCK_EXHAUSTIVENESS", 64)),
+            "num_modes": int(cfg.get("CTRL_REDOCK_NMODES", 9)),
+            "energy_range": float(cfg.get("CTRL_REDOCK_ENERGY_RANGE", 6)),
+            "verbosity": int(cfg.get("VINA_VERBOSITY", 0)),
+        }
+        if cfg.get("FAST_MODE"):
+            info["exhaustiveness"] = 1
+        return info
+
     threads_per_vina = int(cfg.get("THREADS_PER_VINA_CTRL", 8))  # control redock uses its own threads default=8
     vina_exe = str(cfg.get("VINA_EXE") or cfg.get("VINA_PATH") or "vina")
     obabel = str(cfg.get("OPENBABEL_PATH") or "obabel")
@@ -664,10 +683,8 @@ def select_center_via_control_redock(
     stage_name = "ctrl_redock"
     parallel_enabled = workers > 1 and len(cand_pdbqts) > 1
 
-    manifest_path = None
-
     if not parallel_enabled:
-        for lig_pdbqt in cand_pdbqts:
+        for order, lig_pdbqt in enumerate(cand_pdbqts):
             stem = lig_pdbqt.stem.split("_stage")[0]
             base = _canonical_ctrl_base_from_stem(stem)
             center = centroids.get(base)
@@ -678,9 +695,7 @@ def select_center_via_control_redock(
             if not center:
                 continue
 
-            stage_info = {"exhaustiveness": ex, "num_modes": nm}
-            if cfg.get("FAST_MODE"):
-                stage_info["exhaustiveness"] = 1
+            stage_info = _build_ctrl_stage_info()
             logger.info(
                 "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
                 paths.pdb_id,
@@ -702,6 +717,16 @@ def select_center_via_control_redock(
                 variant=variant_token,
                 ph_token=ph_label,
                 legacy=legacy_mode,
+            )
+            logger.info(
+                "[control-redock.job] base=%s order=%d lig=%s center=%s box=%s conf=%s out=%s",
+                base,
+                order,
+                lig_pdbqt.name,
+                tuple(center),
+                (24.0, 24.0, 24.0),
+                conf_path,
+                out_path,
             )
             try:
                 _, score = _run_dock(vina_exe, conf_path, lig_pdbqt.name, out_path)
@@ -731,16 +756,6 @@ def select_center_via_control_redock(
                 if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
                     best = (rmsd, e_print if e_print is not None else None, base, center)
     else:
-        manifest_path = _ensure_ctrl_vina_manifest(
-            cfg,
-            paths,
-            stage_name,
-            variant_token,
-            ph_label,
-            legacy_mode,
-            logger,
-        )
-        logger.info("[ctrl.parallel] write_once=on path=%s", manifest_path)
         cfg_payload = dict(cfg)
         jobs = []
         for order, lig_pdbqt in enumerate(cand_pdbqts):
@@ -753,9 +768,7 @@ def select_center_via_control_redock(
                     center = _centroid_from_pdb(ref)
             if not center:
                 continue
-            stage_info = {"exhaustiveness": ex, "num_modes": nm}
-            if cfg.get("FAST_MODE"):
-                stage_info["exhaustiveness"] = 1
+            stage_info = _build_ctrl_stage_info()
             logger.info(
                 "[emit.debug] pdb=%s stage=%s variant=%s ph=%s",
                 paths.pdb_id,
@@ -782,31 +795,40 @@ def select_center_via_control_redock(
                     "vina_exe": vina_exe,
                     "obabel": obabel,
                     "base": base,
-                    "skip_manifest": True,
                 }
             )
 
         if not jobs:
             return None, None
 
-        results = []
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            future_map = {pool.submit(_ctrl_redock_job, job): job for job in jobs}
-            for fut in as_completed(future_map):
-                res = fut.result()
-                results.append(res)
+        results: list[dict[str, object]] = []
+        if jobs:
+            try:
+                with ProcessPoolExecutor(max_workers=workers) as pool:
+                    future_map = {pool.submit(_ctrl_redock_job, job): job for job in jobs}
+                    for fut in as_completed(future_map):
+                        res = fut.result()
+                        results.append(res)
+            except Exception as e:
+                logger.exception(
+                    "[control-redock] ProcessPoolExecutor failed for pdb=%s: %s",
+                    paths.pdb_id,
+                    e,
+                )
+                # A hard failure here should signal the caller to fall back to activesite
+                return None, None
+        else:
+            logger.warning("[control-redock] No jobs constructed for ctrl_redock; skipping redock.")
+            return None, None
+
+        if not results:
+            logger.warning(
+                "[control-redock.summary] pdb=%s no results from ctrl_redock jobs (results empty); will fall back.",
+                paths.pdb_id,
+            )
+            return None, None
 
         results.sort(key=lambda r: r["order"])
-        _finalize_ctrl_vina_manifest(
-            cfg,
-            paths,
-            stage_name,
-            variant_token,
-            ph_label,
-            legacy_mode,
-            manifest_path,
-            jobs,
-        )
         for res in results:
             base = res["base"]
             center = tuple(res["center"])

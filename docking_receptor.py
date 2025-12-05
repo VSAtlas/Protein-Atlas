@@ -52,13 +52,11 @@ def prepare_receptor(
     prepare_receptor.last_provenance = "unknown"
     force_reprocess = bool(strtobool(str(cfg.get("FORCE_REPROCESS", False))))
     log = logging.getLogger("ph_ensemble")
-    # >>> RECEPTOR PATHS PATCH START
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant = var if var else None
     ph_token = None
     cleaned_pdb_path = paths.receptor_cleaned_pdb(variant)
     receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
-    # >>> RECEPTOR PATHS PATCH END
     logger.info(
         f"FORCE_REPROCESS={force_reprocess} | "
         f"cleaned_exists={cleaned_pdb_path.exists()} "

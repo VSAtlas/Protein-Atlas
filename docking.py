@@ -355,7 +355,12 @@ def _phase2_to4_receptor_and_center(
         )
     except Exception as _e:
         sel_center, sel_box = (None, None)
-        logger.debug(f"[control-centers] helper errored: {_e}")
+        logger.exception(
+            "[control-centers] helper errored during ctrl_redock for pdb=%s variant=%s: %s",
+            paths.pdb_id,
+            variant_label,
+            _e,
+        )
     if sel_center is not None:
         center, box_size, center_source = sel_center, sel_box, "control"
         logger.info(f"[control-redock] Using control-derived center {center} with box {box_size}")

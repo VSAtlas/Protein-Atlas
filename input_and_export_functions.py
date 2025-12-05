@@ -546,11 +546,30 @@ def emit_vina_config(
     }
 
     manifest_tmp = manifest_path.with_suffix(".part")
-    with open(manifest_tmp, "w", encoding="utf-8") as fh:
-        json.dump(manifest_data, fh, indent=2, sort_keys=True)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(manifest_tmp, manifest_path)
+    try:
+        manifest_tmp.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest_tmp, "w", encoding="utf-8") as fh:
+            json.dump(manifest_data, fh, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(manifest_tmp, manifest_path)
+    except FileNotFoundError:
+        # Rare race when another process cleans up temp files; non-fatal for ctrl_redock.
+        if logger:
+            logger.warning(
+                "[cfg.emit] manifest_tmp missing; skipping manifest update tmp=%s dest=%s stage=%s",
+                str(manifest_tmp),
+                str(manifest_path),
+                stage_name,
+            )
+    except Exception:
+        # Any manifest issue should not block docking; log and continue.
+        if logger:
+            logger.exception(
+                "[cfg.emit] manifest update failed; continuing without manifest stage=%s path=%s",
+                stage_name,
+                str(manifest_path),
+            )
 
     emit_msg = (
         "[cfg.emit] run=%s pdb=%s variant=%s ph=%s stage=%s ligand=%s "

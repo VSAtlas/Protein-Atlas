@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 from collections import Counter, defaultdict
 from math import sqrt
 from pathlib import Path
@@ -4804,6 +4805,58 @@ def _drop_free_ions_for_meeko(
     return dropped
 
 
+def _clean_receptor_pdbqt(pdbqt_path: Union[str, Path]) -> None:
+    """
+    Drop Reduce USER MOD lines and strip bogus AutoDock 'std' suffixes on
+    receptor PDBQT atom records. Safe no-op on missing files.
+    """
+    p = Path(pdbqt_path)
+    if not p.exists():
+        return
+    try:
+        lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception as exc:
+        logging.warning("[receptor.clean] read failed for %s: %s", p, exc)
+        return
+
+    cleaned: list[str] = []
+    user_removed = 0
+    std_fixed = 0
+    std_pattern = re.compile(r"\s(?:std|new)\s*$", re.IGNORECASE)
+
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("USER  MOD"):
+            user_removed += 1
+            continue
+
+        if line.startswith(("ATOM", "HETATM")):
+            new_line, n = std_pattern.subn("", line)
+            if n:
+                std_fixed += n
+            cleaned.append(new_line)
+        else:
+            cleaned.append(line)
+
+    try:
+        p.write_text("\n".join(cleaned) + "\n", encoding="utf-8", errors="ignore")
+    except Exception as exc:
+        logging.warning("[receptor.clean] write failed for %s: %s", p, exc)
+        return
+
+    if user_removed or std_fixed:
+        logging.info(
+            "[receptor.clean] cleaned receptor PDBQT %s: user_mod_removed=%d std_suffix_fixed=%d",
+            str(p),
+            user_removed,
+            std_fixed,
+        )
+
+
+def _strip_reduce_user_lines(pdbqt_path: Union[str, Path]) -> None:
+    """Back-compat shim to the unified receptor cleaner."""
+    _clean_receptor_pdbqt(pdbqt_path)
+
 
 def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, Path], cfg: dict) -> bool:
     """
@@ -5025,45 +5078,57 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
     else:
         meeko_cmd = None
         meeko_cmd_legacy = None
+    adt_cmd = None
     # Only attempt ADT if BOTH are explicitly configured and present
     if not (MGLTOOLS_PYTHON and Path(MGLTOOLS_PYTHON).is_file() and os.access(MGLTOOLS_PYTHON, os.X_OK) and
             PREPARE_RECEPTOR_SCRIPT and Path(PREPARE_RECEPTOR_SCRIPT).is_file()):
         logging.info("[receptor] ADT fallback disabled (missing MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT)")
-        return False  # keep modern Meeko as the only path unless ADT is truly configured
-
-    # --- Step 3: ADT prepare_receptor4 fallback (only if both keys are valid)
-    adt_ok = False
-    mgltools_python = MGLTOOLS_PYTHON
-    prepare_script = PREPARE_RECEPTOR_SCRIPT
-    if (mgltools_python and Path(mgltools_python).is_file() and os.access(mgltools_python, os.X_OK)
-            and prepare_script and Path(prepare_script).is_file()):
-        allow_tokens, _ = _load_retain_allowlist(cfg)
-        logging.info(
-            "[ions.policy] stage=adt variant=%s drop_metals=%s drop_salts=%s radius=none allowlist=%d",
-            variant_label,
-            False,
-            False,
-            len({str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}),
-        )
-        adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt,
-                   "-A", "none",      "-U", "nphs_lps",]  
-        cp = subprocess.run(adt_cmd, capture_output=True, text=True)
-        _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
-        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-            logging.info("Prepared receptor with ADT prepare_receptor4.py.")
-            try:
-                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-                _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
-            except Exception as _e:
-                logging.warning("[ion diff] skipped note=%s", _e)
-            return True
-        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-            head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
-            logging.warning("[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r", head, tail)
     else:
-        logging.info("[receptor] ADT fallback disabled (MGLTOOLS_PYTHON/PREPARE_RECEPTOR_SCRIPT not set)")
-    return False
+        # --- Step 3: ADT prepare_receptor4 fallback (only if both keys are valid)
+        adt_ok = False
+        mgltools_python = MGLTOOLS_PYTHON
+        prepare_script = PREPARE_RECEPTOR_SCRIPT
+        if (mgltools_python and Path(mgltools_python).is_file() and os.access(mgltools_python, os.X_OK)
+                and prepare_script and Path(prepare_script).is_file()):
+            allow_tokens, _ = _load_retain_allowlist(cfg)
+            logging.info(
+                "[ions.policy] stage=adt variant=%s drop_metals=%s drop_salts=%s radius=none allowlist=%d",
+                variant_label,
+                False,
+                False,
+                len({str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}),
+            )
+            adt_cmd = [mgltools_python, prepare_script, "-r", tmp1_path, "-o", output_pdbqt,
+                       "-A", "none",      "-U", "nphs_lps",]  
+            cp = subprocess.run(adt_cmd, capture_output=True, text=True)
+            _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
+            if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+                _clean_receptor_pdbqt(output_pdbqt)
+                logging.info("Prepared receptor with ADT prepare_receptor4.py.")
+                # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
+                try:
+                    _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+                    _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+                    _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
+                except Exception as _e:
+                    logging.warning("[ion diff] skipped note=%s", _e)
+                try:
+                    _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="ADT")
+                except Exception as diff_exc:
+                    logging.warning(
+                        "[iondiff.pdb_pdbqt] action=skip tool=ADT reason=%s",
+                        diff_exc,
+                    )
+
+                return True
+            if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+                head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
+                logging.warning("[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+            elif Path(output_pdbqt).exists():
+                _clean_receptor_pdbqt(output_pdbqt)
+        else:
+            logging.info("[receptor] ADT fallback disabled (MGLTOOLS_PYTHON/PREPARE_RECEPTOR_SCRIPT not set)")
+
 
     # --- Step 1: Modern Meeko attempt
     if not skip_meeko and meeko_cmd:
@@ -5075,6 +5140,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         cp = SimpleNamespace(returncode=127, stdout="", stderr=("meeko_skipped" if skip_meeko else "meeko_not_found"))
 
     if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+        _clean_receptor_pdbqt(output_pdbqt)
         logging.info("Prepared receptor PDBQT with modern Meeko.")
         # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
         try:
@@ -5110,6 +5176,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         cp = subprocess.run(meeko_cmd_with_n, capture_output=True, text=True)
         _persist_subproc("meeko_retry_nmap", meeko_cmd_with_n, cp, work_dir, Path(output_pdbqt))
         if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            _clean_receptor_pdbqt(output_pdbqt)
             logging.info("Prepared receptor after HIS -n mapping.")
             # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
             try:
@@ -5145,6 +5212,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         cp = subprocess.run(meeko_cmd_allow_bad, capture_output=True, text=True)
         _persist_subproc("meeko_retry_allow_bad_res", meeko_cmd_allow_bad, cp, work_dir, Path(output_pdbqt))
         if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            _clean_receptor_pdbqt(output_pdbqt)
             logging.info("Prepared receptor after -a allow_bad_res.")
             # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
             try:
@@ -5171,6 +5239,7 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
         cp = subprocess.run(meeko_cmd_legacy, capture_output=True, text=True)
         _persist_subproc("meeko_legacy", meeko_cmd_legacy, cp, work_dir, Path(output_pdbqt))
         if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            _clean_receptor_pdbqt(output_pdbqt)
             logging.info("Prepared receptor with legacy Meeko.")
             # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
             try:
@@ -5194,30 +5263,40 @@ def run_prepare_receptor(input_pdb: Union[str, Path], output_pdbqt: Union[str, P
             logging.warning("[meeko_legacy] receptor PDBQT is empty. head=%r tail=%r", head, tail)
 
     # --- Step 3: ADT prepare_receptor4 fallback
-    cp = subprocess.run(adt_cmd, capture_output=True, text=True)
-    _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
-    if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-        logging.info("Prepared receptor with ADT prepare_receptor4.py.")
-        # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
-        try:
-            _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-            _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-            _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
-        except Exception as _e:
-            logging.warning("[ion diff] skipped note=%s", _e)
-        try:
-            _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="ADT")
-        except Exception as diff_exc:
-            logging.warning(
-                "[iondiff.pdb_pdbqt] action=skip tool=ADT reason=%s",
-                diff_exc,
-            )
+    if adt_cmd:
+        cp = subprocess.run(adt_cmd, capture_output=True, text=True)
+        _persist_subproc("adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt))
+        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
+            _clean_receptor_pdbqt(output_pdbqt)
+            logging.info("Prepared receptor with ADT prepare_receptor4.py.")
+            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
+            try:
+                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
+                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
+                _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
+            except Exception as _e:
+                logging.warning("[ion diff] skipped note=%s", _e)
+            try:
+                _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="ADT")
+            except Exception as diff_exc:
+                logging.warning(
+                    "[iondiff.pdb_pdbqt] action=skip tool=ADT reason=%s",
+                    diff_exc,
+                )
 
+            return True
+
+        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
+            head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
+            logging.warning("[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+        elif Path(output_pdbqt).exists():
+            _clean_receptor_pdbqt(output_pdbqt)
+
+    if _ok_receptor_file(Path(output_pdbqt)):
+        _clean_receptor_pdbqt(output_pdbqt)
+        logging.warning("[receptor] proceeding with existing receptor PDBQT despite prep errors.")
         return True
-
-    if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-        head, tail = _first_last_lines(work_dir / "adt_prepare_receptor4.stderr.txt")
-        logging.warning("[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r", head, tail)
+    return False
 
 
 
@@ -5714,6 +5793,3 @@ def main(
     except Exception as e:
         logging.exception("[FATAL] automate_protein_prep.main() failed: %s", e)
         raise
-
-
-
