@@ -244,20 +244,8 @@ def build_ph_ensemble(
         elog.info("[pHlogs] disabled")
 
     ph_values = list(ph_values)
-    elog.info("[ph.list] n=%d values=%s", len(ph_values), ph_values)
-
-    CPU = int(os.getenv("CPU", os.cpu_count() or 1))
-    max_parallel = int(os.getenv("MAX_PARALLEL_JOBS", CPU))
-    workers = max(1, min(CPU, max_parallel))
-    per_job_threads = 1
-    elog.info(
-        "[ph.parallel] CPU=%d MAX_PARALLEL_JOBS=%d workers=%d threads_per_job=%d total_threads=%d",
-        CPU,
-        max_parallel,
-        workers,
-        per_job_threads,
-        workers * per_job_threads,
-    )
+    n_ph = len(ph_values)
+    elog.info("[ph.list] n=%d values=%s", n_ph, ph_values)
 
     jobs = []
     for idx, ph in enumerate(ph_values):
@@ -284,11 +272,35 @@ def build_ph_ensemble(
             )
         )
 
+    cpu = int(os.getenv("CPU", os.cpu_count() or 1))
+    max_parallel = int(os.getenv("MAX_PARALLEL_JOBS", cpu))
+    workers = min(n_ph, max_parallel, cpu)
+    if workers < 1:
+        workers = 1
+    threads_per_job = 1
+
     results = []
-    if workers == 1 or len(jobs) <= 1:
+    if n_ph <= 1 or workers <= 1:
+        if n_ph == 1 and jobs:
+            elog.info(
+                "[ph.serial] single pH member; running without parallel executor. tag=%s ph=%.2f",
+                jobs[0][2],
+                jobs[0][1],
+            )
+        elif n_ph > 1:
+            elog.info("[ph.serial] workers=1; running %d pH members without parallel executor", n_ph)
         for job in jobs:
             results.append(_ph_member_job(job))
     else:
+        elog.info(
+            "[ph.parallel] CPU=%d MAX_PARALLEL_JOBS=%d n_ph=%d workers=%d threads_per_job=%d total_threads=%d",
+            cpu,
+            max_parallel,
+            n_ph,
+            workers,
+            threads_per_job,
+            workers * threads_per_job,
+        )
         with ProcessPoolExecutor(max_workers=workers) as pool:
             future_to_job = {pool.submit(_ph_member_job, job): job for job in jobs}
             for fut in as_completed(future_to_job):

@@ -1059,7 +1059,12 @@ def main() -> None:
         ) as bar:
             cfg_v = cfg  # no per-variant mutation; variant is propagated via APO_HOLO_VARIANT env
 
-            for pdb_file in pdb_files:
+            single_ligand_mode = bool(cfg.get("_EFFECTIVE_SINGLE_LIGAND"))
+            multi_pdb_single_ligand = single_ligand_mode and len(pdb_files) > 1
+            cpu = int(cfg.get("CPU", os.cpu_count() or 1))
+            max_pdb_workers = max(1, min(cpu, len(pdb_files))) if pdb_files else 1
+
+            def _process_one(pdb_file: str, cfg_for_pdb):
                 pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
                 pdb_start = time.time()
 
@@ -1067,16 +1072,16 @@ def main() -> None:
                     library_name = None
                     try:
                         if test_mode != "off":
-                            lib_map = cfg.get("_TEST_LIBRARY_CANONICAL", {}) or {}
+                            lib_map = cfg_for_pdb.get("_TEST_LIBRARY_CANONICAL", {}) or {}
                             library_name = lib_map.get(pdb_id)
                         if not library_name:
-                            library_name = cfg.get("LIBRARY_SUBDIR_DEFAULT")
+                            library_name = cfg_for_pdb.get("LIBRARY_SUBDIR_DEFAULT")
                     except Exception:
-                        library_name = cfg.get("LIBRARY_SUBDIR_DEFAULT")
+                        library_name = cfg_for_pdb.get("LIBRARY_SUBDIR_DEFAULT")
 
                     try:
                         update_manifest_for_protein_start(
-                            cfg, run_id, pdb_id, label, library_name
+                            cfg_for_pdb, run_id, pdb_id, label, library_name
                         )
                     except Exception:
                         logging.warning(
@@ -1087,12 +1092,12 @@ def main() -> None:
                         )
 
                     # Main per-PDB work
-                    process_one_protein(cfg_v, pdb_file, stages, params)
+                    process_one_protein(cfg_for_pdb, pdb_file, stages, params)
 
                     pdb_elapsed = time.time() - pdb_start
                     try:
                         update_manifest_for_protein_success(
-                            cfg, run_id, pdb_id, label, pdb_elapsed
+                            cfg_for_pdb, run_id, pdb_id, label, pdb_elapsed
                         )
                     except Exception:
                         logging.warning(
@@ -1138,7 +1143,7 @@ def main() -> None:
 
                     try:
                         update_manifest_for_protein_failure(
-                            cfg, run_id, pdb_id, label, fail_log_path
+                            cfg_for_pdb, run_id, pdb_id, label, fail_log_path
                         )
                     except Exception:
                         logging.warning(
@@ -1148,9 +1153,43 @@ def main() -> None:
                             exc_info=True,
                         )
 
-                finally:
-                    # Always advance the progress bar, even if this PDB failed
-                    bar.update(1)
+            if multi_pdb_single_ligand:
+                logging.info(
+                    "[main.parallel.single_ligand] mode=%s n_pdb=%d max_workers=%d",
+                    label.upper(),
+                    len(pdb_files),
+                    max_pdb_workers,
+                )
+
+                def _cfg_for_pdb() -> ConfigDict:
+                    cfg_local = cfg_v.copy()
+                    cfg_local["MAX_PARALLEL_JOBS"] = 1
+                    return cfg_local
+
+                with ThreadPoolExecutor(max_workers=max_pdb_workers) as pool:
+                    future_map = {
+                        pool.submit(_process_one, pdb_file, _cfg_for_pdb()): pdb_file
+                        for pdb_file in pdb_files
+                    }
+                    for fut in as_completed(future_map):
+                        pdb_file = future_map[fut]
+                        try:
+                            fut.result()
+                        except Exception as exc:
+                            logging.exception(
+                                "[main.parallel.single_ligand.error] pdb=%s error=%s",
+                                pdb_file,
+                                exc,
+                            )
+                        finally:
+                            bar.update(1)
+            else:
+                for pdb_file in pdb_files:
+                    try:
+                        _process_one(pdb_file, cfg_v)
+                    finally:
+                        # Always advance the progress bar, even if this PDB failed
+                        bar.update(1)
 
     elapsed_min = (time.time() - start) / 60.0
     print(f"\nAll proteins processed in {elapsed_min:.2f} minutes.")

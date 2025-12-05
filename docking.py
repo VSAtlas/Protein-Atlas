@@ -1689,7 +1689,16 @@ def run_one_stage(
     import subprocess
 
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
-    max_workers = int(cfg["MAX_PARALLEL_JOBS"])
+    cpu = int(cfg.get("CPU", os.cpu_count() or 1))
+    max_jobs = int(cfg.get("MAX_PARALLEL_JOBS", cpu))
+    max_workers = min(max_jobs, len(ligands))
+    if max_workers < 1:
+        max_workers = 1
+    if max_jobs == 1 and len(ligands) > 0:
+        logger.info(
+            "[dock.parallel.single_ligand] MAX_PARALLEL_JOBS=1 forcing max_workers=1 for %d ligands",
+            len(ligands),
+        )
     variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant_token = variant_env or None
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
