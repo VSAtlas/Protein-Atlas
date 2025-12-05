@@ -569,7 +569,8 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                         if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
                             continue
                         resn = (ln[17:20] if len(ln) >= 20 else "").strip().upper()
-                        if resn in STANDARD_AMINO_ACIDS:
+                        # only treat as fatal if the ligand *itself* is a protein residue
+                        if resn in STANDARD_AMINO_ACIDS and resn == residue_name:
                             has_protein_res = True
                             break
             if has_protein_res:

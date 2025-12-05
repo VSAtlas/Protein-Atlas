@@ -55,7 +55,7 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
         sys.executable,
         os.fspath(root / "main.py"),
         "-fast",
-        "--",
+        "-pdbs",
         pdbs_arg,
         "--single",
         "dexamethasone",

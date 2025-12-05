@@ -708,9 +708,9 @@ retain_in_receptor_resnames:
 
 # Common solvents / buffers / cryo / detergents that should be extracted (never chosen as ligand)
 remove_as_solvent_resnames:
-  - GOL; EDO; PG4; PGO; PEO; PEG; MPD; ACT; ACY; CIT; TLA
+  - GOL; EDO; PG4; PGO; PEO; PEG; MPD; ACY; TLA
   - TRS; MES; HEP; HEPES; MOPS; PIP; PIPES; BIS; BIC; BME; DTT
-  - IPA; IPAH; DMS; DMSO; ACN; EOH; ETH; LAC; FMT; MLI
+  - IPA; IPAH; DMS; DMSO; ACN; EOH; ETH; MLI
   - BOG; BDN; LDAO; DDM; CHS; CHOL; OLA; OLC; OCT; UND
   - SO4; PO4; EPE; MPD; NME; ACE
   - CL; BR; I; F  # (kept as ions if monatomic; here stops them being ligand picks)
