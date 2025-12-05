@@ -34,14 +34,17 @@ STANDARD_AMINO_ACIDS = {
 
 try:
     from chemdb.chem_alias_db import EXCLUDE_HET_IDS as EXCLUDE_CRYSTAL_ADDITIVES
-except Exception:
+except Exception as e:
+    logging.warning(
+        f"[prep_ligands_common] Failed to import EXCLUDE_HET_IDS from chemdb.chem_alias_db: {e}. "
+        "Falling back to built-in default set of crystallization additives."
+    )
     EXCLUDE_CRYSTAL_ADDITIVES = {
-        "HOH","CIT","TAR","SO4","PO4","CA","NA","K","MG","MN","ZN","GOL","EDO","PEG","MPD","TRS",
-        "MES","HEPES","ACET","ACT","FMT","MAL","DMS","IPA","CLU","NAG","BOG","TOS","BES","PTS","OTF",
-        "TRF","TFA","BF4","PF6","CL","BR","I","HEM","HEC","HEA","HEB","HEO","HEG","HEF","HEH","PTR",
-        "TPO","SEP"
+        "HOH", "CIT", "TAR", "SO4", "PO4", "CA", "NA", "K", "MG", "MN", "ZN", "GOL", "EDO", "PEG",
+        "MPD", "TRS", "MES", "HEPES", "ACET", "ACT", "FMT", "MAL", "DMS", "IPA", "CLU", "NAG", "BOG",
+        "TOS", "BES", "PTS", "OTF", "TRF", "TFA", "BF4", "PF6", "CL", "BR", "I", "HEM", "HEC", "HEA",
+        "HEB", "HEO", "HEG", "HEF", "HEH", "PTR", "TPO", "SEP"
     }
-
 MAX_HEAVY_ATOMS = 1200
 MIN_ATOMS_FOR_DOCKING = 3
 QUARANTINE_DIRNAME = "quarantine"

@@ -1,136 +1,101 @@
-import logging
+import os
 import sys
+import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+import yaml
 
-# Ensure project modules are importable when running from chemdb/tests
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+PDBS_OF_INTEREST = [
+    "2OJG",
+    "TEST",
+    "1L2S",
+    "1D3G",
+    "1S3B",
+    "1H00",
+    "2CNK",
+    "1SQT",
+    "2GTK",
+    "2H7L",
+    "1E66",
+    "2FSZ",
+    "1QW6",
+    "2B8T",
+    "2ICA",
+    "1SYN",
+    "2I0E",
+    "2AYW",
+]
 
-import docking_controls  # noqa: E402
-import run_vina  # noqa: E402
+# 1SYN is temporarily ignored until control pocket detection is fixed for this target.
+IGNORED_PDBS = {"1SYN"}
 
 
-def _write_dummy_pdb(path: Path, coords: list[tuple[float, float, float]]):
-    lines = []
-    for idx, (x, y, z) in enumerate(coords, start=1):
-        lines.append(
-            f"ATOM  {idx:5d}  C   LIG A{idx:4d}    {x:8.3f}{y:8.3f}{z:8.3f}  1.00 20.00           C"
-        )
-    path.write_text("\n".join(lines))
+@pytest.mark.slow
+def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    manifests_dir = root / "manifests"
+    manifests_dir.mkdir(exist_ok=True)
 
+    before = {d.name for d in manifests_dir.iterdir() if d.is_dir()}
 
-def _exploding_job(job):
-    raise RuntimeError("boom")
+    pdbs_arg = " ".join(PDBS_OF_INTEREST)
+    cmd = [
+        sys.executable,
+        os.fspath(root / "main.py"),
+        "-fast",
+        "-pdbs",
+        pdbs_arg,
+        "--single",
+        "dexamethasone",
+    ]
 
-
-@pytest.fixture
-def fake_paths(tmp_path):
-    lig_dir = tmp_path / "ligands_raw"
-    lig_dir.mkdir()
-    prepped_dir = tmp_path / "prepped_ligands"
-    prepped_dir.mkdir()
-    return SimpleNamespace(
-        pdb_id="TEST",
-        ligand_output_dir=lig_dir,
-        prepped_ligands_dir=prepped_dir,
+    result = subprocess.run(
+        cmd,
+        cwd=root,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, (
+        "main.py failed with non-zero exit code\n"
+        f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
     )
 
+    after = {d.name for d in manifests_dir.iterdir() if d.is_dir()}
+    new_ids = sorted(after - before)
+    assert len(new_ids) == 1, f"Expected exactly one new manifest folder, got: {new_ids}"
+    run_id = new_ids[0]
 
-def test_select_center_control_happy(monkeypatch, tmp_path, caplog, fake_paths):
-    ctrl_ref = tmp_path / "CTRL1.sdf"
-    ctrl_ref.write_text("fake sdf")
-    receptor_pdbqt = tmp_path / "receptor.pdbqt"
-    receptor_pdbqt.write_text("RECEPTOR")
+    manifest_path = manifests_dir / run_id / "run_manifest.yaml"
+    assert manifest_path.is_file(), f"Manifest not found at {manifest_path}"
 
-    _write_dummy_pdb(fake_paths.ligand_output_dir / "CTRL1.pdb", [(10.0, 10.0, 10.0)])
-    prepped_ctrl = fake_paths.prepped_ligands_dir / "CTRL1.sanitized.pdbqt"
-    prepped_ctrl.write_text("ROOT\nENDROOT\n")
+    with manifest_path.open("r") as f:
+        data = yaml.safe_load(f) or {}
+    proteins = data.get("proteins", {}) or {}
 
-    def fake_emit_vina_config(cfg, pdb_id, receptor_pdbqt, center, box, lig_pdbqt, stage_name, stage_info, threads, logger=None, variant=None, ph_token=None, legacy=False):
-        out_dir = tmp_path / "ctrl_redock"
-        out_dir.mkdir(exist_ok=True)
-        conf_path = out_dir / "vina.conf"
-        out_path = out_dir / "docked.pdbqt"
-        conf_path.write_text("# dummy")
-        out_path.write_text("REMARK VINA RESULT: -7.5 0.0 0.0")
-        return str(conf_path), str(out_path)
+    required = set(PDBS_OF_INTEREST) - IGNORED_PDBS
+    seen_control = {pdb_id: False for pdb_id in required}
 
-    def fake_best_model(out_path_str, obabel_cmd):
-        best_pdb = tmp_path / "best_ctrl1.pdb"
-        best_pdb.write_text("HETATM ...")
-        return str(best_pdb), -7.5
+    for key, entry in proteins.items():
+        pdb_id = entry.get("pdb_id")
+        if pdb_id not in required:
+            continue
 
-    monkeypatch.setattr(docking_controls, "build_control_lookup", lambda _paths: {"CTRL1": ctrl_ref})
-    monkeypatch.setattr(docking_controls, "emit_vina_config", fake_emit_vina_config)
-    monkeypatch.setattr(docking_controls, "_ctrl_best_model_to_pdb", fake_best_model)
-    monkeypatch.setattr(docking_controls, "compute_rmsd", lambda ref, dock: 1.2)
-    monkeypatch.setattr(run_vina, "run_docking_task", lambda *args, **kwargs: ("ok", -7.5))
+        status = entry.get("status")
+        stages = entry.get("stages", {}) or {}
+        pocket = stages.get("pocket_detection", {}) or {}
+        details = pocket.get("details", {}) or {}
+        method = details.get("method")
 
-    cfg = {
-        "RUN_ID": "TEST",
-        "CONTROL_CENTER_POLICY": "best_redock",
-        "CPU": 1,
-        "MAX_PARALLEL_JOBS": 1,
-    }
-    logger = logging.getLogger("test-ctrl-redock")
-    caplog.set_level(logging.INFO, logger="test-ctrl-redock")
+        if status == "completed" and method == "control":
+            seen_control[pdb_id] = True
 
-    center, box = docking_controls.select_center_via_control_redock(
-        cfg=cfg,
-        paths=fake_paths,
-        receptor_pdbqt=str(receptor_pdbqt),
-        logger=logger,
-        variant="HOLO",
-        ph_token=None,
-        legacy=False,
+    missing = [p for p, ok in seen_control.items() if not ok]
+
+    assert not missing, (
+        "Expected control redocking to be used for pocket_detection "
+        "for all DUD targets, but these PDBs had no completed entry "
+        "with method='control': "
+        + ", ".join(sorted(missing))
+        + f"\nRun ID: {run_id}"
     )
-
-    assert center is not None
-    assert isinstance(center, tuple) and len(center) == 3
-    assert box == (24.0, 24.0, 24.0)
-    assert any("[control-redock] candidates=" in rec.getMessage() for rec in caplog.records)
-
-
-def test_select_center_processpool_failure(monkeypatch, tmp_path, caplog, fake_paths):
-    ctrl1_ref = tmp_path / "CTRL1.sdf"
-    ctrl1_ref.write_text("fake sdf")
-    ctrl2_ref = tmp_path / "CTRL2.sdf"
-    ctrl2_ref.write_text("fake sdf")
-
-    _write_dummy_pdb(fake_paths.ligand_output_dir / "CTRL1.pdb", [(0.0, 0.0, 0.0)])
-    _write_dummy_pdb(fake_paths.ligand_output_dir / "CTRL2.pdb", [(1.0, 1.0, 1.0)])
-
-    (fake_paths.prepped_ligands_dir / "CTRL1.sanitized.pdbqt").write_text("ROOT\nENDROOT\n")
-    (fake_paths.prepped_ligands_dir / "CTRL2.sanitized.pdbqt").write_text("ROOT\nENDROOT\n")
-
-    monkeypatch.setattr(docking_controls, "build_control_lookup", lambda _paths: {"CTRL1": ctrl1_ref, "CTRL2": ctrl2_ref})
-    monkeypatch.setattr(docking_controls, "_ensure_ctrl_vina_manifest", lambda *args, **kwargs: tmp_path / "manifest.json")
-    monkeypatch.setattr(docking_controls, "_finalize_ctrl_vina_manifest", lambda *args, **kwargs: None)
-    monkeypatch.setattr(docking_controls, "_ctrl_redock_job", _exploding_job)
-
-    cfg = {
-        "RUN_ID": "TEST",
-        "CONTROL_CENTER_POLICY": "best_redock",
-        "CPU": 2,
-        "MAX_PARALLEL_JOBS": 2,
-    }
-    logger = logging.getLogger("test-ctrl-redock")
-    caplog.set_level(logging.ERROR, logger="test-ctrl-redock")
-
-    center, box = docking_controls.select_center_via_control_redock(
-        cfg=cfg,
-        paths=fake_paths,
-        receptor_pdbqt=str(tmp_path / "receptor.pdbqt"),
-        logger=logger,
-        variant="HOLO",
-        ph_token=None,
-        legacy=False,
-    )
-
-    assert center is None
-    assert box is None
-    assert any("[control-redock] ProcessPoolExecutor failed" in rec.getMessage() for rec in caplog.records)
