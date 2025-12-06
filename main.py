@@ -29,6 +29,7 @@ from logging_topics import (
     bootstrap_root_logging,
 )
 from run_manifest import (
+    apply_pocket_detection_events,
     finalize_run_manifest,
     init_run_manifest,
     update_manifest_for_protein_failure,
@@ -1190,6 +1191,15 @@ def main() -> None:
                     finally:
                         # Always advance the progress bar, even if this PDB failed
                         bar.update(1)
+
+            try:
+                apply_pocket_detection_events(cfg, run_id)
+            except Exception:
+                logging.warning(
+                    "[run-manifest.pocket_detection.events.apply] run_id=%s action=skip",
+                    run_id,
+                    exc_info=True,
+                )
 
     elapsed_min = (time.time() - start) / 60.0
     print(f"\nAll proteins processed in {elapsed_min:.2f} minutes.")

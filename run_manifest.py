@@ -9,6 +9,7 @@ is unchanged.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import os
 import platform
@@ -16,6 +17,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple
 
@@ -27,6 +29,17 @@ except Exception:  # pragma: no cover - import guard
 
 STAGE_KEYS = ("prep", "pocket_detection", "docking", "postprocessing")
 _missing_yaml_logged = False
+
+
+@dataclass
+class PocketDetectionEvent:
+    run_id: str
+    pdb_id: str
+    variant_label: Optional[str]
+    ph_tag: Optional[str]
+    method: Optional[str]
+    center: Optional[Any]
+    box_size: Optional[Any]
 
 
 def _utc_now_iso() -> str:
@@ -630,6 +643,134 @@ def update_manifest_for_protein_failure(
             pdb_id,
             variant_label,
             ph_tag if ph_tag is not None else "base",
+            run_id,
+            exc_info=True,
+        )
+
+
+def emit_pocket_detection_event(cfg: Mapping[str, Any], event: PocketDetectionEvent) -> None:
+    """
+    Append a pocket-detection event to a JSONL log for later replay by the
+    main process. Best-effort only; failures are logged as warnings.
+    """
+    ph_label = event.ph_tag if event.ph_tag is not None else "base"
+    try:
+        if not event.run_id:
+            logging.debug(
+                "[run-manifest.pocket_detection.event.skip] reason=missing_run_id pdb=%s variant=%s ph=%s",
+                event.pdb_id,
+                event.variant_label,
+                ph_label,
+            )
+            return
+
+        _, manifest_path = get_manifest_paths(cfg, event.run_id)
+        events_path = manifest_path.with_name("run_manifest_events.jsonl")
+        payload = {"type": "pocket_detection", **asdict(event)}
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, sort_keys=True) + "\n")
+
+        logging.debug(
+            "[run-manifest.pocket_detection.event] run_id=%s pdb=%s variant=%s ph=%s method=%s",
+            event.run_id,
+            event.pdb_id,
+            event.variant_label,
+            ph_label,
+            event.method,
+        )
+    except Exception:
+        logging.warning(
+            "[run-manifest.pocket_detection.event.error] run_id=%s pdb=%s variant=%s ph=%s",
+            event.run_id,
+            event.pdb_id,
+            event.variant_label,
+            ph_label,
+            exc_info=True,
+        )
+
+
+def apply_pocket_detection_events(cfg: Mapping[str, Any], run_id: str) -> None:
+    """
+    Replay pocket-detection events for a run and write them to the manifest in
+    a single-threaded main-process context. Best-effort; errors are logged and
+    ignored.
+    """
+    if not run_id:
+        return
+
+    try:
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        events_path = manifest_path.with_name("run_manifest_events.jsonl")
+        if not events_path.exists() or events_path.stat().st_size == 0:
+            return
+
+        try:
+            with events_path.open("r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except Exception:
+            logging.warning(
+                "[run-manifest.pocket_detection.events.read.error] run_id=%s path=%s",
+                run_id,
+                events_path,
+                exc_info=True,
+            )
+            return
+
+        events: list[dict[str, Any]] = []
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            if payload.get("type") != "pocket_detection":
+                continue
+            if str(payload.get("run_id", "")) != str(run_id):
+                continue
+            events.append(payload)
+
+        if not events:
+            try:
+                events_path.unlink()
+            except Exception:
+                pass
+            return
+
+        for payload in events:
+            try:
+                update_manifest_for_pocket_detection(
+                    cfg,
+                    run_id=str(payload.get("run_id") or run_id),
+                    pdb_id=payload.get("pdb_id"),
+                    variant_label=payload.get("variant_label"),
+                    ph_tag=payload.get("ph_tag"),
+                    method=payload.get("method"),
+                    center=payload.get("center"),
+                    box_size=payload.get("box_size"),
+                )
+            except Exception:
+                logging.warning(
+                    "[run-manifest.pocket_detection.events.apply.error] run_id=%s pdb=%s variant=%s ph=%s",
+                    run_id,
+                    payload.get("pdb_id"),
+                    payload.get("variant_label"),
+                    payload.get("ph_tag"),
+                    exc_info=True,
+                )
+
+        try:
+            events_path.unlink()
+        except Exception:
+            try:
+                events_path.write_text("", encoding="utf-8")
+            except Exception:
+                pass
+    except Exception:
+        logging.warning(
+            "[run-manifest.pocket_detection.events.error] run_id=%s",
             run_id,
             exc_info=True,
         )

@@ -75,10 +75,11 @@ from ph_ensemble_docking import (
     prewarm_ph_ligand_microstates,
 )
 from run_manifest import (
+    PocketDetectionEvent,
+    emit_pocket_detection_event,
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
-    update_manifest_for_pocket_detection,
 )
 from pose_validation import (
     attempt_fallback_recenter,
@@ -431,15 +432,17 @@ def _phase2_to4_receptor_and_center(
             box_size,
         )
         if manifest_run_id:
-            update_manifest_for_pocket_detection(
+            emit_pocket_detection_event(
                 cfg,
-                str(manifest_run_id),
-                paths.pdb_id,
-                variant_label,
-                ph_tag=active_ph_label,
-                method=center_source,
-                center=center,
-                box_size=box_size,
+                PocketDetectionEvent(
+                    run_id=str(manifest_run_id),
+                    pdb_id=paths.pdb_id,
+                    variant_label=variant_label,
+                    ph_tag=active_ph_label,
+                    method=center_source,
+                    center=center,
+                    box_size=box_size,
+                ),
             )
         else:
             logger.debug(

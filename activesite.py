@@ -7,7 +7,7 @@ import hashlib
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
 from path_router import make_paths, expand_variants
-from run_manifest import update_manifest_for_pocket_detection
+from run_manifest import PocketDetectionEvent, emit_pocket_detection_event
 
 logger = logging.getLogger(__name__)
 
@@ -1647,15 +1647,17 @@ def main(pdb_file):
                     box_size,
                 )
                 if run_id:
-                    update_manifest_for_pocket_detection(
+                    emit_pocket_detection_event(
                         config,
-                        str(run_id),
-                        pdb_id,
-                        variant,
-                        ph_tag=None,
-                        method=source,
-                        center=center,
-                        box_size=box_size,
+                        PocketDetectionEvent(
+                            run_id=str(run_id),
+                            pdb_id=pdb_id,
+                            variant_label=variant,
+                            ph_tag=None,
+                            method=source,
+                            center=center,
+                            box_size=box_size,
+                        ),
                     )
                 else:
                     logging.debug(
