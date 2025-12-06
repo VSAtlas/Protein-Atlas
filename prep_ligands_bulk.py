@@ -13,9 +13,7 @@ import shutil
 from collections import Counter, defaultdict
 import argparse
 from input_and_export_functions import load_config, validate_config
-# >>> PATHS IMPORT START
 from path_router import make_paths
-# >>> PATHS IMPORT END
 
 from activesite import (
     fix_pdb_elements,

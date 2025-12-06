@@ -1,10 +1,15 @@
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from prep_ligands_bulk import prep_ligands_with_mgltools, read_config
 from prep_ligands_microstates import (

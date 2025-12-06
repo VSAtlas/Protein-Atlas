@@ -400,6 +400,8 @@ def prepare_and_filter_ligands(
                 for root in microstate_roots:
                     ms_paths = enumerate_ligands_for_docking(
                         requested_ph_values=None,
+                        cfg=cfg,
+                        pdb_id=paths.pdb_id.upper(),
                         root_dir=root,
                         microstate_dedup=True,
                         force=False,

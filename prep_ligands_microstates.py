@@ -7,11 +7,14 @@ import json
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Collection, Dict, List, Optional, Set, Union
 
-from path_router import make_paths
+from path_router import make_paths, load_ph_tags
 from rdkit import Chem
+
+from ph_ensemble_docking import _parse_ph_values_from_label
 
 logger = logging.getLogger(__name__)
 
@@ -176,14 +179,159 @@ def load_microstate_registry(library_out_dir: Path, library_name: str) -> tuple[
     return registry, microstate_index
 
 
-def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
-    """Save the microstate registry to microstates.json atomically."""
+def _rehydrate_microstate_registry_from_ph_pdbqts(
+    library_out_dir: Path,
+    library_name: str,
+) -> dict:
+    """
+    Rebuild a microstate registry from existing pH-specific PDBQT files when the
+    registry is empty (e.g., after a previous partial write or resume skip).
+    """
+    registry, index = load_microstate_registry(library_out_dir, library_name)
+    if registry.get("microstates"):
+        return registry
 
-    tmp_path = library_out_dir / "microstates.json.tmp"
+    ph_dirs = [d for d in library_out_dir.iterdir() if d.is_dir() and d.name.lower().startswith("ph")]
+    if not ph_dirs:
+        return registry
+
+    rebuilt = {
+        "version": registry.get("version", 1),
+        "library": registry.get("library", library_name),
+        "microstates": [],
+    }
+    ms_index: Dict[str, dict] = {}
+
+    for ph_dir in sorted(ph_dirs):
+        ph_label = ph_dir.name
+        ph_vals = _parse_ph_values_from_label(ph_label)
+        ph_value = ph_vals[0] if ph_vals else None
+
+        for pdbqt_path in ph_dir.glob("*.pdbqt"):
+            microstate_id = compute_microstate_id_from_pdbqt(pdbqt_path)
+            if not microstate_id:
+                continue
+
+            base = pdbqt_path.stem.replace(ph_label, "")
+            while "__" in base:
+                base = base.replace("__", "_")
+            base = base.strip("_")
+            ligand_stem = base if base else pdbqt_path.stem
+
+            entry = ms_index.get(microstate_id)
+            if entry is None:
+                canonical_name = f"{ligand_stem}__ms_{microstate_id}.pdbqt"
+                canonical_rel = f"microstates/{canonical_name}"
+                canonical_path = library_out_dir / canonical_rel
+                try:
+                    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+                    if not canonical_path.exists():
+                        shutil.copy2(pdbqt_path, canonical_path)
+                except Exception as e:
+                    logger.warning(
+                        "[microstate.rebuild] copy_failed ligand=%s src=%s dst=%s err=%s",
+                        ligand_stem,
+                        pdbqt_path,
+                        canonical_path,
+                        e,
+                    )
+
+                entry = {"microstate_id": microstate_id, "pdbqt_path": canonical_rel, "aliases": []}
+                rebuilt["microstates"].append(entry)
+                ms_index[microstate_id] = entry
+
+            alias = {"ligand_stem": ligand_stem, "ph_label": ph_label}
+            if ph_value is not None:
+                alias["ph_value"] = ph_value
+            aliases = entry.setdefault("aliases", [])
+            if alias not in aliases:
+                aliases.append(alias)
+
+    save_microstate_registry(library_out_dir, rebuilt)
+    return rebuilt
+
+
+def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
+    """
+    Save the microstate registry to microstates.json atomically.
+
+    Merges with the existing registry under a simple file lock to avoid
+    clobbering entries when multiple workers write in parallel.
+    """
+    import errno
+    import time
+
     final_path = library_out_dir / "microstates.json"
-    payload = json.dumps(registry, indent=2, sort_keys=True)
-    tmp_path.write_text(payload, encoding="utf-8")
-    os.replace(tmp_path, final_path)
+    tmp_path = library_out_dir / "microstates.json.tmp"
+    lock_path = library_out_dir / "microstates.json.lock"
+
+    fd = None
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except OSError as e:
+            if e.errno == errno.EEXIST:
+                time.sleep(0.05)
+                continue
+            raise
+
+    try:
+        library_name = registry.get("library") or "ligprep"
+        try:
+            existing_registry, _ = load_microstate_registry(library_out_dir, library_name)
+        except Exception:
+            existing_registry = {
+                "version": registry.get("version", 1),
+                "library": library_name,
+                "microstates": [],
+            }
+
+        existing_microstates = list(existing_registry.get("microstates") or [])
+        index: Dict[str, dict] = {}
+        for entry in existing_microstates:
+            mid = entry.get("microstate_id")
+            if mid:
+                index[mid] = entry
+
+        new_microstates = registry.get("microstates") or []
+        for entry in new_microstates:
+            mid = entry.get("microstate_id")
+            if not mid:
+                continue
+            existing_entry = index.get(mid)
+            if existing_entry is None:
+                existing_microstates.append(entry)
+                index[mid] = entry
+                continue
+
+            # Merge aliases for existing microstates so parallel writers don't drop metadata
+            existing_aliases = existing_entry.get("aliases") or []
+            new_aliases = entry.get("aliases") or []
+            for alias in new_aliases:
+                if alias and alias not in existing_aliases:
+                    existing_aliases.append(alias)
+            existing_entry["aliases"] = existing_aliases
+
+        merged = existing_registry
+        merged["microstates"] = existing_microstates
+        if "version" not in merged and "version" in registry:
+            merged["version"] = registry["version"]
+        if "library" not in merged and registry.get("library"):
+            merged["library"] = registry["library"]
+
+        payload = json.dumps(merged, indent=2, sort_keys=True)
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(tmp_path, final_path)
+    finally:
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            try:
+                os.remove(lock_path)
+            except FileNotFoundError:
+                pass
 
 
 def _collect_ligand_stems_with_microstates(
@@ -347,6 +495,42 @@ def enumerate_ligands_for_docking(
     if requested_ph_values:
         requested_set = {float(ph) for ph in requested_ph_values}
 
+    # Auto-derive pH window from pH ensemble labels when none is provided explicitly
+    if requested_set is None and cfg is not None and pdb_id:
+        try:
+            mode = str(cfg.get("PH_LIGAND_MODE", "off")).lower()
+            ph_ensemble_enabled = bool(cfg.get("PH_ENSEMBLE"))
+            if ph_ensemble_enabled and mode not in ("off", ""):
+                ph_tags = load_ph_tags(pdb_id, variant=None) or []
+
+                context_phs: list[float] = []
+                for tag in ph_tags:
+                    for ph in _parse_ph_values_from_label(tag):
+                        context_phs.extend((ph - 1.0, ph, ph + 1.0))
+
+                ligand_window = sorted(
+                    {
+                        round(ph, 1)
+                        for ph in context_phs
+                        if 0.0 < ph < 15.0
+                    }
+                )
+
+                if ligand_window:
+                    requested_set = set(ligand_window)
+                    logger.info(
+                        "enumerate_ligands_for_docking: auto pH window from ensemble pdb=%s mode=%s ph_values=%s",
+                        (pdb_id or "").upper(),
+                        mode,
+                        ligand_window,
+                    )
+        except Exception as e:
+            logger.warning(
+                "enumerate_ligands_for_docking: failed to derive pH window from ensemble for %s: %s",
+                (pdb_id or "").upper(),
+                e,
+            )
+
     logger.info(
         "enumerate_ligands_for_docking: root_dir=%s ph_values=%s microstate_dedup=%s force=%s",
         str(root_dir_path) if root_dir_path is not None else "",
@@ -391,6 +575,14 @@ def enumerate_ligands_for_docking(
         if not registry_path.exists():
             _run_microstate_prep_for_phs(requested_set)
         registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+        if not (registry.get("microstates") or []):
+            try:
+                registry = _rehydrate_microstate_registry_from_ph_pdbqts(library_out_dir, library_name)
+                _, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+            except Exception as e:
+                logger.warning(
+                    "[microstate.rebuild.skip] library=%s reason=%s", library_name, e
+                )
 
         existing_ph_values: Set[float] = set()
         for entry in registry.get("microstates", []) or []:

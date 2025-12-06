@@ -1,5 +1,168 @@
 {
   "library": "test_library_10",
-  "microstates": [],
+  "microstates": [
+    {
+      "aliases": [
+        {
+          "ligand_stem": "test_library_10_00004",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00007",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00008",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00010",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00007",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00004",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00003",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00002",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00010",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00002",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00009",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00002",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00007",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00009",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00005",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00001",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00005",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00009",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00003",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00010",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00001",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00005",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00008",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        },
+        {
+          "ligand_stem": "test_library_10_00006",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00001",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00008",
+          "ph_label": "pH6_0",
+          "ph_value": 6.0
+        },
+        {
+          "ligand_stem": "test_library_10_00004",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        }
+      ],
+      "microstate_id": "9a19b2baef23b983",
+      "pdbqt_path": "microstates/test_library_10_00004__ms_9a19b2baef23b983.pdbqt"
+    },
+    {
+      "aliases": [
+        {
+          "ligand_stem": "test_library_10_00003",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00006",
+          "ph_label": "pH8_0",
+          "ph_value": 8.0
+        },
+        {
+          "ligand_stem": "test_library_10_00006",
+          "ph_label": "pH7_0",
+          "ph_value": 7.0
+        }
+      ],
+      "microstate_id": "5a31e6cfa451a79e",
+      "pdbqt_path": "microstates/test_library_10_00003__ms_5a31e6cfa451a79e.pdbqt"
+    }
+  ],
   "version": 1
 }
