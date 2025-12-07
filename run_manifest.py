@@ -111,6 +111,40 @@ def _normalize_pdb_id_token(token: Any) -> Optional[str]:
     return None
 
 
+def _normalize_string_token(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        s = str(value).strip()
+    except Exception:
+        return None
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in {'"', "'"}:
+        s = s[1:-1].strip()
+    return s or None
+
+
+def _coerce_bool_token(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    try:
+        token = str(value).strip().lower()
+    except Exception:
+        return None
+    if not token:
+        return None
+    truthy = {"1", "true", "yes", "on", "y", "t"}
+    falsy = {"0", "false", "no", "off", "n", "f"}
+    if token in truthy:
+        return True
+    if token in falsy:
+        return False
+    return None
+
+
 def _refresh_summary(manifest: MutableMapping[str, Any]) -> None:
     summary = manifest.get("summary")
     if not isinstance(summary, MutableMapping):
@@ -568,6 +602,64 @@ def update_manifest_for_scheduled_proteins(
     except Exception:
         logging.warning(
             "[run-manifest.scheduled.error] run_id=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
+def update_manifest_for_run_config(
+    cfg: Mapping[str, Any],
+    run_id: str,
+) -> None:
+    """
+    Record resolved apo/holo mode and water-policy knobs in the manifest.
+    """
+    try:
+        if not run_id:
+            logging.debug("[run-manifest.run-config.skip] reason=missing_run_id")
+            return
+
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.run-config.skip] manifest missing run_id=%s path=%s",
+                run_id,
+                manifest_path,
+            )
+            return
+
+        cmd = manifest.get("command")
+        if not isinstance(cmd, MutableMapping):
+            cmd = {}
+            manifest["command"] = cmd
+
+        apo_mode = _normalize_string_token(cfg.get("_RESOLVED_APO_HOLO_MODE"))
+        if apo_mode is None:
+            apo_mode = _normalize_string_token(cfg.get("APO_HOLO_MODE"))
+        if apo_mode is not None:
+            cmd["APO_HOLO_MODE"] = apo_mode
+
+        if "REMOVE_WATERS" in cfg:
+            rw_raw = cfg.get("REMOVE_WATERS")
+            rw_val = _coerce_bool_token(rw_raw)
+            cmd["REMOVE_WATERS"] = rw_val if rw_val is not None else rw_raw
+
+        if "KEEP_WATERS_WITHIN_A" in cfg:
+            val = cfg.get("KEEP_WATERS_WITHIN_A")
+            try:
+                cmd["KEEP_WATERS_WITHIN_A"] = float(val) if val is not None else None
+            except Exception:
+                cmd["KEEP_WATERS_WITHIN_A"] = val
+
+        if "WATER_KEEP_POLICY" in cfg:
+            val = _normalize_string_token(cfg.get("WATER_KEEP_POLICY"))
+            cmd["WATER_KEEP_POLICY"] = val if val is not None else cfg.get("WATER_KEEP_POLICY")
+
+        _write_manifest(manifest_path, manifest)
+    except Exception:
+        logging.warning(
+            "[run-manifest.run-config.error] run_id=%s",
             run_id,
             exc_info=True,
         )

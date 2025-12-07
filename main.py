@@ -36,6 +36,7 @@ from run_manifest import (
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
     update_manifest_for_scheduled_proteins,
+    update_manifest_for_run_config,
 )
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1091,8 +1092,13 @@ def main() -> None:
         variants,
         cfg_raw_mode,
     )
-
-
+    try:
+        update_manifest_for_run_config(cfg, run_id)
+    except Exception:
+        logging.warning(
+            "[run-manifest] Failed to record run-level apo/holo + water policy",
+            exc_info=True,
+        )
 
     # Where to write per-PDB failure logs
     overall_dir = cfg.get("OVERALL_DIR", ".")
@@ -1318,19 +1324,28 @@ def _send_run_email(status: int, start_time: str, end_time: str) -> None:
         ]
         body = "\n".join(body_lines)
 
-        # Use the same `mail` CLI you already tested in your bash wrapper
+        mail_bin = shutil.which("mail")
+        if not mail_bin:
+            logging.info("[notify] mail command unavailable; skipping email")
+            return
+
         try:
-            pipe = os.popen(f'mail -s "{subject}" mpg2352@utexas.edu', "w")
+            proc = subprocess.Popen(
+                [mail_bin, "-s", subject, "mpg2352@utexas.edu"],
+                stdin=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as exc:
+            logging.warning("[notify] failed to spawn mail command err=%s", exc)
+            return
+
+        try:
+            proc.communicate(body, timeout=30)
+        except Exception as exc:
+            logging.warning("[notify] mail command failed err=%s", exc)
             try:
-                pipe.write(body)
-            finally:
-                pipe.close()
-        except Exception:
-            # If mail fails, log it but never break the run
-            try:
-                logging.exception("[notify] failed to send mail notification")
+                proc.kill()
             except Exception:
-                # Logging itself should not be able to kill the run
                 pass
 
     except Exception:
