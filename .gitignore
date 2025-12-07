@@ -38,3 +38,4 @@ logs/
 
 # Run manifests
 /manifests/
+analysis/out/
