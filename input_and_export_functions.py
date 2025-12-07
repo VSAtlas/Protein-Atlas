@@ -3,6 +3,7 @@ from pathlib import Path
 from distutils.util import strtobool
 from typing import Any, Dict, Optional
 import re, csv, math
+import pandas as pd
 from collections import defaultdict
 # >>> PATHS IMPORT START
 from path_router import (
@@ -789,6 +790,100 @@ def write_scores_csv(cfg, pdb_id, score_history):
         variant=var,
     )
     return csv_output_path
+
+
+def annotate_fda_long_csv_with_t_scores_vs_decoys(
+    cfg: Dict[str, Any],
+    pdb_id: str,
+    ph_label: Optional[str] = None,
+    logger=None,
+) -> Optional[str]:
+    """
+    Post-processing helper used by docking.py when TEST_MODE_ENABLE includes DUD
+    and we are running the FDA subrun.
+
+    It reads dud_docking_score_long.csv to compute mean/std of best decoy scores,
+    then annotates docking_score_long.csv for FDA ligands with a t_vs_decoys column.
+
+    Returns the path to the updated FDA long CSV, or None if skipped.
+    """
+    try:
+        from dud_eval import (
+            compute_decoy_stats_from_long_csv,
+            guess_ligfile_col,
+            guess_score_col,
+        )
+    except Exception as e:
+        if logger:
+            logger.warning("[t-score.skip] pdb_id=%s reason=import_error %s", pdb_id, e)
+        return None
+
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+    variant_root = Path(paths.docked_variant_root(var))
+
+    dud_csv = variant_root / "dud_docking_score_long.csv"
+    fda_csv = variant_root / "docking_score_long.csv"
+
+    if not dud_csv.exists() or not fda_csv.exists():
+        if logger:
+            logger.info(
+                "[t-score.skip] pdb_id=%s ph=%s reason=missing_csv dud=%s fda=%s",
+                pdb_id,
+                ph_label or "base",
+                str(dud_csv),
+                str(fda_csv),
+            )
+        return None
+
+    mu, sigma, n_decoys = compute_decoy_stats_from_long_csv(dud_csv)
+    if (
+        not n_decoys
+        or not math.isfinite(mu)
+        or not math.isfinite(sigma)
+        or sigma == 0.0
+    ):
+        if logger:
+            logger.info(
+                "[t-score.skip] pdb_id=%s ph=%s reason=degenerate_stats n=%s mu=%s sigma=%s",
+                pdb_id,
+                ph_label or "base",
+                n_decoys,
+                mu,
+                sigma,
+            )
+        return None
+
+    df = pd.read_csv(fda_csv)
+
+    lig_col = guess_ligfile_col(df, None)
+    score_col = guess_score_col(df, None)
+    df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
+
+    # Best score per ligand
+    best = (
+        df.groupby(lig_col, as_index=False)
+          .agg(best_score=(score_col, "min"))
+    )
+    best["t_vs_decoys"] = (mu - best["best_score"]) / sigma
+    t_map = dict(zip(best[lig_col], best["t_vs_decoys"]))
+
+    df["t_vs_decoys"] = df[lig_col].map(t_map)
+
+    df.to_csv(fda_csv, index=False)
+
+    if logger:
+        logger.info(
+            "[t-score.ok] pdb_id=%s ph=%s n_decoys=%s mean=%.3f std=%.3f out=%s",
+            pdb_id,
+            ph_label or "base",
+            n_decoys,
+            mu,
+            sigma,
+            str(fda_csv),
+        )
+
+    return str(fda_csv)
 
 
 # -------------------------

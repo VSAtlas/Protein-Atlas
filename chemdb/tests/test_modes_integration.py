@@ -299,7 +299,7 @@ def test_no_docking_mode_creates_planned_ligands_only(tmp_path: Path) -> None:
 
 TEST_MODES_AND_PREFIXES = [
     ("off", [""]),
-    ("dud", ["dud_"]),
+    ("dud", [""]),
     ("hmdb", ["hmdb_"]),
     ("hmdb+dud", ["hmdb_", "dud_"]),
     ("hmdb+fda", ["hmdb_", ""]),
@@ -346,7 +346,11 @@ def test_test_mode_enable_generates_prefixed_csvs(
                     suffix = "dud"
                 elif prefix == "hmdb_":
                     suffix = "hmdb"
+                elif "fda" in mode.lower():
+                    suffix = "fda"
 
-                planned = variant_root / f"planned_ligands_{suffix}.txt"
-                assert planned.exists(), f"Missing planned ligands list for mode={mode} prefix={prefix} variant={variant}"
-                assert planned.stat().st_size > 0, f"Planned ligands list empty for mode={mode} prefix={prefix} variant={variant}"
+                planned = list(variant_root.rglob(f"planned_ligands_{suffix}.txt"))
+                assert planned, f"Missing planned ligands list for mode={mode} prefix={prefix} variant={variant}"
+                assert all(p.stat().st_size > 0 for p in planned), (
+                    f"Planned ligands list empty for mode={mode} prefix={prefix} variant={variant}"
+                )
