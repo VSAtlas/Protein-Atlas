@@ -171,19 +171,23 @@ def _coerce_test_map(m) -> Dict[str, str]:
 
 def _resolve_test_mode(cfg) -> str:
     """
-    Normalize TEST_MODE_ENABLE to one of: "off", "dud", "fda+dud".
+    Normalize TEST_MODE_ENABLE to one of:
+      "off", "dud", "fda+dud", "hmdb", "hmdb+dud", "hmdb+fda", "fda+dud+hmdb".
 
     Accepts:
       - Booleans / bool-like strings for backwards compatibility:
           True  / "true" / "yes" / "on" / "1"  -> "fda+dud"
           False / "false" / "no"  / "off" / "0" / "" / None -> "off"
-      - Explicit string modes:
-          "off"        -> "off"
-          "dud"        -> "dud"
-          "fda+dud"    -> "fda+dud"
-          "both"       -> "fda+dud"
-          "fda_dud"    -> "fda+dud"
-    Any unrecognized string should log a warning and fall back to "off".
+      - Explicit string modes (case-insensitive, tolerant of "_" / "+" / "-"):
+          "off"                 -> "off"
+          "dud"                 -> "dud"
+          "fda+dud"/"both"      -> "fda+dud"
+          "hmdb"                -> "hmdb"
+          "hmdb+dud"            -> "hmdb+dud"
+          "hmdb+fda"            -> "hmdb+fda"
+          "fda+dud+hmdb"        -> "fda+dud+hmdb"
+
+    Any unrecognized string logs a warning and falls back to "off".
     """
     #env has priority over config
     raw = os.environ.get("TEST_MODE_ENABLE", cfg.get("TEST_MODE_ENABLE", "off"))
@@ -191,14 +195,49 @@ def _resolve_test_mode(cfg) -> str:
     if isinstance(raw, bool):
         return "fda+dud" if raw else "off"
 
-    s = str(raw).strip().lower()
-    if s in ("", "0", "false", "no", "off", "none", "null"):
+    s = str(raw).strip()
+    if not s:
         return "off"
-    if s in ("true", "yes", "on", "1"):
+
+    s_lower = s.lower()
+    if s_lower in ("", "0", "false", "no", "off", "none", "null"):
+        return "off"
+    if s_lower in ("true", "yes", "on", "1"):
         return "fda+dud"
-    if s in ("dud", "dud-only", "dud_only"):
+
+    direct_aliases = {
+        "both": "fda+dud",
+        "fda_dud": "fda+dud",
+        "fda+dud": "fda+dud",
+        "dud+fda": "fda+dud",
+    }
+    if s_lower in direct_aliases:
+        return direct_aliases[s_lower]
+
+    normalized = (
+        s_lower.replace("_", "+")
+        .replace("-", "+")
+        .replace(" ", "")
+        .replace("only", "")
+    ).strip("+")
+    if normalized in direct_aliases:
+        return direct_aliases[normalized]
+
+    tokens = [tok for tok in normalized.split("+") if tok and tok != "and"]
+    token_set = set(tokens)
+    if token_set == {"dud"}:
         return "dud"
-    if s in ("fda+dud", "dud+fda", "both", "fda_and_dud", "fda_dud"):
+    if token_set == {"hmdb"}:
+        return "hmdb"
+    if token_set == {"fda", "dud"}:
+        return "fda+dud"
+    if token_set == {"hmdb", "dud"}:
+        return "hmdb+dud"
+    if token_set == {"hmdb", "fda"}:
+        return "hmdb+fda"
+    if token_set == {"fda", "dud", "hmdb"}:
+        return "fda+dud+hmdb"
+    if normalized in ("fdaadud", "fdaanddud"):
         return "fda+dud"
 
     print(f"[test-mode] WARNING: Unknown TEST_MODE_ENABLE={raw!r}; treating as 'off'.")
@@ -241,6 +280,7 @@ def _lib_roots_for_pdb(
                 extra_paths.append(p)
 
     subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
+    hmdb_subdir = str(cfg.get("HMDB_LIBRARY_SUBDIR", "hmdb"))
     test_mode = test_mode_override or _resolve_test_mode(cfg)
 
     maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
@@ -254,20 +294,40 @@ def _lib_roots_for_pdb(
         or cfg.get("PREPPED_LIGANDS_ROOT")
         or "prepped_ligands"
     )
+    hmdb_root = base_root / hmdb_subdir
+    dud_root = (base_root / mapped_value) if mapped_value else None
+
+    need_dud_map = test_mode in ("dud", "fda+dud", "hmdb+dud", "fda+dud+hmdb")
+    if need_dud_map and not mapped_value:
+        logger.warning(
+            "[test-mode] PDB %s missing from TEST_LIBRARY_MAP; using default library=%s",
+            pdb_id,
+            subdir_default,
+        )
+    dud_roots: list[Path] = []
+    if dud_root:
+        dud_roots = [dud_root]
+    elif need_dud_map:
+        dud_roots = [base_root / subdir_default]
 
     roots_for_mode: list[Path]
-    if test_mode == "off" or not mapped_value:
+    if test_mode == "off":
         roots_for_mode = [base_root / subdir_default]
-        if test_mode in ("dud", "fda+dud") and not mapped_value:
-            logger.warning(
-                "[test-mode] PDB %s missing from TEST_LIBRARY_MAP; using default library=%s",
-                pdb_id,
-                subdir_default,
-            )
     elif test_mode == "dud":
-        roots_for_mode = [base_root / mapped_value]
+        roots_for_mode = dud_roots or [base_root / subdir_default]
     elif test_mode == "fda+dud":
-        roots_for_mode = [base_root / mapped_value, base_root / subdir_default]
+        roots_for_mode = dud_roots + [base_root / subdir_default] if dud_roots else [base_root / subdir_default]
+    elif test_mode == "hmdb":
+        roots_for_mode = [hmdb_root]
+    elif test_mode == "hmdb+dud":
+        roots_for_mode = [hmdb_root] + (dud_roots or [base_root / subdir_default])
+    elif test_mode == "hmdb+fda":
+        roots_for_mode = [hmdb_root, base_root / subdir_default]
+    elif test_mode == "fda+dud+hmdb":
+        if dud_roots:
+            roots_for_mode = dud_roots + [hmdb_root, base_root / subdir_default]
+        else:
+            roots_for_mode = [hmdb_root, base_root / subdir_default]
     else:
         roots_for_mode = [base_root / subdir_default]
 
@@ -324,11 +384,16 @@ def prepare_and_filter_ligands(
       - TEST_MODE_ENABLE="off"      -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
       - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
       - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+      - TEST_MODE_ENABLE="hmdb"     -> OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR>
+      - TEST_MODE_ENABLE="hmdb+dud" -> OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR> + OUTPUT_LIGANDS_DIR/<mapped_subdir>
+      - TEST_MODE_ENABLE="hmdb+fda" -> OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+      - TEST_MODE_ENABLE="fda+dud+hmdb" -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
 
     run_mode:
-      - None: preserve TEST_MODE_ENABLE semantics (off / dud / fda+dud)
+      - None: preserve TEST_MODE_ENABLE semantics (off / dud / fda+dud / hmdb / combinations)
       - "dud": force DUD-only by using the mapped subdir only
       - "fda": force FDA-only by using the default library only
+      - "hmdb": force HMDB-only by using HMDB_LIBRARY_SUBDIR only
 
     Controls are *never* filtered out here.
     LIBRARY_EXTRA_DIRS remain included (unchanged).
@@ -338,6 +403,8 @@ def prepare_and_filter_ligands(
         effective_mode = "dud"
     elif run_mode == "fda":
         effective_mode = "off"
+    elif run_mode == "hmdb":
+        effective_mode = "hmdb"
     else:
         effective_mode = overall_mode
 

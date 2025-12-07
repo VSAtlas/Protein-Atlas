@@ -833,6 +833,7 @@ def main() -> None:
 
     # --- Library subfolder selection -----------------------------------
     cfg.setdefault("LIBRARY_SUBDIR_DEFAULT", "fda_library")
+    cfg.setdefault("HMDB_LIBRARY_SUBDIR", "hmdb")
     cfg.setdefault("TEST_MODE_ENABLE", "off")
     # Accept dict or JSON-ish string
     if "TEST_LIBRARY_MAP" not in cfg:

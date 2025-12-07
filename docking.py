@@ -703,9 +703,9 @@ def _run_ligand_pipeline_subrun(
     """
     Run the existing ligands + multi-stage docking pipeline once,
     but parameterized by:
-      - run_mode: None | "dud" | "fda"
-      - csv_prefix: "" or "dud_"
-      - stage_name_prefix: "" or "dud_"
+      - run_mode: None | "dud" | "fda" | "hmdb"
+      - csv_prefix: "" or "dud_" or "hmdb_"
+      - stage_name_prefix: "" or "dud_" or "hmdb_"
     Variant and pH behavior must remain unchanged: only the final stage
     component gets the prefix.
     """
@@ -775,7 +775,12 @@ def _run_ligand_pipeline_subrun(
                 )
                 logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
 
-                ph_override_single = "dud" if run_mode == "dud" else None
+                if run_mode in {"dud", "hmdb"}:
+                    ph_override_single = run_mode
+                elif run_mode == "fda":
+                    ph_override_single = "off"
+                else:
+                    ph_override_single = None
                 _, noncontrol_roots_single = _lib_roots_for_pdb(
                     cfg,
                     paths.pdb_id.upper(),
@@ -888,7 +893,12 @@ def _run_ligand_pipeline_subrun(
         )
         return
 
-    ph_test_mode_override = "dud" if run_mode == "dud" else None
+    if run_mode in {"dud", "hmdb"}:
+        ph_test_mode_override = run_mode
+    elif run_mode == "fda":
+        ph_test_mode_override = "off"
+    else:
+        ph_test_mode_override = None
     _ctrl_roots_ph, noncontrol_roots_ph = _lib_roots_for_pdb(
         cfg,
         paths.pdb_id.upper(),
@@ -1504,8 +1514,57 @@ def _run_ligand_pipeline_subrun(
                     variant_label,
                     ph_label if ph_label else "base",
                     exc_info=True,
-                )
+            )
             raise
+
+
+def _subruns_for_test_mode(test_mode: str) -> list[dict]:
+    """
+    Return a list of subrun descriptors with keys:
+      - run_mode: None | "dud" | "fda" | "hmdb"
+      - csv_prefix: str
+      - stage_name_prefix: str
+    """
+    if test_mode in (None, "", "off", "dud"):
+        return [
+            {
+                "run_mode": None,
+                "csv_prefix": "",
+                "stage_name_prefix": "",
+            }
+        ]
+    if test_mode == "fda+dud":
+        return [
+            {"run_mode": "dud",  "csv_prefix": "dud_",  "stage_name_prefix": "dud_"},
+            {"run_mode": "fda",  "csv_prefix": "",      "stage_name_prefix": ""},
+        ]
+    if test_mode == "hmdb":
+        return [
+            {"run_mode": "hmdb", "csv_prefix": "hmdb_", "stage_name_prefix": "hmdb_"},
+        ]
+    if test_mode == "hmdb+dud":
+        return [
+            {"run_mode": "hmdb", "csv_prefix": "hmdb_", "stage_name_prefix": "hmdb_"},
+            {"run_mode": "dud",  "csv_prefix": "dud_",  "stage_name_prefix": "dud_"},
+        ]
+    if test_mode == "hmdb+fda":
+        return [
+            {"run_mode": "hmdb", "csv_prefix": "hmdb_", "stage_name_prefix": "hmdb_"},
+            {"run_mode": "fda",  "csv_prefix": "",      "stage_name_prefix": ""},
+        ]
+    if test_mode == "fda+dud+hmdb":
+        return [
+            {"run_mode": "dud",  "csv_prefix": "dud_",  "stage_name_prefix": "dud_"},
+            {"run_mode": "hmdb", "csv_prefix": "hmdb_", "stage_name_prefix": "hmdb_"},
+            {"run_mode": "fda",  "csv_prefix": "",      "stage_name_prefix": ""},
+        ]
+    return [
+        {
+            "run_mode": None,
+            "csv_prefix": "",
+            "stage_name_prefix": "",
+        }
+    ]
 
 
 def _phase6_to8_ligands_and_docking(
@@ -1527,89 +1586,37 @@ def _phase6_to8_ligands_and_docking(
     control_lookup: Dict[str, Path],
 ) -> None:
     test_mode = _resolve_test_mode(cfg)
+    subruns = _subruns_for_test_mode(test_mode)
 
-    if test_mode != "fda+dud":
-
+    for sub in subruns:
         logger.info(
-            "[subrun] mode=%s run_mode=None csv_prefix='' stage_prefix='' (single subrun)",
+            "[subrun] mode=%s run_mode=%r csv_prefix=%r stage_prefix=%r",
             test_mode,
+            sub["run_mode"],
+            sub["csv_prefix"],
+            sub["stage_name_prefix"],
         )
         _run_ligand_pipeline_subrun(
-                cfg,
-                paths,
-                logger,
-                pdb_id,
-                variant_env,
-                variant_token,
-                variant_label,
-                legacy_mode,
-                cleaned_pdb,
-                receptor_pdbqt,
-                center,
-                box_size,
-                stages,
-                params,
-                control_stems,
-                control_lookup,
-                run_mode=None,
-                csv_prefix="",
-                stage_name_prefix="",
+            cfg,
+            paths,
+            logger,
+            pdb_id,
+            variant_env,
+            variant_token,
+            variant_label,
+            legacy_mode,
+            cleaned_pdb,
+            receptor_pdbqt,
+            center,
+            box_size,
+            stages,
+            params,
+            control_stems,
+            control_lookup,
+            run_mode=sub["run_mode"],
+            csv_prefix=sub["csv_prefix"],
+            stage_name_prefix=sub["stage_name_prefix"],
         )
-        return
-
-    logger.info(
-        "[subrun] mode=fda+dud -> running DUD-only subrun then FDA-only subrun "
-        "(stage_prefix='dud_' for DUD only)"
-    )
-
-
-    # fda+dud: 1) DUD-only sub-run, 2) FDA-only sub-run
-
-    # DUD: use run_mode="dud", stage and CSV prefixes "dud_"
-    _run_ligand_pipeline_subrun(
-        cfg,
-        paths,
-        logger,
-        pdb_id,
-        variant_env,
-        variant_token,
-        variant_label,
-        legacy_mode,
-        cleaned_pdb,
-        receptor_pdbqt,
-        center,
-        box_size,
-        stages,
-        params,
-        control_stems,
-        control_lookup,
-        run_mode="dud",
-        csv_prefix="dud_",
-        stage_name_prefix="dud_",
-    )
-
-    # FDA: run_mode="fda", no prefixes (standard behavior)
-    _run_ligand_pipeline_subrun(
-        cfg,
-        paths,
-        logger,
-        pdb_id,
-        variant_env,
-        variant_token,
-        variant_label,
-        legacy_mode,
-        cleaned_pdb,
-        receptor_pdbqt,
-        center,
-        box_size,
-        stages,
-        params,
-        control_stems,
-        control_lookup,
-        run_mode="fda",
-        csv_prefix="",
-        stage_name_prefix="",
-    )
 
 
 def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
