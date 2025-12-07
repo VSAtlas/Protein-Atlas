@@ -602,6 +602,23 @@ def prepare_and_filter_ligands(
         if keep:
             filtered_noncontrols.append(p)
 
+    # When pH ligand mode is disabled, drop pH-annotated microstate ligands
+    # from the non-control pool. We detect these by 'pH' in the filename stem.
+    ph_mode_raw = str(cfg.get("PH_LIGAND_MODE", "off")).strip().lower()
+    ph_ligand_mode_on = ph_mode_raw not in ("", "off", "none", "false", "0")
+    if not ph_ligand_mode_on:
+        before = len(filtered_noncontrols)
+        filtered_noncontrols = [
+            p for p in filtered_noncontrols
+            if "pH" not in p.stem
+        ]
+        removed = before - len(filtered_noncontrols)
+        if removed:
+            logger.info(
+                "[ligands.ph-filter] PH_LIGAND_MODE=False -> removed %d ligands with 'pH' in stem from non-control pool",
+                removed,
+            )
+
     # --- Optional: build library manifests from scan results ---
     if cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN"):
         try:
