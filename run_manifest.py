@@ -898,6 +898,255 @@ def update_manifest_for_pocket_detection(
         )
 
 
+def _ensure_stage_timing(stage_entry: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    timing = stage_entry.get("timing")
+    if not isinstance(timing, MutableMapping):
+        timing = {"started_at": None, "finished_at": None, "wall_time_sec": None}
+    else:
+        timing.setdefault("started_at", None)
+        timing.setdefault("finished_at", None)
+        timing.setdefault("wall_time_sec", None)
+    stage_entry["timing"] = timing
+    return timing
+
+
+def update_manifest_for_docking_overall(
+    cfg: Mapping[str, Any],
+    run_id: str,
+    pdb_id: str,
+    variant_label: Optional[str],
+    *,
+    ph_tag: Optional[str] = None,
+    event: str = "start",
+    elapsed_sec: Optional[float] = None,
+    error: Optional[str] = None,
+) -> None:
+    """
+    Record overall docking timing + status for a single (pdb, variant, pH).
+
+    event == "start" : mark running + capture started_at if unset.
+    event == "end"   : mark completed + capture finished_at/wall_time_sec.
+    event == "fail"  : mark failed + capture finished_at/wall_time_sec/error.
+    """
+    ph_label = ph_tag if ph_tag is not None else "base"
+    try:
+        if not run_id:
+            logging.debug(
+                "[run-manifest.docking-overall.skip] no run_id pdb=%s variant=%s ph=%s event=%s",
+                pdb_id,
+                variant_label,
+                ph_label,
+                event,
+            )
+            return
+
+        now = _utc_now_iso()
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.docking-overall.skip] manifest missing run_id=%s path=%s pdb=%s variant=%s ph=%s",
+                run_id,
+                manifest_path,
+                pdb_id,
+                variant_label,
+                ph_label,
+            )
+            return
+
+        entry = _ensure_protein(manifest, pdb_id, variant_label, ph_tag)
+        stages = entry.setdefault("stages", {})
+        docking_stage = stages.get("docking")
+        if not isinstance(docking_stage, MutableMapping):
+            docking_stage = _default_stage_entry()
+            stages["docking"] = docking_stage
+
+        timing = _ensure_stage_timing(docking_stage)
+
+        if event == "start":
+            docking_stage["status"] = "running"
+            docking_stage["error"] = None
+            if not timing.get("started_at"):
+                timing["started_at"] = now
+        elif event in ("end", "fail"):
+            if not timing.get("started_at"):
+                timing["started_at"] = now
+            timing["finished_at"] = now
+            if elapsed_sec is not None:
+                timing["wall_time_sec"] = round(float(elapsed_sec), 3)
+            docking_stage["status"] = "failed" if event == "fail" else "completed"
+            if error is not None:
+                docking_stage["error"] = str(error)
+        else:
+            logging.debug(
+                "[run-manifest.docking-overall.skip] unknown_event=%s run_id=%s pdb=%s variant=%s ph=%s",
+                event,
+                run_id,
+                pdb_id,
+                variant_label,
+                ph_label,
+            )
+            return
+
+        _refresh_summary(manifest)
+        _write_manifest(manifest_path, manifest)
+    except Exception:
+        logging.warning(
+            "[run-manifest.docking-overall.error] run_id=%s pdb=%s variant=%s ph=%s event=%s",
+            run_id,
+            pdb_id,
+            variant_label,
+            ph_label,
+            event,
+            exc_info=True,
+        )
+
+
+def update_manifest_for_docking_stage(
+    cfg: Mapping[str, Any],
+    run_id: str,
+    pdb_id: str,
+    variant_label: Optional[str],
+    stage_name: str,
+    status: str,
+    *,
+    ph_tag: Optional[str] = None,
+    elapsed_sec: Optional[float] = None,
+    error: Optional[str] = None,
+) -> None:
+    """
+    Record status/timing for a single docking stage (e.g., "stage1", "stage2").
+    """
+    ph_label = ph_tag if ph_tag is not None else "base"
+    stage_token = (stage_name or "stage").strip() or "stage"
+    raw_name = stage_token
+    subrun_label = "primary"
+    base_stage_name = raw_name
+    if raw_name.startswith("dud_"):
+        subrun_label = "dud"
+        suffix = raw_name[len("dud_") :]
+        base_stage_name = suffix or raw_name
+    elif raw_name.startswith("hmdb_"):
+        subrun_label = "hmdb"
+        suffix = raw_name[len("hmdb_") :]
+        base_stage_name = suffix or raw_name
+    try:
+        if not run_id:
+            logging.debug(
+                "[run-manifest.docking-stage.skip] no run_id pdb=%s variant=%s ph=%s stage=%s",
+                pdb_id,
+                variant_label,
+                ph_label,
+                stage_token,
+            )
+            return
+
+        now = _utc_now_iso()
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.docking-stage.skip] manifest missing run_id=%s path=%s pdb=%s variant=%s ph=%s stage=%s",
+                run_id,
+                manifest_path,
+                pdb_id,
+                variant_label,
+                ph_label,
+                stage_token,
+            )
+            return
+
+        entry = _ensure_protein(manifest, pdb_id, variant_label, ph_tag)
+        stages = entry.setdefault("stages", {})
+        docking_stage = stages.get("docking")
+        if not isinstance(docking_stage, MutableMapping):
+            docking_stage = _default_stage_entry()
+            stages["docking"] = docking_stage
+
+        details = docking_stage.get("details")
+        if not isinstance(details, MutableMapping):
+            details = {}
+        docking_stage["details"] = details
+
+        per_stage = details.get("per_stage")
+        if not isinstance(per_stage, MutableMapping):
+            per_stage = {}
+        details["per_stage"] = per_stage
+
+        stage_entry = per_stage.get(stage_token)
+        if not isinstance(stage_entry, MutableMapping):
+            stage_entry = {
+                "status": "pending",
+                "error": None,
+                "timing": {"started_at": None, "finished_at": None, "wall_time_sec": None},
+                "subrun": subrun_label,
+                "stage_base_name": base_stage_name,
+            }
+        per_stage[stage_token] = stage_entry
+        stage_entry["subrun"] = subrun_label
+        stage_entry["stage_base_name"] = base_stage_name
+
+        timing = stage_entry.get("timing")
+        if not isinstance(timing, MutableMapping):
+            timing = {"started_at": None, "finished_at": None, "wall_time_sec": None}
+        else:
+            timing.setdefault("started_at", None)
+            timing.setdefault("finished_at", None)
+            timing.setdefault("wall_time_sec", None)
+        stage_entry["timing"] = timing
+
+        by_subrun = details.get("by_subrun")
+        if not isinstance(by_subrun, MutableMapping):
+            by_subrun = {}
+        details["by_subrun"] = by_subrun
+
+        subrun_map = by_subrun.get(subrun_label)
+        if not isinstance(subrun_map, MutableMapping):
+            subrun_map = {}
+        by_subrun[subrun_label] = subrun_map
+        subrun_map[raw_name] = stage_entry
+
+        if status == "running":
+            if not timing.get("started_at"):
+                timing["started_at"] = now
+            stage_entry["status"] = "running"
+            stage_entry["error"] = None
+        elif status in ("completed", "failed"):
+            if not timing.get("started_at"):
+                timing["started_at"] = now
+            timing["finished_at"] = now
+            if elapsed_sec is not None:
+                timing["wall_time_sec"] = round(float(elapsed_sec), 3)
+            stage_entry["status"] = status
+            if error is not None:
+                stage_entry["error"] = str(error)
+        else:
+            logging.debug(
+                "[run-manifest.docking-stage.skip] unknown_status=%s run_id=%s pdb=%s variant=%s ph=%s stage=%s",
+                status,
+                run_id,
+                pdb_id,
+                variant_label,
+                ph_label,
+                stage_token,
+            )
+            return
+
+        _refresh_summary(manifest)
+        _write_manifest(manifest_path, manifest)
+    except Exception:
+        logging.warning(
+            "[run-manifest.docking-stage.error] run_id=%s pdb=%s variant=%s ph=%s stage=%s status=%s",
+            run_id,
+            pdb_id,
+            variant_label,
+            ph_label,
+            stage_token,
+            status,
+            exc_info=True,
+        )
+
+
 def finalize_run_manifest(
     cfg: Mapping[str, Any], run_id: str, start_time: float, failed_entries: list[tuple[str, str, str, str, str]]
 ) -> None:

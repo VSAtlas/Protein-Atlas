@@ -60,6 +60,8 @@ from path_router import Paths, make_paths
 from run_manifest import (
     PocketDetectionEvent,
     emit_pocket_detection_event,
+    update_manifest_for_docking_overall,
+    update_manifest_for_docking_stage,
 )
 from pose_validation import (
     attempt_fallback_recenter,
@@ -740,24 +742,75 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         box_size,
     )
 
-    _phase6_to8_ligands_and_docking(
-        cfg,
-        paths,
-        logger,
-        pdb_id,
-        variant_env,
-        variant_token,
-        variant_label,
-        legacy_mode,
-        cleaned_pdb,
-        receptor_pdbqt,
-        center,
-        box_size,
-        stages,
-        params,
-        control_stems,
-        control_lookup,
-    )
+    run_id = str(cfg.get("RUN_ID", "") or "")
+    docking_event = "end"
+    docking_error: Optional[str] = None
+    docking_start = time.time()
+    if run_id:
+        try:
+            update_manifest_for_docking_overall(
+                cfg,
+                run_id,
+                pdb_id,
+                variant_label,
+                ph_tag=active_ph_label,
+                event="start",
+            )
+        except Exception:
+            logger.warning(
+                "[run-manifest.docking-overall] failed to record start pdb=%s variant=%s ph=%s",
+                pdb_id,
+                variant_label,
+                active_ph_label if active_ph_label is not None else "base",
+                exc_info=True,
+            )
+
+    try:
+        _phase6_to8_ligands_and_docking(
+            cfg,
+            paths,
+            logger,
+            pdb_id,
+            variant_env,
+            variant_token,
+            variant_label,
+            legacy_mode,
+            cleaned_pdb,
+            receptor_pdbqt,
+            center,
+            box_size,
+            stages,
+            params,
+            control_stems,
+            control_lookup,
+        )
+    except Exception as exc:
+        docking_event = "fail"
+        docking_error = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        docking_elapsed = time.time() - docking_start
+        if run_id:
+            try:
+                update_manifest_for_docking_overall(
+                    cfg,
+                    run_id,
+                    pdb_id,
+                    variant_label,
+                    ph_tag=active_ph_label,
+                    event=docking_event,
+                    elapsed_sec=docking_elapsed,
+                    error=docking_error,
+                )
+            except Exception:
+                logger.warning(
+                    "[run-manifest.docking-overall] failed to record end pdb=%s variant=%s ph=%s event=%s",
+                    pdb_id,
+                    variant_label,
+                    active_ph_label if active_ph_label is not None else "base",
+                    docking_event,
+                    exc_info=True,
+                )
 
 def _map_reason_to_category(reason: str) -> str:
     if not reason:
@@ -848,6 +901,38 @@ def run_one_stage(
     variant_token = variant_env or None
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    run_id = str(cfg.get("RUN_ID", "") or "")
+    variant_label = variant_env or "legacy"
+    raw_stage_name = (
+        stage.get("name")
+        or stage.get("stage_name")
+        or stage.get("label")
+        or stage.get("id")
+        or "stage"
+    )
+    stage_name = str(raw_stage_name).strip() or "stage"
+    stage_start = time.time()
+
+    if run_id:
+        try:
+            update_manifest_for_docking_stage(
+                cfg,
+                run_id,
+                pdb_id,
+                variant_label,
+                stage_name,
+                status="running",
+                ph_tag=ph_label,
+            )
+        except Exception:
+            logger.warning(
+                "[run-manifest.docking-stage] failed to record start pdb=%s variant=%s ph=%s stage=%s",
+                pdb_id,
+                variant_label,
+                ph_label if ph_label is not None else "base",
+                stage_name,
+                exc_info=True,
+            )
 
     scores: Dict[str, float] = {}
     validated_ligands: List[str] = []
@@ -1494,6 +1579,29 @@ def run_one_stage(
                         pbar=pbar,
                     )
                     continue
+
+    stage_elapsed = time.time() - stage_start
+    if run_id:
+        try:
+            update_manifest_for_docking_stage(
+                cfg,
+                run_id,
+                pdb_id,
+                variant_label,
+                stage_name,
+                status="completed",
+                ph_tag=ph_label,
+                elapsed_sec=stage_elapsed,
+            )
+        except Exception:
+            logger.warning(
+                "[run-manifest.docking-stage] failed to record completion pdb=%s variant=%s ph=%s stage=%s",
+                pdb_id,
+                variant_label,
+                ph_label if ph_label is not None else "base",
+                stage_name,
+                exc_info=True,
+            )
 
     return scores, validated_ligands, all_distances, raw_docked_ligands, invalids
 
