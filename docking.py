@@ -1056,9 +1056,57 @@ def _run_ligand_pipeline_subrun(
             guard = GlobalCenterGuard(
                 max_global_switches=int(cfg.get("MAX_GLOBAL_CENTER_SWITCHES", 2))
             )
-    
+
             stage1_original = ligands[:]
-    
+
+            # --- NO_LIBRARY_DOCKING: only plan ligands, do not dock -----------
+            if bool(cfg.get("NO_LIBRARY_DOCKING", False)):
+                # How many ligands would be docked for this PH / mode?
+                preview_n = int(cfg.get("NO_DOCKING_PREVIEW_N", 10))
+                preview_names = ", ".join(
+                    Path(l).name for l in stage1_original[:preview_n]
+                )
+
+                logger.info(
+                    "[no-docking-planned] pdb=%s variant=%s ph=%s mode=%s "
+                    "n_stage1=%d preview=[%s]",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                    run_mode or "(unspecified)",
+                    len(stage1_original),
+                    preview_names,
+                )
+
+                # Also drop a simple text file with the full Stage1 ligand list
+                try:
+                    out_dir = docked_dir(
+                        paths.pdb_id,
+                        variant=variant_token,
+                        ph_tag=ph_label,
+                        legacy=legacy_mode,
+                    )
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    suffix = run_mode or "run"
+                    out_txt = out_dir / f"planned_ligands_{suffix}.txt"
+
+                    with out_txt.open("w") as fh:
+                        for lig in stage1_original:
+                            fh.write(f"{lig}\n")
+
+                    logger.info(
+                        "[no-docking-planned] Wrote planned ligands to %s",
+                        out_txt,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[no-docking-planned] Failed to write planned ligand list: %s",
+                        e,
+                    )
+
+                # Skip all docking stages for this PH context.
+                continue
+
             control_stems_lower = {s.lower() for s in control_stems}
             forced_extracted_for_stage3 = {
                 lig for lig in stage1_original

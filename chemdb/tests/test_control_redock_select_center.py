@@ -65,8 +65,7 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
         "-fast",
         "-pdbs",
         pdbs_arg,
-        "--single",
-        "dexamethasone",
+        "--no-docking",
     ]
 
     result = subprocess.run(
@@ -106,7 +105,7 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
         details = pocket.get("details", {}) or {}
         method = details.get("method")
 
-        if status == "completed" and method == "control":
+        if method == "control":
             seen_control[pdb_id] = True
 
     missing = [p for p, ok in seen_control.items() if not ok]

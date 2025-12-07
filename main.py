@@ -847,6 +847,38 @@ def main() -> None:
     if cfg["FAST_MODE"]:
         print("[config] FAST_MODE effective=True (exhaustiveness=1)")
 
+    # --- No-library docking mode (controls-only + ligand planning) ------
+    #
+    # If enabled, we still run receptor prep + control redocking +
+    # pocket detection + ligand selection/enumeration, but we skip the
+    # actual docking calls for DUD/FDA libraries.
+    #
+    cfg.setdefault("NO_LIBRARY_DOCKING", False)
+
+    cli_no_dock = _cli_has(sys.argv, "--no-docking")
+    env_no_dock = os.environ.get("NO_LIBRARY_DOCKING")
+
+    effective_no_dock = False
+    if cli_no_dock:
+        effective_no_dock = True
+    elif env_no_dock is not None:
+        try:
+            effective_no_dock = _to_bool(env_no_dock)
+        except Exception:
+            effective_no_dock = False
+    else:
+        try:
+            effective_no_dock = bool(cfg.get("NO_LIBRARY_DOCKING", False))
+        except Exception:
+            effective_no_dock = False
+
+    cfg["NO_LIBRARY_DOCKING"] = effective_no_dock
+    if effective_no_dock:
+        print(
+            "[config] NO_LIBRARY_DOCKING=True "
+            "(controls-only; skip DUD/FDA docking, but still enumerate ligands)"
+        )
+
     # --- Center selection knobs (safe defaults) ---
     cfg.setdefault("CENTER_MODE", "control-first")  # ["control-first","hybrid","library-first"]
     cfg.setdefault("CONTROL_BLACKLIST", "GOL,EDO,PG4,MPD,ACT,SO4,PO4,CL,NA,CA")
