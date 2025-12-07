@@ -19,7 +19,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple
+from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 try:  # PyYAML is optional; we degrade gracefully if unavailable
     import yaml
@@ -85,14 +85,47 @@ def _default_protein_entry() -> Dict[str, Any]:
     }
 
 
+def _normalize_pdb_id_token(token: Any) -> Optional[str]:
+    """
+    Best-effort normalization of arbitrary tokens into 4-char uppercase PDB IDs.
+    Mirrors the CLI helper in main.py without importing it to avoid cycles.
+    """
+    if token is None:
+        return None
+    try:
+        t = str(token).strip()
+    except Exception:
+        return None
+    if not t:
+        return None
+    while t.startswith("-"):
+        t = t[1:]
+    t = os.path.basename(t)
+    if t.lower().endswith(".pdb"):
+        t = t[:-4]
+    t = t.replace("_cleaned", "")
+    t = t.upper()
+    if len(t) >= 4:
+        cand = t[:4]
+        return cand if cand.isalnum() else None
+    return None
+
+
 def _refresh_summary(manifest: MutableMapping[str, Any]) -> None:
+    summary = manifest.get("summary")
+    if not isinstance(summary, MutableMapping):
+        summary = {}
+        manifest["summary"] = summary
+
     proteins = manifest.get("proteins")
     if not isinstance(proteins, MutableMapping):
-        manifest["summary"] = {
-            "total_proteins_scheduled": 0,
-            "total_proteins_completed": 0,
-            "total_proteins_failed": 0,
-        }
+        manifest["proteins"] = {}
+        if "total_proteins_scheduled" not in summary:
+            summary["total_proteins_scheduled"] = 0
+        if "total_protein_list" not in summary:
+            summary["total_protein_list"] = []
+        summary["total_proteins_completed"] = 0
+        summary["total_proteins_failed"] = 0
         return
 
     try:
@@ -205,11 +238,20 @@ def _refresh_summary(manifest: MutableMapping[str, Any]) -> None:
             elif status == "failed":
                 failed += 1
 
-        manifest["summary"] = {
-            "total_proteins_scheduled": total,
-            "total_proteins_completed": completed,
-            "total_proteins_failed": failed,
-        }
+        if "total_proteins_scheduled" not in summary:
+            summary["total_proteins_scheduled"] = total
+        if "total_protein_list" not in summary:
+            fallback_ids: list[str] = []
+            for entry in proteins.values():
+                if not isinstance(entry, Mapping):
+                    continue
+                nid = entry.get("pdb_id")
+                canon = _normalize_pdb_id_token(nid)
+                if canon:
+                    fallback_ids.append(canon)
+            summary["total_protein_list"] = sorted(set(fallback_ids))
+        summary["total_proteins_completed"] = completed
+        summary["total_proteins_failed"] = failed
     except Exception:
         logging.warning(
             "[run-manifest] Failed to refresh summary (promotion + dedupe)", exc_info=True
@@ -482,6 +524,53 @@ def _ensure_protein(
     entry["ph"] = ph_tag
 
     return entry  # type: ignore[return-value]
+
+
+def update_manifest_for_scheduled_proteins(
+    cfg: Mapping[str, Any],
+    run_id: str,
+    scheduled_pdb_ids: Sequence[Any],
+) -> None:
+    """
+    Record the canonical list of PDB IDs queued for this run.
+    """
+    try:
+        if not run_id:
+            logging.debug("[run-manifest.scheduled.skip] reason=missing_run_id")
+            return
+
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.scheduled.skip] manifest missing run_id=%s path=%s",
+                run_id,
+                manifest_path,
+            )
+            return
+
+        summary = manifest.get("summary")
+        if not isinstance(summary, MutableMapping):
+            summary = {}
+            manifest["summary"] = summary
+
+        norm_ids: set[str] = set()
+        for raw in scheduled_pdb_ids:
+            nid = _normalize_pdb_id_token(raw)
+            if nid:
+                norm_ids.add(nid)
+
+        sorted_ids = sorted(norm_ids)
+        summary["total_proteins_scheduled"] = len(sorted_ids)
+        summary["total_protein_list"] = sorted_ids
+
+        _write_manifest(manifest_path, manifest)
+    except Exception:
+        logging.warning(
+            "[run-manifest.scheduled.error] run_id=%s",
+            run_id,
+            exc_info=True,
+        )
 
 
 def update_manifest_for_protein_start(

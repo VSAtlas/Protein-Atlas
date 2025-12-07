@@ -35,6 +35,7 @@ from run_manifest import (
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
+    update_manifest_for_scheduled_proteins,
 )
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -838,6 +839,25 @@ def main() -> None:
     # Accept dict or JSON-ish string
     if "TEST_LIBRARY_MAP" not in cfg:
         cfg["TEST_LIBRARY_MAP"] = {}
+
+    # Small FDA test library override.
+    # When called with: python main.py -test -test-fda -fast
+    # we want to use a tiny FDA test library instead of the full FDA set.
+    #
+    # By default this points at "fda_test_library_10", which should correspond to:
+    #   prepped_ligands/fda_test_library_10/
+    #   extracted_ligands/fda_test_library_10/
+    cfg.setdefault("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
+
+    if _cli_has(sys.argv, "-test-fda") or _cli_has(sys.argv, "--test-fda"):
+        cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get(
+            "TEST_FDA_LIBRARY_SUBDIR",
+            "fda_test_library_10",
+        )
+        print(
+            f"[config] TEST_FDA_LIBRARY enabled: "
+            f"LIBRARY_SUBDIR_DEFAULT={cfg['LIBRARY_SUBDIR_DEFAULT']}"
+        )
     # --- Specified Proteins Mode ---------------------------------------
     cfg.setdefault("SPECIFIED_PROTEINS", "")
     requested_ids, _sel_src = _parse_specified_proteins(sys.argv, cfg)
@@ -1028,6 +1048,18 @@ def main() -> None:
     print("Working directory:", os.getcwd())
     print("Loaded config keys:", list(cfg.keys()))
     print(f"Proteins queued: {len(pdb_files)}")
+    try:
+        scheduled_ids: list[str] = []
+        for f in pdb_files:
+            nid = _norm_pdb_id(f)
+            if nid:
+                scheduled_ids.append(nid.upper())
+        update_manifest_for_scheduled_proteins(cfg, run_id, scheduled_ids)
+    except Exception:
+        print(
+            "[run-manifest] WARNING: failed to record scheduled proteins in manifest",
+            file=sys.stderr,
+        )
 
 
     start = time.time()

@@ -820,7 +820,8 @@ def annotate_fda_long_csv_with_t_scores_vs_decoys(
 
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-    variant_root = Path(paths.docked_variant_root(var))
+    ph_token = (ph_label or "").strip() or None
+    variant_root = Path(paths.docked_variant_root(var, ph_token))
 
     dud_csv = variant_root / "dud_docking_score_long.csv"
     fda_csv = variant_root / "docking_score_long.csv"
