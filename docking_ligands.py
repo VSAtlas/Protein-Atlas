@@ -611,11 +611,12 @@ def prepare_and_filter_ligands(
         filtered_noncontrols = [
             p for p in filtered_noncontrols
             if "pH" not in p.stem
+            and not any(part.lower() == "microstates" for part in p.parts)
         ]
         removed = before - len(filtered_noncontrols)
         if removed:
             logger.info(
-                "[ligands.ph-filter] PH_LIGAND_MODE=False -> removed %d ligands with 'pH' in stem from non-control pool",
+                "[ligands.ph-filter] PH_LIGAND_MODE=False -> removed %d ligands with 'pH' in stem or under microstates/ from non-control pool",
                 removed,
             )
 

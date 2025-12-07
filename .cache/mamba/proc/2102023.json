@@ -1,0 +1,1 @@
+{"command":["exec","python","-m","pytest","chemdb/tests/test_modes_integration.py","-q"],"name":"happy_python","prefix":"/home/atlas/micromamba/envs/docking-env"}
