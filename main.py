@@ -32,12 +32,13 @@ from run_manifest import (
     apply_pocket_detection_events,
     finalize_run_manifest,
     init_run_manifest,
+    load_run_manifest,
+    update_manifest_for_config_hash,
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
-    update_manifest_for_scheduled_proteins,
     update_manifest_for_run_config,
-    update_manifest_for_config_hash,
+    update_manifest_for_scheduled_proteins,
 )
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -694,6 +695,11 @@ def _smoke_emit_config_demo() -> None:
 # ======================
 def main() -> None:
     print("MODELLER is working with license.")
+    is_resume = _cli_has(sys.argv, "-resume") or _cli_has(sys.argv, "--resume")
+    cli_run_id = _cli_val(sys.argv, "--run-id")
+    if is_resume and not cli_run_id:
+        print("ERROR: -resume requires --run-id <RUN_ID>", file=sys.stderr)
+        sys.exit(2)
     run_id = _resolve_run_id(sys.argv)
     os.environ["ATLAS_RUN_ID"] = run_id
     log_path = _prepare_run_logfile(run_id)
@@ -782,9 +788,13 @@ def main() -> None:
     cli_cfg_dir = _cli_val(sys.argv, "--configs-dir")
     cli_no_reset = _cli_has(sys.argv, "--no-reset-configs")
 
-    if cli_cfg_dir:  cfg["CONFIGS_DIR"] = cli_cfg_dir
+    if cli_cfg_dir:
+        cfg["CONFIGS_DIR"] = cli_cfg_dir
     cfg["RUN_ID"] = run_id
-    if cli_no_reset: cfg["RESET_CONFIGS"] = False
+    if is_resume:
+        cfg["RESET_CONFIGS"] = False
+    elif cli_no_reset:
+        cfg["RESET_CONFIGS"] = False
 
     init_config_run_dir(cfg, run_id=cfg.get("RUN_ID"), reset=cfg.get("RESET_CONFIGS"),
                         logger=logging.getLogger("run"))
@@ -794,19 +804,22 @@ def main() -> None:
     global_start = time.time()
 
     # Best-effort manifest initialization
-    try:
-        init_run_manifest(cfg, run_id, sys.argv, log_path)
-    except Exception:
-        logging.warning("Failed to initialize run_manifest.yaml", exc_info=True)
-    else:
+    if not is_resume:
         try:
-            update_manifest_for_config_hash(cfg, run_id)
+            init_run_manifest(cfg, run_id, sys.argv, log_path)
         except Exception:
-            logging.warning(
-                "[run-manifest] Failed to record config hash run_id=%s",
-                run_id,
-                exc_info=True,
-            )
+            logging.warning("Failed to initialize run_manifest.yaml", exc_info=True)
+        else:
+            try:
+                update_manifest_for_config_hash(cfg, run_id)
+            except Exception:
+                logging.warning(
+                    "[run-manifest] Failed to record config hash run_id=%s",
+                    run_id,
+                    exc_info=True,
+                )
+    else:
+        logging.info("[resume] Skipping manifest initialization for run_id=%s", run_id)
 
     # --- Single-ligand config (ported) ---------------------------------------
     cfg.setdefault("SINGLE_LIGAND", "")
@@ -977,6 +990,76 @@ def main() -> None:
         if f.lower().endswith(".pdb") and "_nolig" not in f.lower()
     ]
 
+    resume_manifest = None
+    resume_protein_ids: list[str] = []
+    completed_lookup: dict[tuple[str, str], bool] = {}
+    if is_resume:
+        resume_manifest = load_run_manifest(cfg, run_id)
+        if resume_manifest is None:
+            print(
+                f"ERROR: -resume requested but run_manifest.yaml for run_id={run_id} "
+                f"could not be loaded.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        command_section = resume_manifest.get("command") or {}
+        if isinstance(command_section, Mapping):
+            listed = command_section.get("pdb_list") or []
+            if isinstance(listed, (list, tuple)):
+                resume_protein_ids.extend(str(x).strip().upper() for x in listed if str(x).strip())
+
+        if not resume_protein_ids:
+            summary_section = resume_manifest.get("summary") or {}
+            summary_list = summary_section.get("total_protein_list") or []
+            if isinstance(summary_list, (list, tuple)):
+                resume_protein_ids.extend(str(x).strip().upper() for x in summary_list if str(x).strip())
+
+        proteins = resume_manifest.get("proteins") or {}
+        aggregated: dict[tuple[str, str], bool] = {}
+        if isinstance(proteins, Mapping):
+            for key, entry in proteins.items():
+                try:
+                    raw_key = str(key)
+                    parts = raw_key.split("|", 2)
+                    if len(parts) != 3:
+                        continue
+                    pdb_part, variant_part, _ph = parts
+                    pdb_token = (pdb_part or "").strip().upper()
+                    if not pdb_token:
+                        continue
+                    variant_token = (variant_part or "legacy").strip().lower() or "legacy"
+                    ckey = (pdb_token, variant_token)
+                    if not resume_protein_ids:
+                        resume_protein_ids.append(pdb_token)
+                    aggregated.setdefault(ckey, True)
+                    status = (entry.get("status") or "").strip().lower()
+                    if status != "completed":
+                        aggregated[ckey] = False
+                except Exception:
+                    logging.warning(
+                        "[resume.lookup.skip] key=%r entry=%r", key, entry, exc_info=True
+                    )
+
+        completed_lookup = {k: True for k, v in aggregated.items() if v}
+        if resume_protein_ids:
+            seen = set()
+            deduped = []
+            for pid in resume_protein_ids:
+                token = pid.strip().upper()
+                if not token or token in seen:
+                    continue
+                seen.add(token)
+                deduped.append(token)
+            resume_protein_ids = deduped
+        if resume_protein_ids and not cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS"):
+            cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = list(resume_protein_ids)
+        logging.info(
+            "[resume] loaded manifest for run_id=%s; completed protein entries=%d",
+            run_id,
+            len(completed_lookup),
+        )
+
     # Build an index: PDBID (4-char, upper) -> filename
     id_index: dict[str, str] = {}
     for f in pdb_files:
@@ -987,6 +1070,8 @@ def main() -> None:
             id_index.setdefault(nid, f)
 
     req = list(cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS", []) or [])
+    if is_resume and not req and resume_protein_ids:
+        req = list(resume_protein_ids)
     if req:
         # Compute present/missing and apply filter in user-specified order
         hits = [nid for nid in req if nid in id_index]
@@ -1059,18 +1144,19 @@ def main() -> None:
     print("Working directory:", os.getcwd())
     print("Loaded config keys:", list(cfg.keys()))
     print(f"Proteins queued: {len(pdb_files)}")
-    try:
-        scheduled_ids: list[str] = []
-        for f in pdb_files:
-            nid = _norm_pdb_id(f)
-            if nid:
-                scheduled_ids.append(nid.upper())
-        update_manifest_for_scheduled_proteins(cfg, run_id, scheduled_ids)
-    except Exception:
-        print(
-            "[run-manifest] WARNING: failed to record scheduled proteins in manifest",
-            file=sys.stderr,
-        )
+    if not is_resume:
+        try:
+            scheduled_ids: list[str] = []
+            for f in pdb_files:
+                nid = _norm_pdb_id(f)
+                if nid:
+                    scheduled_ids.append(nid.upper())
+            update_manifest_for_scheduled_proteins(cfg, run_id, scheduled_ids)
+        except Exception:
+            print(
+                "[run-manifest] WARNING: failed to record scheduled proteins in manifest",
+                file=sys.stderr,
+            )
 
 
     start = time.time()
@@ -1149,6 +1235,16 @@ def main() -> None:
             def _process_one(pdb_file: str, cfg_for_pdb):
                 pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
                 pdb_start = time.time()
+
+                if is_resume:
+                    resume_key = (pdb_id, label)
+                    if completed_lookup.get(resume_key):
+                        logging.info(
+                            "[resume.skip] pdb_id=%s variant=%s already completed; skipping.",
+                            pdb_id,
+                            label,
+                        )
+                        return
 
                 try:
                     library_name = None

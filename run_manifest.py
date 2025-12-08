@@ -734,6 +734,33 @@ def update_manifest_for_config_hash(
         )
 
 
+def load_run_manifest(cfg: Mapping[str, Any], run_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Load the run_manifest.yaml for the specified run_id. Returns None on failure.
+    """
+    try:
+        if not run_id:
+            logging.debug("[run-manifest.load.skip] reason=missing_run_id")
+            return None
+
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.load.missing] run_id=%s path=%s",
+                run_id,
+                manifest_path,
+            )
+        return manifest
+    except Exception:
+        logging.warning(
+            "[run-manifest.load.error] run_id=%s",
+            run_id,
+            exc_info=True,
+        )
+        return None
+
+
 def update_manifest_for_protein_start(
     cfg: Mapping[str, Any],
     run_id: str,
