@@ -19,6 +19,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import hashlib
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 try:  # PyYAML is optional; we degrade gracefully if unavailable
@@ -504,6 +505,8 @@ def init_run_manifest(cfg: Mapping[str, Any], run_id: str, argv: list[str], log_
         if pdb_list:
             manifest["command"]["pdb_list"] = pdb_list
 
+        manifest["command"]["config_hash"] = compute_config_hash(cfg)
+
         _refresh_summary(manifest)
         _write_manifest(manifest_path, manifest)
     except Exception:
@@ -558,6 +561,35 @@ def _ensure_protein(
     entry["ph"] = ph_tag
 
     return entry  # type: ignore[return-value]
+
+
+def _normalize_for_hash(obj: Any) -> Any:
+    if isinstance(obj, Mapping):
+        return {
+            str(k): _normalize_for_hash(v)
+            for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))
+        }
+    if isinstance(obj, (list, tuple, set)):
+        return [_normalize_for_hash(v) for v in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return repr(obj)
+
+
+def compute_config_hash(cfg: Mapping[str, Any]) -> str:
+    try:
+        normalized = _normalize_for_hash(dict(cfg))
+        payload = json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    except Exception:
+        try:
+            return hashlib.sha256(repr(cfg).encode("utf-8")).hexdigest()
+        except Exception:
+            return "UNKNOWN"
 
 
 def update_manifest_for_scheduled_proteins(
@@ -660,6 +692,43 @@ def update_manifest_for_run_config(
     except Exception:
         logging.warning(
             "[run-manifest.run-config.error] run_id=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
+def update_manifest_for_config_hash(
+    cfg: Mapping[str, Any],
+    run_id: str,
+) -> None:
+    """
+    Record the resolved config hash under command.config_hash.
+    """
+    try:
+        if not run_id:
+            logging.debug("[run-manifest.config-hash.skip] missing run_id")
+            return
+
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.config-hash.skip] manifest missing run_id=%s path=%s",
+                run_id,
+                manifest_path,
+            )
+            return
+
+        cmd = manifest.get("command")
+        if not isinstance(cmd, MutableMapping):
+            cmd = {}
+            manifest["command"] = cmd
+
+        cmd["config_hash"] = compute_config_hash(cfg)
+        _write_manifest(manifest_path, manifest)
+    except Exception:
+        logging.warning(
+            "[run-manifest.config-hash.error] run_id=%s",
             run_id,
             exc_info=True,
         )

@@ -37,6 +37,7 @@ from run_manifest import (
     update_manifest_for_protein_success,
     update_manifest_for_scheduled_proteins,
     update_manifest_for_run_config,
+    update_manifest_for_config_hash,
 )
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -797,6 +798,15 @@ def main() -> None:
         init_run_manifest(cfg, run_id, sys.argv, log_path)
     except Exception:
         logging.warning("Failed to initialize run_manifest.yaml", exc_info=True)
+    else:
+        try:
+            update_manifest_for_config_hash(cfg, run_id)
+        except Exception:
+            logging.warning(
+                "[run-manifest] Failed to record config hash run_id=%s",
+                run_id,
+                exc_info=True,
+            )
 
     # --- Single-ligand config (ported) ---------------------------------------
     cfg.setdefault("SINGLE_LIGAND", "")
