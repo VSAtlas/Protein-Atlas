@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 from activesite import extract_and_remove_ligands, get_atom_rules
-import sys, hashlib, re, logging, json, time, os, shutil, re
+import sys, hashlib, re, logging, json, time, os, shutil, re, shlex
 from dataclasses import dataclass, field
 import datetime
 from pathlib import Path
@@ -701,6 +701,10 @@ def main() -> None:
         print("ERROR: -resume requires --run-id <RUN_ID>", file=sys.stderr)
         sys.exit(2)
     run_id = _resolve_run_id(sys.argv)
+    argv_for_parsing = list(sys.argv)
+    resume_manifest = None
+    resume_protein_ids: list[str] = []
+    completed_lookup: dict[tuple[str, str], bool] = {}
     os.environ["ATLAS_RUN_ID"] = run_id
     log_path = _prepare_run_logfile(run_id)
     os.environ["ATLAS_LOG_FILE"] = log_path
@@ -757,9 +761,86 @@ def main() -> None:
 
     log = logging.getLogger("ph_ensemble")
     log.info("[ph_ensemble.mode] enabled=%s scope=%s radius=%s", cfg.PH_ENSEMBLE, getattr(cfg, "PH_SCOPE", "auto"), getattr(cfg, "PH_RADIUS", 10.0))
+
+    if is_resume:
+        resume_manifest = load_run_manifest(cfg, run_id)
+        if resume_manifest is None:
+            print(
+                f"ERROR: -resume requested but run_manifest.yaml for run_id={run_id} "
+                f"could not be loaded.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        command_section = resume_manifest.get("command") or {}
+        stored_argv = command_section.get("argv")
+        if stored_argv:
+            try:
+                parsed_args = shlex.split(str(stored_argv))
+                if parsed_args:
+                    argv_for_parsing = parsed_args
+                    logging.info("[resume] using stored argv=%s", parsed_args)
+            except Exception:
+                logging.warning(
+                    "[resume] Failed to parse stored argv=%r", stored_argv, exc_info=True
+                )
+
+        listed = command_section.get("pdb_list") or []
+        if isinstance(listed, (list, tuple)):
+            resume_protein_ids.extend(str(x).strip().upper() for x in listed if str(x).strip())
+
+        if not resume_protein_ids:
+            summary_section = resume_manifest.get("summary") or {}
+            summary_list = summary_section.get("total_protein_list") or []
+            if isinstance(summary_list, (list, tuple)):
+                resume_protein_ids.extend(str(x).strip().upper() for x in summary_list if str(x).strip())
+
+        proteins = resume_manifest.get("proteins") or {}
+        aggregated: dict[tuple[str, str], bool] = {}
+        if isinstance(proteins, Mapping):
+            for key, entry in proteins.items():
+                try:
+                    raw_key = str(key)
+                    parts = raw_key.split("|", 2)
+                    if len(parts) != 3:
+                        continue
+                    pdb_part, variant_part, _ph = parts
+                    pdb_token = (pdb_part or "").strip().upper()
+                    if not pdb_token:
+                        continue
+                    variant_token = (variant_part or "legacy").strip().lower() or "legacy"
+                    ckey = (pdb_token, variant_token)
+                    if not resume_protein_ids:
+                        resume_protein_ids.append(pdb_token)
+                    aggregated.setdefault(ckey, True)
+                    status = (entry.get("status") or "").strip().lower()
+                    if status != "completed":
+                        aggregated[ckey] = False
+                except Exception:
+                    logging.warning(
+                        "[resume.lookup.skip] key=%r entry=%r", key, entry, exc_info=True
+                    )
+
+        completed_lookup = {k: True for k, v in aggregated.items() if v}
+        if resume_protein_ids:
+            seen_ids = set()
+            deduped = []
+            for pid in resume_protein_ids:
+                token = pid.strip().upper()
+                if not token or token in seen_ids:
+                    continue
+                seen_ids.add(token)
+                deduped.append(token)
+            resume_protein_ids = deduped
+        logging.info(
+            "[resume] loaded manifest for run_id=%s; completed protein entries=%d",
+            run_id,
+            len(completed_lookup),
+        )
+
     # --- PH-ligand mode (CLI > ENV > CFG) ---
     cfg.setdefault("PH_LIGAND_MODE", "off")
-    cli_ph_mode = _cli_val(sys.argv, "--ph-ligand-mode")
+    cli_ph_mode = _cli_val(argv_for_parsing, "--ph-ligand-mode")
     env_ph_mode = os.environ.get("PH_LIGAND_MODE")
     cfg_ph_mode = str(cfg.get("PH_LIGAND_MODE", "off"))
 
@@ -785,8 +866,8 @@ def main() -> None:
 
 
     # CLI > ENV > CFG
-    cli_cfg_dir = _cli_val(sys.argv, "--configs-dir")
-    cli_no_reset = _cli_has(sys.argv, "--no-reset-configs")
+    cli_cfg_dir = _cli_val(argv_for_parsing, "--configs-dir")
+    cli_no_reset = _cli_has(argv_for_parsing, "--no-reset-configs")
 
     if cli_cfg_dir:
         cfg["CONFIGS_DIR"] = cli_cfg_dir
@@ -846,7 +927,7 @@ def main() -> None:
     cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
 
     # CLI > ENV > CFG precedence
-    cli_single = _parse_single_from_cli(sys.argv)
+    cli_single = _parse_single_from_cli(argv_for_parsing)
     env_single = os.environ.get("SINGLE_LIGAND", "").strip()
     cfg_single = str(cfg.get("SINGLE_LIGAND", "")).strip()
 
@@ -873,7 +954,7 @@ def main() -> None:
     #   extracted_ligands/fda_test_library_10/
     cfg.setdefault("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
 
-    if _cli_has(sys.argv, "-test-fda") or _cli_has(sys.argv, "--test-fda"):
+    if _cli_has(argv_for_parsing, "-test-fda") or _cli_has(argv_for_parsing, "--test-fda"):
         cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get(
             "TEST_FDA_LIBRARY_SUBDIR",
             "fda_test_library_10",
@@ -884,11 +965,11 @@ def main() -> None:
         )
     # --- Specified Proteins Mode ---------------------------------------
     cfg.setdefault("SPECIFIED_PROTEINS", "")
-    requested_ids, _sel_src = _parse_specified_proteins(sys.argv, cfg)
+    requested_ids, _sel_src = _parse_specified_proteins(argv_for_parsing, cfg)
     cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = requested_ids
     print(f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)")
     # --- Fast mode: force exhaustiveness=1 everywhere ---
-    cfg["FAST_MODE"] = _parse_fast_flag(sys.argv) or bool(cfg.get("FAST_MODE", False))
+    cfg["FAST_MODE"] = _parse_fast_flag(argv_for_parsing) or bool(cfg.get("FAST_MODE", False))
     if cfg["FAST_MODE"]:
         print("[config] FAST_MODE effective=True (exhaustiveness=1)")
 
@@ -900,7 +981,7 @@ def main() -> None:
     #
     cfg.setdefault("NO_LIBRARY_DOCKING", False)
 
-    cli_no_dock = _cli_has(sys.argv, "--no-docking")
+    cli_no_dock = _cli_has(argv_for_parsing, "--no-docking")
     env_no_dock = os.environ.get("NO_LIBRARY_DOCKING")
 
     effective_no_dock = False
@@ -989,76 +1070,6 @@ def main() -> None:
         f for f in os.listdir(cfg["INPUT_DIR"])
         if f.lower().endswith(".pdb") and "_nolig" not in f.lower()
     ]
-
-    resume_manifest = None
-    resume_protein_ids: list[str] = []
-    completed_lookup: dict[tuple[str, str], bool] = {}
-    if is_resume:
-        resume_manifest = load_run_manifest(cfg, run_id)
-        if resume_manifest is None:
-            print(
-                f"ERROR: -resume requested but run_manifest.yaml for run_id={run_id} "
-                f"could not be loaded.",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-
-        command_section = resume_manifest.get("command") or {}
-        if isinstance(command_section, Mapping):
-            listed = command_section.get("pdb_list") or []
-            if isinstance(listed, (list, tuple)):
-                resume_protein_ids.extend(str(x).strip().upper() for x in listed if str(x).strip())
-
-        if not resume_protein_ids:
-            summary_section = resume_manifest.get("summary") or {}
-            summary_list = summary_section.get("total_protein_list") or []
-            if isinstance(summary_list, (list, tuple)):
-                resume_protein_ids.extend(str(x).strip().upper() for x in summary_list if str(x).strip())
-
-        proteins = resume_manifest.get("proteins") or {}
-        aggregated: dict[tuple[str, str], bool] = {}
-        if isinstance(proteins, Mapping):
-            for key, entry in proteins.items():
-                try:
-                    raw_key = str(key)
-                    parts = raw_key.split("|", 2)
-                    if len(parts) != 3:
-                        continue
-                    pdb_part, variant_part, _ph = parts
-                    pdb_token = (pdb_part or "").strip().upper()
-                    if not pdb_token:
-                        continue
-                    variant_token = (variant_part or "legacy").strip().lower() or "legacy"
-                    ckey = (pdb_token, variant_token)
-                    if not resume_protein_ids:
-                        resume_protein_ids.append(pdb_token)
-                    aggregated.setdefault(ckey, True)
-                    status = (entry.get("status") or "").strip().lower()
-                    if status != "completed":
-                        aggregated[ckey] = False
-                except Exception:
-                    logging.warning(
-                        "[resume.lookup.skip] key=%r entry=%r", key, entry, exc_info=True
-                    )
-
-        completed_lookup = {k: True for k, v in aggregated.items() if v}
-        if resume_protein_ids:
-            seen = set()
-            deduped = []
-            for pid in resume_protein_ids:
-                token = pid.strip().upper()
-                if not token or token in seen:
-                    continue
-                seen.add(token)
-                deduped.append(token)
-            resume_protein_ids = deduped
-        if resume_protein_ids and not cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS"):
-            cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = list(resume_protein_ids)
-        logging.info(
-            "[resume] loaded manifest for run_id=%s; completed protein entries=%d",
-            run_id,
-            len(completed_lookup),
-        )
 
     # Build an index: PDBID (4-char, upper) -> filename
     id_index: dict[str, str] = {}
