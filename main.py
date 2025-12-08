@@ -16,6 +16,7 @@ from activesite import extract_and_remove_ligands, get_atom_rules
 import sys, hashlib, re, logging, json, time, os, shutil, re, shlex
 from dataclasses import dataclass, field
 import datetime
+import yaml
 from pathlib import Path
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -89,7 +90,7 @@ install_debug_makedirs()
 
 
 def _resolve_run_id(argv: list[str]) -> str:
-    cli_run_id = _cli_val(argv, "--run-id")
+    cli_run_id = _cli_val(argv, "--run-id") or _cli_val(argv, "-run-id")
     env_run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
     if cli_run_id:
         return cli_run_id
@@ -117,6 +118,97 @@ class ConfigDict(dict):
         self[key] = value
     def copy(self):
         return ConfigDict(super().copy())
+
+
+def _apply_resume_config_from_snapshot(
+    cfg: Mapping[str, Any],
+    run_id: str,
+) -> dict:
+    """
+    For resume mode:
+
+    - Load run_manifest.yaml for run_id.
+    - Find the per-run config snapshot (paths.run_dir + paths.config_file).
+    - Load it as a dict.
+    - Return that dict so the caller can use it as the canonical cfg.
+
+    If anything goes wrong, this logs a WARNING and returns the original cfg as a plain dict.
+    """
+    logger = logging.getLogger("resume.config")
+    try:
+        manifest = load_run_manifest(cfg, run_id)
+        if not manifest:
+            logger.warning(
+                "[resume.config] manifest missing or empty for run_id=%s; "
+                "falling back to current cfg.",
+                run_id,
+            )
+            return dict(cfg)
+
+        paths = manifest.get("paths") or {}
+        run_dir = paths.get("run_dir")
+        cfg_file_name = paths.get("config_file", "run_config.yaml")
+
+        if not run_dir:
+            logger.warning(
+                "[resume.config] run_dir missing in manifest paths for run_id=%s; "
+                "falling back to current cfg.",
+                run_id,
+            )
+            return dict(cfg)
+
+        cfg_path = Path(run_dir) / cfg_file_name
+        if not cfg_path.exists():
+            logger.warning(
+                "[resume.config] snapshot config file missing at %s for run_id=%s; "
+                "falling back to current cfg.",
+                cfg_path,
+                run_id,
+            )
+            return dict(cfg)
+
+        with cfg_path.open("r", encoding="utf-8") as fh:
+            snap = yaml.safe_load(fh) or {}
+        if not isinstance(snap, dict):
+            logger.warning(
+                "[resume.config] snapshot config not a mapping at %s; falling back.",
+                cfg_path,
+            )
+            return dict(cfg)
+
+        cmd = manifest.get("command") or {}
+        manifest_hash = cmd.get("config_hash")
+        if manifest_hash:
+            try:
+                from run_manifest import compute_config_hash  # avoid import cycles
+
+                snap_hash = compute_config_hash(snap)
+                if snap_hash != manifest_hash:
+                    logger.warning(
+                        "[resume.config] config_hash mismatch for run_id=%s: "
+                        "manifest=%s snapshot=%s",
+                        run_id,
+                        manifest_hash,
+                        snap_hash,
+                    )
+            except Exception:
+                logger.warning(
+                    "[resume.config] unable to compute config_hash for snapshot",
+                    exc_info=True,
+                )
+
+        logger.info(
+            "[resume.config] loaded snapshot config from %s for run_id=%s",
+            cfg_path,
+            run_id,
+        )
+        return snap
+    except Exception:
+        logger.warning(
+            "[resume.config] unexpected error loading snapshot config; falling back",
+            exc_info=True,
+        )
+        return dict(cfg)
 
 
 def _log_cfg_emit_path_check(pdb_id, receptor_path, variant, legacy):
@@ -696,7 +788,7 @@ def _smoke_emit_config_demo() -> None:
 def main() -> None:
     print("MODELLER is working with license.")
     is_resume = _cli_has(sys.argv, "-resume") or _cli_has(sys.argv, "--resume")
-    cli_run_id = _cli_val(sys.argv, "--run-id")
+    cli_run_id = _cli_val(sys.argv, "--run-id") or _cli_val(sys.argv, "-run-id")
     if is_resume and not cli_run_id:
         print("ERROR: -resume requires --run-id <RUN_ID>", file=sys.stderr)
         sys.exit(2)
@@ -713,6 +805,14 @@ def main() -> None:
     bootstrap_root_logging(cfg, log_path)
     logging.info("[probe.root] root-logger INFO now visible")
     print(f"[run] log_file={log_path} run_id={run_id}")
+
+    if is_resume:
+        snap_dict = _apply_resume_config_from_snapshot(cfg, run_id)
+        cfg = ConfigDict(snap_dict)
+        cfg["RUN_ID"] = run_id
+    else:
+        cfg["RUN_ID"] = run_id
+
     validate_config(cfg)
 
     rules = get_atom_rules()
@@ -731,7 +831,7 @@ def main() -> None:
     )
 
     cfg.setdefault("PH_ENSEMBLE", False)
-    cfg.setdefault("PH_RADIUS", 10.0)
+    cfg.setdefault("PH_RADIUS", 1000000.0)
 
     env_ph_flag = os.environ.get("PH_ENSEMBLE")
     if env_ph_flag is not None:
@@ -750,17 +850,17 @@ def main() -> None:
         try:
             cfg.PH_RADIUS = float(radius_env)
         except Exception:
-            cfg.PH_RADIUS = 10.0
+            cfg.PH_RADIUS = 1000000.0
     else:
         try:
             cfg.PH_RADIUS = float(cfg.PH_RADIUS)
         except Exception:
-            cfg.PH_RADIUS = 10.0
+            cfg.PH_RADIUS = 100000000.0
     if cfg.PH_RADIUS <= 0:
-        cfg.PH_RADIUS = 10.0
+        cfg.PH_RADIUS = 10000000.0
 
     log = logging.getLogger("ph_ensemble")
-    log.info("[ph_ensemble.mode] enabled=%s scope=%s radius=%s", cfg.PH_ENSEMBLE, getattr(cfg, "PH_SCOPE", "auto"), getattr(cfg, "PH_RADIUS", 10.0))
+    log.info("[ph_ensemble.mode] enabled=%s scope=%s radius=%s", cfg.PH_ENSEMBLE, getattr(cfg, "PH_SCOPE", "auto"), getattr(cfg, "PH_RADIUS", 1000000.0))
 
     if is_resume:
         resume_manifest = load_run_manifest(cfg, run_id)

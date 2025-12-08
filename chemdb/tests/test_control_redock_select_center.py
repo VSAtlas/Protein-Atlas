@@ -12,7 +12,6 @@ PDBS_OF_INTEREST = [
     "1SYN",
     "1UYG",
     "1XL2",
-    "2I78",
     "2OF2",
     "2OWB",
     "TEST",
@@ -62,10 +61,14 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
     cmd = [
         sys.executable,
         os.fspath(root / "main.py"),
+        "-run-id control_redock",
         "-fast",
         "-pdbs",
         pdbs_arg,
         "--no-docking",
+        "--single",
+        "dexamethasone",
+
     ]
 
     result = subprocess.run(

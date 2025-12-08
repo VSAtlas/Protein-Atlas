@@ -736,7 +736,9 @@ def update_manifest_for_config_hash(
 
 def load_run_manifest(cfg: Mapping[str, Any], run_id: str) -> Optional[Dict[str, Any]]:
     """
-    Load the run_manifest.yaml for the specified run_id. Returns None on failure.
+    Best-effort loader for run_manifest.yaml for a given run_id.
+
+    Returns the manifest dict, or None if it can't be loaded.
     """
     try:
         if not run_id:
