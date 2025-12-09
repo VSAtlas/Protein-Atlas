@@ -16,9 +16,8 @@ from path_router import Paths, docked_dir, receptor_file
 from protein_functions import detect_active_site
 from run_vina import run_docking_task
 
-# NEW: ligand helpers used for control selection and redock RMSD
 from docking_ligands import _is_readable_ref, compute_rmsd
-
+from pose_validation import compute_redock_rmsd
 
 def _canonical_ctrl_base_from_stem(stem: str) -> str:
     """
@@ -550,7 +549,17 @@ def select_center_via_control_redock(
 
     if not ctrl_pdbs:
         logger.warning("[control-redock] No extracted control PDBs present; skipping redock.")
-        return None, None  # let caller go to P2Rank directly
+        return None, None  # let caller go to P2Rank directly if no control
+    # Map base control name -> extracted crystal PDB (for Kabsch RMSD)
+    ctrl_pdb_map: dict[str, _Path] = {}
+    for p in ctrl_pdbs:
+        try:
+            base = _canonical_ctrl_base_from_stem(p.stem)
+            # First hit wins; avoids ambiguity if multiple variants exist.
+            if base not in ctrl_pdb_map:
+                ctrl_pdb_map[base] = p
+        except Exception:
+            continue
 
 
     policy = str(cfg.get("CONTROL_CENTER_POLICY", "best_redock")).lower().strip()
@@ -832,29 +841,71 @@ def select_center_via_control_redock(
         for res in results:
             base = res["base"]
             center = tuple(res["center"])
+
+            # Legacy control lookup (SDF/MOL2/PDB); kept only for logging / debugging.
             ref_path = control_lookup.get(base)
+
+            # crystal PDB taken from ligands_raw (or legacy NOLIG) via ctrl_pdb_map
+            crystal_pdb = ctrl_pdb_map.get(base)
+
+            # Docked control redock PDBQT (full multi-model file that Vina wrote)
+            dock_pdbqt = res.get("out_path")
+
+            # Also keep best_pdb around for debugging if needed
             best_pdb = res["best_pdb"]
+
             rmsd = float("inf")
-            if best_pdb and ref_path:
-                logger.info(f"[rmsd.debug] ref={ref_path} | {_ctrl_quick_file_sig(str(ref_path))}")
-                logger.info(f"[rmsd.debug] dock={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}")
-                same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
-                if same_file:
-                    logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
-                try:
-                    rmsd = compute_rmsd(str(ref_path), str(best_pdb))
-                except Exception as e:
-                    rmsd = float("inf")
-                    logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
+
+            # Prefer Kabsch RMSD using crystal PDB vs docked PDBQT
+            if crystal_pdb and dock_pdbqt:
+                logger.info(
+                    f"[rmsd.debug] crystal_pdb={crystal_pdb} | {_ctrl_quick_file_sig(str(crystal_pdb))}"
+                )
+                # best_pdb is a PDB-converted best pose; still useful to log for sanity
+                if best_pdb:
+                    logger.info(
+                        f"[rmsd.debug] best_pdb={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}"
+                    )
+                # log ref_path for comparison, even though we don't use it for RMSD now
+                if ref_path:
+                    logger.info(f"[rmsd.debug] ref_lookup={ref_path}")
+
+                kabsch_rmsd = compute_redock_rmsd(str(crystal_pdb), str(dock_pdbqt))
+                if kabsch_rmsd is None:
+                    logger.warning(
+                        "[rmsd.debug] compute_redock_rmsd returned None for base=%s; treating RMSD=inf",
+                        base,
+                    )
+                else:
+                    rmsd = float(kabsch_rmsd)
+            else:
+                logger.warning(
+                    "[rmsd.debug] missing crystal_pdb or dock_pdbqt for base=%s; crystal=%s dock_pdbqt=%s",
+                    base,
+                    crystal_pdb,
+                    dock_pdbqt,
+                )
 
             best_e = res["best_e"]
             score = res["score"]
             e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
-            logger.info(f"[control-redock] lig={res['ligand_name']} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
+            logger.info(
+                f"[control-redock] lig={res['ligand_name']} rmsd={rmsd:.2f}A "
+                f"score={e_print if e_print is not None else float('nan')} kcal/mol"
+            )
 
             if _math.isfinite(rmsd):
-                if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
+                if (
+                    (best is None)
+                    or (rmsd < best[0])
+                    or (
+                        rmsd == best[0]
+                        and (e_print is not None)
+                        and (best[1] is None or e_print < best[1])
+                    )
+                ):
                     best = (rmsd, e_print if e_print is not None else None, base, center)
+
 
     if best is None:
         return None, None
