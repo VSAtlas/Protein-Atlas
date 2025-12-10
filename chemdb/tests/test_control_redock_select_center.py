@@ -9,11 +9,8 @@ import pytest
 import yaml
 
 PDBS_OF_INTEREST = [
-    "1SYN",
-    "1UYG",
-    "1XL2",
-    "2OF2",
-    "2OWB",
+    "TEMP",
+    "T3MP",
     "TEST",
 ]
 
@@ -61,11 +58,10 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
     cmd = [
         sys.executable,
         os.fspath(root / "main.py"),
-        "-run-id control_redock",
         "-fast",
-        "-pdbs",
-        pdbs_arg,
+        "-pdbs", pdbs_arg,
         "--no-docking",
+        "-run-id","control-redock",
         "--single",
         "dexamethasone",
 

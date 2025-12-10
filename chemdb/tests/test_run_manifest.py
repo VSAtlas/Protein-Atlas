@@ -66,23 +66,23 @@ def test_scheduled_protein_summary_preserved(tmp_path: Path) -> None:
     update_manifest_for_scheduled_proteins(
         cfg,
         run_id,
-        ["1abc", "1ABC ", "-2def", "2DEF.pdb", "zz"],
+        ["test", "TEST ", "-temp", "TEMP.pdb", "zz"],
     )
 
     manifest = _load_manifest_dict(manifest_path)
     summary = manifest.get("summary") or {}
     assert summary["total_proteins_scheduled"] == 2
-    assert summary["total_protein_list"] == ["1ABC", "2DEF"]
+    assert summary["total_protein_list"] == ["TEST", "TEMP"]
 
     manifest["proteins"] = {
-        "1ABC|LEGACY|base": {"status": "completed", "pdb_id": "1ABC"},
-        "2DEF|LEGACY|base": {"status": "failed", "pdb_id": "2DEF"},
-        "3XYZ|LEGACY|base": {"status": "failed", "pdb_id": "3XYZ"},
+        "TEST|LEGACY|base": {"status": "completed", "pdb_id": "TEST"},
+        "TEMP|LEGACY|base": {"status": "failed", "pdb_id": "TEMP"},
+        "T3MP|LEGACY|base": {"status": "failed", "pdb_id": "T3MP"},
     }
 
     _refresh_summary(manifest)
     summary = manifest.get("summary") or {}
     assert summary["total_proteins_scheduled"] == 2
-    assert summary["total_protein_list"] == ["1ABC", "2DEF"]
+    assert summary["total_protein_list"] == ["TEST", "TEMP"]
     assert summary["total_proteins_completed"] == 1
     assert summary["total_proteins_failed"] == 2

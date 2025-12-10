@@ -82,8 +82,8 @@ def test_resume_mode(tmp_path: Path) -> None:
     initial_cmd = [
         str(MAIN_PY),
         "-test",
-        "1bcd",
-        "2am9",
+        "temp",
+        "t3mp",
         "-fast",
         "-test-fda",
         "--run-id",
@@ -130,22 +130,22 @@ def test_resume_mode(tmp_path: Path) -> None:
             pdb_part, variant_part, ph_part = str(key).split("|", 2)
         except ValueError:
             continue
-        if pdb_part.upper() in {"1BCD", "2AM9"} and variant_part:
+        if pdb_part.upper() in {"TEMP", "T3MP"} and variant_part:
             ph_token = ph_part or ph_token
-            if pdb_part.upper() == "1BCD":
+            if pdb_part.upper() == "TEMP":
                 entry = dict(entry)
                 entry["status"] = "completed"
-                proteins[f"1BCD|{variant_part}|{ph_part}"] = entry
-            elif pdb_part.upper() == "2AM9":
+                proteins[f"TEMP|{variant_part}|{ph_part}"] = entry
+            elif pdb_part.upper() == "T3MP":
                 entry = dict(entry)
                 entry["status"] = "pending"
-                proteins[f"2AM9|{variant_part}|{ph_part}"] = entry
+                proteins[f"T3MP|{variant_part}|{ph_part}"] = entry
 
         if not proteins:
             variant = "HOLO"
-            proteins[f"1BCD|{variant}|{ph_token}"] = _ensure_protein_entry("1BCD", variant, ph_token)
-            proteins[f"1BCD|{variant}|{ph_token}"]["status"] = "completed"
-            proteins[f"2AM9|{variant}|{ph_token}"] = _ensure_protein_entry("2AM9", variant, ph_token)
+            proteins[f"TEMP|{variant}|{ph_token}"] = _ensure_protein_entry("TEMP", variant, ph_token)
+            proteins[f"TEMP|{variant}|{ph_token}"]["status"] = "completed"
+            proteins[f"T3MP|{variant}|{ph_token}"] = _ensure_protein_entry("T3MP", variant, ph_token)
 
         manifest["proteins"] = proteins
         cmd_block = manifest.get("command") or {}
@@ -157,7 +157,7 @@ def test_resume_mode(tmp_path: Path) -> None:
             "total_proteins_scheduled": 2,
             "total_proteins_completed": 1,
             "total_proteins_failed": 0,
-            "total_protein_list": ["1BCD", "2AM9"],
+            "total_protein_list": ["TEMP", "T3MP"],
         }
     manifest["status"] = "running"
 
@@ -177,7 +177,7 @@ def test_resume_mode(tmp_path: Path) -> None:
     drift_cfg = drift_cfg.replace("APO_HOLO_MODE = holo", "APO_HOLO_MODE = apo")
     drift_cfg = drift_cfg.replace("PH_ENSEMBLE=true", "PH_ENSEMBLE=false")
     drift_cfg = drift_cfg.replace("TEST_MODE_ENABLE = dud+fda", "TEST_MODE_ENABLE = off")
-    drift_cfg = drift_cfg.replace('"2am9": "test_library_10",', "")
+    drift_cfg = drift_cfg.replace('"T3MP": "test_library_10",', "")
     CONFIG_PATH.write_text(drift_cfg)
 
     try:
@@ -198,10 +198,10 @@ def test_resume_mode(tmp_path: Path) -> None:
                     return entry
             return None
 
-        entry_1bcd = _lookup("1BCD", "HOLO")
-        entry_2am9 = _lookup("2AM9", "HOLO")
-        assert entry_1bcd is not None and entry_1bcd.get("status") == "completed"
-        assert entry_2am9 is not None and entry_2am9.get("status") == "completed"
+        entry_temp = _lookup("TEMP", "HOLO")
+        entry_t3mp = _lookup("T3MP", "HOLO")
+        assert entry_temp is not None and entry_temp.get("status") == "completed"
+        assert entry_t3mp is not None and entry_t3mp.get("status") == "completed"
 
         summary = manifest_after.get("summary") or {}
         assert summary.get("total_proteins_scheduled") == 2
@@ -225,8 +225,8 @@ def test_resume_mode(tmp_path: Path) -> None:
         if isinstance(test_map, str):
             test_map = yaml.safe_load(test_map) or {}
         test_map_norm = {str(k).upper(): v for k, v in test_map.items()}
-        assert test_map_norm.get("1BCD") == "test_library_10"
-        assert test_map_norm.get("2AM9") == "test_library_10"
+        assert test_map_norm.get("TEMP") == "test_library_10"
+        assert test_map_norm.get("T3MP") == "test_library_10"
     finally:
         # Restore global config drift and interrupted manifest state.
         if config_backup_path.exists():

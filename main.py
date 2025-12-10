@@ -493,21 +493,45 @@ def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None)
         for p in root.rglob("*.pdbqt"):
             yield p
 
-
+def _normalize_flag_name(tok: str) -> str:
+    """
+    Normalize a CLI flag token by stripping leading dashes and
+    lowercasing. This lets '-flag' and '--flag' be interchangeable.
+    """
+    return str(tok).lstrip("-").lower()
 
 def _cli_val(argv, flag):
+    """
+    Return the value following a flag, treating '-flag' and '--flag'
+    as equivalent. Example: _cli_val(sys.argv, "--run-id") will find
+    values from either '-run-id' or '--run-id'.
+    """
     try:
-        if flag in argv:
-            i = argv.index(flag)
-            if i + 1 < len(argv) and not argv[i+1].startswith("-"):
-                return argv[i+1]
+        target = _normalize_flag_name(flag)
+        for i, tok in enumerate(argv):
+            # Only consider tokens that look like flags
+            if not tok.startswith("-"):
+                continue
+            if _normalize_flag_name(tok) == target:
+                if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                    return argv[i + 1]
     except Exception:
         pass
     return None
 
 def _cli_has(argv, flag):
+    """
+    Return True if a flag is present, treating '-flag' and '--flag'
+    as equivalent.
+    """
     try:
-        return flag in argv
+        target = _normalize_flag_name(flag)
+        for tok in argv:
+            if not tok.startswith("-"):
+                continue
+            if _normalize_flag_name(tok) == target:
+                return True
+        return False
     except Exception:
         return False
 

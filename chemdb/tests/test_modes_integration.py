@@ -36,6 +36,11 @@ def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[
         "CPU": "1",
         "MAX_PARALLEL_JOBS": "1",
         "FORCE_REPROCESS": "0",
+        # Keep integration runs small by forcing the tiny test FDA library.
+        "TEST_FDA_LIBRARY_SUBDIR": "fda_test_library_10",
+        "LIBRARY_SUBDIR_DEFAULT": "fda_test_library_10",
+        # Ensure test mode stays on (allows dud/fda small libraries).
+        "TEST_MODE_ENABLE": "dud+fda",
     }
     env.update({k: str(v) for k, v in base.items()})
     if extra_env:
@@ -119,7 +124,8 @@ def run_main_cli(
     config_dir = Path(env_vars.get("CONFIGS_DIR", tmp_path / "configs"))
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    args = [sys.executable, str(MAIN_PY), "-test", "-fast"]
+    # Force fast + test FDA runs to keep integration tests lightweight.
+    args = [sys.executable, str(MAIN_PY), "-test", "-fast", "-test-fda"]
     if extra_args:
         args.extend(extra_args)
     if "--configs-dir" not in args:
@@ -176,7 +182,7 @@ def _prepare_run(tmp_path: Path, extra_env: dict[str, str] | None = None) -> tup
 
 def test_apo_mode_generates_csv(tmp_path: Path) -> None:
     env, pdb_id = _prepare_run(tmp_path, {"APO_HOLO_MODE": "apo"})
-    cp = run_main_cli(tmp_path, extra_args=["-pdb", pdb_id, "--run-id", "apo_mode"], env=env)
+    cp = run_main_cli(tmp_path, extra_args=["-fast", "-test-fda","-pdb", pdb_id, "--run-id", "apo_mode"], env=env)
     assert cp.returncode == 0
 
     with patch.dict(os.environ, env, clear=False):

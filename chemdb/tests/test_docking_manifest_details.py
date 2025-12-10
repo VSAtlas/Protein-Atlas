@@ -45,7 +45,7 @@ def test_docking_stage_details_and_timing(tmp_path: Path) -> None:
     _, manifest_path = get_manifest_paths(cfg, run_id)
     assert manifest_path.exists()
 
-    pdb_id = "1ABC"
+    pdb_id = "TEST"
     variant_label = "legacy"
     library = "fda"
     ph_tag = None

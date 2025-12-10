@@ -32,6 +32,18 @@ git push origin main
 
 
 
+
+Reset 
+cd /home/atlas/code/protein_automation   && git fetch origin   && git reset --hard origin/main   && git clean -fd
+
+
+
+
+
+
+
+
+
 PULL WITH REBASE IF  YOU HAVE UNCOMMITTED WORK THAT IS READY
 # Make sure you're on the right branch
 git checkout main
