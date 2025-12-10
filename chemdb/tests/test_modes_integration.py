@@ -15,6 +15,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+TESTS_ROOT = Path(__file__).resolve().parent
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
 
 MAIN_PY = REPO_ROOT / "main.py"
 
@@ -23,6 +26,7 @@ from docking_ligands import _coerce_test_map, _lib_roots_for_pdb, _resolve_test_
 from input_and_export_functions import load_inputs  # noqa: E402
 from path_router import docked_dir, load_ph_tags, make_paths  # noqa: E402
 from ph_ensemble_docking import enumerate_ligands_for_ph_context  # noqa: E402
+from testdata_hmdb_test_library import ensure_hmdb_test_library, infer_ligand_roots  # noqa: E402
 
 
 def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[str, str]:
@@ -41,6 +45,8 @@ def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[
         "LIBRARY_SUBDIR_DEFAULT": "fda_test_library_10",
         # Ensure test mode stays on (allows dud/fda small libraries).
         "TEST_MODE_ENABLE": "dud+fda",
+        # Let downstream logic know we're in pytest-driven TEST_LIBRARY_MAP flows.
+        "PDB_SELECTION_MODE": "TEST_LIBRARY_MAP",
     }
     env.update({k: str(v) for k, v in base.items()})
     if extra_env:
@@ -176,6 +182,10 @@ def enumerate_ph_ligands_for_test_pdb(
 def _prepare_run(tmp_path: Path, extra_env: dict[str, str] | None = None) -> tuple[dict[str, str], str]:
     env = _build_env(tmp_path, extra_env)
     cfg = _load_cfg(env)
+    test_mode_raw = str(env.get("TEST_MODE_ENABLE", "")).lower()
+    if "hmdb" in test_mode_raw:
+        extracted_root, prepped_root = infer_ligand_roots(cfg)
+        ensure_hmdb_test_library(extracted_root, prepped_root)
     pdb_id = _pick_test_pdb(cfg)
     return env, pdb_id
 

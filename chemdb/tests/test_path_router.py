@@ -85,6 +85,9 @@ def _load_cfg() -> dict[str, str]:
     for key in ("LIGANDS_MOL2_DIR", "PREPPED_LIGANDS_DIR"):
         assert key in cfg, f"Missing required key {key!r} in config"
 
+    # Path-router tests should mirror apo_vs_holo behavior.
+    cfg["APO_HOLO_MODE"] = "apo_vs_holo"
+
     return cfg
 
 

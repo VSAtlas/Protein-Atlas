@@ -22,6 +22,22 @@ def norm(p: str | Path) -> str:
     return os.path.abspath(str(p)).replace("\\", "/")
 
 
+def _is_pytest_context(cfg: dict) -> bool:
+    """
+    Detect pytest-driven runs so we can swap HMDB roots for lightweight fixtures.
+    """
+    try:
+        selection_mode = str(cfg.get("PDB_SELECTION_MODE", "")).strip().lower()
+    except Exception:
+        selection_mode = ""
+    env_selection = str(os.environ.get("PDB_SELECTION_MODE", "")).strip().lower()
+    return (
+        "pytest" in os.environ.get("PYTEST_CURRENT_TEST", "")
+        or selection_mode == "test_library_map"
+        or env_selection == "test_library_map"
+    )
+
+
 def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None):
     """
     Yield .pdbqt files with a directory-first strategy:
@@ -280,8 +296,12 @@ def _lib_roots_for_pdb(
                 extra_paths.append(p)
 
     subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
-    hmdb_subdir = str(cfg.get("HMDB_LIBRARY_SUBDIR", "hmdb"))
+    hmdb_subdir_raw = str(cfg.get("HMDB_LIBRARY_SUBDIR", "hmdb"))
+    hmdb_test_subdir = str(cfg.get("HMDB_TEST_LIBRARY_SUBDIR", "hmdb_test_library_10"))
     test_mode = test_mode_override or _resolve_test_mode(cfg)
+    pytest_mode = _is_pytest_context(cfg)
+    hmdb_use_test = pytest_mode and ("hmdb" in str(test_mode))
+    hmdb_subdir = hmdb_test_subdir if hmdb_use_test else hmdb_subdir_raw
 
     maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
     test_map: Dict[str, str] = {}
@@ -294,6 +314,16 @@ def _lib_roots_for_pdb(
         or cfg.get("PREPPED_LIGANDS_ROOT")
         or "prepped_ligands"
     )
+
+    if hmdb_use_test and hmdb_subdir != hmdb_subdir_raw:
+        logger.info(
+            "[ligands.hmdb-test] test_mode=%s pytest=%s subdir=%s raw=%s",
+            test_mode,
+            pytest_mode,
+            hmdb_subdir,
+            hmdb_subdir_raw,
+        )
+
     hmdb_root = base_root / hmdb_subdir
     dud_root = (base_root / mapped_value) if mapped_value else None
 

@@ -12,20 +12,53 @@ You are operating via **Codex CLI** with the workspace root:
 Treat this directory as the project root. Do **not** propose edits or commands outside this tree.
 
 ---
-
-## Environment Constraints
+Environment Constraints
 
 - Runtime host: local Linux server (no internet inside Codex sandbox).
 - Python env: micromamba environment named **`docking-env`**.
 - Assume a POSIX shell (`bash`); avoid OS- or editor-specific features.
 - Do not run network calls, package installs, or system-wide changes.
 
-All Python or CLI commands that touch the pipeline MUST either:
+All Python or CLI commands that touch the pipeline SHOULD:
 
-- Use `micromamba run -n docking-env ...`, or
-- Use the projectâ€™s `ci/run_in_env.sh` helper if explicitly requested.
+- Prefer `micromamba run -n docking-env ...` for commands you suggest to me
+  and for test/analysis commands you run in the sandbox, **when it works**.
+- You MAY drop the `micromamba run -n docking-env` prefix and call
+  `python` / `pytest` directly **only** when the micromamba call fails due
+  to sandbox lock or permission issues (see “Mamba lockfile errors” below).
 
-Never assume a virtualenv is already activated; be explicit.
+Never assume a virtualenv is already activated; be explicit in commands you
+show to me. It is OK if the sandbox falls back to plain `python` / `pytest`
+after a micromamba lockfile error.
+### Handling micromamba lockfile errors in the Codex sandbox
+
+In the Codex sandbox you may see errors like:
+
+- `error    libmamba Could not open lockfile '/home/michael/.cache/mamba/proc/proc.lock'`
+- `critical libmamba 'mamba run' failed to lock (...)`
+
+Treat these **only** as sandbox limitations, NOT as evidence that the patch
+or tests are wrong.
+
+When this happens:
+
+1. **Do not abandon the patch.** Never conclude "tests failed" based solely
+   on this lockfile error.
+2. If the Codex CLI automatically reruns the command with elevated
+   permissions, assume that retry handled the lock unless it produces a
+   different error. Do not double-count the first failure.
+3. If there is no automatic retry, immediately rerun the same command
+   **without** the `micromamba run -n docking-env` prefix:
+   - Example: from  
+     `micromamba run -n docking-env pytest chemdb/tests/test_resume_mode.py -vv`  
+     to  
+     `pytest chemdb/tests/test_resume_mode.py -vv`
+4. Base your reasoning about pass/fail on the **fallback** run. If the
+   fallback also fails for a different reason, then treat that as a real
+   failure and debug it.
+5. Always mention in the final reply if tests could not be run in the full
+   `docking-env` micromamba environment due to lockfile issues, and that a
+   plain `pytest` fallback was used instead.
 
 ---
 

@@ -1,17 +1,214 @@
 # -*- coding: utf-8 -*-
-# High-level pipeline for multi-stage docking.
-#
-# Phases per protein:
-# 1) Setup & logging
-# 2) Extract ligands and generate a ligand-free PDB
-# 3) Protein preparation (clean PDB + receptor PDBQT), reuse if cached
-# 4) Active-site detection (center, box size)
-# 5) Ligand preparation & filtering
-# 6) Multi-stage docking with early/fallback recenter heuristics + CenterSelector
-# 7) Final pose validation & optional screenshots
-# 8) Write per-protein score CSV
-
 from __future__ import annotations
+HELP_TEXT = """
+Atlas2 multi-stage docking pipeline
+
+Usage:
+  python main.py [OPTIONS] [PDB_IDS...]
+
+High-level description:
+  This script runs the Atlas2 pipeline for one or more proteins:
+    1) Set up logging and run metadata
+    2) Extract bound ligands and generate ligand-free PDBs
+    3) Prepare receptors (clean PDB + PDBQT), reusing cached prep when possible
+    4) Detect active sites and define docking boxes
+    5) Prepare and filter ligands from configured libraries
+    6) Run multi-stage docking with recentering and fallback heuristics
+    7) Validate final poses and optionally capture screenshots
+    8) Write per-protein score CSVs and update run_manifest.yaml
+
+Core options:
+  -h, --help
+      Show this help message and exit.
+
+  --run-id RUN_ID
+  -run-id RUN_ID
+      Explicit run identifier. By default, a timestamp like
+      YYYYMMDD_HHMMSS is generated. Required when using -resume.
+      Also overrides ATLAS_RUN_ID if set.
+
+  -resume, --resume
+      Resume a previous run using its run_id. The pipeline will:
+        - Load run_manifest.yaml for that run
+        - Reuse the stored configuration snapshot
+        - Reconstruct the original argv for parsing
+        - Skip proteins that were already marked as completed
+      You MUST also pass --run-id <RUN_ID> (or set ATLAS_RUN_ID).
+
+Config directory and manifests:
+  --configs-dir PATH
+      Override CONFIGS_DIR for this run. By default this is derived
+      from OVERALL_DIR in the YAML config (e.g. OVERALL_DIR/configs).
+
+  --no-reset-configs
+      Do not reset the per-run CONFIG_RUN_DIR. By default, new runs
+      reset their run-specific config directory so stale configs do
+      not accumulate. In resume mode, configs are never reset.
+
+Protein selection (Specified Proteins Mode):
+  You can explicitly choose which PDBs to run via CLI, environment,
+  or config. Precedence is: CLI > ENV > CFG. If nothing is specified,
+  Atlas2 runs on all .pdb files under INPUT_DIR that do not contain
+  '_nolig' in the filename.
+
+  CLI forms:
+    --pdb ID
+    -pdb ID
+        Add a single PDB ID (repeatable). Example:
+          --pdb 1BN1 --pdb 2OJ9
+
+    --pdbs "ID1,ID2"
+    -pdbs "ID1 ID2"
+        Comma- or space-separated list of PDB IDs.
+
+    QoL flags:
+      --1BN1, -1BN1
+        Any 4-character alphanumeric token used as a flag (--XXXX or -XXXX)
+        is treated as a PDB ID, except special tokens like FAST.
+
+    Bare tokens:
+      1BN1
+      1BN1.pdb
+      1BN1_cleaned.pdb
+        If you pass bare arguments that look like 4-char PDB IDs or
+        .pdb filenames, they are also treated as target proteins.
+
+  Environment:
+    ONLY_PDBS="1BN1 2OJ9"
+        Space- or comma-separated list of PDB IDs to run.
+
+  Config (YAML):
+    SPECIFIED_PROTEINS:
+      - 1BN1
+      - 2OJ9
+    or
+    SPECIFIED_PROTEINS: "1BN1, 2OJ9"
+
+  The final list of PDBs is printed as:
+    [config] SPECIFIED_PROTEINS effective=[...]
+
+Fast mode:
+  -fast, --fast, fast
+      Enable FAST_MODE. This forces docking exhaustiveness=1 across
+      stages for faster but less thorough runs. Helpful for smoke tests
+      or CI checks.
+
+Test FDA library toggle:
+  -test-fda, --test-fda
+      Switch the default small-molecule library from the full FDA set
+      to the small test library configured in TEST_FDA_LIBRARY_SUBDIR
+      (default: fda_test_library_10). This is designed for quick,
+      lightweight test runs.
+
+Single-ligand mode:
+  --single PATTERN
+      Enable SINGLE_LIGAND mode and restrict docking to a single ligand
+      whose name contains PATTERN. The search order is controlled by:
+        SINGLE_LIGAND_SEARCH_ORDER
+        SINGLE_LIGAND_ALLOW_PREFIX
+        SINGLE_LIGAND_MANIFEST_ONLY
+      as defined in the YAML config. When combined with multiple PDBs,
+      the pipeline will dock the same ligand (if found) across all
+      selected proteins in parallel.
+
+pH ensemble and pH-ligand modes:
+  --ph-ligand-mode MODE
+      Control how ligands are selected for pH-ensemble runs. Precedence:
+        CLI (--ph-ligand-mode) > ENV (PH_LIGAND_MODE) > CFG (PH_LIGAND_MODE)
+      Typical values:
+        off       - standard behavior (no special pH filtering)
+        context_window   - only dock ligands whose pH microstate is relevant
+                    to the current receptor microstate/context
+
+
+  Related environment variables:
+    PH_ENSEMBLE (bool)
+        Turn pH-ensemble mode on/off (overrides config).
+    PH_SCOPE (string)
+        Limit pH-ensemble to a subset of residues or region. If unset,
+        defaults to config behavior.
+    PH_RADIUS (float)
+        Radius (Å) for pH-ensemble context. Non-positive values fall
+        back to a large default.
+
+No-library docking mode:
+  --no-docking
+      Enable NO_LIBRARY_DOCKING=True. In this mode, Atlas2 will:
+        - Run receptor preparation
+        - Run control redocking
+        - Run pocket detection and ligand planning
+      but it will SKIP docking for DUD/FDA libraries. This is useful
+      when you only want control validation and planned ligand lists.
+
+Apo/holo and variants:
+  The apo/holo mode and variant list are resolved from the YAML
+  configuration (APO_HOLO_MODE) and possibly env variables. This
+  script will:
+    - Iterate over all variants
+    - Set APO_HOLO_VARIANT in the environment for each variant
+    - Route all paths via the path_router module
+  There is currently no direct CLI flag to override APO_HOLO_MODE; use
+  the YAML config for that.
+
+Environment variables (summary):
+  ATLAS_RUN_ID
+      Alternate way to supply the run ID. Used if --run-id is not
+      provided. main() will still derive a timestamp if neither is set.
+
+  PH_ENSEMBLE, PH_SCOPE, PH_RADIUS
+      See pH ensemble section above.
+
+  PH_LIGAND_MODE
+      Fallback for --ph-ligand-mode if the CLI flag is not used.
+
+  NO_LIBRARY_DOCKING
+      Fallback for --no-docking when CLI is not used.
+
+  SINGLE_LIGAND
+      Fallback pattern for --single when no CLI arg is given.
+
+  LIBRARY_MANIFEST_BUILD_ON_SCAN
+      Boolean controlling whether per-library manifest files are built
+      during directory scans.
+
+Logging and outputs:
+  - Logs:
+      * A top-level main log is created under ./logs as:
+          logs/main_<RUN_ID>.log
+        Stdout/stderr are tee'd into that log.
+
+  - Manifests:
+      * run_manifest.yaml is created under manifests/<run-id> and tracks
+        run configuration, apo/holo/water decisions, and per-protein
+        status (start/success/failure).
+
+  - Failed proteins:
+      * Per-PDB failure logs are placed under:
+          <OVERALL_DIR>/failed/<PDB>.<variant>.log
+
+  - Docking and configs:
+      * Receptors, docking configs, and pose/score outputs are routed
+        by path_router into subdirectories under:
+          INPUT_DIR, PROCESSED_PDBS_DIR, DOCKED_DIR, PREPPED_LIGANDS_DIR,
+          CONFIGS_DIR, etc., as defined in the YAML config.
+
+Examples:
+  # Standard run on all PDBs in INPUT_DIR
+  python main.py
+
+  # Fast run on two specific PDBs
+  python main.py --pdb 1BN1 --pdb 2OJ9 --fast
+
+  # Use small FDA test library and fast mode
+  python main.py -test-fda --fast
+
+  # Resume a previous run by ID
+  python main.py -resume --run-id 20251205_225826
+
+  # Single-ligand docking across multiple proteins
+  python main.py --pdbs "1BN1,2OJ9" --single imatinib
+
+"""
 from activesite import extract_and_remove_ligands, get_atom_rules
 import sys, hashlib, re, logging, json, time, os, shutil, re, shlex
 from dataclasses import dataclass, field
@@ -810,6 +1007,10 @@ def _smoke_emit_config_demo() -> None:
 # Program entry point
 # ======================
 def main() -> None:
+    if _cli_has(sys.argv, "-h") or _cli_has(sys.argv, "--help"):
+        print(HELP_TEXT)
+        sys.exit(0)
+
     print("MODELLER is working with license.")
     is_resume = _cli_has(sys.argv, "-resume") or _cli_has(sys.argv, "--resume")
     cli_run_id = _cli_val(sys.argv, "--run-id") or _cli_val(sys.argv, "-run-id")
@@ -1520,7 +1721,7 @@ def main() -> None:
         print("\nThe following proteins failed. See per-PDB logs under:", failed_root)
         for pdb_id, label, log_path, exc_type, exc_msg in failed_entries:
             print(
-                f"  - {pdb_id} ({label}): {exc_type} — {exc_msg}\n"
+                f"  - {pdb_id} ({label}): {exc_type} â€” {exc_msg}\n"
                 f"      log: {log_path}"
             )
     else:
@@ -1620,7 +1821,7 @@ def _run_with_email_notification() -> None:
         status = code if isinstance(code, int) else 1
         raise
     except BaseException:
-        # KeyboardInterrupt and other errors → non-zero status
+        # KeyboardInterrupt and other errors â†’ non-zero status
         status = 1
         raise
     finally:
