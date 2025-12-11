@@ -199,6 +199,9 @@ def _load_router_roots() -> RouterRoots:
         env_val = os.environ.get(key)
         if env_val:
             cfg[key] = env_val
+    cfg_env = os.environ.get("CONFIGS_DIR")
+    if cfg_env:
+        cfg["CONFIGS_DIR"] = cfg_env
     expanded = _expand_tokens(cfg)
 
     over_raw = expanded.get("OVERALL_DIR")
@@ -212,6 +215,15 @@ def _load_router_roots() -> RouterRoots:
 
     cfg_raw = expanded.get("CONFIGS_DIR")
     configs = Path(cfg_raw).expanduser() if cfg_raw else overall / "configs"
+
+    if os.environ.get("ROUTER_DEBUG"):
+        print(
+            "[router.debug.env]"
+            f" OVERALL_DIR={over_raw!r}"
+            f" OUTPUT_DIR={out_raw!r}"
+            f" DOCKED_DIR={dock_raw!r}"
+            f" CONFIGS_DIR={cfg_raw!r}"
+        )
 
     return RouterRoots(overall=overall, processed=processed, docked=docked, configs=configs)
 
@@ -228,38 +240,15 @@ def _set_router_roots(overall: Path, processed: Path, docked: Path, configs: Opt
 
 def _ensure_router_roots() -> RouterRoots:
     global _ROUTER_ROOTS
-    if _ROUTER_ROOTS is None:
-        _ROUTER_ROOTS = _load_router_roots()
-        return _ROUTER_ROOTS
-
+    # Always re-evaluate current environment + config so test-mode runs that
+    # temporarily override paths do not leak into subsequent calls.
     try:
-        env_over = os.environ.get("OVERALL_DIR")
-        env_out = os.environ.get("OUTPUT_DIR")
-        env_docked = os.environ.get("DOCKED_DIR")
-        env_configs = os.environ.get("CONFIGS_DIR")
-
-        mismatch = False
-        if env_over and Path(env_over).expanduser() != _ROUTER_ROOTS.overall:
-            mismatch = True
-        if env_out and Path(env_out).expanduser() != _ROUTER_ROOTS.processed:
-            mismatch = True
-        if env_docked and Path(env_docked).expanduser() != _ROUTER_ROOTS.docked:
-            mismatch = True
-        if env_configs and Path(env_configs).expanduser() != _ROUTER_ROOTS.configs:
-            mismatch = True
-
-        if mismatch:
-            _ROUTER_ROOTS = _load_router_roots()
-        else:
-            try:
-                default_cfg_path = _default_config_path()
-                if not (_ROUTER_ROOTS.overall / "config.txt").exists() and default_cfg_path.exists():
-                    _ROUTER_ROOTS = _load_router_roots()
-            except Exception:
-                pass
+        current = _load_router_roots()
     except Exception:
-        pass
+        current = _ROUTER_ROOTS
 
+    if _ROUTER_ROOTS is None or (_ROUTER_ROOTS != current and current is not None):
+        _ROUTER_ROOTS = current
     return _ROUTER_ROOTS
 
 

@@ -955,6 +955,61 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         e,
                     )
 
+            difficulty_info = None
+            should_eval_difficulty = False
+            if test_mode_now:
+                should_eval_difficulty = "dud" in str(test_mode_now).lower()
+            if should_eval_difficulty and run_mode not in (None, "dud"):
+                should_eval_difficulty = False
+
+            if should_eval_difficulty:
+                try:
+                    from chemdb.target_difficulty import evaluate_difficulty_for_target
+
+                    dock_dir = paths.docked_variant_root(variant_env or None, ph_label)
+                    csv_basename = f"{csv_prefix}docking_score_long.csv"
+                    vina_csv = dock_dir / csv_basename
+                    if not vina_csv.exists():
+                        logger.warning(
+                            "[difficulty] pdb=%s csv=%s action=skip reason=missing_csv",
+                            paths.pdb_id,
+                            vina_csv,
+                        )
+                    elif vina_csv.stat().st_size == 0:
+                        logger.warning(
+                            "[difficulty] pdb=%s csv=%s action=skip reason=empty_csv",
+                            paths.pdb_id,
+                            vina_csv,
+                        )
+                    else:
+                        run_id_token = str(manifest_run_id or cfg.get("RUN_ID") or "")
+                        analysis_root = Path(cfg.get("OVERALL_DIR", ".")) / "analysis" / "dud_eval"
+                        if run_id_token:
+                            analysis_root = analysis_root / run_id_token
+
+                        difficulty_info = evaluate_difficulty_for_target(
+                            pdb_id=paths.pdb_id,
+                            csv_path=vina_csv,
+                            analysis_root=analysis_root,
+                            lig_col="ligand",
+                            score_col="score",
+                            bedroc_alpha=float(cfg.get("DUD_EVAL_BEDROC_ALPHA", 20.0)),
+                            logauc_lambda=float(cfg.get("DUD_EVAL_LOGAUC_LAMBDA", 1e-3)),
+                            run_id=run_id_token or None,
+                        )
+                        cfg.setdefault("_TARGET_DIFFICULTY", {})[paths.pdb_id] = {
+                            "difficulty": difficulty_info.difficulty,
+                            "roc_auc": difficulty_info.roc_auc,
+                            "N": difficulty_info.N,
+                            "n_actives": difficulty_info.n_actives,
+                        }
+                except Exception:
+                    logger.warning(
+                        "[difficulty] pdb=%s action=skip reason=exception",
+                        paths.pdb_id,
+                        exc_info=True,
+                    )
+
             try:
                 summary = {
                     "pdb_id": paths.pdb_id,
@@ -967,6 +1022,11 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     "stages": [s["name"] for s in stages_for_run],
                     "ph_label": ph_label,
                 }
+                if difficulty_info:
+                    summary["difficulty"] = difficulty_info.difficulty
+                    summary["roc_auc"] = difficulty_info.roc_auc
+                    summary["difficulty_N"] = difficulty_info.N
+                    summary["difficulty_n_actives"] = difficulty_info.n_actives
                 _write_audit_json(cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None)
             except Exception as _e:
                 logger.warning(f"Audit JSON write failed: {_e}")

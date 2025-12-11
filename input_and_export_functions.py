@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 import re, csv, math
 import pandas as pd
 from collections import defaultdict
+import sitecustomize  # noqa: F401  # ensure HOME is writable for micromamba/pytest sandboxes
 # >>> PATHS IMPORT START
 from path_router import (
     make_paths,
