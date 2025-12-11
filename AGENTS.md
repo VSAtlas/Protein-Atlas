@@ -22,10 +22,8 @@ Environment Constraints
 All Python or CLI commands that touch the pipeline SHOULD:
 
 - Prefer `micromamba run -n docking-env ...` for commands you suggest to me
-  and for test/analysis commands you run in the sandbox, **when it works**.
-- You MAY drop the `micromamba run -n docking-env` prefix and call
-  `python` / `pytest` directly **only** when the micromamba call fails due
-  to sandbox lock or permission issues (see “Mamba lockfile errors” below).
+  and for test/analysis commands you run in the sandbox, note you may run into permission errors using micromamba. 
+  Whenever you come across permissions errors, ask for elevated permissions, never stop a patch because of the lock.
 
 Never assume a virtualenv is already activated; be explicit in commands you
 show to me. It is OK if the sandbox falls back to plain `python` / `pytest`

@@ -137,6 +137,19 @@ def run_main_cli(
     if "--configs-dir" not in args:
         args.extend(["--configs-dir", str(config_dir)])
 
+    # Tests reuse fixed run_ids; clear any stale main log before invoking the CLI.
+    run_id = None
+    for idx, token in enumerate(args):
+        if token in {"--run-id", "-run-id"} and (idx + 1) < len(args):
+            run_id = args[idx + 1]
+            break
+    if run_id:
+        log_path = REPO_ROOT / "logs" / f"main_{run_id}.log"
+        try:
+            log_path.unlink()
+        except FileNotFoundError:
+            pass
+
     cp = subprocess.run(
         args,
         env=env_vars,
@@ -156,6 +169,9 @@ def enumerate_ph_ligands_for_test_pdb(
 ) -> set[str]:
     with patch.dict(os.environ, env, clear=False):
         cfg = load_inputs()
+        # Mirror the CLI -test-fda override used by run_main_cli so enumeration
+        # matches the runtime library selection.
+        cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
         cfg["PH_LIGAND_MODE"] = "context_window"
         chosen = pdb_id or _pick_test_pdb(cfg)
         ph_tags = load_ph_tags(chosen, variant=None)
@@ -169,7 +185,32 @@ def enumerate_ph_ligands_for_test_pdb(
             logger,
             test_mode_override=_resolve_test_mode(cfg),
         )
-        ph_root = noncontrol_roots[0] if noncontrol_roots else None
+        ph_root = None
+        if noncontrol_roots:
+            default_root_name = Path(str(cfg.get("LIBRARY_SUBDIR_DEFAULT", ""))).name
+
+            # Prefer the configured default library (e.g., fda_test_library_10) when present.
+            for root in noncontrol_roots:
+                if default_root_name and Path(root).name == default_root_name:
+                    ph_root = root
+                    break
+
+            # Otherwise, prefer non-decoy roots (e.g., test_library_10) over decoys_* entries.
+            if ph_root is None:
+                for root in noncontrol_roots:
+                    name = Path(root).name
+                    if not name.startswith("decoys_"):
+                        ph_root = root
+                        break
+
+            if ph_root is None:
+                ph_root = noncontrol_roots[0]
+
+        logger.info(
+            "[test.ph_ligands] chosen ph_ligand_root=%s (noncontrol_roots=%s)",
+            ph_root,
+            noncontrol_roots,
+        )
         ligs = enumerate_ligands_for_ph_context(
             cfg=cfg,
             pdb_id=chosen,
