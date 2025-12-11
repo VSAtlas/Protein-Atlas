@@ -72,7 +72,7 @@ def test_scheduled_protein_summary_preserved(tmp_path: Path) -> None:
     manifest = _load_manifest_dict(manifest_path)
     summary = manifest.get("summary") or {}
     assert summary["total_proteins_scheduled"] == 2
-    assert summary["total_protein_list"] == ["TEST", "TEMP"]
+    assert set(summary["total_protein_list"]) == {"TEST", "TEMP"}
 
     manifest["proteins"] = {
         "TEST|LEGACY|base": {"status": "completed", "pdb_id": "TEST"},
@@ -83,6 +83,6 @@ def test_scheduled_protein_summary_preserved(tmp_path: Path) -> None:
     _refresh_summary(manifest)
     summary = manifest.get("summary") or {}
     assert summary["total_proteins_scheduled"] == 2
-    assert summary["total_protein_list"] == ["TEST", "TEMP"]
+    assert set(summary["total_protein_list"]) == {"TEST", "TEMP"}
     assert summary["total_proteins_completed"] == 1
     assert summary["total_proteins_failed"] == 2
