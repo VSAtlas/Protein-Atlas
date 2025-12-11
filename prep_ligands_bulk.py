@@ -71,6 +71,7 @@ from prep_ligands_common import (
     _polyacidic_by_counts_from_pdbfile,
     _prepare_one,
     _re_aromatize_mol2_in_place,
+    collapse_sanitized_path,
     _resolve_obabel_exe,
     _resolve_prepare_ligand4,
     _run_obabel,
@@ -170,14 +171,9 @@ from rdkit import Chem
 from rdkit.Chem import rdchem
 
 
-
-
-
-_SANITIZED_RE = re.compile(r'(?:\.sanitized)+(?=\.)')
-
-
 def collapse_sanitized_once(p: Path) -> Path:
-    return p.with_name(_SANITIZED_RE.sub('.sanitized', p.name))
+    """Collapse repeated '.sanitized' tokens in the basename (single pass)."""
+    return collapse_sanitized_path(p)
 
 
 def _ph_label(ph: float) -> str:

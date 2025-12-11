@@ -279,7 +279,7 @@ from single_ligand_index import (
     _ensure_single_ligand_index,
     _resolve_single_ligand,
 )
-from debug_fs import install_debug_makedirs, collapse_sanitized_names_for_cfg
+from debug_fs import install_debug_makedirs
 
 # Install debug wrappers for Path.mkdir and os.makedirs at import time,
 # preserving the previous behavior.
@@ -1472,10 +1472,6 @@ def main() -> None:
     else:
         cfg["_TEST_LIBRARY_CANONICAL"] = {}
 
-
-    # Normalize any repeated '.sanitized' tokens in ligand filenames
-    sanitize_logger = logging.getLogger("sanitize")
-    collapse_sanitized_names_for_cfg(cfg, logger=sanitize_logger)
 
     print("Working directory:", os.getcwd())
     print("Loaded config keys:", list(cfg.keys()))

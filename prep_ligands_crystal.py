@@ -39,6 +39,7 @@ from prep_ligands_common import (
     _resolve_obabel_exe,
     _resolve_prepare_ligand4,
     _run_obabel,
+    collapse_sanitized_path,
     _looks_like_buffer_salt,
     _write_aromatic_sdf,
     get_short_path_name,
@@ -176,6 +177,20 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
         logging.debug("intermediates link skipped: %s", e)
 
     for pdb_file in pdb_files:
+        normalized_src = collapse_sanitized_path(pdb_file)
+        if normalized_src != pdb_file:
+            try:
+                pdb_file.rename(normalized_src)
+                logging.info("[sanitize] normalized ligand filename %s -> %s", pdb_file.name, normalized_src.name)
+                pdb_file = normalized_src
+            except Exception as e:
+                logging.warning(
+                    "[sanitize] unable to normalize ligand filename %s -> %s: %s",
+                    pdb_file.name,
+                    normalized_src.name,
+                    e,
+                )
+
         logging.info(f"Processing: {pdb_file.name}")
 
         lig_id = pdb_file.stem  # e.g., RXT_A1204
@@ -200,7 +215,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
             continue
 
         # Sanitize PDB: keep only the ligand's HETATM triplet; drop all ATOM lines (protein)
-        sanitized = pdb_file.with_suffix(".sanitized.pdb")
+        sanitized = collapse_sanitized_path(pdb_file.with_suffix(".sanitized.pdb"))
 
         def _sanitize_pdb(in_pdb: Path, out_pdb: Path) -> bool:
             target = None  # (resn, chain, resi)
@@ -347,7 +362,7 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
                 out.write(pdb_file.stem + "\n$$$$\n")
 
         # Resume check
-        pdbqt_path = prepped_ligands_dir / f"{pdb_file.stem}.pdbqt"
+        pdbqt_path = collapse_sanitized_path(prepped_ligands_dir / f"{pdb_file.stem}.pdbqt")
         if pdbqt_path.exists() and pdbqt_path.stat().st_size > 100 and is_valid_ligand(pdbqt_path, log_dir=prepped_ligands_dir):
             logging.info(f"[resume] Valid PDBQT already exists, skipping: {pdbqt_path.name}")
             continue

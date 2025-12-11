@@ -2,6 +2,7 @@
 import ctypes
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,24 @@ except Exception:
 from prep_ligands_bulk_sdf import _run_obabel
 
 logger = logging.getLogger(__name__)
+_SANITIZED_RUN = re.compile(r"(?:\.sanitized){2,}")
+
+
+def collapse_sanitized_tokens(name: str) -> str:
+    """
+    Collapse any repeated '.sanitized' tokens in a filename while preserving the extension.
+    Example: 'foo.sanitized.sanitized.pdb' -> 'foo.sanitized.pdb'
+    """
+    stem, ext = os.path.splitext(name)
+    new_stem = _SANITIZED_RUN.sub(".sanitized", stem)
+    return new_stem + ext
+
+
+def collapse_sanitized_path(path: Path) -> Path:
+    """Return a Path with repeated '.sanitized' tokens collapsed in the basename."""
+    path = Path(path)
+    new_name = collapse_sanitized_tokens(path.name)
+    return path.with_name(new_name)
 
 # Shared constants and global state
 STANDARD_AMINO_ACIDS = {

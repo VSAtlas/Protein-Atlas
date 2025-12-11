@@ -144,44 +144,7 @@ def collapse_sanitized_names(
 
 def collapse_sanitized_names_for_cfg(cfg, logger=None) -> None:
     """
-    Convenience wrapper used from main.py.
-
-    Given the ConfigDict (or plain dict) `cfg`, gather all relevant
-    directories that may contain '.sanitized' filenames and call
-    collapse_sanitized_names(...) on them.
-
-    This should be a thin wrapper: no new behavior beyond picking
-    the right roots and delegating to collapse_sanitized_names.
+    Deprecated no-op. Upstream prep now normalizes sanitized filenames at
+    creation time, so we skip the expensive filesystem scan entirely.
     """
-    candidate_keys = [
-        "PREPPED_LIGANDS_DIR",
-        "PREPPED_LIGANDS_ROOT",
-        "OUTPUT_LIGANDS_DIR",
-        "LIGAND_DIR",
-        "LIGANDS_MOL2_DIR",
-        "OUTPUT_DIR",
-        "PDBQT_DIR",
-    ]
-
-    roots = []
-    # Support both dict-style and attribute-style access.
-    for key in candidate_keys:
-        val = None
-        if hasattr(cfg, "get"):
-            try:
-                val = cfg.get(key)  # ConfigDict path
-            except Exception:
-                val = None
-        if val is None:
-            # Fallback to attribute-style (cfg.PREPPED_LIGANDS_DIR, etc.)
-            val = getattr(cfg, key, None)
-        if val:
-            roots.append(os.fspath(val))
-
-    if not roots:
-        return
-
-    if logger:
-        logger.info("[sanitize-collapse] scanning %d roots: %s", len(roots), roots)
-
-    collapse_sanitized_names(roots, logger=logger)
+    return None
