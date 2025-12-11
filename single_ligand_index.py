@@ -56,9 +56,14 @@ def _ensure_single_ligand_index(cfg: Dict, paths: Paths, logger: logging.Logger)
         return
 
     manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+    strict_mtime = cfg.get("LIBRARY_MANIFEST_STRICT_MTIME_CHECK", True)
     index = cfg.get("_LIB_INDEX")
     if not isinstance(index, LibraryIndex):
-        index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
+        index = LibraryIndex(
+            manifest_filename=manifest_filename,
+            logger=logger,
+            strict_mtime_check=bool(strict_mtime),
+        )
         cfg["_LIB_INDEX"] = index
 
     index_roots = _dedupe_manifest_roots([*per_roots, *library_roots])
@@ -74,6 +79,10 @@ def _ensure_single_ligand_index(cfg: Dict, paths: Paths, logger: logging.Logger)
             [str(p) for p in per_roots],
             [str(p) for p in library_roots],
             ";".join(status_parts) or "none",
+        )
+        logger.info(
+            "[single.index] Using %d library roots for single-ligand selection",
+            len(index_roots),
         )
     else:
         logger.info(
