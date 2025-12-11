@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -73,36 +74,76 @@ def test_resume_mode(tmp_path: Path) -> None:
     Simulate an interrupted run and verify resume mode reloads the snapshot config.
     """
     assert MAIN_PY.exists(), "main.py not found; cannot run integration test"
+
+    # Save original config and force APO_HOLO_MODE = holo for this test.
+    original_config = CONFIG_PATH.read_text()
+    config_backup_path = CONFIG_PATH.with_suffix(".backup_resume_test")
+    config_backup_path.write_text(original_config)
+
+    log_stub = REPO_ROOT / "logs" / f"{RUN_ID}_bootstrap.log"
+    log_stub.parent.mkdir(parents=True, exist_ok=True)
+    log_stub.unlink(missing_ok=True)
+    main_log = REPO_ROOT / "logs" / f"main_{RUN_ID}.log"
+    main_log.unlink(missing_ok=True)
+    manifest_dir = REPO_ROOT / "manifests" / RUN_ID
+    if manifest_dir.exists():
+        shutil.rmtree(manifest_dir)
+    config_run_dir = REPO_ROOT / "configs" / RUN_ID
+    if config_run_dir.exists():
+        shutil.rmtree(config_run_dir)
+
+    holo_config = original_config
+    # Replace any existing APO_HOLO_MODE line; if none, append one.
+    pattern = re.compile(r"^APO_HOLO_MODE\s*=.*$", re.MULTILINE)
+    if pattern.search(holo_config):
+        holo_config = pattern.sub("APO_HOLO_MODE = holo", holo_config)
+    else:
+        # Add a newline if the file isn't empty and doesn't already end with one.
+        if holo_config and not holo_config.endswith("\n"):
+            holo_config += "\n"
+        holo_config += "APO_HOLO_MODE = holo\n"
+    CONFIG_PATH.write_text(holo_config)
+
     cfg = load_inputs()
     cfg["RUN_ID"] = RUN_ID
     cfg["CONFIG_RUN_DIR"] = str(REPO_ROOT / "configs" / RUN_ID)
     cfg["TEST_MODE_ENABLE"] = "dud+fda"
     cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
-    cfg["TEST_LIBRARY_MAP"] = {"TEMP": "test_library_10", "T3MP": "test_library_10"}
+    specified_proteins = ["TEMP", "T3MP"]
+    cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = specified_proteins
+    cfg["SPECIFIED_PROTEINS"] = specified_proteins
+    cfg["TEST_LIBRARY_MAP"] = {
+        "TEMP": "test_library_10",
+        "T3MP": "test_library_10",
+        "TEST": "test_library_10",
+    }
     cfg["FAST_MODE"] = True
-    cfg["NO_LIBRARY_DOCKING"] = True
+    cfg["NO_LIBRARY_DOCKING"] = False
     _, manifest_path = get_manifest_paths(cfg, RUN_ID)
     manifest_dir = manifest_path.parent
     manifest_dir.mkdir(parents=True, exist_ok=True)
 
     # Ensure snapshot exists; if not, run the initial command once.
     resume_env = os.environ.copy()
+    resume_env.pop("NO_LIBRARY_DOCKING", None)
     resume_env.update(
         {
             "PYTHONUNBUFFERED": "1",
             "CPU": "1",
             "MAX_PARALLEL_JOBS": "1",
-            "NO_LIBRARY_DOCKING": "1",
+            "NO_LIBRARY_DOCKING": "0",
             "TEST_MODE_ENABLE": cfg["TEST_MODE_ENABLE"],
             "FAST_MODE": "1",
             "LIBRARY_SUBDIR_DEFAULT": cfg["LIBRARY_SUBDIR_DEFAULT"],
+            "ONLY_PDBS": "TEMP T3MP",
         }
     )
     initial_cmd = [
         str(MAIN_PY),
-        "-test",
-        "temp",
-        "t3mp",
+        "--pdb",
+        "TEMP",
+        "--pdb",
+        "T3MP",
         "-fast",
         "-test-fda",
         "--run-id",
@@ -126,7 +167,6 @@ def test_resume_mode(tmp_path: Path) -> None:
     if not cfg_snap_path.exists():
         run_dir.mkdir(parents=True, exist_ok=True)
         if not manifest_path.exists():
-            log_stub = REPO_ROOT / "logs" / f"{RUN_ID}_bootstrap.log"
             log_stub.parent.mkdir(parents=True, exist_ok=True)
             init_run_manifest(cfg, RUN_ID, initial_cmd, str(log_stub))
         if not cfg_snap_path.exists():
@@ -144,7 +184,6 @@ def test_resume_mode(tmp_path: Path) -> None:
     # Build interrupted manifest state and save a backup copy of that state.
     manifest = _load_manifest(manifest_path) or {}
     if not manifest:
-        log_stub = REPO_ROOT / "logs" / f"{RUN_ID}_bootstrap.log"
         log_stub.parent.mkdir(parents=True, exist_ok=True)
         init_run_manifest(cfg, RUN_ID, initial_cmd, str(log_stub))
         manifest = _load_manifest(manifest_path) or {}
@@ -193,6 +232,7 @@ def test_resume_mode(tmp_path: Path) -> None:
 
     manifest["proteins"] = proteins
     cmd_block = manifest.get("command") or {}
+    cmd_block["argv"] = " ".join(initial_cmd)
     cmd_block["APO_HOLO_MODE"] = "holo"
     cmd_block["PH_ENSEMBLE_ENABLE"] = True
     cmd_block["TEST_MODE_ENABLE"] = "dud+fda"
@@ -206,6 +246,8 @@ def test_resume_mode(tmp_path: Path) -> None:
             pid = str(key)
         if pid not in protein_ids:
             protein_ids.append(pid)
+    cmd_block["pdb_list"] = protein_ids
+    manifest["command"] = cmd_block
     completed_count = sum(
         1
         for entry in proteins.values()
@@ -219,6 +261,7 @@ def test_resume_mode(tmp_path: Path) -> None:
     }
     paths_block = manifest.get("paths") or {}
     paths_block["run_dir"] = str(cfg["CONFIG_RUN_DIR"])
+    paths_block["log_file"] = str(main_log)
     paths_block["config_file"] = cfg_file
     manifest["paths"] = paths_block
     manifest["status"] = "running"
@@ -230,12 +273,8 @@ def test_resume_mode(tmp_path: Path) -> None:
     shutil.copyfile(manifest_path, backup_path)
 
     # Simulate config drift by altering config.txt (restore later).
-    original_config = CONFIG_PATH.read_text()
-    config_backup_path = CONFIG_PATH.with_suffix(".backup_resume_test")
-    CONFIG_PATH.write_text(original_config)
-    shutil.copyfile(CONFIG_PATH, config_backup_path)
-
-    drift_cfg = original_config
+    holo_config = CONFIG_PATH.read_text()
+    drift_cfg = holo_config
     drift_cfg = drift_cfg.replace("APO_HOLO_MODE = holo", "APO_HOLO_MODE = apo")
     drift_cfg = drift_cfg.replace("PH_ENSEMBLE=true", "PH_ENSEMBLE=false")
     drift_cfg = drift_cfg.replace("TEST_MODE_ENABLE = dud+fda", "TEST_MODE_ENABLE = off")
@@ -262,29 +301,22 @@ def test_resume_mode(tmp_path: Path) -> None:
             for entry in matches:
                 if str(entry.get("status", "")).lower() == "completed":
                     return entry
-            return matches[0] if matches else None
+            return None
 
         entry_temp = _lookup("TEMP", "HOLO")
         entry_t3mp = _lookup("T3MP", "HOLO")
-        assert entry_temp is not None and entry_temp.get("status") == "completed"
-        assert entry_t3mp is not None
-        t3mp_status = str(entry_t3mp.get("status", "")).lower()
-        assert t3mp_status in {"completed", "pending", "running"}
-        if t3mp_status != "completed":
-            docked_root = Path((manifest_after.get("paths") or {}).get("docked_dir", REPO_ROOT / "docked"))
-            planned = list((docked_root / "T3MP").rglob("planned_ligands_*.txt"))
-            assert planned, "Resume run did not emit planned ligands for T3MP"
-            assert all(p.stat().st_size > 0 for p in planned)
+        assert entry_temp is not None and str(entry_temp.get("status", "")).lower() == "completed"
+        assert entry_t3mp is not None and str(entry_t3mp.get("status", "")).lower() == "completed"
 
         summary = manifest_after.get("summary") or {}
         assert summary.get("total_proteins_scheduled") == 2
         completed_count = sum(
             1
             for entry in proteins_after.values()
-            if isinstance(entry, dict) and entry.get("status") == "completed"
+            if isinstance(entry, dict) and str(entry.get("status", "")).lower() == "completed"
         )
         summary_completed = summary.get("total_proteins_completed")
-        assert summary_completed is not None and int(summary_completed) >= completed_count >= 1
+        assert summary_completed is not None and int(summary_completed) == completed_count == 2
         assert summary.get("total_proteins_failed") == 0
 
         cmd = manifest_after.get("command") or {}

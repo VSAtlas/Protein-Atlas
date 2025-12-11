@@ -34,7 +34,7 @@ from input_and_export_functions import (
     record_score,
     _to_bool,
 )
-from path_router import Paths, docked_dir, receptor_file
+from path_router import Paths, docked_dir, receptor_file, load_ph_tags
 from ph_ensemble_docking import (
     enumerate_ligands_for_ph_context,
     init_ph_tags_and_manifest,
@@ -349,6 +349,12 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
         library_for_manifest = cfg.get("LIBRARY_SUBDIR_DEFAULT")
 
     ph_tags = init_ph_tags_and_manifest(cfg, paths.pdb_id, variant_token, legacy_mode)
+    ph_tags = [str(tag).strip() for tag in ph_tags if tag is not None and str(tag).strip()]
+    if not ph_tags:
+        fallback_ph = load_ph_tags(paths.pdb_id, variant=variant_token) or []
+        ph_tags = [str(tag).strip() for tag in fallback_ph if tag is not None and str(tag).strip()]
+    if not ph_tags:
+        ph_tags = ["base"]  # ensure downstream logging/manifest updates occur
     if ph_enabled and not ph_tags:
         logger.info(
             "[subrun.ph] run_mode=%s ph_enabled=True but no ph_tags; skipping PH run",
