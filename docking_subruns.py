@@ -165,6 +165,14 @@ def subruns_for_test_mode(test_mode: str) -> List[SubrunSpec]:
                 stage_name_prefix="",
             )
         ]
+    if test_mode == "fda":
+        return [
+            SubrunSpec(
+                run_mode="fda",
+                csv_prefix="",
+                stage_name_prefix="",
+            )
+        ]
     if test_mode == "fda+dud":
         return [
             SubrunSpec(run_mode="dud", csv_prefix="dud_", stage_name_prefix="dud_"),

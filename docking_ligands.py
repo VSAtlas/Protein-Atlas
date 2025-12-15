@@ -249,7 +249,7 @@ def _coerce_test_map(m) -> Dict[str, str]:
 def _resolve_test_mode(cfg) -> str:
     """
     Normalize TEST_MODE_ENABLE to one of:
-      "off", "dud", "fda+dud", "hmdb", "hmdb+dud", "hmdb+fda", "fda+dud+hmdb".
+      "off", "dud", "fda", "fda+dud", "hmdb", "hmdb+dud", "hmdb+fda", "fda+dud+hmdb".
 
     Accepts:
       - Booleans / bool-like strings for backwards compatibility:
@@ -258,6 +258,7 @@ def _resolve_test_mode(cfg) -> str:
       - Explicit string modes (case-insensitive, tolerant of "_" / "+" / "-"):
           "off"                 -> "off"
           "dud"                 -> "dud"
+          "fda"                 -> "fda"
           "fda+dud"/"both"      -> "fda+dud"
           "hmdb"                -> "hmdb"
           "hmdb+dud"            -> "hmdb+dud"
@@ -283,6 +284,7 @@ def _resolve_test_mode(cfg) -> str:
         return "fda+dud"
 
     direct_aliases = {
+        "fda": "fda",
         "both": "fda+dud",
         "fda_dud": "fda+dud",
         "fda+dud": "fda+dud",
@@ -304,6 +306,8 @@ def _resolve_test_mode(cfg) -> str:
     token_set = set(tokens)
     if token_set == {"dud"}:
         return "dud"
+    if token_set == {"fda"}:
+        return "fda"
     if token_set == {"hmdb"}:
         return "hmdb"
     if token_set == {"fda", "dud"}:

@@ -117,6 +117,36 @@ def _get_library_index(root: Path, manifest_filename: str) -> LibraryIndex:
     return idx
 
 
+@dataclass
+class TargetSpec:
+    target_key: str
+    pdb_id: str
+    variant: Optional[str]
+    ph_tag: Optional[str]
+    csv_path: Optional[Path]
+    source: str  # "manifest" | "scan" | "legacy"
+
+
+def make_target_key(pdb_id: str,
+                    variant: Optional[str],
+                    ph_tag: Optional[str]) -> str:
+    """
+    Build a path-safe identifier for a target.
+    Backward compatibility: if both variant and pH are blank, return the pdb_id unchanged.
+    """
+    variant_norm = (variant or "").strip()
+    ph_norm = (ph_tag or "").strip()
+    if not variant_norm and not ph_norm:
+        return pdb_id
+    variant_norm = variant_norm.upper().replace(" ", "_")
+    ph_norm = ph_norm.replace(" ", "_")
+    for sep in (os.sep, os.altsep):
+        if sep:
+            variant_norm = variant_norm.replace(sep, "_")
+            ph_norm = ph_norm.replace(sep, "_")
+    return f"{pdb_id}__{variant_norm}__{ph_norm}"
+
+
 
 def _fmt_counts_and_round(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy with big counts comma-formatted and floats rounded to 3 dp (for display only)."""
@@ -615,7 +645,7 @@ def guess_ligfile_col(df: pd.DataFrame, override: Optional[str]) -> str:
     raise ValueError("Could not find ligand filename/path column. Use --lig-col.")
 
 # >>> RUN-SELECTION START
-def select_default_run_id(targets: List[Tuple[str, Path]],
+def select_default_run_id(targets: List[TargetSpec],
                           csv_paths_by_target: Dict[str, Path],
                           lig_col_cli: Optional[str],
                           score_col_cli: Optional[str]) -> Optional[str]:
@@ -654,14 +684,14 @@ def select_default_run_id(targets: List[Tuple[str, Path]],
                     continue
         return None
 
-    for pdb_id, _ in targets:
-        csv_path = csv_paths_by_target.get(pdb_id)
+    for target in targets:
+        csv_path = csv_paths_by_target.get(target.target_key)
         if not csv_path or not csv_path.exists():
             continue
         try:
             df = pd.read_csv(csv_path)
         except Exception as exc:
-            dbg("WARN", "run", f"pdb={pdb_id} auto_select_read_err={exc}")
+            dbg("WARN", "run", f"pdb={target.pdb_id} auto_select_read_err={exc}")
             continue
 
         if "run_id" not in df.columns:
@@ -670,7 +700,7 @@ def select_default_run_id(targets: List[Tuple[str, Path]],
         try:
             lig_col = guess_ligfile_col(df, lig_col_cli)
         except Exception as exc:
-            dbg("WARN", "run", f"pdb={pdb_id} auto_select_ligcol_err={exc}")
+            dbg("WARN", "run", f"pdb={target.pdb_id} auto_select_ligcol_err={exc}")
             continue
 
         lig_series = df[lig_col].astype(str)
@@ -691,7 +721,7 @@ def select_default_run_id(targets: List[Tuple[str, Path]],
         lig_counts = df_subset.groupby("__run_id")["__lig_id"].nunique()
         for run_label, count in lig_counts.items():
             if count >= FULL_RUN_MIN_LIGANDS:
-                run_full_map.setdefault(run_label, set()).add(pdb_id)
+                run_full_map.setdefault(run_label, set()).add(target.target_key)
             try:
                 stat = csv_path.stat()
             except Exception:
@@ -1230,6 +1260,29 @@ def _manifest_library_for_target(
     return ""
 
 
+def _manifest_protein_entries(manifest: dict) -> List[Dict[str, str]]:
+    """
+    Return the manifest proteins entries in order, without collapsing by pdb_id.
+    Each entry is a dict with pdb_id, variant, and ph (strings, may be empty).
+    """
+    entries: List[Dict[str, str]] = []
+    if not manifest:
+        return entries
+    proteins = manifest.get("proteins") or {}
+    if not isinstance(proteins, dict):
+        return entries
+    for _key, entry in proteins.items():
+        if not isinstance(entry, dict):
+            continue
+        pdb_id = str(entry.get("pdb_id", "")).strip()
+        if not pdb_id:
+            continue
+        variant = str(entry.get("variant", "") or "").strip()
+        ph = str(entry.get("ph", "") or "").strip()
+        entries.append({"pdb_id": pdb_id, "variant": variant, "ph": ph})
+    return entries
+
+
 def _manifest_proteins_by_pdb(manifest: dict) -> Dict[str, Dict[str, str]]:
     """
     Return a mapping:
@@ -1484,9 +1537,6 @@ def main():
     analysis_root.mkdir(parents=True, exist_ok=True)
     dbg("DEBUG", "paths", f"docked_root={docked_root} out_root={out_root} analysis_root={analysis_root} pdb_root={pdb_root_override or 'none'} prepped_root={prepped_root_override or 'none'}")
 
-    variant_by_target: Dict[str, Optional[str]] = {}
-    ph_by_target: Dict[str, Optional[str]] = {}
-
     def _infer_variant_ph_from_csv_path(pdb_id: str, csv_path: Path) -> tuple[Optional[str], Optional[str]]:
         """
         Infer (variant, pH_tag) from the chosen docking_score_long.csv path.
@@ -1648,10 +1698,6 @@ def main():
             dbg("DEBUG", "resolve", f"pdb={pdb_id} tried={len(candidates_tried)} candidates={candidates_tried}")
             dbg("INFO", "resolve", f"pdb={pdb_id} picked={picked}")
 
-            variant, ph_tag = _infer_variant_ph_from_csv_path(pdb_id, picked)
-            variant_by_target[pdb_id] = variant
-            ph_by_target[pdb_id] = ph_tag
-
             return picked
 
         dbg("WARN", "resolve", f"pdb={pdb_id} no_csv_found tried={candidates_tried or ['<none>']} search_root={fallback_dir}")
@@ -1704,15 +1750,95 @@ def main():
 
         return _resolve_docking_csv(pdb_id, docked_root / pdb_id)
 
+    def _discover_docking_csvs(
+        pdb_id: str,
+        docked_root: Path,
+        cfg: Optional[dict],
+        csv_basenames: Tuple[str, ...],
+    ) -> List[TargetSpec]:
+        """
+        Return all docking CSVs for a pdb_id across variants/pH subfolders.
+        """
+        try:
+            paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb") if cfg else None
+        except Exception:
+            paths = None
+
+        if paths:
+            base_root = paths.docked_pdb_root()
+        else:
+            base_root = docked_root / pdb_id
+            if docked_root.name.upper() == pdb_id.upper():
+                base_root = docked_root
+
+        seen_paths: Set[str] = set()
+        ranked: List[Tuple[TargetSpec, int]] = []
+        basename_rank = {name: idx for idx, name in enumerate(csv_basenames)}
+
+        def _add(candidate: Path, variant: Optional[str], ph_tag: Optional[str], source: str) -> None:
+            if not candidate.exists():
+                return
+            try:
+                key = str(candidate.resolve())
+            except Exception:
+                key = str(candidate)
+            if key in seen_paths:
+                return
+            seen_paths.add(key)
+            variant_norm = variant.upper() if variant else None
+            rank = basename_rank.get(candidate.name, len(csv_basenames))
+            ranked.append((
+                TargetSpec(
+                    target_key=make_target_key(pdb_id, variant_norm, ph_tag),
+                    pdb_id=pdb_id,
+                    variant=variant_norm,
+                    ph_tag=ph_tag,
+                    csv_path=candidate,
+                    source=source,
+                ),
+                rank,
+            ))
+
+        # Legacy root: docked/<PDB>/<basename>
+        for basename in csv_basenames:
+            _add(base_root / basename, None, None, "legacy")
+
+        for variant in ("APO", "HOLO"):
+            variant_dir = base_root / variant
+            for basename in csv_basenames:
+                _add(variant_dir / basename, variant, None, "scan")
+            if variant_dir.is_dir():
+                for ph_dir in sorted(variant_dir.iterdir()):
+                    if not ph_dir.is_dir():
+                        continue
+                    ph_label = ph_dir.name
+                    for basename in csv_basenames:
+                        _add(ph_dir / basename, variant, ph_label, "scan")
+
+        ranked.sort(key=lambda pair: (
+            pair[0].pdb_id,
+            pair[0].variant or "",
+            pair[0].ph_tag or "",
+            pair[1],
+            str(pair[0].csv_path),
+        ))
+        specs = [spec for spec, _rank in ranked]
+        pairs = [f"{spec.variant or 'legacy'}|{spec.ph_tag or 'base'}" for spec in specs]
+        variant_label = ";".join(pairs) if pairs else "<none>"
+        dbg("INFO", "discover", f"pdb={pdb_id} targets={len(specs)} variants={variant_label}")
+        return specs
+
     manifest_data: dict | None = None
+    manifest_entries: List[Dict[str, str]] = []
     manifest_proteins: Dict[str, Dict[str, str]] = {}
     manifest_driven = False
     if cfg and active_run_id:
         try:
             _manifest_dir, manifest_path = get_manifest_paths(cfg, str(active_run_id))
             manifest_data = _load_manifest(manifest_path) or {}
+            manifest_entries = _manifest_protein_entries(manifest_data or {})
             manifest_proteins = _manifest_proteins_by_pdb(manifest_data or {})
-            manifest_driven = bool(active_run_id and manifest_proteins)
+            manifest_driven = bool(active_run_id and manifest_entries)
             test_mode_enable = ""
             cmd_block = manifest_data.get("command") if isinstance(manifest_data, dict) else {}
             if isinstance(cmd_block, dict):
@@ -1720,38 +1846,44 @@ def main():
             if test_mode_enable == "dud":
                 csv_basenames = ("docking_score_long.csv", "dud_docking_score_long.csv")
                 dbg("INFO", "manifest", f"run_id={active_run_id} test_mode=dud csv_priority={';'.join(csv_basenames)}")
-            if manifest_driven:
-                for pdb_id, meta in manifest_proteins.items():
-                    variant_hint = meta.get("variant") or None
-                    ph_hint = meta.get("ph") or None
-                    if variant_hint:
-                        variant_by_target[pdb_id] = variant_hint
-                    if ph_hint:
-                        ph_by_target[pdb_id] = ph_hint
-            dbg("INFO", "manifest", f"run_id={active_run_id} manifest={manifest_path} proteins={len(manifest_proteins)}")
+            dbg("INFO", "manifest", f"run_id={active_run_id} manifest={manifest_path} proteins={len(manifest_entries)}")
         except Exception as exc:
             dbg("WARN", "manifest", f"run_id={active_run_id} load_err={exc}")
             manifest_data = {}
+            manifest_entries = []
             manifest_proteins = {}
             manifest_driven = False
     else:
         dbg("DEBUG", "manifest", "pre-discover: no cfg or active_run_id; manifest lookup disabled")
 
-    # discover targets
-    targets: List[Tuple[str, Optional[Path]]] = []
+    targets: List[TargetSpec] = []
 
     if manifest_driven:
-        for pdb_id, meta in manifest_proteins.items():
+        for entry in manifest_entries:
+            pdb_id = str(entry.get("pdb_id", "")).strip()
+            if not pdb_id:
+                continue
+            variant_hint = str(entry.get("variant", "") or "").strip()
+            ph_hint = str(entry.get("ph", "") or "").strip()
+            variant_upper = variant_hint.upper() if variant_hint else None
             csv_path = _resolve_docking_csv_for_manifest(
                 pdb_id=pdb_id,
-                variant_hint=meta.get("variant") or None,
-                ph_hint=meta.get("ph") or None,
+                variant_hint=variant_hint or None,
+                ph_hint=ph_hint or None,
                 docked_root=docked_root,
                 cfg=cfg,
             )
-            targets.append((pdb_id, csv_path))
+            target_key = make_target_key(pdb_id, variant_upper, ph_hint or None)
+            targets.append(TargetSpec(
+                target_key=target_key,
+                pdb_id=pdb_id,
+                variant=variant_upper,
+                ph_tag=ph_hint or None,
+                csv_path=csv_path,
+                source="manifest",
+            ))
             if csv_path is None:
-                dbg("WARN", "discover", f"pdb={pdb_id} reason=no_docked_csv_for_manifest_entry")
+                dbg("WARN", "discover", f"pdb={pdb_id} variant={variant_upper or 'base'} ph={ph_hint or 'base'} reason=no_docked_csv_for_manifest_entry")
     elif docked_root.is_dir():
         # Multi-target first: treat docked_root as parent of many PDBs
         for sub in sorted(docked_root.iterdir()):
@@ -1759,26 +1891,29 @@ def main():
                 continue
             pdb_id = sub.name
 
-            # Option B: skip stale docked runs with no corresponding input PDB
             pdb_path = Path("input_pdbs") / f"{pdb_id}.pdb"
             if not pdb_path.exists():
                 dbg("WARN", "discover.skip", f"pdb={pdb_id} reason=no_input_pdb path={pdb_path}")
                 continue
 
-            csv_path = _resolve_docking_csv(pdb_id, sub)
-            if csv_path is not None:
-                targets.append((pdb_id, csv_path))
+            targets.extend(_discover_docking_csvs(pdb_id, docked_root, cfg, csv_basenames))
 
-        # If we didn't find anything under subdirectories, fall back to single-target mode
         if not targets:
-            csv_path = _resolve_docking_csv(docked_root.name, docked_root)
-            if csv_path is not None:
-                targets.append((docked_root.name, csv_path))
+            pdb_id = docked_root.name
+            targets.extend(_discover_docking_csvs(pdb_id, docked_root, cfg, csv_basenames))
     else:
-        # Non-directory path: treat as a single PDB-specific root
-        csv_path = _resolve_docking_csv(docked_root.name, docked_root)
-        if csv_path is not None:
-            targets.append((docked_root.name, csv_path))
+        pdb_id = docked_root.name
+        targets.extend(_discover_docking_csvs(pdb_id, docked_root, cfg, csv_basenames))
+
+    unique_targets: List[TargetSpec] = []
+    seen_keys: Set[str] = set()
+    for spec in targets:
+        if spec.target_key in seen_keys:
+            dbg("WARN", "discover", f"target_key={spec.target_key} csv={spec.csv_path} source={spec.source} action=skip_duplicate")
+            continue
+        seen_keys.add(spec.target_key)
+        unique_targets.append(spec)
+    targets = unique_targets
 
     if not targets:
         dbg("ERROR", "discover", f"no docking_score_long.csv / dud_docking_score_long.csv under {docked_root}")
@@ -1787,13 +1922,12 @@ def main():
     dbg("INFO", "discover", f"targets={len(targets)} root={docked_root}")
 
     rows: List[pd.Series] = []
-    ligand_basenames_by_target: Dict[str, Set[str]] = {}
     target_eval_results: Dict[str, TargetEvaluation] = {}
     csv_paths_by_target: Dict[str, Path] = {}
-    for pdb_id, csvp in targets:
-        if csvp:
-            csv_paths_by_target[pdb_id] = csvp
-    targets_with_csv = [(p, c) for p, c in targets if c]
+    for spec in targets:
+        if spec.csv_path:
+            csv_paths_by_target[spec.target_key] = spec.csv_path
+    targets_with_csv = [t for t in targets if t.csv_path]
 
     if not active_run_id:
         try:
@@ -1807,8 +1941,9 @@ def main():
         try:
             _manifest_dir, manifest_path = get_manifest_paths(cfg, str(active_run_id))
             manifest_data = _load_manifest(manifest_path) or {}
+            manifest_entries = _manifest_protein_entries(manifest_data or {})
             manifest_proteins = _manifest_proteins_by_pdb(manifest_data or {})
-            manifest_driven = manifest_driven or bool(active_run_id and manifest_proteins)
+            manifest_driven = manifest_driven or bool(active_run_id and manifest_entries)
             test_mode_enable = ""
             cmd_block = manifest_data.get("command") if isinstance(manifest_data, dict) else {}
             if isinstance(cmd_block, dict):
@@ -1816,43 +1951,30 @@ def main():
             if test_mode_enable == "dud":
                 csv_basenames = ("docking_score_long.csv", "dud_docking_score_long.csv")
                 dbg("INFO", "manifest", f"run_id={active_run_id} test_mode=dud csv_priority={';'.join(csv_basenames)}")
-            if manifest_proteins:
-                for pdb_id, meta in manifest_proteins.items():
-                    variant_hint = meta.get("variant") or None
-                    ph_hint = meta.get("ph") or None
-                    if variant_hint:
-                        variant_by_target[pdb_id] = variant_hint
-                    if ph_hint:
-                        ph_by_target[pdb_id] = ph_hint
-            dbg("INFO", "manifest", f"run_id={active_run_id} manifest={manifest_path} proteins={len(manifest_proteins)}")
+            dbg("INFO", "manifest", f"run_id={active_run_id} manifest={manifest_path} proteins={len(manifest_entries)}")
         except Exception as exc:
             dbg("WARN", "manifest", f"run_id={active_run_id} load_err={exc}")
             manifest_data = {}
+            manifest_entries = []
             manifest_proteins = {}
             manifest_driven = bool(active_run_id and manifest_proteins)
     elif manifest_data is None:
         dbg("DEBUG", "manifest", "no cfg or active_run_id; manifest lookup disabled")
 
+    if not manifest_entries:
+        manifest_entries = _manifest_protein_entries(manifest_data or {})
     if not manifest_proteins:
         manifest_proteins = _manifest_proteins_by_pdb(manifest_data or {})
-    manifest_driven = manifest_driven or bool(active_run_id and manifest_proteins)
-    if manifest_driven and manifest_proteins:
-        for pdb_id, meta in manifest_proteins.items():
-            variant_hint = meta.get("variant") or None
-            ph_hint = meta.get("ph") or None
-            if variant_hint:
-                variant_by_target[pdb_id] = variant_hint
-            if ph_hint:
-                ph_by_target[pdb_id] = ph_hint
-        dbg("DEBUG", "manifest", f"targets={len(manifest_proteins)} source=manifest")
+    manifest_driven = manifest_driven or bool(active_run_id and manifest_entries)
 
-    for pdb_id, csvp in targets:
+    for spec in targets:
         evaluated: Optional[TargetEvaluation] = None
-        if csvp:
+        out_dir = analysis_root / spec.target_key
+        if spec.csv_path:
             evaluated = evaluate_target(
-                pdb_id=pdb_id,
-                csv_path=csvp,
-                out_dir=analysis_root / pdb_id,
+                pdb_id=spec.pdb_id,
+                csv_path=spec.csv_path,
+                out_dir=out_dir,
                 lig_col_cli=args.lig_col,
                 score_col_cli=args.score_col,
                 bedroc_alpha=args.bedroc_alpha,
@@ -1860,14 +1982,22 @@ def main():
                 run_id=active_run_id,
             )
         if evaluated is not None:
-            target_eval_results[pdb_id] = evaluated
-            ligand_basenames_by_target[pdb_id] = evaluated.ligand_basenames
+            target_eval_results[spec.target_key] = evaluated
             if evaluated.metrics is not None:
-                rows.append(evaluated.metrics)
+                metrics = evaluated.metrics.copy()
+                for col in ("variant", "pH"):
+                    if col in metrics.index:
+                        metrics.drop(index=col, inplace=True)
+                metrics["pdb_id"] = spec.pdb_id
+                metrics["variant"] = spec.variant or ""
+                metrics["pH"] = spec.ph_tag or ""
+                rows.append(metrics)
             elif manifest_driven:
                 base_row = {
                     "run_id": str(active_run_id) if active_run_id else "(none)",
-                    "pdb_id": pdb_id,
+                    "pdb_id": spec.pdb_id,
+                    "variant": spec.variant or "",
+                    "pH": spec.ph_tag or "",
                     "N": 0,
                     "n_actives": 0,
                     "actives_fraction": float("nan"),
@@ -1885,7 +2015,9 @@ def main():
         elif manifest_driven:
             base_row = {
                 "run_id": str(active_run_id) if active_run_id else "(none)",
-                "pdb_id": pdb_id,
+                "pdb_id": spec.pdb_id,
+                "variant": spec.variant or "",
+                "pH": spec.ph_tag or "",
                 "N": 0,
                 "n_actives": 0,
                 "actives_fraction": float("nan"),
@@ -1905,51 +2037,47 @@ def main():
         dbg("ERROR", "metrics", "no targets produced evaluable rows")
         raise SystemExit(3)
 
-    df_all = pd.DataFrame(rows).sort_values("pdb_id")
-
-    # Optional variant / pH columns derived from manifest (canonical) and chosen docking CSV path
-    existing_variant = df_all["variant"] if "variant" in df_all.columns else None
-    if "variant" in df_all.columns:
+    df_all = pd.DataFrame(rows)
+    for col in ("variant", "pH"):
+        if col not in df_all.columns:
+            df_all[col] = ""
+    has_variant = "variant" in df_all.columns and df_all["variant"].astype(str).str.strip().ne("").any()
+    has_ph = "pH" in df_all.columns and df_all["pH"].astype(str).str.strip().ne("").any()
+    if not has_variant and "variant" in df_all.columns:
         df_all = df_all.drop(columns=["variant"])
-    if "pH" in df_all.columns:
+    if not has_ph and "pH" in df_all.columns:
         df_all = df_all.drop(columns=["pH"])
+    sort_cols = [c for c in ("pdb_id", "variant", "pH") if c in df_all.columns]
+    df_all = df_all.sort_values(sort_cols or ["pdb_id"])
 
-    manifest_variant_by_pdb: Dict[str, Optional[str]] = {}
-    manifest_ph_by_pdb: Dict[str, Optional[str]] = {}
-    for pdb_id, meta in manifest_proteins.items():
-        manifest_variant_by_pdb[pdb_id] = meta.get("variant") or None
-        manifest_ph_by_pdb[pdb_id] = meta.get("ph") or None
+    if manifest_driven:
+        expected_keys = [
+            make_target_key(
+                str(entry.get("pdb_id", "")).strip(),
+                (entry.get("variant") or "").strip() or None,
+                (entry.get("ph") or "").strip() or None,
+            )
+            for entry in manifest_entries
+            if str(entry.get("pdb_id", "")).strip()
+        ]
+        observed_keys: List[str] = []
+        for _, row in df_all.iterrows():
+            variant_val = ""
+            ph_val = ""
+            if "variant" in df_all.columns:
+                raw_var = row.get("variant", "")
+                variant_val = "" if pd.isna(raw_var) else str(raw_var)
+            if "pH" in df_all.columns:
+                raw_ph = row.get("pH", "")
+                ph_val = "" if pd.isna(raw_ph) else str(raw_ph)
+            observed_keys.append(make_target_key(str(row.get("pdb_id", "")), variant_val, ph_val))
+        missing = sorted(set(expected_keys) - set(observed_keys))
+        extra = sorted(set(observed_keys) - set(expected_keys))
+        dbg("INFO", "manifest.coverage", f"expected={len(expected_keys)} observed={len(observed_keys)} missing={len(missing)} extra={len(extra)}")
+        if missing:
+            suffix = "..." if len(missing) > 5 else ""
+            dbg("WARN", "manifest.coverage", f"missing_keys={missing[:5]}{suffix}")
 
-    path_variant_series = df_all["pdb_id"].map(variant_by_target).fillna("")
-    path_ph_series = df_all["pdb_id"].map(ph_by_target).fillna("")
-
-    manifest_variant_series = df_all["pdb_id"].map(manifest_variant_by_pdb).fillna("")
-    manifest_ph_series = df_all["pdb_id"].map(manifest_ph_by_pdb).fillna("")
-
-    variant_series = manifest_variant_series.where(
-        manifest_variant_series.astype(str).str.strip().ne(""),
-        path_variant_series,
-    )
-    if existing_variant is not None:
-        variant_series = variant_series.where(
-            variant_series.astype(str).str.strip().ne(""),
-            existing_variant.reindex(df_all.index).fillna(""),
-        )
-    ph_series = manifest_ph_series.where(
-        manifest_ph_series.astype(str).str.strip().ne(""),
-        path_ph_series,
-    )
-
-    has_variant = variant_series.astype(str).str.strip().ne("").any()
-    has_ph = ph_series.astype(str).str.strip().ne("").any()
-
-    if has_variant:
-        df_all.insert(0, "variant", variant_series)
-    if has_ph:
-        idx = 1 if has_variant else 0
-        df_all.insert(idx, "pH", ph_series)
-
-    control_targets = [pdb for pdb, _ in targets if pdb in target_eval_results]
     annotate_targets = list(df_all["pdb_id"].astype(str).unique())
 
     names: Dict[str, str] = {p: "" for p in annotate_targets}
@@ -1966,37 +2094,37 @@ def main():
     else:
         dbg("DEBUG", "target", "target_name_from_pdb=OFF")
 
-    libs: Dict[str, str] = {p: "" for p in annotate_targets}
     if args.report_library:
-        for pdb_id in annotate_targets:
-            variant_label = variant_by_target.get(pdb_id)
-            ph_tag = ph_by_target.get(pdb_id)
-            lib = ""
-            if manifest_data:
-                lib = _manifest_library_for_target(
+        if manifest_data:
+            df_all["library_name"] = df_all.apply(
+                lambda r: _manifest_library_for_target(
                     manifest=manifest_data,
-                    pdb_id=pdb_id,
-                    variant_label=variant_label,
-                    ph_tag=ph_tag,
-                )
-            libs[pdb_id] = lib or ""
-            dbg(
-                "DEBUG",
-                "library",
-                f"pdb={pdb_id} variant={variant_label or 'base'} ph={ph_tag or 'base'} "
-                f"library_manifest='{libs[pdb_id]}'",
+                    pdb_id=str(r.get("pdb_id", "")),
+                    variant_label=(
+                        "" if "variant" not in df_all.columns else ("" if pd.isna(r.get("variant", "")) else str(r.get("variant", "")))
+                    ),
+                    ph_tag=(
+                        "" if "pH" not in df_all.columns else ("" if pd.isna(r.get("pH", "")) else str(r.get("pH", "")))
+                    ),
+                ),
+                axis=1,
             )
-
-        if not df_all.empty:
-            df_all["library_name"] = df_all["pdb_id"].map(libs).fillna("")
+            df_all["library_name"] = df_all["library_name"].fillna("")
+        else:
+            df_all["library_name"] = ""
     else:
         dbg("DEBUG", "library", "report_library=OFF")
+        if "library_name" not in df_all.columns:
+            df_all["library_name"] = ""
+
+    if not df_all.empty and "target_name" not in df_all.columns:
+        df_all["target_name"] = df_all["pdb_id"].map(names).fillna("")
+    if "library_name" not in df_all.columns:
+        df_all["library_name"] = ""
+
+    control_targets = [t for t in targets if t.target_key in target_eval_results]
 
     df = df_all.copy()
-    if not df.empty and "target_name" not in df.columns:
-        df["target_name"] = df["pdb_id"].map(names).fillna("")
-    if not df.empty and "library_name" not in df.columns:
-        df["library_name"] = df["pdb_id"].map(libs).fillna("")
 
     analysis_root.mkdir(parents=True, exist_ok=True)
 
@@ -2049,68 +2177,86 @@ def main():
                 f"searching_pattern.control_redock=\"{CONTROL_REDOCK_RE.pattern}\"",
             )
             _CONTROL_PATTERNS_LOGGED = True
-        for pdb_id in control_targets:
-            eval_meta = target_eval_results.get(pdb_id)
-            run_label = _resolve_run_label(pdb_id, eval_meta, args.run_id, active_run_id)
-            target_label = names.get(pdb_id, "")
-            library_label = libs.get(pdb_id, "")
-            csv_path = csv_paths_by_target.get(pdb_id)
+        for spec in control_targets:
+            eval_meta = target_eval_results.get(spec.target_key)
+            run_label = _resolve_run_label(spec.pdb_id, eval_meta, args.run_id, active_run_id)
+            target_label = names.get(spec.pdb_id, "")
+            library_label = ""
+            if args.report_library and manifest_data:
+                library_label = _manifest_library_for_target(
+                    manifest=manifest_data,
+                    pdb_id=spec.pdb_id,
+                    variant_label=spec.variant,
+                    ph_tag=spec.ph_tag,
+                )
+            if not library_label and not df.empty and "library_name" in df.columns:
+                mask = df["pdb_id"].astype(str) == str(spec.pdb_id)
+                if "variant" in df.columns:
+                    mask &= df["variant"].astype(str) == (spec.variant or "")
+                if "pH" in df.columns:
+                    mask &= df["pH"].astype(str) == (spec.ph_tag or "")
+                if mask.any():
+                    library_label = str(df.loc[mask, "library_name"].iloc[0])
+
+            csv_path = csv_paths_by_target.get(spec.target_key)
             if csv_path is None:
                 continue
-            variant_label = variant_by_target.get(pdb_id)
-            ph_label = ph_by_target.get(pdb_id)
-            parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
+            parsed_counts[spec.target_key] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
             selected_log, candidates = _candidate_protein_logs(
-                pdb_id,
+                spec.pdb_id,
                 csv_path,
                 docked_root,
                 log_root_override,
                 cfg,
             )
-            dbg("DEBUG", "control", f"pdb={pdb_id} log_candidates={[str(c) for c in candidates]}")
+            dbg(
+                "DEBUG",
+                "control",
+                f"target={spec.target_key} log_candidates={[str(c) for c in candidates]}",
+            )
             if selected_log:
-                dbg("INFO", "control", f"pdb={pdb_id} protein_log={selected_log}")
-                scanned_ok.append(pdb_id)
+                dbg("INFO", "control", f"target={spec.target_key} protein_log={selected_log}")
+                scanned_ok.append(spec.target_key)
             else:
-                missing_logs.append(pdb_id)
-                missing_hint = str(candidates[0]) if candidates else str(Path("docked") / pdb_id / "protein.log")
+                missing_logs.append(spec.target_key)
+                missing_hint = str(candidates[0]) if candidates else str(Path("docked") / spec.pdb_id / "protein.log")
                 dbg(
                     "WARN",
                     "control",
-                    f"pdb={pdb_id} protein_log_missing={missing_hint} action=skip_control_parse",
+                    f"target={spec.target_key} protein_log_missing={missing_hint} action=skip_control_parse",
                 )
 
             long_rows, summary_row, meta = _build_control_records(
-                pdb_id,
+                spec.pdb_id,
                 run_label,
                 target_label,
                 library_label,
                 selected_log,
-                variant_label,
-                ph_label,
+                spec.variant,
+                spec.ph_tag,
             )
-            if pdb_id not in parsed_counts:
-                parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
-            parsed_counts[pdb_id]["centers"] = meta.get("centers_found", 0)
-            parsed_counts[pdb_id]["redock_lines"] = meta.get("redock_lines", 0)
-            parsed_counts[pdb_id]["report_rows"] = meta.get("report_rows", 0)
+            if spec.target_key not in parsed_counts:
+                parsed_counts[spec.target_key] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
+            parsed_counts[spec.target_key]["centers"] = meta.get("centers_found", 0)
+            parsed_counts[spec.target_key]["redock_lines"] = meta.get("redock_lines", 0)
+            parsed_counts[spec.target_key]["report_rows"] = meta.get("report_rows", 0)
             dbg(
                 "INFO",
                 "control",
                 (
-                    f"pdb={pdb_id} centers_found={parsed_counts[pdb_id]['centers']} "
-                    f"redock_lines={parsed_counts[pdb_id]['redock_lines']} "
-                    f"report_rows={parsed_counts[pdb_id]['report_rows']}"
+                    f"target={spec.target_key} centers_found={parsed_counts[spec.target_key]['centers']} "
+                    f"redock_lines={parsed_counts[spec.target_key]['redock_lines']} "
+                    f"report_rows={parsed_counts[spec.target_key]['report_rows']}"
                 ),
             )
             if long_rows:
                 control_long_records.extend(long_rows)
             control_summary_records.append(summary_row)
-        for pdb_id in control_targets:
-            if pdb_id not in parsed_counts:
-                parsed_counts[pdb_id] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
-                if pdb_id not in missing_logs and pdb_id not in scanned_ok:
-                    missing_logs.append(pdb_id)
+        for spec in control_targets:
+            if spec.target_key not in parsed_counts:
+                parsed_counts[spec.target_key] = {"centers": 0, "redock_lines": 0, "report_rows": 0}
+                if spec.target_key not in missing_logs and spec.target_key not in scanned_ok:
+                    missing_logs.append(spec.target_key)
 
     summary_name = "summary.tsv"
     if args.run_id:
@@ -2181,8 +2327,8 @@ def main():
             # Pretty summary alongside TSV
             if args.pretty_summary:  # if you added the flag; otherwise remove the 'if'
                 pretty_name = summary_path.with_name(summary_path.stem + "_pretty.txt")
-            _write_pretty_summary([(None, _df[cols])], pretty_name)
-            print(f"[eval] pretty_summary_out={pretty_name}")
+                _write_pretty_summary([(None, _df[cols])], pretty_name)
+                print(f"[eval] pretty_summary_out={pretty_name}")
     metric_cols = [c for c in df.columns if c not in excluded_cols]
     macro = df[metric_cols].mean(numeric_only=True).to_dict()
     macro_df = pd.DataFrame([{"pdb_id": "macro_avg", **{k: macro[k] for k in metric_cols}}])
@@ -2256,11 +2402,14 @@ def main():
 
     scan_summary_path = analysis_root / "control_redock_scan_summary.txt"
     per_target_rows: List[Dict[str, int | str]] = []
-    for pdb_id in control_targets:
-        stats = parsed_counts.get(pdb_id, {"centers": 0, "redock_lines": 0, "report_rows": 0})
+    for spec in control_targets:
+        stats = parsed_counts.get(spec.target_key, {"centers": 0, "redock_lines": 0, "report_rows": 0})
         per_target_rows.append(
             {
-                "pdb_id": pdb_id,
+                "target_key": spec.target_key,
+                "pdb_id": spec.pdb_id,
+                "variant": spec.variant or "",
+                "pH": spec.ph_tag or "",
                 "centers_found": stats.get("centers", 0),
                 "redock_lines": stats.get("redock_lines", 0),
                 "report_rows": stats.get("report_rows", 0),
@@ -2284,7 +2433,10 @@ def main():
         fh.write("\nPer-target counts\n")
         if per_target_rows:
             counts_df = pd.DataFrame(per_target_rows, columns=[
+                "target_key",
                 "pdb_id",
+                "variant",
+                "pH",
                 "centers_found",
                 "redock_lines",
                 "report_rows",
