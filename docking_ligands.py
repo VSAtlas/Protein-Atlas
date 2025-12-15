@@ -132,6 +132,7 @@ def compute_stage_membership_from_scores(
     scores: Dict[str, float],
     *,
     higher_is_better: bool,
+    n_stages: Optional[int] = None,
 ) -> Dict[int, List[str]]:
     """
     Compute stage membership using the same percentile logic as Vina staging.
@@ -149,7 +150,7 @@ def compute_stage_membership_from_scores(
 
     order = [l for l, _ in sorted(valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better)]
     total = len(order)
-    schedule = _selection_schedule(docking_mode, None)
+    schedule = _selection_schedule(docking_mode, n_stages)
 
     # Assign most selective stages first to avoid duplicates, then return in ascending stage order.
     remaining = list(order)

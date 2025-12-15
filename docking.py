@@ -23,11 +23,10 @@ from input_and_export_functions import (
     define_docking_stages,
     write_score_summary_to_csv,
     extract_best_score,
-    emit_vina_config,
-    emit_vina_config as _emit_vina_config_impl,
     score_key,
     init_config_run_dir,
 )
+from docking_vina import emit_vina_config, emit_vina_config as _emit_vina_config_impl
 from rdkit.Chem import rdMolAlign
 from tqdm import tqdm
 

@@ -58,13 +58,20 @@ def checkpoint_invalidate_from(cfg: Dict, pdb_id: str, stages: List[Dict], start
                                ph_label: Optional[str] = None,
                                variant: Optional[str] = None) -> None:
     for j in range(start_index, len(stages)):
+        names = [stages[j]["name"]]
         try:
-            _checkpoint_path(
-                cfg,
-                pdb_id,
-                stages[j]["name"],
-                ph_label=ph_label,
-                variant=variant,
-            ).unlink(missing_ok=True)
+            base = stages[j]["name"]
+            names.append(f"gnina_{base}")
         except Exception:
             pass
+        for nm in names:
+            try:
+                _checkpoint_path(
+                    cfg,
+                    pdb_id,
+                    nm,
+                    ph_label=ph_label,
+                    variant=variant,
+                ).unlink(missing_ok=True)
+            except Exception:
+                pass

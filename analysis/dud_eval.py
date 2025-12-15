@@ -9,7 +9,7 @@ Assumptions:
 - Lower score = better (Vina-style)
 - Ligand filename contains token 'active/actives' or 'decoy/decoys' (case-insensitive)
     ABL1_active_0123.pdbqt  or  ABL1_decoy_0456.pdbqt
-- We derive labels from the filename; no chemdb/actives files are used.
+- derive labels from the filename
 
 Outputs:
 - <OVERALL_DIR>/analysis/out/<PDB_ID>/
@@ -1033,8 +1033,8 @@ def evaluate_target(pdb_id: str,
 
     # Score distributions
     plt.figure()
-    plt.hist(best.loc[best["is_active"]==1, "best_score"], bins=40, alpha=0.6, label="Actives")
-    plt.hist(best.loc[best["is_active"]==0, "best_score"], bins=40, alpha=0.6, label="Decoys")
+    plt.hist(best.loc[best["is_active"]==1, "best_score"], bins=40, alpha=1, label="Actives", zorder=2) #alpha controls opacity, was 0.6 for both by default
+    plt.hist(best.loc[best["is_active"]==0, "best_score"], bins=40, alpha=0.5, label="Decoys", zorder=1)
     plt.xlabel("Best docking score (lower = better)")
     plt.ylabel("Count")
     plt.title(f"{pdb_id} - Score distributions")
@@ -1595,23 +1595,19 @@ def main():
                 _scan_tree(fallback_dir)
         else:
             try:
-                # >>> PATHS INIT START
                 mode    = str(cfg.get("APO_HOLO_MODE", "")).strip()
                 variants = expand_variants(mode)  # returns [None] | ["APO","HOLO"]
                 paths   = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
                 ph_token = cfg.get("PH_TOKEN") or None
-                # >>> PATHS INIT END
             except Exception as exc:
                 dbg("WARN", "resolve", f"pdb={pdb_id} router_err={exc}")
                 _record_basenames(fallback_dir)
                 if picked is None:
                     _scan_tree(fallback_dir)
             else:
-                # >>> DOCKED INPUT PATHS PATCH START
                 docked_root_cfg = paths.docked_pdb_root()
                 summary_csv = paths.docking_score_summary_csv()
                 long_csv    = paths.docking_score_long_csv()
-                # >>> DOCKED INPUT PATHS PATCH END
 
                 if docked_root_cfg.exists():
                     # 1) Try path_router's long_csv location, but with both basenames
@@ -1799,7 +1795,6 @@ def main():
             csv_paths_by_target[pdb_id] = csvp
     targets_with_csv = [(p, c) for p, c in targets if c]
 
-    # >>> ACTIVE-RUN PICK START
     if not active_run_id:
         try:
             active_run_id = select_default_run_id(targets_with_csv, csv_paths_by_target, args.lig_col, args.score_col)
@@ -1807,7 +1802,6 @@ def main():
             active_run_id = None
             dbg("WARN", "run", f"auto_select_failed err={_exc}")
     dbg("INFO", "run", f"active={active_run_id or '(none)'} source={'CLI' if args.run_id else 'auto'}")
-    # >>> ACTIVE-RUN PICK END
 
     if manifest_data is None and cfg and active_run_id:
         try:

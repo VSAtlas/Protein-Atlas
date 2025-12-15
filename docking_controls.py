@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, Mapping
 
 import numpy as np
 
-from input_and_export_functions import emit_vina_config
+from docking_vina import emit_vina_config
 from path_router import Paths, docked_dir, receptor_file
 from protein_functions import detect_active_site
 from run_vina import run_docking_task

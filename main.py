@@ -242,9 +242,15 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from input_and_export_functions import (
-    load_inputs, validate_config, define_docking_stages, write_score_summary_to_csv,
-    extract_best_score, emit_vina_config as _emit_vina_config_impl, _to_bool, init_config_run_dir
+    load_inputs,
+    validate_config,
+    define_docking_stages,
+    write_score_summary_to_csv,
+    extract_best_score,
+    _to_bool,
+    init_config_run_dir,
 )
+from docking_vina import emit_vina_config as _emit_vina_config_impl
 from docking import (
     norm,
     _fingerprint_stage,

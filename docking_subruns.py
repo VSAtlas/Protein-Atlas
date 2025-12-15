@@ -47,10 +47,17 @@ from run_manifest import (
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
 )
-from record_data import compute_ligand_efficiency, record_le, write_gnina_scores_csv, write_scores_csv
-from docking_gnina import run_gnina_for_stage, should_run_gnina_for_target
+from record_data import compute_ligand_efficiency, record_le
+from docking_gnina import (
+    run_gnina_for_stage,
+    should_run_gnina_for_target,
+    write_gnina_scores_csv,
+    annotate_gnina_fda_long_csv_with_t_scores_vs_decoys,
+)
+from docking_vina import write_scores_csv
 from chemdb.target_difficulty import get_or_compute_target_difficulty
 from docking_ligands import (
+    compute_stage_membership_from_scores,
     _count_heavy_atoms_from_pdbqt,
     _lib_roots_for_pdb,
     _resolve_test_mode,
@@ -62,6 +69,54 @@ from single_ligand_index import (
     _load_fda_name_map,
     _resolve_single_ligand,
 )
+
+
+def _apply_force_carry_and_doping(
+    cfg: Dict[str, Any],
+    docking_mode: str,
+    stage_index: int,
+    stages_for_run: List[Dict[str, Any]],
+    scores: Dict[str, float],
+    logger: logging.Logger,
+    *,
+    stage1_original: List[str],
+    forced_extracted_for_stage3: Optional[set] = None,
+    invalids: Optional[Dict[str, Tuple[Optional[float], str]]] = None,
+) -> List[str]:
+    """
+    Mirror the existing Vina selection + doping flow:
+      - percentile selection via select_ligands_for_next
+      - optional force-carry of extracted controls into stage3
+      - optional rescue of self-RMSD near-miss ligands
+    """
+    use_stage1_base = (docking_mode == "polypharmacology" and stage_index == 1)
+
+    rescue: List[str] = []
+    if invalids and stage_index < len(stages_for_run) - 1:
+        for lig, (sc, reason) in invalids.items():
+            if sc is not None and "self_rmsd_" in str(reason).lower() and sc <= float(
+                cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0)
+            ):
+                rescue.append((sc, lig))
+        rescue = [lig for _, lig in sorted(rescue)[: int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]]
+
+    selected = select_ligands_for_next(
+        docking_mode,
+        stage_index,
+        stages_for_run,
+        scores,
+        logger,
+        base_pool_n=(len(stage1_original) if use_stage1_base else None),
+        force_include=(forced_extracted_for_stage3 if use_stage1_base else None),
+    )
+
+    if rescue:
+        sel_set = set(selected)
+        rescue_unique = [r for r in rescue if r not in sel_set]
+        ligands = rescue_unique + selected
+    else:
+        ligands = selected
+    return ligands
 
 
 @dataclass
@@ -878,32 +933,17 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         else:
                             break
 
-                    use_stage1_base = (docking_mode == "polypharmacology" and i == 1)
-
-                    rescue = []
-                    if i < len(stages_for_run) - 1:
-                        for lig, (sc, reason) in invalids.items():
-                            if sc is not None and "self_rmsd_" in str(reason).lower() and sc <= float(
-                                    cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0)):
-                                rescue.append((sc, lig))
-                        rescue = [lig for _, lig in sorted(rescue)[:int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]]
-
-                    selected = select_ligands_for_next(
+                    ligands = _apply_force_carry_and_doping(
+                        cfg,
                         docking_mode,
                         i,
                         stages_for_run,
                         scores,
                         logger,
-                        base_pool_n=(len(stage1_original) if use_stage1_base else None),
-                        force_include=(forced_extracted_for_stage3 if use_stage1_base else None)
+                        stage1_original=stage1_original,
+                        forced_extracted_for_stage3=forced_extracted_for_stage3,
+                        invalids=invalids,
                     )
-
-                    if rescue:
-                        sel_set = set(selected)
-                        rescue_unique = [r for r in rescue if r not in sel_set]
-                        ligands = rescue_unique + selected
-                    else:
-                        ligands = selected
                     if not ligands:
                         logger.warning(
                             f"No ligands selected for {stages_for_run[i + 1]['name']}; stopping."
@@ -973,6 +1013,43 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 )
                 for job in gnina_jobs:
                     gnina_stage_name = f"gnina_{job['stage_name']}"
+                    gnina_fp = None
+                    if bool(cfg.get("CHECKPOINT_ENABLE", True)):
+                        try:
+                            gnina_fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, job["stage_info"])
+                            if checkpoint_should_skip(
+                                cfg,
+                                paths.pdb_id,
+                                gnina_stage_name,
+                                gnina_fp,
+                                ph_label=ph_label,
+                                variant=variant_env or None,
+                            ):
+                                logger.info(f"[Checkpoint] Skipping {gnina_stage_name} (fingerprint matched).")
+                                if manifest_run_id:
+                                    try:
+                                        update_manifest_for_docking_stage(
+                                            cfg,
+                                            manifest_run_id,
+                                            paths.pdb_id,
+                                            variant_label,
+                                            gnina_stage_name,
+                                            status="completed",
+                                            ph_tag=ph_label,
+                                            elapsed_sec=0.0,
+                                        )
+                                    except Exception:
+                                        logger.warning(
+                                            "[run-manifest.docking-stage] failed to record GNINA checkpoint skip pdb=%s variant=%s ph=%s stage=%s",
+                                            paths.pdb_id,
+                                            variant_label,
+                                            ph_label if ph_label is not None else "base",
+                                            gnina_stage_name,
+                                            exc_info=True,
+                                        )
+                                continue
+                        except Exception:
+                            gnina_fp = None
                     gnina_start_ts = time.time()
                     if manifest_run_id:
                         try:
@@ -1010,7 +1087,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                             logger=logger,
                             receptor_pdbqt=receptor_pdbqt,
                             control_lookup=control_lookup,
-                        )
+                                )
                         gnina_elapsed = time.time() - gnina_start_ts
                         if manifest_run_id:
                             try:
@@ -1033,6 +1110,18 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                     gnina_stage_name,
                                     exc_info=True,
                                 )
+                        if bool(cfg.get("CHECKPOINT_ENABLE", True)) and gnina_fp is not None:
+                            try:
+                                checkpoint_mark_done(
+                                    cfg,
+                                    paths.pdb_id,
+                                    gnina_stage_name,
+                                    gnina_fp,
+                                    ph_label=ph_label,
+                                    variant=variant_env or None,
+                                )
+                            except Exception:
+                                pass
                     except Exception as e:
                         if manifest_run_id:
                             try:
@@ -1107,9 +1196,57 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 )
 
             if gnina_records:
+                gnina_primary_scores: Dict[str, float] = {}
                 for rec in gnina_records:
                     lig = rec["ligand"]
-                    gnina_stage_name = rec.get("stage_name") or "gnina_stage1"
+                    sc = rec.get("primary_score")
+                    if not isinstance(sc, (int, float)) or not math.isfinite(sc):
+                        continue
+                    prev = gnina_primary_scores.get(lig)
+                    if prev is None or sc > prev:
+                        gnina_primary_scores[lig] = sc
+
+                gnina_stage_membership: Dict[int, List[str]] = {}
+                gnina_stage_index_for_ligand: Dict[str, int] = {}
+                if gnina_primary_scores:
+                    try:
+                        gnina_stage_membership = compute_stage_membership_from_scores(
+                            cfg=cfg,
+                            docking_mode=docking_mode,
+                            scores=gnina_primary_scores,
+                            higher_is_better=True,
+                            n_stages=len(stages_for_run),
+                        )
+                    except Exception as e:
+                        logger.warning("[gnina.staging] failed to compute stage membership: %s", e)
+                        gnina_stage_membership = {}
+
+                for stage_idx, lig_list in (gnina_stage_membership or {}).items():
+                    for lig in lig_list:
+                        gnina_stage_index_for_ligand[lig] = stage_idx
+
+                best_rec_for_lig: Dict[str, Dict[str, Any]] = {}
+                for rec in gnina_records:
+                    lig = rec["ligand"]
+                    sc = rec.get("primary_score")
+                    prev = best_rec_for_lig.get(lig)
+                    if prev is None:
+                        best_rec_for_lig[lig] = rec
+                        continue
+                    prev_sc = prev.get("primary_score")
+                    if (
+                        isinstance(sc, (int, float))
+                        and math.isfinite(sc)
+                        and (not isinstance(prev_sc, (int, float)) or not math.isfinite(prev_sc) or sc > prev_sc)
+                    ):
+                        best_rec_for_lig[lig] = rec
+
+                for lig, rec in best_rec_for_lig.items():
+                    stage_idx = gnina_stage_index_for_ligand.get(lig)
+                    if stage_idx is not None:
+                        gnina_stage_name = f"gnina_stage{stage_idx}"
+                    else:
+                        gnina_stage_name = rec.get("stage_name") or "gnina_stage1"
 
                     record_score(
                         score_history_gnina,
@@ -1180,6 +1317,20 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 except Exception as e:
                     logger.warning(
                         "[t-score.warn] pdb_id=%s ph=%s reason=%s",
+                        paths.pdb_id,
+                        ph_label if ph_label else "base",
+                        e,
+                    )
+                try:
+                    annotate_gnina_fda_long_csv_with_t_scores_vs_decoys(
+                        cfg,
+                        paths.pdb_id,
+                        ph_label=ph_label,
+                        logger=logger,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[gnina.t-score.warn] pdb_id=%s ph=%s reason=%s",
                         paths.pdb_id,
                         ph_label if ph_label else "base",
                         e,
