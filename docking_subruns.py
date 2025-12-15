@@ -42,6 +42,7 @@ from ph_ensemble_docking import (
     prewarm_ph_ligand_microstates,
 )
 from run_manifest import (
+    update_manifest_for_docking_stage,
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
@@ -55,7 +56,6 @@ from docking_ligands import (
     _resolve_test_mode,
     prepare_and_filter_ligands,
     select_ligands_for_next,
-    compute_stage_membership_from_scores,
 )
 from single_ligand_index import (
     _ensure_single_ligand_index,
@@ -602,7 +602,6 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
             score_history_gnina: Dict[str, Dict[str, Dict]] = defaultdict(dict)
             gnina_metrics_by_stage: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
-            gnina_primary_scores: Dict[str, float] = {}
             gnina_records: List[Dict[str, Any]] = []
             validated_ligands_last: List[str] = []
             recenter_attempts = 0
@@ -973,21 +972,91 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     len(gnina_jobs),
                 )
                 for job in gnina_jobs:
-                    scores_gnina, gnina_metrics = run_gnina_for_stage(
-                        cfg=cfg,
-                        paths=paths,
-                        pdb_id=paths.pdb_id,
-                        variant=variant_env or None,
-                        ph_label=ph_label,
-                        stage_name=job["stage_name"],
-                        stage_info=job["stage_info"],
-                        ligands=job["ligands"],
-                        center=job["center"],
-                        box_size=job["box_size"],
-                        logger=logger,
-                        receptor_pdbqt=receptor_pdbqt,
-                        control_lookup=control_lookup,
-                    )
+                    gnina_stage_name = f"gnina_{job['stage_name']}"
+                    gnina_start_ts = time.time()
+                    if manifest_run_id:
+                        try:
+                            update_manifest_for_docking_stage(
+                                cfg,
+                                manifest_run_id,
+                                paths.pdb_id,
+                                variant_label,
+                                gnina_stage_name,
+                                status="running",
+                                ph_tag=ph_label,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "[run-manifest.docking-stage] failed to record GNINA start pdb=%s variant=%s ph=%s stage=%s",
+                                paths.pdb_id,
+                                variant_label,
+                                ph_label if ph_label is not None else "base",
+                                gnina_stage_name,
+                                exc_info=True,
+                            )
+
+                    try:
+                        scores_gnina, gnina_metrics = run_gnina_for_stage(
+                            cfg=cfg,
+                            paths=paths,
+                            pdb_id=paths.pdb_id,
+                            variant=variant_env or None,
+                            ph_label=ph_label,
+                            stage_name=job["stage_name"],
+                            stage_info=job["stage_info"],
+                            ligands=job["ligands"],
+                            center=job["center"],
+                            box_size=job["box_size"],
+                            logger=logger,
+                            receptor_pdbqt=receptor_pdbqt,
+                            control_lookup=control_lookup,
+                        )
+                        gnina_elapsed = time.time() - gnina_start_ts
+                        if manifest_run_id:
+                            try:
+                                update_manifest_for_docking_stage(
+                                    cfg,
+                                    manifest_run_id,
+                                    paths.pdb_id,
+                                    variant_label,
+                                    gnina_stage_name,
+                                    status="completed",
+                                    ph_tag=ph_label,
+                                    elapsed_sec=gnina_elapsed,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "[run-manifest.docking-stage] failed to record GNINA end pdb=%s variant=%s ph=%s stage=%s",
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ph_label if ph_label is not None else "base",
+                                    gnina_stage_name,
+                                    exc_info=True,
+                                )
+                    except Exception as e:
+                        if manifest_run_id:
+                            try:
+                                update_manifest_for_docking_stage(
+                                    cfg,
+                                    manifest_run_id,
+                                    paths.pdb_id,
+                                    variant_label,
+                                    gnina_stage_name,
+                                    status="failed",
+                                    ph_tag=ph_label,
+                                    error=str(e),
+                                    elapsed_sec=time.time() - gnina_start_ts,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "[run-manifest.docking-stage] failed to record GNINA failure pdb=%s variant=%s ph=%s stage=%s",
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ph_label if ph_label is not None else "base",
+                                    gnina_stage_name,
+                                    exc_info=True,
+                                )
+                        raise
                     for lig, sc in scores_gnina.items():
                         metrics_entry = gnina_metrics.get(
                             lig,
@@ -1012,13 +1081,10 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         ha_val = heavy_atom_counts.get(lig)
                         le_val = compute_ligand_efficiency(primary_score, ha_val)
                         pains_val = pains_flags.get(lig, pains_flags.get(Path(lig).stem, False))
-                        if primary_score is not None and isinstance(primary_score, (int, float)) and math.isfinite(primary_score):
-                            prev = gnina_primary_scores.get(lig)
-                            if prev is None or primary_score > prev:
-                                gnina_primary_scores[lig] = primary_score
 
                         gnina_records.append(
                             {
+                                "stage_name": f"gnina_{job['stage_name']}",
                                 "ligand": lig,
                                 "primary_score": primary_score,
                                 "minimized_affinity_kcal": minimized_affinity,
@@ -1041,21 +1107,9 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 )
 
             if gnina_records:
-                gnina_stage_membership = compute_stage_membership_from_scores(
-                    cfg=cfg,
-                    docking_mode=docking_mode,
-                    scores=gnina_primary_scores,
-                    higher_is_better=True,
-                )
-                gnina_stage_index_for_ligand: Dict[str, int] = {}
-                for idx, ligs in gnina_stage_membership.items():
-                    for lig in ligs:
-                        gnina_stage_index_for_ligand[lig] = idx
-
                 for rec in gnina_records:
                     lig = rec["ligand"]
-                    stage_idx = gnina_stage_index_for_ligand.get(lig)
-                    gnina_stage_name = f"gnina_stage{stage_idx}" if stage_idx is not None else "gnina_stage1"
+                    gnina_stage_name = rec.get("stage_name") or "gnina_stage1"
 
                     record_score(
                         score_history_gnina,

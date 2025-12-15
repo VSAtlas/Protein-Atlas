@@ -1298,17 +1298,42 @@ def update_manifest_for_docking_stage(
     """
     ph_label = ph_tag if ph_tag is not None else "base"
     stage_token = (stage_name or "stage").strip() or "stage"
-    raw_name = stage_token
-    subrun_label = "primary"
-    base_stage_name = raw_name
-    if raw_name.startswith("dud_"):
-        subrun_label = "dud"
-        suffix = raw_name[len("dud_") :]
-        base_stage_name = suffix or raw_name
-    elif raw_name.startswith("hmdb_"):
-        subrun_label = "hmdb"
-        suffix = raw_name[len("hmdb_") :]
-        base_stage_name = suffix or raw_name
+
+    # --- normalize stage token into subrun + engine + base stage name ---
+    lib_prefix = None
+    core = stage_token
+    if core.startswith("dud_"):
+        lib_prefix = "dud"
+        core = core[len("dud_") :] or core
+    elif core.startswith("hmdb_"):
+        lib_prefix = "hmdb"
+        core = core[len("hmdb_") :] or core
+
+    engine = None
+    if core.startswith("vina_"):
+        engine = "vina"
+        core = core[len("vina_") :] or core
+    elif core.startswith("gnina_"):
+        engine = "gnina"
+        core = core[len("gnina_") :] or core
+
+    # Handle engine-prefixed strings that still carry a library prefix (e.g., gnina_dud_stage1)
+    if lib_prefix is None:
+        if core.startswith("dud_"):
+            lib_prefix = "dud"
+            core = core[len("dud_") :] or core
+        elif core.startswith("hmdb_"):
+            lib_prefix = "hmdb"
+            core = core[len("hmdb_") :] or core
+
+    base_stage_name = core or stage_token
+    engine = engine or "vina"
+    subrun_label = lib_prefix if lib_prefix else "primary"
+
+    if lib_prefix:
+        raw_name = f"{lib_prefix}_{engine}_{base_stage_name}"
+    else:
+        raw_name = f"{engine}_{base_stage_name}"
     try:
         if not run_id:
             logging.debug(
@@ -1352,7 +1377,7 @@ def update_manifest_for_docking_stage(
             per_stage = {}
         details["per_stage"] = per_stage
 
-        stage_entry = per_stage.get(stage_token)
+        stage_entry = per_stage.get(raw_name)
         if not isinstance(stage_entry, MutableMapping):
             stage_entry = {
                 "status": "pending",
@@ -1361,7 +1386,7 @@ def update_manifest_for_docking_stage(
                 "subrun": subrun_label,
                 "stage_base_name": base_stage_name,
             }
-        per_stage[stage_token] = stage_entry
+        per_stage[raw_name] = stage_entry
         stage_entry["subrun"] = subrun_label
         stage_entry["stage_base_name"] = base_stage_name
 

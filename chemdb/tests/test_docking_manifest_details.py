@@ -134,20 +134,20 @@ def test_docking_stage_details_and_timing(tmp_path: Path) -> None:
 
     details = docking.get("details") or {}
     per_stage = details.get("per_stage") or {}
-    assert "stage1" in per_stage
-    assert "dud_stage1" in per_stage
-    assert "hmdb_stage2" in per_stage
+    assert "vina_stage1" in per_stage
+    assert "dud_vina_stage1" in per_stage
+    assert "hmdb_vina_stage2" in per_stage
 
-    stage_detail = per_stage["stage1"]
+    stage_detail = per_stage["vina_stage1"]
     assert stage_detail.get("status") == "completed"
     assert stage_detail.get("subrun") == "primary"
     assert stage_detail.get("stage_base_name") == "stage1"
 
-    dud_stage_detail = per_stage["dud_stage1"]
+    dud_stage_detail = per_stage["dud_vina_stage1"]
     assert dud_stage_detail.get("subrun") == "dud"
     assert dud_stage_detail.get("stage_base_name") == "stage1"
 
-    hmdb_stage_detail = per_stage["hmdb_stage2"]
+    hmdb_stage_detail = per_stage["hmdb_vina_stage2"]
     assert hmdb_stage_detail.get("subrun") == "hmdb"
     assert hmdb_stage_detail.get("stage_base_name") == "stage2"
 
@@ -161,10 +161,10 @@ def test_docking_stage_details_and_timing(tmp_path: Path) -> None:
     assert "dud" in by_subrun
     assert "hmdb" in by_subrun
 
-    assert "stage1" in by_subrun["primary"]
-    assert "dud_stage1" in by_subrun["dud"]
-    assert "hmdb_stage2" in by_subrun["hmdb"]
+    assert "vina_stage1" in by_subrun["primary"]
+    assert "dud_vina_stage1" in by_subrun["dud"]
+    assert "hmdb_vina_stage2" in by_subrun["hmdb"]
 
-    assert by_subrun["primary"]["stage1"] is stage_detail
-    assert by_subrun["dud"]["dud_stage1"] is dud_stage_detail
-    assert by_subrun["hmdb"]["hmdb_stage2"] is hmdb_stage_detail
+    assert by_subrun["primary"]["vina_stage1"] is stage_detail
+    assert by_subrun["dud"]["dud_vina_stage1"] is dud_stage_detail
+    assert by_subrun["hmdb"]["hmdb_vina_stage2"] is hmdb_stage_detail
