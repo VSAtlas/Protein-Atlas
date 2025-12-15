@@ -39,3 +39,6 @@ logs/
 # Run manifests
 /manifests/
 analysis/out/
+
+# Ignore generated analysis output
+/analysis/difficulty/
