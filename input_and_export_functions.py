@@ -6,7 +6,6 @@ import re, csv, math
 import pandas as pd
 from collections import defaultdict
 import sitecustomize  # noqa: F401  # ensure HOME is writable for micromamba/pytest sandboxes
-# >>> PATHS IMPORT START
 from path_router import (
     make_paths,
     config_dir as router_config_dir,
@@ -14,7 +13,6 @@ from path_router import (
     docked_dir as router_docked_dir,
     receptor_file as router_receptor_file,
 )
-# >>> PATHS IMPORT END
 
 # -------------------------
 # OS guards (Windows-only)
@@ -102,6 +100,7 @@ def _default_tools() -> Dict[str, str]:
     return {
         "VINA_PATH": which_or_exists(["vina"]),
         "VINA_EXE": which_or_exists(["vina"]),
+        "GNINA_EXE": which_or_exists(["gnina"]),
         "OPENBABEL_PATH": which_or_exists(["obabel"]),
         "PYMOL_PATH": which_or_exists(["pymol"]),
         "REDUCE_EXE": which_or_exists(["reduce"]),
@@ -131,7 +130,7 @@ def _default_runtime() -> Dict[str, Any]:
         # control-centering knobs
         "CONTROL_CENTER_POLICY": "best_redock",
         "CONTROL_CENTER_CLOSE_MAX_A": 8.0,
-        "CTRL_REDOCK_EXHAUSTIVENESS": 64,
+        "CTRL_REDOCK_EXHAUSTIVENESS": 32,
         "CTRL_REDOCK_NMODES": 9,
 
         # --- benchmark policy knobs ---
@@ -144,7 +143,7 @@ def _default_runtime() -> Dict[str, Any]:
 # Config loading & validation
 # -------------------------
 _ALLOWED_ENV_OVERRIDES = {
-    "VINA_EXE","VINA_PATH","OPENBABEL_PATH","MGLTOOLS_PYTHON",
+    "VINA_EXE","VINA_PATH","GNINA_EXE","OPENBABEL_PATH","MGLTOOLS_PYTHON",
     "PREPARE_LIGAND_SCRIPT","PREPARE_RECEPTOR_SCRIPT","PYMOL_PATH",
     "P2RANK_PATH","PHENIX_DIR","PHENIX_LIB_PATH","PHENIX_CLEAN_SCRIPT",
     "INPUT_DIR","OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","LIGAND_DIR",
@@ -162,6 +161,9 @@ _ALLOWED_ENV_OVERRIDES = {
     "CTRL_REDOCK_NMODES",
     # logging/topic gates (opt-in; safe to ignore if unset)
     "LOG_TOPICS", "LOG_LEVEL_FILE", "LOG_LEVEL_CONSOLE",
+
+    # GNINA follow-up toggle
+    "USE_GNINA",
 
 }
 def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}"):
@@ -279,6 +281,8 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
         pass
 
     cfg.update(file_cfg)
+    # Preserve raw file-sourced config (before env overrides) for precedence checks.
+    cfg["_FILE_CFG"] = dict(file_cfg)
 
     # overlay env vars (uppercased keys only)
     for k, v in os.environ.items():
@@ -598,6 +602,244 @@ def emit_vina_config(
     return str(cfg_path), str(out_path)
 
 
+def emit_gnina_config(
+    cfg: Dict[str, Any],
+    pdb_id: str,
+    receptor_pdbqt: str,
+    center: tuple[float, float, float],
+    box_size: tuple[float, float, float],
+    ligand_path: str,
+    stage_name: str,
+    stage_info: Dict[str, Any],
+    cpu_per_job: int,
+    logger: logging.Logger | None = None,
+    *,
+    variant: Optional[str] = None,
+    ph_token: Optional[str] = None,
+    legacy: bool = False,
+):
+    """
+    GNINA config writer mirroring emit_vina_config.
+
+    Key differences:
+    - Writes directory manifest as gnina.json (not vina.json).
+    - Keeps the same router path layout so downstream indexing remains stable.
+    """
+    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+
+    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
+    legacy_mode = bool(legacy)
+
+    from pathlib import Path
+
+    lig_base = Path(ligand_path).stem
+    run_id = cfg["RUN_ID"]
+
+    cfg_dir = router_config_dir(
+        run_id,
+        pdb_id,
+        stage_name,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = router_config_file(
+        run_id,
+        pdb_id,
+        stage_name,
+        variant=variant_token,
+        ph_tag=ph_label,
+        name="gnina.json",
+        legacy=legacy_mode,
+    )
+
+    cfg_path = cfg_dir / f"{lig_base}_{stage_name}.txt"
+
+    stage_root = router_docked_dir(
+        pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    out_dir = stage_root / stage_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{lig_base}_{stage_name}.pdbqt"
+
+    expected_receptor = router_receptor_file(
+        pdb_id,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    receptor_exists = expected_receptor.exists()
+    receptor_for_config = str(expected_receptor)
+
+    variant_display = variant_token or "None"
+    ph_display = ph_label or "None"
+    breadcrumb = (
+        "[cfg.emit] run=%s pdb=%s stage=%s variant=%s ph=%s\n"
+        "           cfg_dir=%s receptor=%s out_root=%s"
+    )
+    breadcrumb_args = (
+        run_id,
+        pdb_id,
+        stage_name,
+        variant_display,
+        ph_display,
+        str(cfg_dir),
+        receptor_for_config,
+        str(stage_root),
+    )
+    if logger:
+        logger.info(breadcrumb, *breadcrumb_args)
+    else:
+        print(breadcrumb % breadcrumb_args)
+
+    if not receptor_exists:
+        msg = (
+            f"[router.error] missing receptor for pdb={pdb_id} variant={variant_display} "
+            f"ph={ph_display} -> {expected_receptor}"
+        )
+        if logger:
+            logger.error(msg)
+        else:
+            print(msg)
+
+    # GNINA consumes a Vina-style config; unsupported keys are stripped later
+    # by the GNINA launcher to keep this writer aligned with router paths.
+    lines = [
+        f"receptor = {receptor_for_config}",
+        f"ligand   = {ligand_path}",
+        f"center_x = {center[0]:.3f}",
+        f"center_y = {center[1]:.3f}",
+        f"center_z = {center[2]:.3f}",
+        f"size_x   = {box_size[0]:.3f}",
+        f"size_y   = {box_size[1]:.3f}",
+        f"size_z   = {box_size[2]:.3f}",
+        f"cpu      = {int(cpu_per_job)}",
+        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
+        f"energy_range   = {int(stage_info.get('energy_range', 4))}",
+        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
+        f"verbosity      = {int(stage_info.get('verbosity', 0))}",
+        f"out = {out_path}",
+    ]
+
+    if "seed" in stage_info:
+        lines.append(f"seed = {int(stage_info['seed'])}")
+    if logger:
+        cx, cy, cz = center
+        sx, sy, sz = box_size
+        lig_name = os.path.basename(str(ligand_path))
+        logger.info(
+            "[gnina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
+            lig_name,
+            cx,
+            cy,
+            cz,
+            sx,
+            sy,
+            sz,
+        )
+
+    payload = ("\n".join(lines)).encode("utf-8")
+    overwrite = cfg_path.exists()
+
+    tmp = cfg_path.with_suffix(".part")
+    with open(tmp, "wb") as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, cfg_path)
+
+    manifest_data: Dict[str, Any]
+    entries_map: Dict[str, Dict[str, Any]]
+    if manifest_path.exists():
+        try:
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            manifest_data = {}
+    else:
+        manifest_data = {}
+
+    entries = manifest_data.get("entries") if isinstance(manifest_data, dict) else None
+    entries_map = {}
+    if isinstance(entries, list):
+        for item in entries:
+            if isinstance(item, dict):
+                lig = str(item.get("ligand", ""))
+                if lig:
+                    entries_map[lig] = item
+
+    entry = {
+        "ligand": lig_base,
+        "config": str(cfg_path),
+        "out": str(out_path),
+        "receptor": receptor_for_config,
+    }
+    entries_map[lig_base] = entry
+
+    manifest_data = {
+        "run_id": run_id,
+        "pdb_id": pdb_id,
+        "stage": stage_name,
+        "variant": variant_token,
+        "ph": ph_label,
+        "legacy": legacy_mode,
+        "entries": [entries_map[k] for k in sorted(entries_map.keys())],
+    }
+
+    manifest_tmp = manifest_path.with_suffix(".part")
+    try:
+        manifest_tmp.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest_tmp, "w", encoding="utf-8") as fh:
+            json.dump(manifest_data, fh, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(manifest_tmp, manifest_path)
+    except FileNotFoundError:
+        if logger:
+            logger.warning(
+                "[cfg.emit] manifest_tmp missing; skipping manifest update tmp=%s dest=%s stage=%s",
+                str(manifest_tmp),
+                str(manifest_path),
+                stage_name,
+            )
+    except Exception:
+        if logger:
+            logger.exception(
+                "[cfg.emit] manifest update failed; continuing without manifest stage=%s path=%s",
+                stage_name,
+                str(manifest_path),
+            )
+
+    emit_msg = (
+        "[cfg.emit] run=%s pdb=%s variant=%s ph=%s stage=%s ligand=%s "
+        "cfg_dir=%s docked_root=%s path=%s overwrite=%s bytes=%d"
+    )
+    emit_args = (
+        run_id,
+        pdb_id,
+        variant_display,
+        ph_display,
+        stage_name,
+        lig_base,
+        str(cfg_dir),
+        str(stage_root),
+        str(cfg_path),
+        str(overwrite).lower(),
+        len(payload),
+    )
+    if logger:
+        logger.info(emit_msg, *emit_args)
+    else:
+        print(emit_msg % emit_args)
+
+    return str(cfg_path), str(out_path)
+
+
 
 
 # -------------------------
@@ -693,6 +935,45 @@ def extract_best_score(docked_pdbqt_path):
                 if best_score is None or score < best_score:
                     best_score = score
     return best_score
+
+
+def extract_gnina_scores(docked_pdbqt_path: str) -> Dict[str, Optional[float]]:
+    """
+    Parse GNINA REMARK lines from a docked PDBQT.
+
+    Returns keys:
+      - minimized_affinity_kcal
+      - cnn_score
+      - cnn_affinity_pK
+    Values are float or None if not present/parseable.
+    """
+    metrics = {
+        "minimized_affinity_kcal": None,
+        "cnn_score": None,
+        "cnn_affinity_pK": None,
+    }
+    try:
+        with open(docked_pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if not line.startswith("REMARK"):
+                    continue
+                parts = line.strip().split()
+                if len(parts) < 2:
+                    continue
+                token = parts[1].lower()
+                try:
+                    val = float(parts[-1])
+                except Exception:
+                    val = None
+                if token == "minimizedaffinity":
+                    metrics["minimized_affinity_kcal"] = val
+                elif token == "cnnscore":
+                    metrics["cnn_score"] = val
+                elif token == "cnnaffinity":
+                    metrics["cnn_affinity_pK"] = val
+    except Exception:
+        pass
+    return metrics
 
 
 # -------------------------

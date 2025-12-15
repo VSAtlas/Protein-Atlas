@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Mapping, Optional
@@ -158,3 +160,91 @@ def evaluate_difficulty_for_targets(
             run_id=run_id,
         )
     return results
+
+
+def get_or_compute_target_difficulty(
+    cfg: Mapping[str, object],
+    pdb_id: str,
+    csv_path: Path,
+    analysis_root: Path,
+    run_id: Optional[str] = None,
+) -> TargetDifficulty:
+    """
+    Convenience helper for docking-time difficulty gating.
+
+    - Caches difficulty on disk under analysis_root / f"{pdb_id}.json".
+    - If cached, loads it instead of recomputing.
+    - Otherwise, calls evaluate_difficulty_for_target(...).
+    - If csv_path missing or dud_eval fails, returns a degenerate difficulty.
+
+    Env override:
+      FORCE_TARGET_DIFFICULTY=<easy|medium|hard|degenerate> forces the bucket.
+      Used for tests; no CLI surface area change.
+    """
+    force = (os.environ.get("FORCE_TARGET_DIFFICULTY") or "").strip().lower()
+    if force in {"easy", "medium", "hard", "degenerate"}:
+        return TargetDifficulty(
+            pdb_id=pdb_id,
+            roc_auc=float("nan"),
+            difficulty=force,
+            N=0,
+            n_actives=0,
+        )
+
+    analysis_root = Path(analysis_root)
+    analysis_root.mkdir(parents=True, exist_ok=True)
+    cache_path = analysis_root / f"{pdb_id}.json"
+
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            return TargetDifficulty(
+                pdb_id=str(data.get("pdb_id", pdb_id)),
+                roc_auc=float(data.get("roc_auc", float("nan"))),
+                difficulty=str(data.get("difficulty", "degenerate")),
+                N=int(data.get("N", 0)),
+                n_actives=int(data.get("n_actives", 0)),
+            )
+        except Exception:
+            pass
+
+    csv_path = Path(csv_path)
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        td = TargetDifficulty(
+            pdb_id=pdb_id,
+            roc_auc=float("nan"),
+            difficulty="degenerate",
+            N=0,
+            n_actives=0,
+        )
+    else:
+        td = evaluate_difficulty_for_target(
+            pdb_id=pdb_id,
+            csv_path=csv_path,
+            analysis_root=analysis_root,
+            lig_col="ligand",
+            score_col="score",
+            bedroc_alpha=float(cfg.get("DUD_EVAL_BEDROC_ALPHA", 20.0)),  # type: ignore[arg-type]
+            logauc_lambda=float(cfg.get("DUD_EVAL_LOGAUC_LAMBDA", 1e-3)),  # type: ignore[arg-type]
+            run_id=run_id,
+        )
+
+    try:
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "pdb_id": td.pdb_id,
+                    "roc_auc": td.roc_auc,
+                    "difficulty": td.difficulty,
+                    "N": td.N,
+                    "n_actives": td.n_actives,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    return td

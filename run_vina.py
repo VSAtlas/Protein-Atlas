@@ -21,13 +21,11 @@ except Exception:
 
 import io
 
-# >>> PATHS IMPORT START
 from path_router import (
     make_paths,
     config_dir as router_config_dir,
     docked_dir as router_docked_dir,
 )
-# >>> PATHS IMPORT END
 
 _SCORE_LINE = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 _MODEL_START = re.compile(r"^\s*MODEL\b", re.IGNORECASE)

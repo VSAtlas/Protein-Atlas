@@ -69,16 +69,28 @@ def _run_python(args: list[str], env: Mapping[str, str], *, check: bool = True) 
     )
 
 
-def test_resume_mode(tmp_path: Path) -> None:
+def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     """
     Simulate an interrupted run and verify resume mode reloads the snapshot config.
     """
     assert MAIN_PY.exists(), "main.py not found; cannot run integration test"
 
-    # Save original config and force APO_HOLO_MODE = holo for this test.
+    # Save original config and ensure we restore it even if the test errors early.
     original_config = CONFIG_PATH.read_text()
     config_backup_path = CONFIG_PATH.with_suffix(".backup_resume_test")
     config_backup_path.write_text(original_config)
+
+    def _restore_config() -> None:
+        try:
+            if config_backup_path.exists():
+                shutil.copyfile(config_backup_path, CONFIG_PATH)
+                config_backup_path.unlink(missing_ok=True)
+            else:
+                CONFIG_PATH.write_text(original_config)
+        except Exception:
+            pass
+
+    request.addfinalizer(_restore_config)
 
     log_stub = REPO_ROOT / "logs" / f"{RUN_ID}_bootstrap.log"
     log_stub.parent.mkdir(parents=True, exist_ok=True)
@@ -333,11 +345,6 @@ def test_resume_mode(tmp_path: Path) -> None:
         assert test_map_norm.get("TEMP") == "test_library_10"
         assert test_map_norm.get("T3MP") == "test_library_10"
     finally:
-        # Restore global config drift and interrupted manifest state.
-        if config_backup_path.exists():
-            shutil.copyfile(config_backup_path, CONFIG_PATH)
-            config_backup_path.unlink(missing_ok=True)
-        else:
-            CONFIG_PATH.write_text(original_config)
+        # Restore interrupted manifest state (config restoration handled by finalizer).
         if backup_path.exists():
             shutil.copyfile(backup_path, manifest_path)

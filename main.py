@@ -1450,10 +1450,18 @@ def main() -> None:
                 test_keys.add(nid)
 
         if test_keys:
+            # Always honor explicitly specified proteins even in test mode.
+            specified_raw = cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS") or []
+            specified_keys = set()
+            for s in specified_raw:
+                nid = _norm_pdb_id(str(s))
+                if nid:
+                    specified_keys.add(nid)
+
             kept, skipped = [], []
             for f in pdb_files:
                 nid = _norm_pdb_id(f)
-                if nid and nid in test_keys:
+                if nid and (nid in test_keys or nid in specified_keys):
                     kept.append(f)
                 else:
                     skipped.append(f)
@@ -1461,7 +1469,8 @@ def main() -> None:
             if skipped:
                 print(
                     f"[test-mode] Enabled mode={test_mode}; restricting to "
-                    f"{len(kept)} PDBs from TEST_LIBRARY_MAP keys."
+                    f"{len(kept)} PDBs from TEST_LIBRARY_MAP keys"
+                    + (" (plus specified proteins)." if specified_keys else ".")
                 )
                 for s in skipped:
                     print(f"[test-mode] Skipping {s} (not in TEST_LIBRARY_MAP).")

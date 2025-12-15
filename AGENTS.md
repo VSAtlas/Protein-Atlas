@@ -26,8 +26,8 @@ All Python or CLI commands that touch the pipeline SHOULD:
   Whenever you come across permissions errors, ask for elevated permissions, never stop a patch because of the lock.
 
 Never assume a virtualenv is already activated; be explicit in commands you
-show to me. It is OK if the sandbox falls back to plain `python` / `pytest`
-after a micromamba lockfile error.
+show to me. 
+
 ### Handling micromamba lockfile errors in the Codex sandbox
 
 In the Codex sandbox you may see errors like:
@@ -45,18 +45,6 @@ When this happens:
 2. If the Codex CLI automatically reruns the command with elevated
    permissions, assume that retry handled the lock unless it produces a
    different error. Do not double-count the first failure.
-3. If there is no automatic retry, immediately rerun the same command
-   **without** the `micromamba run -n docking-env` prefix:
-   - Example: from  
-     `micromamba run -n docking-env pytest chemdb/tests/test_resume_mode.py -vv`  
-     to  
-     `pytest chemdb/tests/test_resume_mode.py -vv`
-4. Base your reasoning about pass/fail on the **fallback** run. If the
-   fallback also fails for a different reason, then treat that as a real
-   failure and debug it.
-5. Always mention in the final reply if tests could not be run in the full
-   `docking-env` micromamba environment due to lockfile issues, and that a
-   plain `pytest` fallback was used instead.
 
 ---
 

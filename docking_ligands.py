@@ -6,8 +6,9 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import math
 from rdkit import Chem
 from rdkit.Chem import FilterCatalog, rdFMCS, rdMolAlign
 from rdkit.Chem.MolStandardize import rdMolStandardize
@@ -20,6 +21,27 @@ from prep_ligands import enumerate_ligands_for_docking, prep_ligands_from_pdb
 def norm(p: str | Path) -> str:
     """Normalize path to a clean, forward-slash string for logs & keys."""
     return os.path.abspath(str(p)).replace("\\", "/")
+
+
+def _selection_schedule(docking_mode: str, n_stages: Optional[int]) -> List[float]:
+    """
+    Selection percentages per stage.
+    Mirrors the existing Vina staging defaults.
+    """
+    default_disc = [1.0, 0.1, 0.01, 0.001, 0.001]
+    default_poly = [1.0, 0.05, 0.005]
+    sched = {
+        "discovery": default_disc,
+        "polypharmacology": default_poly,
+    }.get(docking_mode, [1.0] * n_stages if n_stages is not None else [1.0])
+    # Trim/extend to requested number of stages to avoid index errors.
+    if n_stages is None:
+        return list(sched)
+    if len(sched) < n_stages:
+        sched = sched + [sched[-1]] * (n_stages - len(sched))
+    elif len(sched) > n_stages:
+        sched = sched[:n_stages]
+    return sched
 
 
 def _is_pytest_context(cfg: dict) -> bool:
@@ -75,11 +97,7 @@ def select_ligands_for_next(
         # Still allow force-carry if provided and next stage exists
         return sorted(force_include) if force_include else []
 
-    schedule = {
-        "discovery": [1.0, 0.1, 0.01, 0.001, 0.001],
-        "polypharmacology": [1.0, 0.05, 0.005],   # i=1 -> next is stage3 uses 0.5%
-    }.get(docking_mode, [1.0] * len(stages))
-
+    schedule = _selection_schedule(docking_mode, len(stages))
     pct = schedule[i + 1] if i + 1 < len(schedule) else 0.01
 
     # Use provided base if given (e.g., Stage1 pool size) -- otherwise fall back to valid-count
@@ -106,6 +124,41 @@ def select_ligands_for_next(
         f"= {len(next_list)} total ({pct * 100:.5f}% of base={pool_n})."
     )
     return next_list
+
+
+def compute_stage_membership_from_scores(
+    cfg: Dict[str, Any],
+    docking_mode: str,
+    scores: Dict[str, float],
+    *,
+    higher_is_better: bool,
+) -> Dict[int, List[str]]:
+    """
+    Compute stage membership using the same percentile logic as Vina staging.
+
+    Returns {stage_index (1-based): [ligands]}.
+    """
+    del cfg  # cfg reserved for future config-driven selection; staging matches current Vina defaults.
+    if not scores:
+        return {}
+
+    # Filter to numeric scores only
+    valid_scores = {l: s for l, s in scores.items() if isinstance(s, (int, float)) and math.isfinite(s)}
+    if not valid_scores:
+        return {}
+
+    order = sorted(valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better)
+    n = len(order)
+    schedule = _selection_schedule(docking_mode, None)
+
+    stage_membership: Dict[int, List[str]] = {}
+    for idx, pct in enumerate(schedule, start=1):
+        pool_n = n
+        k_target = max(1, int(pool_n * pct))
+        k = max(1, min(k_target, n))
+        ligs = [l for l, _ in order[:k]]
+        stage_membership[idx] = ligs
+    return stage_membership
 
 
 def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:

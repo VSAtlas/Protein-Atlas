@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from collections import defaultdict
@@ -45,13 +46,16 @@ from run_manifest import (
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
 )
-from record_data import record_le, write_scores_csv
+from record_data import compute_ligand_efficiency, record_le, write_gnina_scores_csv, write_scores_csv
+from docking_gnina import run_gnina_for_stage, should_run_gnina_for_target
+from chemdb.target_difficulty import get_or_compute_target_difficulty
 from docking_ligands import (
     _count_heavy_atoms_from_pdbqt,
     _lib_roots_for_pdb,
     _resolve_test_mode,
     prepare_and_filter_ligands,
     select_ligands_for_next,
+    compute_stage_membership_from_scores,
 )
 from single_ligand_index import (
     _ensure_single_ligand_index,
@@ -596,11 +600,16 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             )
 
             score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
+            score_history_gnina: Dict[str, Dict[str, Dict]] = defaultdict(dict)
+            gnina_metrics_by_stage: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+            gnina_primary_scores: Dict[str, float] = {}
+            gnina_records: List[Dict[str, Any]] = []
             validated_ligands_last: List[str] = []
             recenter_attempts = 0
             docking_mode = cfg.get("DOCKING_MODE", "discovery").lower()
 
             retry_mgr = RetryManager()
+            gnina_jobs: List[Dict[str, Any]] = []
 
             i = 0
             while i < len(stages_for_run):
@@ -824,6 +833,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 ph_label=ph_label,
                                 variant=variant_env or None,
                             )
+                        gnina_jobs.clear()
                         i = 0
                         continue
 
@@ -863,6 +873,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                     ph_label=ph_label,
                                     variant=variant_env or None,
                                 )
+                            gnina_jobs.clear()
                             i = 0
                             continue
                         else:
@@ -895,8 +906,47 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     else:
                         ligands = selected
                     if not ligands:
-                        logger.warning(f"No ligands selected for {stages_for_run[i + 1]['name']}; stopping.")
+                        logger.warning(
+                            f"No ligands selected for {stages_for_run[i + 1]['name']}; stopping."
+                        )
                         break
+
+                # Difficulty-gated GNINA follow-up for the completed Vina stage.
+                # Runs after selection logic to keep Vina pipeline semantics unchanged.
+                if validated:
+                    try:
+                        variant_root = Path(paths.docked_variant_root(variant_env or None, ph_label))
+                        vina_long = variant_root / "docking_score_long.csv"
+                        analysis_root = Path(cfg.get("OVERALL_DIR", ".")) / "analysis" / "difficulty"
+                        run_id_token = str(cfg.get("RUN_ID") or "")
+                        if run_id_token:
+                            analysis_root = analysis_root / run_id_token
+                        td = get_or_compute_target_difficulty(
+                            cfg=cfg,
+                            pdb_id=paths.pdb_id,
+                            csv_path=vina_long,
+                            analysis_root=analysis_root,
+                            run_id=run_id_token or None,
+                        )
+                    except Exception:
+                        td = None
+
+                    if should_run_gnina_for_target(td, cfg):
+                        gnina_jobs.append(
+                            {
+                                "stage_name": stage["name"],
+                                "stage_info": dict(stage),
+                                "ligands": list(validated),
+                                "center": tuple(center) if center is not None else None,
+                                "box_size": tuple(box_size) if box_size is not None else None,
+                            }
+                        )
+                    else:
+                        logger.info(
+                            "[gnina.skip] pdb=%s difficulty=%s",
+                            paths.pdb_id,
+                            getattr(td, "difficulty", "unknown") if td is not None else "unknown",
+                        )
 
                 if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                     try:
@@ -913,6 +963,132 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         pass
 
                 i += 1
+
+            if gnina_jobs:
+                logger.info(
+                    "[gnina.scheduler] pdb=%s variant=%s ph=%s policy=after_all_vina_stages n_jobs=%d",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                    len(gnina_jobs),
+                )
+                for job in gnina_jobs:
+                    scores_gnina, gnina_metrics = run_gnina_for_stage(
+                        cfg=cfg,
+                        paths=paths,
+                        pdb_id=paths.pdb_id,
+                        variant=variant_env or None,
+                        ph_label=ph_label,
+                        stage_name=job["stage_name"],
+                        stage_info=job["stage_info"],
+                        ligands=job["ligands"],
+                        center=job["center"],
+                        box_size=job["box_size"],
+                        logger=logger,
+                        receptor_pdbqt=receptor_pdbqt,
+                        control_lookup=control_lookup,
+                    )
+                    for lig, sc in scores_gnina.items():
+                        metrics_entry = gnina_metrics.get(
+                            lig,
+                            {
+                                "minimized_affinity_kcal": None,
+                                "cnn_score": None,
+                                "cnn_affinity_pK": None,
+                                "gnina_primary_score": sc,
+                                "valid": False,
+                                "reason": "gnina_failed" if sc is None else "",
+                                "self_rmsd": None,
+                            },
+                        )
+                        primary_score = metrics_entry.get("gnina_primary_score", sc)
+                        minimized_affinity = metrics_entry.get("minimized_affinity_kcal")
+                        cnn_score = metrics_entry.get("cnn_score")
+                        cnn_affinity = metrics_entry.get("cnn_affinity_pK")
+                        valid_flag = bool(metrics_entry.get("valid", False))
+                        reason_str = metrics_entry.get("reason", "") or ("gnina_failed" if not valid_flag else "")
+                        self_rmsd_val = metrics_entry.get("self_rmsd", None)
+
+                        ha_val = heavy_atom_counts.get(lig)
+                        le_val = compute_ligand_efficiency(primary_score, ha_val)
+                        pains_val = pains_flags.get(lig, pains_flags.get(Path(lig).stem, False))
+                        if primary_score is not None and isinstance(primary_score, (int, float)) and math.isfinite(primary_score):
+                            prev = gnina_primary_scores.get(lig)
+                            if prev is None or primary_score > prev:
+                                gnina_primary_scores[lig] = primary_score
+
+                        gnina_records.append(
+                            {
+                                "ligand": lig,
+                                "primary_score": primary_score,
+                                "minimized_affinity_kcal": minimized_affinity,
+                                "cnn_score": cnn_score,
+                                "cnn_affinity_pK": cnn_affinity,
+                                "valid": bool(valid_flag),
+                                "reason": reason_str or "",
+                                "heavy_atoms": int(ha_val) if isinstance(ha_val, (int, float)) else None,
+                                "le": le_val,
+                                "self_rmsd": self_rmsd_val,
+                                "pains_flag": bool(pains_val) if pains_val is not None else False,
+                            }
+                        )
+            else:
+                logger.info(
+                    "[gnina.scheduler] pdb=%s variant=%s ph=%s action=skip reason=no_jobs",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                )
+
+            if gnina_records:
+                gnina_stage_membership = compute_stage_membership_from_scores(
+                    cfg=cfg,
+                    docking_mode=docking_mode,
+                    scores=gnina_primary_scores,
+                    higher_is_better=True,
+                )
+                gnina_stage_index_for_ligand: Dict[str, int] = {}
+                for idx, ligs in gnina_stage_membership.items():
+                    for lig in ligs:
+                        gnina_stage_index_for_ligand[lig] = idx
+
+                for rec in gnina_records:
+                    lig = rec["ligand"]
+                    stage_idx = gnina_stage_index_for_ligand.get(lig)
+                    gnina_stage_name = f"gnina_stage{stage_idx}" if stage_idx is not None else "gnina_stage1"
+
+                    record_score(
+                        score_history_gnina,
+                        gnina_stage_name,
+                        lig,
+                        rec["primary_score"],
+                        rec["valid"],
+                        reason=rec["reason"] or None,
+                    )
+                    record_le(score_history_gnina, gnina_stage_name, lig, rec["primary_score"], heavy_atom_counts)
+
+                    gnina_metrics_by_stage[gnina_stage_name][lig] = {
+                        "minimized_affinity_kcal": rec["minimized_affinity_kcal"],
+                        "cnn_score": rec["cnn_score"],
+                        "cnn_affinity_pK": rec["cnn_affinity_pK"],
+                        "gnina_primary_score": rec["primary_score"],
+                        "valid": rec["valid"],
+                        "reason": rec["reason"],
+                        "heavy_atoms": rec["heavy_atoms"],
+                        "le": rec["le"],
+                        "self_rmsd": rec["self_rmsd"],
+                        "pains_flag": rec["pains_flag"],
+                    }
+
+            if gnina_metrics_by_stage:
+                write_gnina_scores_csv(
+                    cfg,
+                    paths.pdb_id,
+                    gnina_metrics_by_stage,
+                    ph_label=ph_label,
+                    variant=variant_env or None,
+                    csv_prefix=csv_prefix,
+                )
 
             final_pose_validation_and_screenshots(
                 cfg, paths.pdb_id, stages_for_run, receptor_pdbqt, center, validated_ligands_last,
