@@ -147,18 +147,25 @@ def compute_stage_membership_from_scores(
     if not valid_scores:
         return {}
 
-    order = sorted(valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better)
-    n = len(order)
+    order = [l for l, _ in sorted(valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better)]
+    total = len(order)
     schedule = _selection_schedule(docking_mode, None)
 
+    # Assign most selective stages first to avoid duplicates, then return in ascending stage order.
+    remaining = list(order)
     stage_membership: Dict[int, List[str]] = {}
-    for idx, pct in enumerate(schedule, start=1):
-        pool_n = n
-        k_target = max(1, int(pool_n * pct))
-        k = max(1, min(k_target, n))
-        ligs = [l for l, _ in order[:k]]
-        stage_membership[idx] = ligs
-    return stage_membership
+    for stage_idx in range(len(schedule), 0, -1):
+        pct = schedule[stage_idx - 1]
+        target = int(math.ceil(total * pct))
+        target = max(1, target)
+        if stage_idx == 1:
+            assign_count = len(remaining)
+        else:
+            assign_count = min(target, len(remaining))
+        stage_membership[stage_idx] = remaining[:assign_count]
+        remaining = remaining[assign_count:]
+
+    return {k: stage_membership[k] for k in sorted(stage_membership)}
 
 
 def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
