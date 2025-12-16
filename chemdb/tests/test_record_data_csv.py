@@ -16,6 +16,7 @@ def _base_cfg(root: Path) -> dict:
         "OUTPUT_DIR": str(root / "processed_pdbs"),
         "DOCKED_DIR": str(root / "docked"),
         "OUTPUT_LIGANDS_DIR": str(root / "prepped_ligands"),
+        "USE_GNINA": "false",
     }
     for key in ("INPUT_DIR", "OUTPUT_DIR", "DOCKED_DIR", "OUTPUT_LIGANDS_DIR"):
         Path(cfg[key]).mkdir(parents=True, exist_ok=True)

@@ -47,6 +47,8 @@ def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[
         "TEST_MODE_ENABLE": "dud+fda",
         # Let downstream logic know we're in pytest-driven TEST_LIBRARY_MAP flows.
         "PDB_SELECTION_MODE": "TEST_LIBRARY_MAP",
+        # Force Vina-only runs during integration tests.
+        "USE_GNINA": "false",
     }
     env.update({k: str(v) for k, v in base.items()})
     if extra_env:

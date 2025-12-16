@@ -13,6 +13,7 @@ from rdkit import Chem
 from rdkit.Chem import FilterCatalog, rdFMCS, rdMolAlign
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
+from pose_validation import compute_redock_rmsd
 from library_index import LibraryIndex
 from path_router import Paths
 from prep_ligands import enumerate_ligands_for_docking, prep_ligands_from_pdb
@@ -959,6 +960,49 @@ def _is_readable_ref(pth: Path) -> bool:
 def compute_rmsd(ref_path: str, docked_path: str) -> float:
     """Heavy-atom RMSD using best mapping; supports PDB/SDF/MOL2 refs and adds a minimal MCS fallback."""
     _rlog = logging.getLogger("rmsd")
+    def _clamp(val: float) -> float:
+        try:
+            if 0 < val < 0.01:
+                return 0.01
+        except Exception:
+            pass
+        return val
+
+    coord_rmsd = None
+    tmp_to_cleanup: list[Path] = []
+    try:
+        coord_ref = ref_path
+        # Convert non-PDB references to PDB for coordinate-based RMSD if possible.
+        if not str(ref_path).lower().endswith(".pdb"):
+            try:
+                mol = _read_any_lig(ref_path)
+                if mol is not None:
+                    tmp_ref = Path(tempfile.mkstemp(suffix=".pdb")[1])
+                    Chem.MolToPDBFile(mol, str(tmp_ref))
+                    coord_ref = str(tmp_ref)
+                    tmp_to_cleanup.append(tmp_ref)
+            except Exception:
+                coord_ref = ref_path
+
+        coord_rmsd = compute_redock_rmsd(coord_ref, docked_path)
+        if coord_rmsd is not None and math.isfinite(coord_rmsd):
+            if _rlog:
+                _rlog.info(
+                    f"[rmsd.coord] ref='{coord_ref}' dock='{docked_path}' rmsd={coord_rmsd:.3f}A (kabsch)"
+                )
+            return _clamp(coord_rmsd)
+    except Exception as e:
+        if _rlog:
+            _rlog.warning(
+                f"[rmsd.coord] failed ref='{ref_path}' dock='{docked_path}' err={e!r}; falling back to RDKit/MCS"
+            )
+    finally:
+        for tmp in tmp_to_cleanup:
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+
     ref = _read_any_lig(ref_path)
     dock = _read_any_lig(docked_path)
     if not ref or not dock:
@@ -969,7 +1013,7 @@ def compute_rmsd(ref_path: str, docked_path: str) -> float:
         rmsd = float(rdMolAlign.GetBestRMS(ref, dock))
         if _rlog:
             _rlog.info(f"[rmsd.best] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A")
-        return rmsd
+        return _clamp(rmsd)
     except Exception as e:
         if _rlog:
             _rlog.warning(
@@ -1001,7 +1045,7 @@ def compute_rmsd(ref_path: str, docked_path: str) -> float:
         rmsd = float(rdMolAlign.AlignMol(dock, ref, atomMap=amap))
         if _rlog:
             _rlog.info(f"[rmsd.mcs] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A atoms={len(amap)}")
-        return rmsd
+        return _clamp(rmsd)
     except Exception as e:
         if _rlog:
             _rlog.warning(f"[rmsd.mcs] failed ref='{ref_path}' dock='{docked_path}' err={e!r}")
@@ -1022,7 +1066,24 @@ def validate_ligand(
       * Otherwise (non-controls) ? self-RMSD is *log-only* (never reject).
     """
     if crystal_path and Path(crystal_path).exists():
-        redock_rmsd = compute_rmsd(crystal_path, docked_path)
+        # Prefer coordinate-based Kabsch RMSD for control redock when a crystal ligand is available.
+        # This uses pose_validation.compute_redock_rmsd, which operates directly on coordinates,
+        # and falls back to the RDKit/MCS-based compute_rmsd if needed.
+        redock_rmsd = None
+        try:
+            redock_rmsd = compute_redock_rmsd(crystal_path, docked_path)
+        except Exception as e:
+            if logger:
+                logger.warning(
+                    f"[validate] {ligand_name}: compute_redock_rmsd failed for "
+                    f"crystal='{crystal_path}' docked='{docked_path}'; "
+                    f"falling back to RDKit/MCS RMSD; err={e!r}"
+                )
+
+        # If the coordinate-based RMSD could not be computed (None), fall back to the
+        # original RDKit/MCS RMSD implementation to preserve behavior.
+        if redock_rmsd is None:
+            redock_rmsd = compute_rmsd(crystal_path, docked_path)
         if logger:
             sr = f"{self_rmsd:.2f}" if isinstance(self_rmsd, (int, float)) else "n/a"
             logger.info(f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} A, self_RMSD={sr}")

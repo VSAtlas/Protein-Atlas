@@ -55,6 +55,7 @@ def test_scheduled_protein_summary_preserved(tmp_path: Path) -> None:
     cfg = {
         "CONFIG_RUN_DIR": str(tmp_path / "runs"),
         "OVERALL_DIR": str(tmp_path / "overall"),
+        "USE_GNINA": "false",
     }
     run_id = "test_scheduled_manifest"
     argv = ["main.py", "--run-id", run_id]

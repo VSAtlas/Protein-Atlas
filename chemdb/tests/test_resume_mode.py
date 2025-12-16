@@ -114,12 +114,21 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
         if holo_config and not holo_config.endswith("\n"):
             holo_config += "\n"
         holo_config += "APO_HOLO_MODE = holo\n"
+
+    gnina_pattern = re.compile(r"^USE_GNINA\s*=.*$", re.MULTILINE)
+    if gnina_pattern.search(holo_config):
+        holo_config = gnina_pattern.sub("USE_GNINA = false", holo_config)
+    else:
+        if holo_config and not holo_config.endswith("\n"):
+            holo_config += "\n"
+        holo_config += "USE_GNINA = false\n"
     CONFIG_PATH.write_text(holo_config)
 
     cfg = load_inputs()
     cfg["RUN_ID"] = RUN_ID
     cfg["CONFIG_RUN_DIR"] = str(REPO_ROOT / "configs" / RUN_ID)
     cfg["TEST_MODE_ENABLE"] = "dud+fda"
+    cfg["USE_GNINA"] = "false"
     cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
     specified_proteins = ["TEMP", "T3MP"]
     cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = specified_proteins

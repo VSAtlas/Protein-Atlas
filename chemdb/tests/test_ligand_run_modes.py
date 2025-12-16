@@ -37,6 +37,7 @@ def test_prepare_and_filter_ligands_dud_fda_modes(tmp_path):
         "LIBRARY_SUBDIR_DEFAULT": "fda_test",
         "TEST_LIBRARY_MAP": {"TESTPDB": "dud_test"},
         "TEST_MODE_ENABLE": "off",
+        "USE_GNINA": "false",
     }
 
     for key in ("INPUT_DIR", "OUTPUT_DIR", "DOCKED_DIR", "OUTPUT_LIGANDS_DIR"):
