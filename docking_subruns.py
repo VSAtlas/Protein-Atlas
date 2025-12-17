@@ -119,6 +119,14 @@ def _apply_force_carry_and_doping(
     return ligands
 
 
+def _use_ledock(cfg: Dict[str, Any]) -> bool:
+    raw = cfg.get("USE_LEDOCK", cfg.get("use_ledock", False))
+    try:
+        return _to_bool(raw)
+    except Exception:
+        return bool(raw)
+
+
 @dataclass
 class SubrunSpec:
     run_mode: Optional[str]
@@ -218,6 +226,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
     component gets the prefix.
     """
     from docking import RetryManager, run_one_stage  # late import to avoid circular dependency
+    from prep_ligands_mol2_for_ledock import ensure_mol2_for_ledock
 
     cfg = ctx.cfg
     paths = ctx.paths
@@ -1343,6 +1352,38 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         ph_label if ph_label else "base",
                         e,
                     )
+
+            if _use_ledock(cfg):
+                try:
+                    logger.info(
+                        "[ledock.mol2] starting_mol2_prep pdb=%s variant=%s ph=%s",
+                        paths.pdb_id,
+                        variant_label,
+                        ph_label if ph_label else "base",
+                    )
+                    ensure_mol2_for_ledock(cfg, stage1_original, logger)
+                    logger.info(
+                        "[ledock.mol2] completed_mol2_prep pdb=%s variant=%s ph=%s",
+                        paths.pdb_id,
+                        variant_label,
+                        ph_label if ph_label else "base",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[ledock.mol2.warn] pdb=%s variant=%s ph=%s reason=%s",
+                        paths.pdb_id,
+                        variant_label,
+                        ph_label if ph_label else "base",
+                        e,
+                        exc_info=True,
+                    )
+            else:
+                logger.info(
+                    "[ledock.mol2] skip_mol2_prep pdb=%s variant=%s ph=%s reason=use_ledock_disabled",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                )
 
             difficulty_info = None
             should_eval_difficulty = False

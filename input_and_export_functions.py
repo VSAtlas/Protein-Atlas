@@ -164,6 +164,8 @@ _ALLOWED_ENV_OVERRIDES = {
 
     # GNINA follow-up toggle
     "USE_GNINA",
+    # LeDock follow-up toggle
+    "USE_LEDOCK",
 
 }
 def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}"):
