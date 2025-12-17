@@ -54,6 +54,7 @@ from docking_gnina import (
     write_gnina_scores_csv,
     annotate_gnina_fda_long_csv_with_t_scores_vs_decoys,
 )
+from docking_ledock import run_ledock_for_stage, should_run_ledock_for_target
 from docking_vina import write_scores_csv
 from chemdb.target_difficulty import get_or_compute_target_difficulty
 from docking_ligands import (
@@ -681,6 +682,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
 
             retry_mgr = RetryManager()
             gnina_jobs: List[Dict[str, Any]] = []
+            ledock_jobs: List[Dict[str, Any]] = []
 
             i = 0
             while i < len(stages_for_run):
@@ -1004,6 +1006,24 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                             getattr(td, "difficulty", "unknown") if td is not None else "unknown",
                         )
 
+                    if should_run_ledock_for_target(cfg):
+                        ledock_jobs.append(
+                            {
+                                "stage_name": stage["name"],
+                                "stage_info": dict(stage),
+                                "ligands": list(validated),
+                                "center": tuple(center) if center is not None else None,
+                                "box_size": tuple(box_size) if box_size is not None else None,
+                            }
+                        )
+                    else:
+                        logger.info(
+                            "[ledock.skip] pdb=%s variant=%s ph=%s reason=use_ledock_disabled",
+                            paths.pdb_id,
+                            variant_label,
+                            ph_label if ph_label else "base",
+                        )
+
                 if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                     try:
                         fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
@@ -1296,6 +1316,62 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     ph_label=ph_label,
                     variant=variant_env or None,
                     csv_prefix=csv_prefix,
+                )
+
+            if ledock_jobs:
+                logger.info(
+                    "[ledock.scheduler] pdb=%s variant=%s ph=%s policy=after_gnina n_jobs=%d",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                    len(ledock_jobs),
+                )
+                for job in ledock_jobs:
+                    ledock_start_ts = time.time()
+                    try:
+                        scores_ledock, ledock_metrics = run_ledock_for_stage(
+                            cfg=cfg,
+                            paths=paths,
+                            pdb_id=paths.pdb_id,
+                            variant=variant_env or None,
+                            ph_label=ph_label,
+                            stage_name=job["stage_name"],
+                            stage_info=job["stage_info"],
+                            ligands=job["ligands"],
+                            center=job["center"],
+                            box_size=job["box_size"],
+                            logger=logger,
+                        )
+                        valid_count = sum(
+                            1 for rec in ledock_metrics.values() if rec.get("valid")
+                        )
+                        invalid_count = max(len(ledock_metrics) - valid_count, 0)
+                        logger.info(
+                            "[ledock.done] pdb=%s stage=%s variant=%s ph=%s valid=%d invalid=%d elapsed_sec=%.2f",
+                            paths.pdb_id,
+                            job["stage_name"],
+                            variant_label,
+                            ph_label if ph_label else "base",
+                            valid_count,
+                            invalid_count,
+                            time.time() - ledock_start_ts,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[ledock.error] pdb=%s stage=%s variant=%s ph=%s reason=%s",
+                            paths.pdb_id,
+                            job["stage_name"],
+                            variant_label,
+                            ph_label if ph_label else "base",
+                            e,
+                            exc_info=True,
+                        )
+            else:
+                logger.info(
+                    "[ledock.scheduler] pdb=%s variant=%s ph=%s action=skip reason=no_jobs",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
                 )
 
             final_pose_validation_and_screenshots(

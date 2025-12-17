@@ -785,6 +785,35 @@ def assert_no_helium_in_pdbqt(lines: Iterable[str], ligand_name: str) -> Tuple[L
     return new_lines, fixes, quarantine_reason
 
 
+def _normalize_element_token(elem_raw: str, rules=None) -> str | None:
+    """Return canonical element token if the input looks valid; otherwise None."""
+    if rules is None:
+        rules = get_atom_rules()
+    elem = (elem_raw or "").strip()
+    if not elem:
+        return None
+    elem_up = elem.upper()
+    if elem_up == "H":
+        return "H"
+    if elem_up in rules.one_letter:
+        return elem_up
+    if elem_up in rules.two_letter:
+        return elem_up
+    return None
+
+
+def _format_element_token(elem_token: str, upper: bool = True) -> str:
+    token = (elem_token or "").strip()
+    if not token:
+        return ""
+    token_up = token.upper()
+    if upper:
+        return token_up
+    if len(token_up) == 1:
+        return token_up
+    return token_up[0] + token_up[1].lower()
+
+
 
 def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
     """Infer element symbol from atom/residue context using YAML-driven rules."""
@@ -991,11 +1020,20 @@ class ElementFixer(Select):
             hetflag = " "
         is_het = (hetflag != " ")
 
+        elem_raw = getattr(atom, "element", "")
+        elem_token = _normalize_element_token(elem_raw, self.rules)
+        if elem_token is not None:
+            return _format_element_token(elem_token, upper=False)
+
         # if residue looks peptide-like, still derive by name (prevents ion mislabels)
         if self._is_peptidic_like(res):
-            return derive_element(aname, rname, is_het, self.rules)
+            el = derive_element(aname, rname, is_het, self.rules)
+        else:
+            el = derive_element(aname, rname, is_het, self.rules)
 
-        return derive_element(aname, rname, is_het, self.rules)
+        if aname.strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+            el = "H"
+        return el
 
     def accept_atom(self, atom):
         atom.element = self.get_atom_element(atom)
@@ -1065,13 +1103,17 @@ def _fix_ligand_element_columns_in_memory(lines):
             aname = line[12:16]
             resn  = line[17:20]
             is_het = line.startswith("HETATM")
-            el = derive_element(aname, resn, is_het, rules)
-            # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
-            if aname.strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
-                el = "H"
+            elem_token = _normalize_element_token(line[76:78], rules)
+            if elem_token is None:
+                # Fall back only when the element column is missing or invalid.
+                el = derive_element(aname, resn, is_het, rules)
+                # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
+                if aname.strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+                    el = "H"
+            else:
+                el = elem_token
             # [elem-normalize] Force uppercase 2-char element slot before write.
-            el_clean = "" if el is None else str(el)
-            el_clean = el_clean.strip().upper()
+            el_clean = _format_element_token(el, upper=True)
             el_clean = el_clean[:2]
             line = line[:76] + f"{el_clean:>2}" + line[78:]
 
@@ -1096,13 +1138,17 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
             if len(line) >= 78 and (is_het or (rewrite_atoms and is_atom)):
                 aname = line[12:16]
                 resn  = line[17:20]
-                el = derive_element(aname, resn, is_het, rules)
-                # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
-                if str(aname).strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
-                    el = "H"
+                elem_token = _normalize_element_token(line[76:78], rules)
+                if elem_token is None:
+                    # Fall back only when the element column is missing or invalid.
+                    el = derive_element(aname, resn, is_het, rules)
+                    # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
+                    if str(aname).strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+                        el = "H"
+                else:
+                    el = elem_token
                 # [elem-normalize] Align on uppercase 2-char element column for files.
-                el_clean = "" if el is None else str(el)
-                el_clean = el_clean.strip().upper()
+                el_clean = _format_element_token(el, upper=True)
                 el_clean = el_clean[:2]
                 line = line[:76] + f"{el_clean:>2}" + line[78:]
 

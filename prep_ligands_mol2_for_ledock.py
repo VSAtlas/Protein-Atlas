@@ -4,7 +4,7 @@ import logging
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 def _convert_one_pdbqt_to_mol2(src: Path, dst: Path, logger: logging.Logger) -> bool:
@@ -111,6 +111,52 @@ def _group_library_roots_from_ligands(ligands: Iterable[Path | str]) -> List[Pat
         library_root = Path(*parts[: idx + 2])
         roots[library_root] = True
     return list(roots.keys())
+
+
+def map_pdbqt_to_mol2_path(
+    pdbqt_path: Path | str,
+    logger: Optional[logging.Logger] = None,
+) -> Optional[Path]:
+    """
+    Map a PDBQT ligand path under prepped_ligands/<library>/... to the
+    mirrored MOL2 path under prepped_ligands/<library>/<library>_mol2/... .
+    """
+    path = Path(pdbqt_path)
+    if path.suffix.lower() == ".mol2":
+        return path
+
+    try:
+        resolved = path.resolve(strict=False)
+    except Exception:
+        resolved = path
+
+    parts = resolved.parts
+    try:
+        idx = parts.index("prepped_ligands")
+    except ValueError:
+        if logger:
+            logger.debug("[ledock.mol2.map] outside_prepped_ligands=%s", path)
+        return None
+
+    if idx + 1 >= len(parts):
+        return None
+
+    library_root = Path(*parts[: idx + 2])
+    library_name = library_root.name
+    mol2_root = library_root / f"{library_name}_mol2"
+
+    try:
+        rel = resolved.relative_to(mol2_root)
+        return (mol2_root / rel).with_suffix(".mol2")
+    except Exception:
+        pass
+
+    try:
+        rel = resolved.relative_to(library_root)
+    except Exception:
+        return None
+
+    return (mol2_root / rel).with_suffix(".mol2")
 
 
 def ensure_mol2_for_ledock(

@@ -447,10 +447,9 @@ def should_run_gnina_for_target(td: Optional[TargetDifficulty], cfg: Mapping[str
     raw_flag = None
     if cfg is not None:
         file_cfg = cfg.get("_FILE_CFG") if isinstance(cfg, dict) else None
-        if isinstance(file_cfg, dict):
+        raw_flag = cfg.get("USE_GNINA", cfg.get("use_gnina", None))
+        if raw_flag is None and isinstance(file_cfg, dict):
             raw_flag = file_cfg.get("USE_GNINA", file_cfg.get("use_gnina", None))
-        if raw_flag is None:
-            raw_flag = cfg.get("USE_GNINA", cfg.get("use_gnina", None))
     if raw_flag is not None and not _to_bool(raw_flag):
         logging.getLogger(__name__).info(
             "[gnina.disabled] USE_GNINA=%r -> GNINA follow-up docking is globally disabled",
