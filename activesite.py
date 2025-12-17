@@ -828,13 +828,19 @@ def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
     
     # CA special-case (avoid backbone CA -> Calcium)
     if len(an) >= 2 and an[:2] == "CA":
+        # Protein / peptide backbone CA: always treat as carbon
         if not is_het and rules.treat_backbone_ca:
-            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                          an, rn, is_het, "backbone_CA_guard", "C")
+            logging.debug(
+                "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                an, rn, is_het, "backbone_CA_guard", "C"
+            )
             return "C"
-        if is_het and rn in {"CA","CAL"}:
-            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                          an, rn, is_het, "Ca_ion", "Ca")
+        # Simple Ca2+ ions: residue names CA/CAL (pure ion residues)
+        if is_het and rn in {"CA", "CAL"}:
+            logging.debug(
+                "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                an, rn, is_het, "Ca_ion", "Ca"
+            )
             return "Ca"
 
     # two-letter elements at name start (Cl, Br, Na, Mg, ...) — HETs only, and only when the
@@ -843,10 +849,23 @@ def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
         two = an[:2].upper()
         looks_like_standalone = (len(an) == 2) or (len(an) >= 3 and not an[2].isalpha())
         if two in rules.two_letter and looks_like_standalone:
+            # avoid mislabeling organic HET alpha carbons "CA" as Calcium.
+            # If the residue is *not* a simple Ca ion (CA/CAL), and the atom name
+            # is exactly "CA" (or equivalent), prefer carbon over calcium.
+            if two == "CA" and rn not in {"CA", "CAL"}:
+                logging.debug(
+                    "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                    an, rn, is_het, "het_CA_non_ion_guard", "C"
+                )
+                return "C"
+
             t = two
-            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                          an, rn, is_het, "two_letter", t[0] + t[1].lower())
+            logging.debug(
+                "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                an, rn, is_het, "two_letter", t[0] + t[1].lower()
+            )
             return t[0] + t[1].lower()
+
 
         # --- Guard: avoid mislabeling organic HET atom names like "CAK","NAA" as Ca/Na ---
         # If this is a HET but NOT a known simple ion residue, and the atom name
