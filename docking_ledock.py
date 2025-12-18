@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -9,6 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
+import pandas as pd
+
+from dud_eval import compute_decoy_stats_from_long_csv, guess_ligfile_col, guess_score_col
 from input_and_export_functions import _to_bool, write_score_summary_to_csv
 from path_router import make_paths, ph_ensemble_dir
 from prep_for_ledock import ensure_ledock_receptor, map_pdbqt_to_mol2_path, symlink_mol2_for_stage
@@ -23,6 +27,74 @@ _CLUSTER_RE = re.compile(
     r"REMARK\s+Cluster\s+\d+\s+of\s+Poses:\s*(\d+)\s+Score:\s*([-0-9.]+)",
     re.IGNORECASE,
 )
+
+
+def annotate_ledock_fda_long_csv_with_t_scores_vs_decoys(
+    cfg: Dict[str, Any],
+    pdb_id: str,
+    ph_label: Optional[str] = None,
+    logger=None,
+) -> Optional[str]:
+    """
+    Annotate LeDock FDA long CSV with T-scores vs decoys, mirroring Vina/GNINA helpers.
+    """
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+    ph_token = (ph_label or "").strip() or None
+    variant_root = Path(paths.docked_variant_root(var, ph_token))
+
+    dud_csv = variant_root / "dud_ledock_docking_score_long.csv"
+    fda_csv = variant_root / "ledock_docking_score_long.csv"
+
+    if not dud_csv.exists() or not fda_csv.exists():
+        if logger:
+            logger.info(
+                "[ledock.t-score.skip] pdb_id=%s ph=%s reason=missing_csv dud=%s fda=%s",
+                pdb_id,
+                ph_label or "base",
+                str(dud_csv),
+                str(fda_csv),
+            )
+        return None
+
+    mu, sigma, n_decoys = compute_decoy_stats_from_long_csv(dud_csv)
+    if (not n_decoys) or (not math.isfinite(mu)) or (not math.isfinite(sigma)) or sigma == 0.0:
+        if logger:
+            logger.info(
+                "[ledock.t-score.skip] pdb_id=%s ph=%s reason=degenerate_stats n=%s mu=%s sigma=%s",
+                pdb_id,
+                ph_label or "base",
+                n_decoys,
+                mu,
+                sigma,
+            )
+        return None
+
+    df = pd.read_csv(fda_csv)
+    if df.empty:
+        return None
+
+    lig_col = guess_ligfile_col(df, None)
+    score_col = guess_score_col(df, None)
+    df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
+
+    best = df.groupby(lig_col, as_index=False).agg(best_score=(score_col, "min"))
+    best["ledock_t_vs_decoys"] = (mu - best["best_score"]) / sigma
+    t_map = dict(zip(best[lig_col], best["ledock_t_vs_decoys"]))
+    df["ledock_t_vs_decoys"] = df[lig_col].map(t_map)
+
+    df.to_csv(fda_csv, index=False)
+    if logger:
+        logger.info(
+            "[ledock.t-score.ok] pdb_id=%s ph=%s n_decoys=%s mean=%.3f std=%.3f out=%s",
+            pdb_id,
+            ph_label or "base",
+            n_decoys,
+            mu,
+            sigma,
+            str(fda_csv),
+        )
+    return str(fda_csv)
 
 
 def should_run_ledock_for_target(cfg: Dict[str, Any]) -> bool:
