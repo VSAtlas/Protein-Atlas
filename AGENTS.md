@@ -236,3 +236,75 @@ Focus patches in:
 - **OK:** Add debug lines in `code/protein_automation/automate_protein_prep.py` and `main.py`.
 - **NOT OK:** Edit `tests/test_ions_acceptance.py` ‚Äújust to make it pass‚Äù unless explicitly asked with `override:tests`.
 
+
+
+
+---
+
+## Docking engines and artifacts (Vina / GNINA / LeDock / DOCK6)
+
+This section supersedes any earlier generic ìstage1/stage2/stage3 outputsî notes.
+When implementing or refactoring docking logic, always keep outputs engine-scoped so runs do not overwrite each other.
+
+### Shared conventions
+- Stages: stage1 (fast) ? stage2 (medium) ? stage3 (slow).
+- Always route filesystem paths via `path_router.py` / the existing `paths` object; do not hardcode new ad-hoc directories.
+- Never mix outputs between engines. Use engine-prefixed folders and/or filenames:
+  - Example: `.../stage1/` for Vina, `.../gnina_stage1/` or `.../gnina/stage1/` for GNINA, `.../ledock_stage1/` for LeDock, etc.
+- Logs: prefer structured tags like `[gnina.*]`, `[ledock.*]` for grep-ability.
+
+### Vina (baseline)
+- Inputs: receptor PDBQT + ligand PDBQT.
+- Outputs: Vina per-stage outputs under `docked/<PDB>/<VARIANT>/<pH>/...` plus standard CSV summaries.
+
+### GNINA (follow-up engine)
+- GNINA is NOT called directly by `docking.py`; it is wired through `docking_subruns.run_ligand_pipeline_subrun`.
+- GNINA should remain gated by existing config + difficulty logic:
+  - Config keys: `USE_GNINA` / `use_gnina` (and any existing `ENABLE_GNINA`, `GNINA_EXE` pattern already used).
+  - Difficulty: only run for targets deemed ìhardî or ìdegenerateî (per existing code).
+- Outputs:
+  - Write GNINA CSVs alongside Vina outputs under the same `docked/<PDB>/<VARIANT>/<pH>/` tree:
+    - `gnina_docking_score_summary.csv`
+    - `gnina_docking_score_long.csv`
+  - Keep GNINA stage outputs in engine-scoped folders (do not collide with Vina stage folders).
+
+### LeDock (new)
+LeDock requires:
+- Receptor: PDB with explicit hydrogens. Prefer PH-ensemble mode and resolve receptor via `processed_pdbs/<PDB>/<VARIANT>/receptor/ph_ensemble/ensemble.json` to select the correct `<PDB>_<pH>.withH.pdb`.
+- Ligands: Tripos MOL2 files.
+
+#### MOL2 preparation (after GNINA)
+- LeDock (and later DOCK6) consume MOL2, so we maintain a mirrored MOL2 tree:
+  - From: `prepped_ligands/<library>/.../*.pdbqt`
+  - To:   `prepped_ligands/<library>/<library>_mol2/.../*.mol2`
+- Conversion uses Open Babel (`obabel -ipdbqt ... -omol2 -O ...`) and should be parallelized.
+- This MOL2 prep must be toggleable via `USE_LEDOCK` / `use_ledock`:
+  - If disabled, skip MOL2 prep entirely.
+
+#### LeDock staging and outputs
+- LeDock stages should be GNINA-like (stage1?stage3) but engine-scoped.
+- Staging/config lives under:
+  - `processed_pdbs/<PDB>/<VARIANT>/receptor/ph_ensemble/ledock/<stage>/`
+  - Contains: `dock.in`, `ligands_<stage>.list`, and `ligands/` symlinks to the MOL2 ligands being docked.
+- Docking outputs (.dok) must land under the docked tree (not under processed_pdbs):
+  - `docked/<PDB>/<VARIANT>/<pH>/ledock_stage1/` (and stage2/3 similarly)
+
+#### LeDock config knobs (per-stage)
+- `dock.in` includes: receptor path, RMSD, binding pocket bounds, number of poses, ligand list path.
+- Recommended stage parameters (may be tuned later):
+  - stage1: RMSD 1.5, poses 10
+  - stage2: RMSD 1.0, poses 20
+  - stage3: RMSD 0.5, poses 40
+
+### DOCK6 (later / planned)
+- DOCK6 will also reuse the MOL2 library under `prepped_ligands/<library>/<library>_mol2/`.
+- If/when DOCK6 is added, keep its outputs engine-scoped under the docked tree (no collisions with Vina/GNINA/LeDock).
+
+---
+
+## Tests (current)
+Tests live under `chemdb/tests/` (not `tests/`).
+
+Run full suite:
+- `python -m pytest chemdb/tests`
+You may exclude some of the longer running tests, many of these can take upwards of 15+ minutes

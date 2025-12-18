@@ -4,13 +4,14 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
-from input_and_export_functions import _to_bool
-from path_router import ph_ensemble_dir
-from prep_ligands_mol2_for_ledock import map_pdbqt_to_mol2_path
+from input_and_export_functions import _to_bool, write_score_summary_to_csv
+from path_router import make_paths, ph_ensemble_dir
+from prep_for_ledock import ensure_ledock_receptor, map_pdbqt_to_mol2_path, symlink_mol2_for_stage
 
 LEDOCK_STAGE_PARAMS = {
     "stage1": {"rmsd": 1.5, "n_poses": 10},
@@ -107,8 +108,9 @@ def _resolve_ledock_receptor(
         return None
 
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    variant_token = _variant_for_ph(variant, legacy_mode)
-    ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_token, legacy=legacy_mode)
+    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_for_ph = _variant_for_ph(variant_token, legacy_mode)
+    ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
     manifest_path = ensemble_dir / "ensemble.json"
 
     if manifest_path.exists():
@@ -135,13 +137,37 @@ def _resolve_ledock_receptor(
                         if not path.is_absolute():
                             path = (manifest_path.parent / path)
                         return path
+            logger.info(
+                "[ledock.manifest.miss] pdb=%s variant=%s ph=%s path=%s",
+                pdb_id,
+                variant_for_ph or "HOLO",
+                label,
+                str(manifest_path),
+            )
+    else:
+        logger.info(
+            "[ledock.manifest.miss] pdb=%s variant=%s ph=%s path=%s",
+            pdb_id,
+            variant_for_ph or "HOLO",
+            label,
+            str(manifest_path),
+        )
 
     prefix = f"{str(pdb_id).upper()}_"
     label_token = label
     if not label_token.startswith(prefix):
         label_token = f"{prefix}{label_token}"
-    # Fallback to naming convention when manifest is missing or incomplete.
-    return ensemble_dir / f"{label_token}.withH.pdb"
+    fallback = ensemble_dir / f"{label_token}.withH.pdb"
+    if not fallback.exists():
+        logger.info(
+            "[ledock.receptor.missing] pdb=%s variant=%s ph=%s path=%s",
+            pdb_id,
+            variant_for_ph or "HOLO",
+            label,
+            str(fallback),
+        )
+        return None
+    return fallback
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
@@ -304,12 +330,7 @@ def run_ledock_for_stage(
         logger.info("[ledock.skip] reason=missing_center_or_box")
         return scores, ledock_metrics
 
-    if not bool(cfg.get("PH_ENSEMBLE")):
-        logger.info("[ledock.skip] reason=ph_ensemble_disabled_or_missing_receptor")
-        return scores, ledock_metrics
-
     if not should_run_ledock_for_target(cfg):
-        logger.info("[ledock.skip] reason=use_ledock_disabled")
         return scores, ledock_metrics
 
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
@@ -319,7 +340,7 @@ def run_ledock_for_stage(
 
     receptor_path = Path(receptor_pdb) if receptor_pdb else None
     if receptor_path is None:
-        receptor_path = _resolve_ledock_receptor(cfg, pdb_id, variant_token, ph_label, logger)
+        receptor_path = ensure_ledock_receptor(cfg, pdb_id, variant_token, ph_label, logger)
 
     if receptor_path:
         logger.info(
@@ -330,7 +351,7 @@ def run_ledock_for_stage(
             str(receptor_path),
         )
     if receptor_path is None or not receptor_path.exists():
-        logger.info("[ledock.skip] reason=ph_ensemble_disabled_or_missing_receptor")
+        logger.info("[ledock.skip] reason=missing_receptor")
         return scores, ledock_metrics
 
     ligand_paths = [Path(lig) for lig in ligands]
@@ -338,7 +359,7 @@ def run_ledock_for_stage(
         logger.info("[ledock.skip] reason=no_ligands")
         return scores, ledock_metrics
 
-    mol2_map: Dict[Path, Path] = {}
+    ligand_pairs: list[Tuple[Path, Path]] = []
     for lig_path in ligand_paths:
         mol2_path = map_pdbqt_to_mol2_path(lig_path, logger=logger)
         if mol2_path is None or not mol2_path.exists():
@@ -350,25 +371,53 @@ def run_ledock_for_stage(
                 "reason": "ledock_missing_mol2",
             }
             continue
-        mol2_map[lig_path] = mol2_path
+        ligand_pairs.append((lig_path, mol2_path))
 
-    if not mol2_map:
+    if not ligand_pairs:
         logger.info("[ledock.skip] reason=no_mol2_ligands")
         return scores, ledock_metrics
 
     stage_params["rmsd"] = float(stage_info.get("rmsd", stage_params["rmsd"]))
     stage_params["n_poses"] = int(stage_info.get("n_poses", stage_params["n_poses"]))
 
-    dock_root = paths.docked_variant_root(variant_for_ph, ph_token)
-    ledock_root = dock_root / "ledock"
+    if cfg.get("FAST_MODE"):
+        fast_rmsd = float(cfg.get("LEDOCK_FAST_RMSD", 1.5))
+        fast_n_poses = int(cfg.get("LEDOCK_FAST_N_POSES", 1))
+        stage_params["rmsd"] = fast_rmsd
+        stage_params["n_poses"] = fast_n_poses
+        logger.info(
+            "[ledock.fast] enabled=True pdb=%s stage=%s rmsd=%.3f n_poses=%d",
+            pdb_id,
+            stage_name,
+            fast_rmsd,
+            fast_n_poses,
+        )
+
+    ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
+    ledock_root = ensemble_dir / "ledock"
     stage_root = ledock_root / stage_name
     stage_root.mkdir(parents=True, exist_ok=True)
+    for stale in stage_root.glob("*.dok"):
+        try:
+            stale.unlink()
+        except FileNotFoundError:
+            pass
+    for stale in stage_root.glob("*.mol2"):
+        try:
+            stale.unlink()
+        except FileNotFoundError:
+            pass
 
-    mol2_paths = [mol2_map[lig] for lig in ligand_paths if lig in mol2_map]
+    alias_map = symlink_mol2_for_stage(ligand_pairs, stage_root, logger)
+    if not alias_map:
+        logger.info("[ledock.skip] reason=no_symlinked_ligands")
+        return scores, ledock_metrics
+
     ligands_list_path = stage_root / f"ligands_{stage_key}.list"
+    ligand_lines = [alias.name for alias in alias_map.values()]
     _write_text_atomic(
         ligands_list_path,
-        "\n".join(str(p) for p in mol2_paths) + "\n",
+        "\n".join(ligand_lines) + "\n",
     )
 
     config_path = emit_ledock_config(
@@ -387,7 +436,7 @@ def run_ledock_for_stage(
         stage_name,
         variant_for_ph or "HOLO",
         ph_token or "ph_ensemble",
-        len(mol2_paths),
+        len(alias_map),
     )
 
     cmd = ["ledock", str(config_path)]
@@ -401,10 +450,10 @@ def run_ledock_for_stage(
             stage_name,
             exc,
         )
-        for lig in mol2_map:
-            if lig in ledock_metrics:
+        for lig_path, _mol2_path in ligand_pairs:
+            if lig_path in ledock_metrics:
                 continue
-            ledock_metrics[lig] = {
+            ledock_metrics[lig_path] = {
                 "best_score_kcal": None,
                 "n_poses": 0,
                 "cluster_count": 0,
@@ -413,8 +462,8 @@ def run_ledock_for_stage(
             }
         return scores, ledock_metrics
 
-    for lig_path, mol2_path in mol2_map.items():
-        dok_path = stage_root / f"{mol2_path.stem}.dok"
+    for lig_path, alias_path in alias_map.items():
+        dok_path = stage_root / f"{alias_path.stem}.dok"
         metrics = _parse_ledock_dok(dok_path)
         ledock_metrics[lig_path] = metrics
         if metrics.get("valid"):
@@ -422,17 +471,178 @@ def run_ledock_for_stage(
             if isinstance(score, (int, float)):
                 scores[lig_path] = float(score)
             logger.info(
-                "[ledock.score] ligand=%s score=%s rmsd=%.3f",
-                mol2_path.name,
+                "[ledock.score] stage=%s ligand=%s score=%s",
+                stage_name,
+                alias_path.name,
                 score if score is not None else "None",
-                float(stage_params["rmsd"]),
             )
         else:
             logger.warning(
-                "[ledock.parse] ligand=%s reason=%s dok=%s",
-                mol2_path.name,
+                "[ledock.parse] stage=%s ligand=%s reason=%s dok=%s",
+                stage_name,
+                alias_path.name,
                 metrics.get("reason"),
                 str(dok_path),
             )
 
+    dock_root = paths.docked_variant_root(variant_for_ph, ph_token)
+    if stage_key == "stage1":
+        dok_dest = dock_root / "ledock_stage1"
+    elif stage_key == "stage2":
+        dok_dest = dock_root / "ledock_stage2"
+    elif stage_key == "stage3":
+        dok_dest = dock_root / "ledock_stage3"
+    else:
+        dok_dest = dock_root / f"ledock_{stage_name}"
+    dok_dest.mkdir(parents=True, exist_ok=True)
+    for stale in dok_dest.glob("*.dok"):
+        try:
+            stale.unlink()
+        except FileNotFoundError:
+            pass
+
+    moved_any = False
+    for alias_path in alias_map.values():
+        src = stage_root / f"{alias_path.stem}.dok"
+        if not src.exists():
+            continue
+        dest = dok_dest / src.name
+        try:
+            if dest.exists() or dest.is_symlink():
+                dest.unlink()
+        except FileNotFoundError:
+            pass
+        shutil.move(str(src), dest)
+        moved_any = True
+
+    if moved_any:
+        logger.info(
+            "[ledock.move_dok] stage=%s source=%s dest=%s",
+            stage_name,
+            str(stage_root),
+            str(dok_dest),
+        )
+
     return scores, ledock_metrics
+
+
+def write_ledock_scores_csv(
+    cfg: Dict,
+    pdb_id: str,
+    ledock_metrics_by_stage: Dict[str, Dict[str, Dict[str, Any]]],
+    *,
+    ph_label: Optional[str] = None,
+    variant: Optional[str] = None,
+    csv_prefix: str = "",
+) -> str:
+    """
+    Emit LeDock score CSVs:
+
+    - Wide summary: ledock_docking_score_summary.csv
+        One row per ligand, one column per LeDock stage.
+        Cell values are best LeDock energies (kcal/mol), formatted to 2 decimals.
+
+    - Long format: <prefix>ledock_docking_score_long.csv
+        One row per ligand per LeDock stage, with:
+        run_id, optional variant, stage, ligand,
+        ledock_best_score_kcal, ledock_cluster_count, ledock_n_poses.
+
+    NOTE: For now, we ignore valid/invalid flags; no 'valid' or 'reason' columns.
+    """
+    import csv as _csv
+    import logging
+    import os
+    from pathlib import Path
+
+    logger = logging.getLogger(__name__)
+
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
+    ph_token = (ph_label or "").strip() or None
+
+    variant_env = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_token = variant_env or None
+
+    dock_dir = Path(paths.docked_variant_root(variant_token, ph_token))
+    dock_dir.mkdir(parents=True, exist_ok=True)
+
+    run_id_value = str(cfg.get("RUN_ID") or "")
+    variant_value = variant_env
+    include_variant = bool(variant_value)
+
+    summary_name = "ledock_docking_score_summary.csv"
+    long_name = f"{csv_prefix}ledock_docking_score_long.csv"
+
+    csv_out_wide = str(dock_dir / summary_name)
+    csv_out_long = str(dock_dir / long_name)
+
+    flat: Dict[str, Dict[str, str]] = {}
+
+    for stage_name, stage_map in ledock_metrics_by_stage.items():
+        stage_dict: Dict[str, str] = {}
+        for lig, rec in stage_map.items():
+            lig_key = os.path.basename(str(lig))
+            best = rec.get("best_score_kcal")
+            if isinstance(best, (int, float)):
+                stage_dict[lig_key] = f"{best:.2f}"
+            else:
+                stage_dict[lig_key] = ""
+        flat[stage_name] = stage_dict
+
+    write_score_summary_to_csv(
+        flat,
+        output_path=csv_out_wide,
+        run_id=run_id_value,
+        variant=variant_value if include_variant else None,
+    )
+
+    with open(csv_out_long, "w", newline="", encoding="utf-8") as f:
+        writer = _csv.writer(f)
+
+        header = ["run_id"]
+        if include_variant:
+            header.append("variant")
+        header.extend(
+            [
+                "stage",
+                "ligand",
+                "ledock_best_score_kcal",
+                "ledock_cluster_count",
+                "ledock_n_poses",
+            ]
+        )
+        writer.writerow(header)
+
+        def _fmt(val: Any, places: int = 2) -> str:
+            return f"{val:.{places}f}" if isinstance(val, (int, float)) else ""
+
+        for stage_name, stage_map in ledock_metrics_by_stage.items():
+            for lig, rec in stage_map.items():
+                lig_key = os.path.basename(str(lig))
+                best = rec.get("best_score_kcal")
+                cluster_count = rec.get("cluster_count", None)
+                n_poses = rec.get("n_poses", None)
+
+                row = [run_id_value]
+                if include_variant:
+                    row.append(variant_value)
+                row.extend(
+                    [
+                        stage_name,
+                        lig_key,
+                        _fmt(best),
+                        cluster_count if cluster_count is not None else "",
+                        n_poses if n_poses is not None else "",
+                    ]
+                )
+                writer.writerow(row)
+
+    logger.info(
+        "[ledock.csv] pdb=%s ph=%s variant=%s summary=%s long=%s",
+        pdb_id,
+        ph_token,
+        variant_token,
+        csv_out_wide,
+        csv_out_long,
+    )
+
+    return csv_out_wide

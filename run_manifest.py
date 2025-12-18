@@ -1316,6 +1316,9 @@ def update_manifest_for_docking_stage(
     elif core.startswith("gnina_"):
         engine = "gnina"
         core = core[len("gnina_") :] or core
+    elif core.startswith("ledock_"):
+        engine = "ledock"
+        core = core[len("ledock_") :] or core
 
     # Handle engine-prefixed strings that still carry a library prefix (e.g., gnina_dud_stage1)
     if lib_prefix is None:

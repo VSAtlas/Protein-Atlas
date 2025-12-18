@@ -685,9 +685,19 @@ def _run_gnina_for_ligand(
             f"Refusing to launch GNINA with config outside current RUN_DIR: {conf_path}"
         )
 
-    logger.info("[gnina.call] exe=%s config=%s", gnina_exe, conf_path)
-
+    # Build GNINA CLI. In FAST_MODE, explicitly disable CNN scoring to keep runs fast
+    # and easier to test, and sort poses by energy instead of CNN score.
     cmd = [gnina_exe, "--no_gpu", "--cpu", str(cpu_threads), "--config", conf_path]
+    if cfg.get("FAST_MODE"):
+        cmd.extend(["--cnn_scoring", "none", "--pose_sort_order", "energy"])
+
+    logger.info(
+        "[gnina.call] exe=%s config=%s cmd=%s",
+        gnina_exe,
+        conf_path,
+        " ".join(cmd),
+    )
+
     try:
         subprocess.run(
             cmd,
@@ -844,7 +854,9 @@ def run_gnina_for_stage(
         minimized_affinity = parsed.get("minimized_affinity_kcal")
         cnn_score = parsed.get("cnn_score")
         cnn_affinity = parsed.get("cnn_affinity_pK")
-        primary_score = cnn_affinity
+        # Primary score is CNN affinity when available; otherwise fall back to the
+        # minimized empirical affinity (e.g. when FAST_MODE disables CNN scoring).
+        primary_score = cnn_affinity if cnn_affinity is not None else minimized_affinity
 
         metrics.update(
             {

@@ -54,7 +54,11 @@ from docking_gnina import (
     write_gnina_scores_csv,
     annotate_gnina_fda_long_csv_with_t_scores_vs_decoys,
 )
-from docking_ledock import run_ledock_for_stage, should_run_ledock_for_target
+from docking_ledock import (
+    run_ledock_for_stage,
+    should_run_ledock_for_target,
+    write_ledock_scores_csv,
+)
 from docking_vina import write_scores_csv
 from chemdb.target_difficulty import get_or_compute_target_difficulty
 from docking_ligands import (
@@ -121,11 +125,10 @@ def _apply_force_carry_and_doping(
 
 
 def _use_ledock(cfg: Dict[str, Any]) -> bool:
-    raw = cfg.get("USE_LEDOCK", cfg.get("use_ledock", False))
     try:
-        return _to_bool(raw)
+        return should_run_ledock_for_target(cfg)
     except Exception:
-        return bool(raw)
+        return False
 
 
 @dataclass
@@ -227,7 +230,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
     component gets the prefix.
     """
     from docking import RetryManager, run_one_stage  # late import to avoid circular dependency
-    from prep_ligands_mol2_for_ledock import ensure_mol2_for_ledock
+    from prep_for_ledock import ensure_mol2_for_ledock
 
     cfg = ctx.cfg
     paths = ctx.paths
@@ -675,6 +678,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
             score_history_gnina: Dict[str, Dict[str, Dict]] = defaultdict(dict)
             gnina_metrics_by_stage: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+            ledock_metrics_by_stage: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
             gnina_records: List[Dict[str, Any]] = []
             validated_ligands_last: List[str] = []
             recenter_attempts = 0
@@ -683,6 +687,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             retry_mgr = RetryManager()
             gnina_jobs: List[Dict[str, Any]] = []
             ledock_jobs: List[Dict[str, Any]] = []
+            ledock_enabled = _use_ledock(cfg)
 
             i = 0
             while i < len(stages_for_run):
@@ -1006,7 +1011,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                             getattr(td, "difficulty", "unknown") if td is not None else "unknown",
                         )
 
-                    if should_run_ledock_for_target(cfg):
+                    if ledock_enabled:
                         ledock_jobs.append(
                             {
                                 "stage_name": stage["name"],
@@ -1015,13 +1020,6 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 "center": tuple(center) if center is not None else None,
                                 "box_size": tuple(box_size) if box_size is not None else None,
                             }
-                        )
-                    else:
-                        logger.info(
-                            "[ledock.skip] pdb=%s variant=%s ph=%s reason=use_ledock_disabled",
-                            paths.pdb_id,
-                            variant_label,
-                            ph_label if ph_label else "base",
                         )
 
                 if bool(cfg.get("CHECKPOINT_ENABLE", True)):
@@ -1328,6 +1326,29 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 )
                 for job in ledock_jobs:
                     ledock_start_ts = time.time()
+                    stage_name = job["stage_name"]
+                    ledock_stage_name = f"ledock_{stage_name}"
+                    if manifest_run_id:
+                        try:
+                            update_manifest_for_docking_stage(
+                                cfg,
+                                manifest_run_id,
+                                paths.pdb_id,
+                                variant_label,
+                                ledock_stage_name,
+                                status="running",
+                                elapsed_sec=None,
+                                ph_tag=ph_label,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "[manifest.warn] pdb=%s variant=%s ph=%s stage=%s engine=ledock action=running_update_failed reason=%s",
+                                paths.pdb_id,
+                                variant_label,
+                                ph_label if ph_label else "base",
+                                ledock_stage_name,
+                                e,
+                            )
                     try:
                         scores_ledock, ledock_metrics = run_ledock_for_stage(
                             cfg=cfg,
@@ -1335,21 +1356,43 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                             pdb_id=paths.pdb_id,
                             variant=variant_env or None,
                             ph_label=ph_label,
-                            stage_name=job["stage_name"],
+                            stage_name=stage_name,
                             stage_info=job["stage_info"],
                             ligands=job["ligands"],
                             center=job["center"],
                             box_size=job["box_size"],
                             logger=logger,
                         )
+                        ledock_metrics_by_stage[stage_name] = ledock_metrics
                         valid_count = sum(
                             1 for rec in ledock_metrics.values() if rec.get("valid")
                         )
                         invalid_count = max(len(ledock_metrics) - valid_count, 0)
+                        if manifest_run_id:
+                            try:
+                                update_manifest_for_docking_stage(
+                                    cfg,
+                                    manifest_run_id,
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ledock_stage_name,
+                                    status="completed",
+                                    elapsed_sec=time.time() - ledock_start_ts,
+                                    ph_tag=ph_label,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "[manifest.warn] pdb=%s variant=%s ph=%s stage=%s engine=ledock action=completed_update_failed reason=%s",
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ph_label if ph_label else "base",
+                                    ledock_stage_name,
+                                    e,
+                                )
                         logger.info(
                             "[ledock.done] pdb=%s stage=%s variant=%s ph=%s valid=%d invalid=%d elapsed_sec=%.2f",
                             paths.pdb_id,
-                            job["stage_name"],
+                            stage_name,
                             variant_label,
                             ph_label if ph_label else "base",
                             valid_count,
@@ -1360,18 +1403,51 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         logger.warning(
                             "[ledock.error] pdb=%s stage=%s variant=%s ph=%s reason=%s",
                             paths.pdb_id,
-                            job["stage_name"],
+                            stage_name,
                             variant_label,
                             ph_label if ph_label else "base",
                             e,
                             exc_info=True,
                         )
+                        ledock_metrics_by_stage[stage_name] = {}
+                        if manifest_run_id:
+                            try:
+                                update_manifest_for_docking_stage(
+                                    cfg,
+                                    manifest_run_id,
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ledock_stage_name,
+                                    status="failed",
+                                    elapsed_sec=time.time() - ledock_start_ts,
+                                    ph_tag=ph_label,
+                                    error=str(e),
+                                )
+                            except Exception as e2:
+                                logger.warning(
+                                    "[manifest.warn] pdb=%s variant=%s ph=%s stage=%s engine=ledock action=failed_update_failed reason=%s",
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ph_label if ph_label else "base",
+                                    ledock_stage_name,
+                                    e2,
+                                )
             else:
                 logger.info(
                     "[ledock.scheduler] pdb=%s variant=%s ph=%s action=skip reason=no_jobs",
                     paths.pdb_id,
                     variant_label,
                     ph_label if ph_label else "base",
+                )
+
+            if ledock_metrics_by_stage:
+                write_ledock_scores_csv(
+                    cfg,
+                    paths.pdb_id,
+                    ledock_metrics_by_stage,
+                    ph_label=ph_label,
+                    variant=variant_env or None,
+                    csv_prefix=csv_prefix,
                 )
 
             final_pose_validation_and_screenshots(

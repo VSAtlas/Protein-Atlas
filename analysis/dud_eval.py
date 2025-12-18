@@ -602,6 +602,19 @@ LIGFILE_CANDIDATES = [
     "pose_path","output_ligand","output_ligand_path","file","filepath","filename",
     "pdbqt_path","pdbqt","out_path"
 ]
+VALID_COL_CANDIDATES = [
+    "valid",
+    "pose_valid",
+    "is_valid",
+    "passed_pose_validation",
+    "pose_is_valid",
+    "valid_pose",
+    "pose_ok",
+    "ok",
+    "passed",
+    "pass",
+]
+VALID_TRUE_STRINGS = {"true", "t", "yes", "y", "pass", "passed", "ok", "valid"}
 # We now support both DUD-specific and legacy score CSV names.
 # Prefer the DUD-prefixed name when both exist.
 CSV_BASENAMES = (
@@ -643,6 +656,31 @@ def guess_ligfile_col(df: pd.DataFrame, override: Optional[str]) -> str:
         if df[c].dtype == object:
             return c
     raise ValueError("Could not find ligand filename/path column. Use --lig-col.")
+
+def resolve_valid_col(df: pd.DataFrame, override: Optional[str], enabled: bool) -> Optional[str]:
+    if not enabled:
+        return None
+    if override:
+        if override in df.columns:
+            return override
+        raise ValueError(
+            f"Valid-only requested but --valid-col '{override}' is missing. "
+            "Pass --valid-col with an existing column name."
+        )
+    for name in VALID_COL_CANDIDATES:
+        if name in df.columns:
+            return name
+    raise ValueError("Valid-only requested but no validity column found. Use --valid-col.")
+
+def parse_valid_mask(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(series):
+        numeric = pd.to_numeric(series, errors="coerce")
+        return numeric.notna() & (numeric != 0)
+    text = series.fillna("").astype(str).str.strip()
+    numeric = pd.to_numeric(text, errors="coerce")
+    numeric_mask = numeric.notna() & (numeric != 0)
+    token_mask = text.str.lower().isin(VALID_TRUE_STRINGS)
+    return numeric_mask | token_mask
 
 # >>> RUN-SELECTION START
 def select_default_run_id(targets: List[TargetSpec],
@@ -895,7 +933,9 @@ def evaluate_target(pdb_id: str,
                     score_col_cli: Optional[str],
                     bedroc_alpha: float,
                     logauc_lambda: float,
-                    run_id: Optional[str]) -> Optional[TargetEvaluation]:
+                    run_id: Optional[str],
+                    valid_only: bool = False,
+                    valid_col_cli: Optional[str] = None) -> Optional[TargetEvaluation]:
     try:
         df = pd.read_csv(csv_path)
         dbg("INFO", "csv", f"pdb={pdb_id} path={csv_path} rows={len(df)}")
@@ -924,6 +964,15 @@ def evaluate_target(pdb_id: str,
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df = df.dropna(subset=[score_col])
     drop_nonfinite = before_nf - len(df)
+
+    # Apply pose validity filtering before best-pose aggregation.
+    if valid_only:
+        valid_col = resolve_valid_col(df, valid_col_cli, enabled=True)
+        before_valid = len(df)
+        valid_mask = parse_valid_mask(df[valid_col])
+        df = df.loc[valid_mask].copy()
+        dropped_valid = before_valid - len(df)
+        dbg("INFO", "filter", f"pdb={pdb_id} valid_only=ON valid_col={valid_col} rows_kept={len(df)} rows_dropped={dropped_valid}")
 
     raw_lig = df[lig_col]
     missing_names = int(raw_lig.isna().sum())
@@ -1485,6 +1534,10 @@ def main():
                     help="Score column (lower is better). Auto-detected if omitted.")
     ap.add_argument("--run-id", type=str, default=None,
                     help="Filter docking_score_long.csv rows to a specific run identifier.")
+    ap.add_argument("-valid", "--valid", dest="valid_only", action="store_true", default=False,
+                    help="Only evaluate poses marked valid in the docking_score_long.csv file.")
+    ap.add_argument("--valid-col", type=str, default=None,
+                    help="Validity column name to use with --valid (auto-detected if omitted).")
     ap.add_argument("--bedroc-alpha", type=float, default=20.0)
     ap.add_argument("--logauc-lambda", type=float, default=1e-3)
     ap.add_argument("--log-level", type=str, default="INFO",
@@ -1980,6 +2033,8 @@ def main():
                 bedroc_alpha=args.bedroc_alpha,
                 logauc_lambda=args.logauc_lambda,
                 run_id=active_run_id,
+                valid_only=args.valid_only,
+                valid_col_cli=args.valid_col,
             )
         if evaluated is not None:
             target_eval_results[spec.target_key] = evaluated
