@@ -16,7 +16,8 @@ TEST_PDB_ID = "TEST"
 TEST_PDB_PATH = REPO_ROOT / "input_pdbs" / f"{TEST_PDB_ID}.pdb"
 TEST_LIBRARY_SUBDIR = "test_library_10"
 PREPPED_TEST_LIB = REPO_ROOT / "prepped_ligands" / TEST_LIBRARY_SUBDIR
-DOCKED_ROOT = REPO_ROOT / "docked" / TEST_PDB_ID
+TEST_RUN_ID = "test_run"
+DOCKED_ROOT = REPO_ROOT / "docked" / TEST_RUN_ID / TEST_PDB_ID
 SUCCESS_SENTINEL = "No proteins recorded as failed."
 
 pytestmark = pytest.mark.slow
@@ -44,7 +45,7 @@ def _extract_log_path(output: str) -> Path | None:
 
 def _find_recent_long_csv(start_time: float) -> Path | None:
     """
-    Return the newest docking_score_long.csv under docked/TEST/... whose
+    Return the newest docking_score_long.csv under docked/<RUN_ID>/TEST/... whose
     mtime is >= start_time. We accept any variant/pH subdirectory.
     """
     if not DOCKED_ROOT.exists():
@@ -83,9 +84,10 @@ def test_decoy_t_scores_present_in_fast_test_mode() -> None:
     env = os.environ.copy()
     # Ensure the code-path that mixes FDA + DUD is active.
     env["TEST_MODE_ENABLE"] = "fda+dud"
+    env["ATLAS_RUN_ID"] = TEST_RUN_ID
     env["PYTHONUNBUFFERED"] = "1"
 
-    cmd = [sys.executable, str(MAIN_PY), "-test", "-test-fda", "-fast"]
+    cmd = [sys.executable, str(MAIN_PY), "-test", "-test-fda", "-fast", "--run-id", TEST_RUN_ID]
     start_time = time.time()
     proc = subprocess.run(
         cmd,

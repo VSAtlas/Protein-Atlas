@@ -117,6 +117,55 @@ def _get_library_index(root: Path, manifest_filename: str) -> LibraryIndex:
     return idx
 
 
+def _is_probable_run_id_dirname(name: str) -> bool:
+    """
+    Heuristic to detect run-id style directory names (e.g., 20251205_225826, 2025-12-18T...).
+    Avoid matching classic 4-char PDB IDs.
+    """
+    if not name or len(name) <= 6:
+        return False
+    upper = name.upper()
+    if len(upper) == 4 and upper.isalnum():
+        return False
+    if "_" in name:
+        return True
+    if re.fullmatch(r"\d{8,}", name):
+        return True
+    if "T" in name and re.match(r"\d{4}-?\d{2}-?\d{2}", name):
+        return True
+    return False
+
+
+def _resolve_scan_roots(docked_root: Path, run_id: Optional[str]) -> List[Path]:
+    """
+    Determine which roots to scan for docking outputs.
+
+    Priority:
+      - If run_id is provided and docked_root/run_id exists, scan that.
+      - If run_id provided but missing, fall back to docked_root.
+      - If no run_id: scan run-like subdirs (mtime desc) if present, then docked_root.
+      - If docked_root is not a dir, just return [docked_root].
+    """
+    if not docked_root.is_dir():
+        return [docked_root]
+
+    if run_id:
+        candidate = docked_root / run_id
+        if candidate.is_dir():
+            return [candidate]
+        return [docked_root]
+
+    run_subdirs = [
+        p for p in docked_root.iterdir()
+        if p.is_dir() and _is_probable_run_id_dirname(p.name)
+    ]
+    if run_subdirs:
+        run_subdirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return run_subdirs + [docked_root]
+
+    return [docked_root]
+
+
 @dataclass
 class TargetSpec:
     target_key: str
@@ -1238,6 +1287,8 @@ def _candidate_protein_logs(pdb_id: str,
     if log_root_override:
         _add(log_root_override / pdb_id / "protein.log")
     else:
+        # Prefer the provided docked_root, fall back to legacy docked/ root last.
+        _add(docked_root / pdb_id / "protein.log")
         _add(Path("docked") / pdb_id / "protein.log")
 
     if docked_root.is_dir():
@@ -1589,6 +1640,14 @@ def main():
         dbg("DEBUG", "config", f"OVERALL_DIR override applied analysis_root={analysis_root}")
     analysis_root.mkdir(parents=True, exist_ok=True)
     dbg("DEBUG", "paths", f"docked_root={docked_root} out_root={out_root} analysis_root={analysis_root} pdb_root={pdb_root_override or 'none'} prepped_root={prepped_root_override or 'none'}")
+    scan_roots = _resolve_scan_roots(docked_root, args.run_id)
+    dbg("INFO", "paths", f"scan_roots={[str(p) for p in scan_roots]}")
+    manifest_docked_root = scan_roots[0] if scan_roots else docked_root
+
+    if args.run_id:
+        os.environ["ATLAS_RUN_ID"] = str(args.run_id)
+        if cfg is not None:
+            cfg["RUN_ID"] = str(args.run_id)
 
     def _infer_variant_ph_from_csv_path(pdb_id: str, csv_path: Path) -> tuple[Optional[str], Optional[str]]:
         """
@@ -1885,7 +1944,10 @@ def main():
     manifest_entries: List[Dict[str, str]] = []
     manifest_proteins: Dict[str, Dict[str, str]] = {}
     manifest_driven = False
+    effective_manifest_root = docked_root
     if cfg and active_run_id:
+        if len(scan_roots) == 1 and scan_roots[0].is_dir() and _is_probable_run_id_dirname(scan_roots[0].name):
+            effective_manifest_root = scan_roots[0]
         try:
             _manifest_dir, manifest_path = get_manifest_paths(cfg, str(active_run_id))
             manifest_data = _load_manifest(manifest_path) or {}
@@ -1923,7 +1985,7 @@ def main():
                 pdb_id=pdb_id,
                 variant_hint=variant_hint or None,
                 ph_hint=ph_hint or None,
-                docked_root=docked_root,
+                docked_root=manifest_docked_root,
                 cfg=cfg,
             )
             target_key = make_target_key(pdb_id, variant_upper, ph_hint or None)
@@ -1938,22 +2000,31 @@ def main():
             if csv_path is None:
                 dbg("WARN", "discover", f"pdb={pdb_id} variant={variant_upper or 'base'} ph={ph_hint or 'base'} reason=no_docked_csv_for_manifest_entry")
     elif docked_root.is_dir():
-        # Multi-target first: treat docked_root as parent of many PDBs
-        for sub in sorted(docked_root.iterdir()):
-            if not sub.is_dir():
-                continue
-            pdb_id = sub.name
-
-            pdb_path = Path("input_pdbs") / f"{pdb_id}.pdb"
-            if not pdb_path.exists():
-                dbg("WARN", "discover.skip", f"pdb={pdb_id} reason=no_input_pdb path={pdb_path}")
+        # Iterate over candidate scan roots (run-scoped and legacy).
+        for root in scan_roots:
+            if not root.is_dir():
+                # Treat as single-target fallback
+                pdb_id = root.name
+                targets.extend(_discover_docking_csvs(pdb_id, root, cfg, csv_basenames))
                 continue
 
-            targets.extend(_discover_docking_csvs(pdb_id, docked_root, cfg, csv_basenames))
+            any_added = False
+            for sub in sorted(root.iterdir()):
+                if not sub.is_dir():
+                    continue
+                pdb_id = sub.name
 
-        if not targets:
-            pdb_id = docked_root.name
-            targets.extend(_discover_docking_csvs(pdb_id, docked_root, cfg, csv_basenames))
+                pdb_path = Path("input_pdbs") / f"{pdb_id}.pdb"
+                if not pdb_path.exists():
+                    dbg("WARN", "discover.skip", f"pdb={pdb_id} reason=no_input_pdb path={pdb_path}")
+                    continue
+
+                targets.extend(_discover_docking_csvs(pdb_id, root, cfg, csv_basenames))
+                any_added = True
+
+            if not any_added:
+                pdb_id = root.name
+                targets.extend(_discover_docking_csvs(pdb_id, root, cfg, csv_basenames))
     else:
         pdb_id = docked_root.name
         targets.extend(_discover_docking_csvs(pdb_id, docked_root, cfg, csv_basenames))

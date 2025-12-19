@@ -60,6 +60,7 @@ from docking_ledock import (
     write_ledock_scores_csv,
     annotate_ledock_fda_long_csv_with_t_scores_vs_decoys,
 )
+from docking_consensus_score import compute_consensus_for_variant_ph
 from docking_vina import write_scores_csv
 from chemdb.target_difficulty import get_or_compute_target_difficulty
 from docking_ligands import (
@@ -1569,6 +1570,24 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         ph_label if ph_label else "base",
                         e,
                     )
+
+            try:
+                compute_consensus_for_variant_ph(
+                    cfg=cfg,
+                    paths=paths,
+                    ph_label=ph_label,
+                    variant_env=variant_env,
+                    variant_label=variant_label,
+                    csv_prefix=csv_prefix,
+                    logger=logger,
+                )
+            except Exception:
+                logger.exception(
+                    "[consensus.error] Failed to compute consensus scores for pdb_id=%s variant=%s ph=%s",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label,
+                )
 
             if _use_ledock(cfg):
                 try:

@@ -14,6 +14,7 @@ MAIN_PY = REPO_ROOT / "main.py"
 
 TEST_PDB_ID = "TEST"
 TEST_PDB_PATH = REPO_ROOT / "input_pdbs" / f"{TEST_PDB_ID}.pdb"
+TEST_RUN_ID = "test_run"
 
 # Small prepped library used when TEST_MODE_ENABLE=dud
 # (config.txt should map TEST/dud -> prepped_ligands/test_library_10)
@@ -21,10 +22,10 @@ TEST_LIBRARY_SUBDIR = "test_library_10"
 PREPPED_TEST_LIB = REPO_ROOT / "prepped_ligands" / TEST_LIBRARY_SUBDIR
 
 # Root under which we expect docked outputs for TEST to land:
-# - no variant: docked/TEST/...
-# - variant:    docked/TEST/APO/... or docked/TEST/HOLO/...
-# - variant+pH: docked/TEST/APO/pH*/... or docked/TEST/HOLO/pH*/...
-DOCKED_ROOT = REPO_ROOT / "docked" / TEST_PDB_ID
+# - no variant: docked/<RUN_ID>/TEST/...
+# - variant:    docked/<RUN_ID>/TEST/APO/... or docked/<RUN_ID>/TEST/HOLO/...
+# - variant+pH: docked/<RUN_ID>/TEST/APO/pH*/... or docked/<RUN_ID>/TEST/HOLO/pH*/...
+DOCKED_ROOT = REPO_ROOT / "docked" / TEST_RUN_ID / TEST_PDB_ID
 
 SUCCESS_SENTINEL = "No proteins recorded as failed."
 
@@ -85,11 +86,11 @@ def _extract_log_path(output: str) -> Path | None:
 
 def _find_recent_summary(start_time: float, expected_variant: str | None) -> Path | None:
     """
-    Find the newest docking_score_summary.csv under docked/TEST that was
+    Find the newest docking_score_summary.csv under docked/<RUN_ID>/TEST that was
     written or updated after start_time.
 
     If expected_variant is provided ('APO' or 'HOLO'), we also require the
-    summary path to live under docked/TEST/<expected_variant>/...
+    summary path to live under docked/<RUN_ID>/TEST/<expected_variant>/...
     """
     if not DOCKED_ROOT.exists():
         return None
@@ -138,10 +139,10 @@ def test_full_run_produces_summary_without_failures(
 
       - main.py exits with code 0
       - the success sentinel "No proteins recorded as failed." is printed
-      - at least one docking_score_summary.csv under docked/TEST is updated
-        by this run and contains at least one data row.
-      - for APO/HOLO modes, the summary is located under docked/TEST/APO/...
-        or docked/TEST/HOLO/... respectively.
+      - at least one docking_score_summary.csv under docked/<RUN_ID>/TEST is
+        updated by this run and contains at least one data row.
+      - for APO/HOLO modes, the summary is located under docked/<RUN_ID>/TEST/APO/...
+        or docked/<RUN_ID>/TEST/HOLO/... respectively.
     """
     if not _have_test_inputs():
         pytest.skip("Skipping full-run test: TEST.pdb or prepped test library missing.")
@@ -150,12 +151,13 @@ def test_full_run_produces_summary_without_failures(
 
     env = os.environ.copy()
     env.update(env_overrides)
+    env["ATLAS_RUN_ID"] = TEST_RUN_ID
     # Force small test-mode library
     env["TEST_MODE_ENABLE"] = "dud"
     # Keep Python unbuffered so output ordering is sane in CI
     env["PYTHONUNBUFFERED"] = "1"
 
-    cmd = [sys.executable, str(MAIN_PY), "-pdb", TEST_PDB_ID, "-fast"]
+    cmd = [sys.executable, str(MAIN_PY), "-pdb", TEST_PDB_ID, "-fast", "--run-id", TEST_RUN_ID]
 
     start_time = time.time()
     proc = subprocess.run(

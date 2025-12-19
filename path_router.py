@@ -199,6 +199,7 @@ def _load_router_roots() -> RouterRoots:
         env_val = os.environ.get(key)
         if env_val:
             cfg[key] = env_val
+    run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
     cfg_env = os.environ.get("CONFIGS_DIR")
     if cfg_env:
         cfg["CONFIGS_DIR"] = cfg_env
@@ -212,6 +213,12 @@ def _load_router_roots() -> RouterRoots:
 
     dock_raw = expanded.get("DOCKED_DIR")
     docked = Path(dock_raw).expanduser() if dock_raw else overall / "docked"
+    if run_id:
+        try:
+            if docked.name != run_id:
+                docked = docked / run_id
+        except Exception:
+            docked = docked / run_id
 
     cfg_raw = expanded.get("CONFIGS_DIR")
     configs = Path(cfg_raw).expanduser() if cfg_raw else overall / "configs"
@@ -240,15 +247,14 @@ def _set_router_roots(overall: Path, processed: Path, docked: Path, configs: Opt
 
 def _ensure_router_roots() -> RouterRoots:
     global _ROUTER_ROOTS
-    # Always re-evaluate current environment + config so test-mode runs that
-    # temporarily override paths do not leak into subsequent calls.
-    try:
-        current = _load_router_roots()
-    except Exception:
-        current = _ROUTER_ROOTS
+    if _ROUTER_ROOTS is not None:
+        return _ROUTER_ROOTS
 
-    if _ROUTER_ROOTS is None or (_ROUTER_ROOTS != current and current is not None):
-        _ROUTER_ROOTS = current
+    try:
+        _ROUTER_ROOTS = _load_router_roots()
+    except Exception:
+        _ROUTER_ROOTS = None
+
     return _ROUTER_ROOTS
 
 
@@ -342,6 +348,11 @@ def docked_dir(
     ph_tag: Optional[str] = None,
     legacy: bool = False,
 ) -> Path:
+    """
+    Run-scoped docked path:
+      - with ATLAS_RUN_ID or run-scoped roots: DOCKED_DIR/<RUN_ID>/<PDB>/[variant]/[ph_tag]
+      - without run id: legacy DOCKED_DIR/<PDB>/[variant]/[ph_tag]
+    """
     roots = _ensure_router_roots()
     token = _norm_pdb_id(pdb_id)
     base = roots.docked / token
@@ -508,7 +519,7 @@ class Paths:
     over_root: Path             # OVERALL_DIR
     input_root: Path            # INPUT_DIR  (input_pdbs/)
     processed_root: Path        # OUTPUT_DIR (processed_pdbs/)
-    docked_root: Path           # DOCKED_DIR (docked/)
+    docked_root: Path           # DOCKED_DIR (docked/[RUN_ID]/)
     prepped_root: Path          # PREPPED_LIGANDS_DIR / OUTPUT_LIGANDS_DIR / PREPPED_LIGANDS_ROOT
     ligands_mol2_root: Path     # LIGANDS_MOL2_DIR
     configs_root: Path          # default OVERALL_DIR/configs (unless CONFIGS_DIR supplied)
@@ -623,7 +634,7 @@ class Paths:
     # ---------------------------
     def docked_pdb_root(self) -> Path:
         """
-        Dir: docked/<PDB>/
+        Dir: docked/<RUN_ID>/<PDB>/ (or docked/<PDB>/ if no run_id)
         Expected (top-level analysis):
           - docking_score_long.csv
           - docking_score_summary.csv
@@ -635,17 +646,17 @@ class Paths:
         return d
 
     def docking_score_long_csv(self) -> Path:
-        """File: docked/<PDB>/docking_score_long.csv"""
+        """File: docked/<RUN_ID>/<PDB>/docking_score_long.csv"""
         return self.docked_pdb_root() / "docking_score_long.csv"
 
     def docking_score_summary_csv(self) -> Path:
-        """File: docked/<PDB>/docking_score_summary.csv"""
+        """File: docked/<RUN_ID>/<PDB>/docking_score_summary.csv"""
         return self.docked_pdb_root() / "docking_score_summary.csv"
 
     def bench_pocket_dir(self, pocket_index: int) -> Path:
         """
-        Dir: docked/<PDB>/bench_pocketX_single/
-        Example: docked/1T46/bench_pocket1_single/
+        Dir: docked/<RUN_ID>/<PDB>/bench_pocketX_single/
+        Example: docked/<RUN_ID>/1T46/bench_pocket1_single/
         """
         d = self.docked_pdb_root() / f"bench_pocket{int(pocket_index)}_single"
         d.mkdir(parents=True, exist_ok=True)
@@ -654,10 +665,10 @@ class Paths:
     def docked_variant_root(self, variant: Optional[str], ph_label: Optional[str] = None) -> Path:
         """
         If variant in {APO,HOLO}:
-          Dir: docked/<PDB>/<VARIANT>/
+          Dir: docked/<RUN_ID>/<PDB>/<VARIANT>/
           Expected: stage1/, stage2/, stage3/ ... (poses, logs, scores)
         If variant is None (legacy):
-          Dir: docked/<PDB>/         (stages under top-level; back-compat)
+          Dir: docked/<RUN_ID>/<PDB>/         (stages under top-level; back-compat)
         """
         v = _norm_variant(variant)
         base = docked_dir(self.pdb_id, variant=variant, ph_tag=ph_label)
@@ -672,9 +683,9 @@ class Paths:
     ) -> Path:
         """
         If variant in {APO,HOLO}:
-          Dir: docked/<PDB>/<VARIANT>/<stage>/
+          Dir: docked/<RUN_ID>/<PDB>/<VARIANT>/<stage>/
         If variant is None:
-          Dir: docked/<PDB>/<stage>/
+          Dir: docked/<RUN_ID>/<PDB>/<stage>/
         Expected files: <ligand>_<stage>.pdbqt (poses), vina logs, per-stage CSVs
         """
         d = self.docked_variant_root(variant, ph_label) / stage
@@ -736,6 +747,11 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
     input_root = Path(cfg["INPUT_DIR"])
     processed_root = Path(cfg["OUTPUT_DIR"])      # processed_pdbs/
     docked_root = Path(cfg["DOCKED_DIR"])         # docked/
+    run_id = str(cfg.get("RUN_ID") or "").strip()
+    if run_id:
+        os.environ["ATLAS_RUN_ID"] = run_id
+        if docked_root.name != run_id:
+            docked_root = docked_root / run_id
 
     # Prepped ligands: pick the first present among synonymous keys
     prepped_root = Path(

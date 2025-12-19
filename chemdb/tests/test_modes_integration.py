@@ -20,9 +20,18 @@ if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
 
 MAIN_PY = REPO_ROOT / "main.py"
+RUN_ID = "test_run"
+
+# Ensure router helpers see a stable run id in this process.
+os.environ.setdefault("ATLAS_RUN_ID", RUN_ID)
 
 from apo_holo_mode import resolve_apo_holo_mode  # noqa: E402
-from docking_ligands import _coerce_test_map, _lib_roots_for_pdb, _resolve_test_mode  # noqa: E402
+from docking_ligands import (  # noqa: E402
+    _coerce_test_map,
+    _is_under_ph_subdir,
+    _lib_roots_for_pdb,
+    _resolve_test_mode,
+)
 from input_and_export_functions import load_inputs  # noqa: E402
 from path_router import docked_dir, load_ph_tags, make_paths  # noqa: E402
 from ph_ensemble_docking import enumerate_ligands_for_ph_context  # noqa: E402
@@ -37,6 +46,7 @@ def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[
         "CONFIGS_DIR": tmp_path / "configs",
         "P2RANK_OUTPUT_DIR": tmp_path / "p2rank_out",
         "LIGAND_EXTRACTED_DIR": tmp_path / "extracted_ligands",
+        "RUN_ID": RUN_ID,
         "CPU": "1",
         "MAX_PARALLEL_JOBS": "1",
         "FORCE_REPROCESS": "0",
@@ -51,6 +61,7 @@ def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[
         "USE_GNINA": "false",
     }
     env.update({k: str(v) for k, v in base.items()})
+    env["ATLAS_RUN_ID"] = RUN_ID
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items()})
 
@@ -123,6 +134,19 @@ def _ligands_from_csv(csv_path: Path, stage: str | None = None) -> set[str]:
     return ligands
 
 
+def _write_fake_pdbqt(path: Path) -> Path:
+    """Minimal PDBQT writer to satisfy filtering and planned-ligand checks."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["REMARK fake ligand for pH filter test"]
+    for i in range(1, 6):
+        lines.append(
+            f"ATOM  {i:5d}  C   LIG A   1       0.000   0.000   0.000  1.00  0.00           C"
+        )
+    lines.append("END")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def run_main_cli(
     tmp_path: Path,
     extra_args: Sequence[str] | None = None,
@@ -133,9 +157,19 @@ def run_main_cli(
     config_dir.mkdir(parents=True, exist_ok=True)
 
     # Force fast + test FDA runs to keep integration tests lightweight.
-    args = [sys.executable, str(MAIN_PY), "-test", "-fast", "-test-fda"]
+    args = [sys.executable, str(MAIN_PY), "-test", "-fast", "-test-fda", "--run-id", RUN_ID]
     if extra_args:
-        args.extend(extra_args)
+        cleaned: list[str] = []
+        skip = False
+        for tok in extra_args:
+            if skip:
+                skip = False
+                continue
+            if tok in {"--run-id", "-run-id"}:
+                skip = True
+                continue
+            cleaned.append(tok)
+        args.extend(cleaned)
     if "--configs-dir" not in args:
         args.extend(["--configs-dir", str(config_dir)])
 
@@ -354,6 +388,64 @@ def test_no_docking_mode_creates_planned_ligands_only(tmp_path: Path) -> None:
                 assert not any(stage_dir.glob("*_stage*.pdbqt")), (
                     f"Found docking outputs in no-docking mode under {stage_dir}"
                 )
+
+
+def test_main_fast_no_docking_excludes_ph_and_microstate_dirs(tmp_path: Path) -> None:
+    pdb_id = "1BCD"
+    env = _build_env(
+        tmp_path,
+        {
+            "OVERALL_DIR": tmp_path,
+            "INPUT_DIR": REPO_ROOT / "input_pdbs",
+            "OUTPUT_DIR": tmp_path / "processed_pdbs",
+            "PDBQT_DIR": tmp_path / "pdbqts",
+            "OUTPUT_LIGANDS_DIR": tmp_path / "prepped_ligands",
+            "ONLY_PDBS": pdb_id,
+            "PH_LIGAND_MODE": "off",
+        },
+    )
+
+    with patch.dict(os.environ, env, clear=False):
+        cfg_for_roots = load_inputs()
+    test_map = _coerce_test_map(cfg_for_roots.get("TEST_LIBRARY_MAP", {}))
+    mapped = test_map.get(pdb_id)
+    base_root = Path(cfg_for_roots["OUTPUT_LIGANDS_DIR"])
+    library_root = base_root / (mapped or cfg_for_roots.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
+    library_root.mkdir(parents=True, exist_ok=True)
+
+    lig_root = library_root
+    base_lig = _write_fake_pdbqt(lig_root / "base_a.pdbqt")
+    _write_fake_pdbqt(lig_root / "7.4" / "ph_dir_a.pdbqt")
+    _write_fake_pdbqt(lig_root / "microstates" / "micro_a.pdbqt")
+
+    cp = run_main_cli(
+        tmp_path,
+        extra_args=["-pdb", pdb_id, "--no-docking"],
+        env=env,
+    )
+    assert cp.returncode == 0
+
+    with patch.dict(os.environ, env, clear=False):
+        cfg = load_inputs()
+        mode, variants = resolve_apo_holo_mode(cfg)
+        legacy = mode == "legacy"
+        assert variants, "No variants resolved for PH-off filtering check"
+        variant_root = docked_dir(pdb_id, variant=variants[0], ph_tag=None, legacy=legacy)
+
+    planned_lists = list(variant_root.rglob("planned_ligands_*.txt"))
+    assert planned_lists, "No planned ligands written for PH-off filter check"
+
+    planned_paths: list[Path] = []
+    for txt in planned_lists:
+        planned_paths.extend(
+            [Path(ln.strip()) for ln in txt.read_text().splitlines() if ln.strip()]
+        )
+
+    assert base_lig.resolve() in {p.resolve() for p in planned_paths}
+    ph_roots = [lig_root]
+    is_micro = lambda p: any(part.lower() == "microstates" for part in p.parts)
+    assert not any(is_micro(p) for p in planned_paths)
+    assert not any(_is_under_ph_subdir(p, ph_roots) for p in planned_paths)
 
 
 TEST_MODES_AND_PREFIXES = [

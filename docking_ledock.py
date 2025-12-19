@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 import pandas as pd
 
@@ -375,6 +375,24 @@ def _resolve_stage_params(stage_name: str) -> Tuple[Optional[str], Optional[Dict
     return None, None
 
 
+def resolve_ledock_stage_params(
+    cfg: Mapping[str, Any],
+    stage_name: str,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Wrapper around _resolve_stage_params that also applies FAST_MODE overrides.
+    """
+    stage_key, params = _resolve_stage_params(stage_name)
+    if not params:
+        return stage_key, params
+    if cfg.get("FAST_MODE"):
+        fast_rmsd = float(cfg.get("LEDOCK_FAST_RMSD", 1.5))
+        fast_n_poses = int(cfg.get("LEDOCK_FAST_N_POSES", 1))
+        params["rmsd"] = fast_rmsd
+        params["n_poses"] = fast_n_poses
+    return stage_key, params
+
+
 def run_ledock_for_stage(
     cfg: Dict[str, Any],
     paths: Any,
@@ -393,7 +411,7 @@ def run_ledock_for_stage(
     scores: Dict[Path, float] = {}
     ledock_metrics: Dict[Path, Dict[str, Any]] = {}
 
-    stage_key, stage_params = _resolve_stage_params(stage_name)
+    stage_key, stage_params = resolve_ledock_stage_params(cfg, stage_name)
     if not stage_params:
         logger.warning("[ledock.skip] reason=unknown_stage stage=%s", stage_name)
         return scores, ledock_metrics

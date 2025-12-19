@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -83,6 +84,76 @@ def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None)
     except Exception:
         for p in root.rglob("*.pdbqt"):
             yield p
+
+
+def _parse_ph_dir_value(dir_name: str) -> Optional[float]:
+    """
+    Try to coerce a directory token into a plausible pH value.
+
+    Accepts:
+      - plain numerics: "7", "7.4", "6.0"
+      - prefixed numerics: "ph7", "ph7.4", "ph_6.0", "ph-6.0", "pH7.4"
+    Returns float if 0.0 <= value <= 14.0 else None.
+    """
+    token = str(dir_name).strip()
+    if not token:
+        return None
+
+    lowered = token.lower()
+    num_pattern = re.compile(r"[+-]?\d+(?:\.\d+)?$")
+
+    def _coerce(candidate: str) -> Optional[float]:
+        try:
+            val = float(candidate)
+        except Exception:
+            return None
+        return val if 0.0 <= val <= 14.0 else None
+
+    if lowered.startswith("ph"):
+        remainder = lowered[2:].lstrip("_- ")
+        if remainder and remainder[0] in "+-.0123456789":
+            for candidate in (remainder, remainder.replace("_", ".")):
+                if num_pattern.fullmatch(candidate):
+                    parsed = _coerce(candidate)
+                    if parsed is not None:
+                        return parsed
+            match = re.search(r"([+-]?\d+(?:\.\d+)?)", remainder)
+            if match:
+                parsed = _coerce(match.group(1))
+                if parsed is not None:
+                    return parsed
+
+    cleaned = lowered.strip("_- ")
+    cleaned_alt = cleaned.replace("_", ".")
+    for candidate in (cleaned, cleaned_alt):
+        if candidate and num_pattern.fullmatch(candidate):
+            parsed = _coerce(candidate)
+            if parsed is not None:
+                return parsed
+
+    return None
+
+
+def _is_ph_dir_name(dir_name: str) -> bool:
+    """True if the name looks like a pH bucket (0-14)."""
+    return _parse_ph_dir_value(dir_name) is not None
+
+
+def _is_under_ph_subdir(p: Path, roots: list[Path]) -> bool:
+    """
+    Returns True if `p` resides under <root>/<pH_dir>/... where <pH_dir> is
+    the first component beneath any allowed root and looks like a pH bucket.
+    """
+    for root in roots:
+        try:
+            rel = p.resolve().relative_to(Path(root).resolve())
+        except Exception:
+            continue
+        if not rel.parts:
+            continue
+        if _is_ph_dir_name(rel.parts[0]):
+            return True
+    return False
 
 
 def select_ligands_for_next(
@@ -703,17 +774,42 @@ def prepare_and_filter_ligands(
     ph_mode_raw = str(cfg.get("PH_LIGAND_MODE", "off")).strip().lower()
     ph_ligand_mode_on = ph_mode_raw not in ("", "off", "none", "false", "0")
     if not ph_ligand_mode_on:
-        before = len(filtered_noncontrols)
-        filtered_noncontrols = [
-            p for p in filtered_noncontrols
-            if "pH" not in p.stem
-            and not any(part.lower() == "microstates" for part in p.parts)
-        ]
-        removed = before - len(filtered_noncontrols)
-        if removed:
+        micro_removed: list[Path] = []
+        ph_dir_removed: list[Path] = []
+        stem_removed: list[Path] = []
+        filtered: list[Path] = []
+        for p in filtered_noncontrols:
+            is_microstates = any(part.lower() == "microstates" for part in p.parts)
+            is_ph_subdir = _is_under_ph_subdir(p, allowed_noncontrol_roots)
+            has_ph_stem = "pH" in p.stem
+
+            if is_microstates:
+                micro_removed.append(p)
+                continue
+            if is_ph_subdir:
+                ph_dir_removed.append(p)
+                continue
+            if has_ph_stem:
+                stem_removed.append(p)
+                continue
+            filtered.append(p)
+
+        filtered_noncontrols = filtered
+        logger.info(
+            "[ligands.ph-filter] mode=off microstates_removed=%d ph_subdir_removed=%d stem_removed=%d",
+            len(micro_removed),
+            len(ph_dir_removed),
+            len(stem_removed),
+        )
+        if micro_removed:
             logger.info(
-                "[ligands.ph-filter] PH_LIGAND_MODE=False -> removed %d ligands with 'pH' in stem or under microstates/ from non-control pool",
-                removed,
+                "[ligands.ph-filter.examples] category=microstates sample=%s",
+                [str(p) for p in micro_removed[:3]],
+            )
+        if ph_dir_removed:
+            logger.info(
+                "[ligands.ph-filter.examples] category=ph_subdir sample=%s",
+                [str(p) for p in ph_dir_removed[:3]],
             )
 
     # --- Optional: build library manifests from scan results ---

@@ -467,6 +467,21 @@ def should_run_gnina_for_target(td: Optional[TargetDifficulty], cfg: Mapping[str
     return diff in HARD_BUCKETS
 
 
+def _resolve_gnina_stage_params(
+    cfg: Mapping[str, Any],
+    stage: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """
+    Return GNINA-specific stage parameters derived from the base Vina stage.
+    """
+    stage_for_gnina = dict(stage)
+    stage_for_gnina["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
+    if cfg.get("FAST_MODE"):
+        stage_for_gnina["exhaustiveness"] = 1
+        stage_for_gnina["num_modes"] = 1
+    return stage_for_gnina
+
+
 def write_gnina_scores_csv(
     cfg: Dict,
     pdb_id: str,
@@ -617,12 +632,7 @@ def _run_gnina_for_ligand(
     cpu_threads = 10 if pdb_id.strip().upper() in test_pdbs else 1
 
     # Build GNINA-specific stage params without mutating the shared stage dict.
-    stage_for_gnina = dict(stage)
-    stage_for_gnina["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
-    if cfg.get("FAST_MODE"):
-        # FAST_MODE for GNINA forces both knobs to 1; Vina remains unchanged.
-        stage_for_gnina["exhaustiveness"] = 1
-        stage_for_gnina["num_modes"] = 1
+    stage_for_gnina = _resolve_gnina_stage_params(cfg, stage)
 
     base_stage_name = stage.get("name") or "stage"
     gnina_stage_name = f"gnina_{base_stage_name}"

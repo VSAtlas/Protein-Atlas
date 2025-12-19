@@ -49,6 +49,7 @@ ATOM      2  CA  ALA A   1      12.560  13.207   9.597  1.00 20.00           C
 TER
 END
 """
+TEST_RUN_ID = "test_run"
 
 
 def _load_cfg() -> dict[str, str]:
@@ -88,6 +89,7 @@ def _load_cfg() -> dict[str, str]:
     # Make sure path_router tests are independent of the APO_HOLO_MODE in
     # config.txt. These tests specifically validate apo_vs_holo behavior.
     cfg["APO_HOLO_MODE"] = "apo_vs_holo"
+    cfg["RUN_ID"] = TEST_RUN_ID
 
     return cfg
 
@@ -102,6 +104,16 @@ def _variant_segment(variant: str | None) -> list[str]:
 @pytest.fixture(scope="session")
 def cfg() -> dict[str, str]:
     return _load_cfg()
+
+
+@pytest.fixture(autouse=True)
+def _reset_router_roots(monkeypatch):
+    # Ensure each test re-evaluates roots (allows run-id tweaks).
+    import path_router as pr  # local import to avoid circulars
+    pr._ROUTER_ROOTS = None  # type: ignore[attr-defined]
+    monkeypatch.setenv("ATLAS_RUN_ID", TEST_RUN_ID)
+    yield
+    pr._ROUTER_ROOTS = None  # type: ignore[attr-defined]
 
 
 @pytest.fixture(scope="session")
@@ -130,7 +142,7 @@ def test_ensure_router_roots_matches_config(cfg: dict[str, str]) -> None:
 
     overall_expected = Path(cfg["OVERALL_DIR"]).resolve()
     processed_expected = Path(cfg["OUTPUT_DIR"]).resolve()
-    docked_expected = Path(cfg["DOCKED_DIR"]).resolve()
+    docked_expected = Path(cfg["DOCKED_DIR"]).resolve() / TEST_RUN_ID
     configs_expected = Path(
         cfg.get("CONFIGS_DIR", overall_expected / "configs")
     ).resolve()
@@ -204,7 +216,7 @@ def test_docked_dir_layout(cfg: dict[str, str], variant) -> None:
         legacy=False, ph_tag='pH7_0':
             DOCKED_DIR / PDB / [variant?] / 'pH7_0'
     """
-    docked_root = Path(cfg["DOCKED_DIR"])
+    docked_root = Path(cfg["DOCKED_DIR"]) / TEST_RUN_ID
     pdb_id = "TEST"
     v_seg = _variant_segment(variant)
 
@@ -217,6 +229,30 @@ def test_docked_dir_layout(cfg: dict[str, str], variant) -> None:
     ph_tag = "pH7_0"
     expected_ph = docked_root.joinpath(pdb_id, *v_seg, ph_tag)
     assert docked_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=False) == expected_ph
+
+
+def test_docked_dir_scopes_run_id_and_legacy(monkeypatch, cfg: dict[str, str]) -> None:
+    """
+    ATLAS_RUN_ID should inject a run-level subdir under docked/, while
+    clearing it should fall back to legacy docked/<PDB>.
+    """
+    import path_router as pr
+
+    # With run id
+    pr._ROUTER_ROOTS = None  # type: ignore[attr-defined]
+    monkeypatch.setenv("ATLAS_RUN_ID", TEST_RUN_ID)
+    roots = _ensure_router_roots()
+    base = Path(cfg["DOCKED_DIR"]).resolve() / TEST_RUN_ID
+    assert roots.docked == base
+    assert docked_dir("1ABC", legacy=False) == base / "1ABC"
+
+    # Without run id (fallback)
+    pr._ROUTER_ROOTS = None  # type: ignore[attr-defined]
+    monkeypatch.delenv("ATLAS_RUN_ID", raising=False)
+    roots = _ensure_router_roots()
+    legacy_base = Path(cfg["DOCKED_DIR"]).resolve()
+    assert roots.docked == legacy_base
+    assert docked_dir("1ABC", legacy=False) == legacy_base / "1ABC"
 
 
 # --- make_paths structure ----------------------------------------------------

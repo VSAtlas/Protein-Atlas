@@ -38,6 +38,7 @@ def test_prepare_and_filter_ligands_dud_fda_modes(tmp_path):
         "TEST_LIBRARY_MAP": {"TESTPDB": "dud_test"},
         "TEST_MODE_ENABLE": "off",
         "USE_GNINA": "false",
+        "RUN_ID": "test_run",
     }
 
     for key in ("INPUT_DIR", "OUTPUT_DIR", "DOCKED_DIR", "OUTPUT_LIGANDS_DIR"):
@@ -67,3 +68,41 @@ def test_prepare_and_filter_ligands_dud_fda_modes(tmp_path):
     assert libs_off == Counter({"fda_test": 1})
     assert libs_dud == Counter({"dud_test": 1})
     assert libs_both == Counter({"dud_test": 1, "fda_test": 1})
+
+
+def test_prepare_and_filter_ligands_filters_ph_dirs_when_off(tmp_path):
+    root = tmp_path / "ph_filter"
+    root.mkdir()
+
+    cfg = {
+        "OVERALL_DIR": str(root),
+        "INPUT_DIR": str(root / "input_pdbs"),
+        "OUTPUT_DIR": str(root / "processed_pdbs"),
+        "DOCKED_DIR": str(root / "docked"),
+        "OUTPUT_LIGANDS_DIR": str(root / "prepped_ligands"),
+        "LIBRARY_SUBDIR_DEFAULT": "ph_lib",
+        "TEST_MODE_ENABLE": "off",
+        "USE_GNINA": "false",
+        "RUN_ID": "test_run",
+    }
+
+    for key in ("INPUT_DIR", "OUTPUT_DIR", "DOCKED_DIR", "OUTPUT_LIGANDS_DIR"):
+        Path(cfg[key]).mkdir(parents=True, exist_ok=True)
+
+    lib_root = Path(cfg["OUTPUT_LIGANDS_DIR"]) / cfg["LIBRARY_SUBDIR_DEFAULT"]
+    base_lig = _make_fake_lig(lib_root, "base_a")
+    ph_lig = _make_fake_lig(lib_root / "7.4", "ph_dir_a")
+    micro_lig = _make_fake_lig(lib_root / "microstates", "micro_a")
+
+    paths = make_paths(cfg, base_id="TESTPDB", pdb_file="TESTPDB.pdb")
+
+    logger = logging.getLogger("ph_filter_test")
+    logger.setLevel(logging.INFO)
+
+    cfg["PH_LIGAND_MODE"] = "off"
+    ligs_off, _, _ = prepare_and_filter_ligands(cfg, paths, logger)
+    assert {Path(p) for p in ligs_off} == {base_lig}
+
+    cfg["PH_LIGAND_MODE"] = "context_window"
+    ligs_on, _, _ = prepare_and_filter_ligands(cfg, paths, logger)
+    assert {Path(p) for p in ligs_on} == {base_lig, ph_lig, micro_lig}

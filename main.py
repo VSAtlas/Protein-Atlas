@@ -935,6 +935,7 @@ def _smoke_emit_config_demo() -> None:
     """Emit a small config to exercise router paths in isolation."""
     smoke_log = logging.getLogger("smoke")
     old_variant = os.environ.get("APO_HOLO_VARIANT")
+    old_run_env = os.environ.get("ATLAS_RUN_ID")
     try:
         base_cfg = ConfigDict(load_inputs())
     except Exception as exc:
@@ -1003,6 +1004,10 @@ def _smoke_emit_config_demo() -> None:
     except Exception as exc:
         smoke_log.warning("[smoke.emit.skip] reason=%s", exc)
     finally:
+        if old_run_env is None:
+            os.environ.pop("ATLAS_RUN_ID", None)
+        else:
+            os.environ["ATLAS_RUN_ID"] = old_run_env
         if old_variant is None:
             os.environ.pop("APO_HOLO_VARIANT", None)
         else:
