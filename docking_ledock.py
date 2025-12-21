@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import math
@@ -8,14 +9,20 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import pandas as pd
 
 from dud_eval import compute_decoy_stats_from_long_csv, guess_ligfile_col, guess_score_col
 from input_and_export_functions import _to_bool, write_score_summary_to_csv
+from docking_utils import norm, run_completion_audit
 from path_router import make_paths, ph_ensemble_dir
-from prep_for_ledock import ensure_ledock_receptor, map_pdbqt_to_mol2_path, symlink_mol2_for_stage
+from prep_for_ledock import (
+    ensure_ledock_receptor,
+    ensure_mol2_for_ledock,
+    map_pdbqt_to_mol2_path,
+    symlink_mol2_for_stage,
+)
 
 LEDOCK_STAGE_PARAMS = {
     "stage1": {"rmsd": 1.5, "n_poses": 10},
@@ -259,6 +266,7 @@ def emit_ledock_config(
     rmsd: float,
     n_poses: int,
     logger: logging.Logger,
+    config_basename: str = "dock.in",
 ) -> Path:
     """Write a dock.in-style config file and return its path."""
     xmin = center[0] - box_size[0] / 2.0
@@ -268,7 +276,7 @@ def emit_ledock_config(
     zmin = center[2] - box_size[2] / 2.0
     zmax = center[2] + box_size[2] / 2.0
 
-    config_path = ligands_list_path.with_name("dock.in")
+    config_path = ligands_list_path.with_name(config_basename)
     lines = [
         "//",
         "Receptor",
@@ -406,22 +414,24 @@ def run_ledock_for_stage(
     box_size: Optional[Tuple[float, float, float]],
     logger: logging.Logger,
     receptor_pdb: Optional[Path] = None,
-) -> Tuple[Dict[Path, float], Dict[Path, Dict[str, Any]]]:
+    skip_completion: bool = False,
+) -> Tuple[Dict[Path, float], Dict[Path, Dict[str, Any]], Dict[str, Any]]:
     stage_info = stage_info or {}
     scores: Dict[Path, float] = {}
     ledock_metrics: Dict[Path, Dict[str, Any]] = {}
+    completion_report_ledock: Dict[str, Any] = {"success": False, "missing_ligands_after": []}
 
     stage_key, stage_params = resolve_ledock_stage_params(cfg, stage_name)
     if not stage_params:
         logger.warning("[ledock.skip] reason=unknown_stage stage=%s", stage_name)
-        return scores, ledock_metrics
+        return scores, ledock_metrics, completion_report_ledock
 
     if center is None or box_size is None:
         logger.info("[ledock.skip] reason=missing_center_or_box")
-        return scores, ledock_metrics
+        return scores, ledock_metrics, completion_report_ledock
 
     if not should_run_ledock_for_target(cfg):
-        return scores, ledock_metrics
+        return scores, ledock_metrics, completion_report_ledock
 
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     variant_token = (str(variant).strip().upper() or None) if variant is not None else None
@@ -442,17 +452,52 @@ def run_ledock_for_stage(
         )
     if receptor_path is None or not receptor_path.exists():
         logger.info("[ledock.skip] reason=missing_receptor")
-        return scores, ledock_metrics
+        return scores, ledock_metrics, completion_report_ledock
 
     ligand_paths = [Path(lig) for lig in ligands]
     if not ligand_paths:
         logger.info("[ledock.skip] reason=no_ligands")
-        return scores, ledock_metrics
+        if not skip_completion:
+            completion_report_ledock = run_completion_audit(
+                engine="ledock",
+                pdb_id=pdb_id,
+                stage_name=dok_dest.name,
+                ligands=[],
+                expected_output_path=lambda lig: stage_dir / f"{Path(lig).stem}.dok",
+                rerun_one=lambda lig: (True, "no_ligands", None),
+                stage_dir=stage_dir,
+                cfg=cfg,
+                logger=logger,
+                retries=0,
+                ph_label=ph_label,
+                variant=variant_for_ph,
+            )
+        return scores, ledock_metrics, completion_report_ledock
 
     ligand_pairs: list[Tuple[Path, Path]] = []
+    missing_mol2: List[Path] = []
     for lig_path in ligand_paths:
         mol2_path = map_pdbqt_to_mol2_path(lig_path, logger=logger)
         if mol2_path is None or not mol2_path.exists():
+            missing_mol2.append(lig_path)
+            continue
+        ligand_pairs.append((lig_path, mol2_path))
+
+    if missing_mol2:
+        try:
+            ensure_mol2_for_ledock(cfg, missing_mol2, logger)
+        except Exception as exc:
+            logger.warning("[ledock.mol2.retry.warn] n=%d reason=%s", len(missing_mol2), exc)
+
+        recovered: List[Path] = []
+        for lig_path in list(missing_mol2):
+            mol2_path = map_pdbqt_to_mol2_path(lig_path, logger=logger)
+            if mol2_path is not None and mol2_path.exists():
+                ligand_pairs.append((lig_path, mol2_path))
+                recovered.append(lig_path)
+
+        missing_mol2 = [p for p in missing_mol2 if p not in recovered]
+        for lig_path in missing_mol2:
             ledock_metrics[lig_path] = {
                 "best_score_kcal": None,
                 "n_poses": 0,
@@ -460,12 +505,25 @@ def run_ledock_for_stage(
                 "valid": False,
                 "reason": "ledock_missing_mol2",
             }
-            continue
-        ligand_pairs.append((lig_path, mol2_path))
 
     if not ligand_pairs:
         logger.info("[ledock.skip] reason=no_mol2_ligands")
-        return scores, ledock_metrics
+        if not skip_completion:
+            completion_report_ledock = run_completion_audit(
+                engine="ledock",
+                pdb_id=pdb_id,
+                stage_name=dok_dest.name,
+                ligands=ligand_paths,
+                expected_output_path=lambda lig: stage_dir / f"{Path(lig).stem}.dok",
+                rerun_one=lambda lig: (False, "ledock_missing_mol2", None),
+                stage_dir=stage_dir,
+                cfg=cfg,
+                logger=logger,
+                retries=1,
+                ph_label=ph_label,
+                variant=variant_for_ph,
+            )
+        return scores, ledock_metrics, completion_report_ledock
 
     stage_params["rmsd"] = float(stage_info.get("rmsd", stage_params["rmsd"]))
     stage_params["n_poses"] = int(stage_info.get("n_poses", stage_params["n_poses"]))
@@ -482,6 +540,18 @@ def run_ledock_for_stage(
             fast_rmsd,
             fast_n_poses,
         )
+
+    dock_root = paths.docked_variant_root(variant_for_ph, ph_token)
+    if stage_key == "stage1":
+        dok_dest = dock_root / "ledock_stage1"
+    elif stage_key == "stage2":
+        dok_dest = dock_root / "ledock_stage2"
+    elif stage_key == "stage3":
+        dok_dest = dock_root / "ledock_stage3"
+    else:
+        dok_dest = dock_root / f"ledock_{stage_name}"
+    stage_dir = dok_dest
+    stage_dir.mkdir(parents=True, exist_ok=True)
 
     ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
     ledock_root = ensemble_dir / "ledock"
@@ -502,55 +572,129 @@ def run_ledock_for_stage(
     if not alias_map:
         logger.info("[ledock.skip] reason=no_symlinked_ligands")
         return scores, ledock_metrics
+    alias_lookup = {norm(k): v for k, v in alias_map.items()}
 
-    ligands_list_path = stage_root / f"ligands_{stage_key}.list"
-    ligand_lines = [alias.name for alias in alias_map.values()]
-    _write_text_atomic(
-        ligands_list_path,
-        "\n".join(ligand_lines) + "\n",
-    )
+    ligand_items = list(alias_map.items())
+    n_lig = len(ligand_items)
 
-    config_path = emit_ledock_config(
-        receptor_pdb=receptor_path,
-        ligands_list_path=ligands_list_path,
-        center=center,
-        box_size=box_size,
-        rmsd=stage_params["rmsd"],
-        n_poses=stage_params["n_poses"],
-        logger=logger,
-    )
+    cpu = int(cfg.get("CPU", os.cpu_count() or 1))
+    max_jobs = int(cfg.get("MAX_PARALLEL_JOBS", cpu))
+    n_workers_cap = max(1, min(cpu, max_jobs, n_lig))
+
+    # LEDOCK_CHUNK_SIZE is a target number of batches; fall back to worker count when unset.
+    raw_chunks = int(cfg.get("LEDOCK_CHUNK_SIZE", 0) or 0)
+    if raw_chunks > 0:
+        target_batches = max(1, min(raw_chunks, n_lig))
+    else:
+        target_batches = max(1, min(n_workers_cap, n_lig))
+
+    chunk_size = max(1, math.ceil(n_lig / target_batches))
+
+    batches: list[list[tuple[Path, Path]]] = []
+    for i in range(0, n_lig, chunk_size):
+        batches.append(ligand_items[i : i + chunk_size])
+
+    n_batches = len(batches)
+    max_workers = min(n_workers_cap, n_batches)
 
     logger.info(
-        "[ledock.stage] pdb=%s stage=%s variant=%s ph=%s n_lig=%d",
+        "[ledock.stage] pdb=%s stage=%s variant=%s ph=%s n_lig=%d n_batches=%d max_workers=%d",
         pdb_id,
         stage_name,
         variant_for_ph or "HOLO",
         ph_token or "ph_ensemble",
-        len(alias_map),
+        n_lig,
+        n_batches,
+        max_workers,
     )
 
-    cmd = ["ledock", str(config_path)]
-    logger.info("[ledock.cmd] cmd=%s cwd=%s", " ".join(cmd), str(stage_root))
-    try:
-        subprocess.run(cmd, check=True, cwd=stage_root)
-    except Exception as exc:
-        logger.warning(
-            "[ledock.error] pdb=%s stage=%s reason=%s",
+    def _run_ledock_batch(batch_idx: int, batch_items: list[tuple[Path, Path]]) -> None:
+        batch_aliases = [alias for (_lig_path, alias) in batch_items]
+        if n_batches == 1:
+            ligands_list_path = stage_root / f"ligands_{stage_key}.list"
+        else:
+            ligands_list_path = stage_root / f"ligands_{stage_key}_b{batch_idx}.list"
+        ligand_lines = [alias.name for alias in batch_aliases]
+        _write_text_atomic(ligands_list_path, "\n".join(ligand_lines) + "\n")
+
+        if n_batches == 1:
+            cfg_basename = "dock.in"
+        else:
+            cfg_basename = f"dock_{stage_key}_b{batch_idx}.in"
+
+        config_path = emit_ledock_config(
+            receptor_pdb=receptor_path,
+            ligands_list_path=ligands_list_path,
+            center=center,
+            box_size=box_size,
+            rmsd=stage_params["rmsd"],
+            n_poses=stage_params["n_poses"],
+            logger=logger,
+            config_basename=cfg_basename,
+        )
+
+        cmd = ["ledock", str(config_path)]
+        logger.info(
+            "[ledock.cmd] pdb=%s stage=%s batch=%d n_lig=%d cmd=%s cwd=%s",
             pdb_id,
             stage_name,
-            exc,
+            batch_idx,
+            len(batch_items),
+            " ".join(cmd),
+            str(stage_root),
         )
-        for lig_path, _mol2_path in ligand_pairs:
-            if lig_path in ledock_metrics:
-                continue
-            ledock_metrics[lig_path] = {
-                "best_score_kcal": None,
-                "n_poses": 0,
-                "cluster_count": 0,
-                "valid": False,
-                "reason": "ledock_run_failed",
-            }
-        return scores, ledock_metrics
+        subprocess.run(cmd, check=True, cwd=stage_root)
+
+    if n_batches == 1:
+        try:
+            _run_ledock_batch(0, batches[0])
+        except Exception as exc:
+            logger.warning(
+                "[ledock.error] pdb=%s stage=%s batch=%d reason=%s",
+                pdb_id,
+                stage_name,
+                0,
+                exc,
+            )
+            for lig_path, _mol2_path in ligand_pairs:
+                if lig_path in ledock_metrics:
+                    continue
+                ledock_metrics[lig_path] = {
+                    "best_score_kcal": None,
+                    "n_poses": 0,
+                    "cluster_count": 0,
+                    "valid": False,
+                    "reason": "ledock_run_failed",
+                }
+            return scores, ledock_metrics, completion_report_ledock
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {}
+            for idx, batch_items in enumerate(batches):
+                futures[pool.submit(_run_ledock_batch, idx, batch_items)] = idx
+
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    logger.warning(
+                        "[ledock.error] pdb=%s stage=%s batch=%d reason=%s",
+                        pdb_id,
+                        stage_name,
+                        idx,
+                        exc,
+                    )
+                    for lig_path, _alias_path in batches[idx]:
+                        if lig_path in ledock_metrics:
+                            continue
+                        ledock_metrics[lig_path] = {
+                            "best_score_kcal": None,
+                            "n_poses": 0,
+                            "cluster_count": 0,
+                            "valid": False,
+                            "reason": "ledock_run_failed",
+                        }
 
     for lig_path, alias_path in alias_map.items():
         dok_path = stage_root / f"{alias_path.stem}.dok"
@@ -575,17 +719,10 @@ def run_ledock_for_stage(
                 str(dok_path),
             )
 
-    dock_root = paths.docked_variant_root(variant_for_ph, ph_token)
-    if stage_key == "stage1":
-        dok_dest = dock_root / "ledock_stage1"
-    elif stage_key == "stage2":
-        dok_dest = dock_root / "ledock_stage2"
-    elif stage_key == "stage3":
-        dok_dest = dock_root / "ledock_stage3"
-    else:
-        dok_dest = dock_root / f"ledock_{stage_name}"
-    dok_dest.mkdir(parents=True, exist_ok=True)
+    target_names = {f"{alias.stem}.dok" for alias in alias_map.values()}
     for stale in dok_dest.glob("*.dok"):
+        if stale.name not in target_names:
+            continue
         try:
             stale.unlink()
         except FileNotFoundError:
@@ -596,7 +733,7 @@ def run_ledock_for_stage(
         src = stage_root / f"{alias_path.stem}.dok"
         if not src.exists():
             continue
-        dest = dok_dest / src.name
+        dest = dok_dest / f"{alias_path.stem}.dok"
         try:
             if dest.exists() or dest.is_symlink():
                 dest.unlink()
@@ -613,7 +750,73 @@ def run_ledock_for_stage(
             str(dok_dest),
         )
 
-    return scores, ledock_metrics
+    # Completion audit: rerun missing ligands once and persist failure markers.
+    if not skip_completion:
+        stage_dir = dok_dest
+
+        def _expected_ledock_path(lig: str) -> Path:
+            alias = alias_lookup.get(norm(lig))
+            name = f"{alias.stem}.dok" if alias else f"{Path(lig).stem}.dok"
+            return stage_dir / name
+
+        def _rerun_ledock_missing(lig: str) -> tuple[bool, Optional[str], Optional[Path]]:
+            lig_path = Path(lig)
+            try:
+                sub_scores, sub_metrics, _ = run_ledock_for_stage(
+                    cfg=cfg,
+                    paths=paths,
+                    pdb_id=pdb_id,
+                    variant=variant,
+                    ph_label=ph_label,
+                    stage_name=stage_name,
+                    stage_info=stage_info,
+                    ligands=[lig_path],
+                    center=center,
+                    box_size=box_size,
+                    logger=logger,
+                    receptor_pdb=receptor_path,
+                    skip_completion=True,
+                )
+                if lig_path in sub_metrics:
+                    ledock_metrics[lig_path] = sub_metrics[lig_path]
+                if lig_path in sub_scores:
+                    scores[lig_path] = sub_scores[lig_path]
+            except Exception as exc:
+                return False, f"rerun_error:{exc}", None
+            out_path = _expected_ledock_path(lig)
+            if out_path.exists() and out_path.stat().st_size > 0:
+                return True, "rerun_ok", None
+            return False, "rerun_no_output", None
+
+        completion_report_ledock = run_completion_audit(
+            engine="ledock",
+            pdb_id=pdb_id,
+            stage_name=dok_dest.name,
+            ligands=ligand_paths,
+            expected_output_path=_expected_ledock_path,
+            rerun_one=_rerun_ledock_missing,
+            stage_dir=stage_dir,
+            cfg=cfg,
+            logger=logger,
+            retries=1,
+            ph_label=ph_label,
+            variant=variant_for_ph,
+        )
+        missing_after = completion_report_ledock.get("missing_ligands_after") or []
+        if missing_after:
+            for lig in missing_after:
+                lp = Path(lig)
+                if lp not in ledock_metrics:
+                    ledock_metrics[lp] = {
+                        "best_score_kcal": None,
+                        "n_poses": 0,
+                        "cluster_count": 0,
+                        "valid": False,
+                        "reason": "completion_missing",
+                    }
+                scores.setdefault(lp, ledock_metrics[lp].get("best_score_kcal"))
+
+    return scores, ledock_metrics, completion_report_ledock
 
 
 def write_ledock_scores_csv(

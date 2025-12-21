@@ -166,6 +166,8 @@ _ALLOWED_ENV_OVERRIDES = {
     "USE_GNINA",
     # LeDock follow-up toggle
     "USE_LEDOCK",
+    # DOCK6 follow-up toggle
+    "USE_DOCK6",
 
 }
 def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}"):
@@ -293,9 +295,14 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
             cfg[K] = v
 
     # type coercion (before expansion is fine)
-    for k in ["CPU_ONLY","FORCE_REPROCESS","ALLOW_BOX_EXPAND","QUIET_CONSOLE","USE_MEEKO"]:
+    for k in ["CPU_ONLY","FORCE_REPROCESS","ALLOW_BOX_EXPAND","QUIET_CONSOLE","USE_MEEKO","USE_DOCK6","use_dock6"]:
         if k in cfg:
             cfg[k] = _to_bool(cfg[k])
+
+    if ("USE_DOCK6" in cfg) or ("use_dock6" in cfg):
+        dock6_flag = _to_bool(cfg.get("USE_DOCK6", cfg.get("use_dock6")))
+        cfg["USE_DOCK6"] = dock6_flag
+        cfg["use_dock6"] = dock6_flag
 
     for k in ["MAX_PARALLEL_JOBS","CPU","MAX_RECENTER_ATTEMPTS","EARLY_RECENTER_MIN_EVAL","CTRL_REDOCK_EXHAUSTIVENESS","CTRL_REDOCK_NMODES"]:
         if k in cfg:

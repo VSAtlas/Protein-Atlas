@@ -29,7 +29,8 @@ def checkpoint_should_skip(cfg: Dict,
                            stage_name: str,
                            fingerprint: Dict[str, Any],
                            ph_label: Optional[str] = None,
-                           variant: Optional[str] = None) -> bool:
+                           variant: Optional[str] = None,
+                           engine: Optional[str] = None) -> bool:
     p = _checkpoint_path(cfg, pdb_id, stage_name, ph_label=ph_label, variant=variant)
     if not p.exists():
         return False
@@ -37,7 +38,26 @@ def checkpoint_should_skip(cfg: Dict,
         prev = json.loads(p.read_text())
     except Exception:
         return False
-    return prev == fingerprint
+    if prev != fingerprint:
+        return False
+
+    if engine:
+        legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
+        variant_token = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+        stage_dir = docked_dir(pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode) / stage_name
+        marker = stage_dir / f"completion_{engine}.json"
+        if not marker.exists():
+            return False
+        try:
+            payload = json.loads(marker.read_text())
+            if not payload or payload.get("success") is False:
+                return False
+            missing_after = payload.get("missing_count_after")
+            if isinstance(missing_after, int) and missing_after > 0:
+                return False
+        except Exception:
+            return False
+    return True
 
 
 def checkpoint_mark_done(cfg: Dict,

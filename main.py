@@ -210,7 +210,7 @@ Examples:
 
 """
 from activesite import extract_and_remove_ligands, get_atom_rules
-import sys, hashlib, re, logging, json, time, os, shutil, re, shlex
+import sys, hashlib, re, logging, json, time, os, shutil, re, shlex, subprocess
 from dataclasses import dataclass, field
 import datetime
 import yaml
@@ -297,7 +297,7 @@ def _resolve_run_id(argv: list[str]) -> str:
     env_run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
     if cli_run_id:
         return cli_run_id
-    if env_run_id:
+    if env_run_id and env_run_id.lower() not in {"smoke_demo", "main_smoke_demo"}:
         return env_run_id
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -1752,6 +1752,68 @@ def main() -> None:
 
     if plan_only:
         sys.exit(0)
+
+    try:
+        _maybe_run_dud_eval(cfg, run_id, pdb_files)
+    except Exception:
+        logging.warning("[dud-eval.invoke] action=skip reason=unexpected_exception", exc_info=True)
+
+
+def _maybe_run_dud_eval(cfg: Mapping[str, Any], run_id: str, pdb_files: list[str]) -> None:
+    """
+    Best-effort post-run DUD evaluator. Never raises.
+    """
+    logger = logging.getLogger("dud-eval")
+    if not run_id:
+        logger.info("[dud-eval.skip] reason=missing_run_id")
+        return
+
+    test_mode = str(cfg.get("TEST_MODE_ENABLE", "off")).lower()
+    if "dud" not in test_mode:
+        logger.info("[dud-eval.skip] reason=test_mode_off test_mode=%s", test_mode)
+        return
+    if cfg.get("NO_LIBRARY_DOCKING"):
+        logger.info("[dud-eval.skip] reason=no_library_docking")
+        return
+
+    repo_root = Path(__file__).resolve().parent
+    preferred = repo_root / "analysis" / "dud_eval.py"
+    fallback = repo_root / "dud_eval.py"
+    dud_eval_path = preferred if preferred.exists() else fallback
+    if not dud_eval_path.exists():
+        logger.warning("[dud-eval.skip] reason=script_missing path=%s", dud_eval_path)
+        return
+
+    cmd = [
+        sys.executable,
+        str(dud_eval_path),
+        "--run-id",
+        str(run_id),
+        "--docked-root",
+        "docked",
+        "--out-dir",
+        "analysis/dud_eval",
+    ]
+
+    if len(pdb_files) == 1:
+        pdb_id = _norm_pdb_id(pdb_files[0])
+        if pdb_id:
+            cmd.extend(["--pdb-id", pdb_id])
+            logger.info("[dud-eval.filter] pdb_id=%s", pdb_id)
+
+    logger.info("[dud-eval.run] cmd=%s", shlex.join(cmd))
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        logger.warning(
+            "[dud-eval.fail] run_id=%s returncode=%s", run_id, result.returncode
+        )
+    else:
+        logger.info(
+            "[dud-eval.done] run_id=%s returncode=%s out_root=%s",
+            run_id,
+            result.returncode,
+            "analysis/dud_eval",
+        )
 
 
 def _send_run_email(status: int, start_time: str, end_time: str) -> None:

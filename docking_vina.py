@@ -115,6 +115,12 @@ def emit_vina_config(
         else:
             print(msg)
 
+    exhaustiveness = int(stage_info.get("exhaustiveness", 8))
+    num_modes = int(stage_info.get("num_modes", 4))
+    if cfg.get("FAST_MODE"):
+        exhaustiveness = 1
+        num_modes = 1
+
     lines = [
         f"receptor = {receptor_for_config}",
         f"ligand   = {ligand_path}",
@@ -125,9 +131,9 @@ def emit_vina_config(
         f"size_y   = {box_size[1]:.3f}",
         f"size_z   = {box_size[2]:.3f}",
         f"cpu      = {int(cpu_per_job)}",
-        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
+        f"exhaustiveness = {exhaustiveness}",
         f"energy_range   = {int(stage_info.get('energy_range', 4))}",
-        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
+        f"num_modes      = {num_modes}",
         f"verbosity      = {int(stage_info.get('verbosity', 0))}",
         f"out = {out_path}",
     ]

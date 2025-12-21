@@ -24,6 +24,7 @@ from pose_validation import (
 )
 from fallback_recenter import BudgetGuard, validate_first_valid_pose
 from dataclasses import dataclass, field
+from docking_utils import run_completion_audit
 from path_router import (
     make_paths,
     config_dir as router_config_dir,
@@ -744,7 +745,7 @@ def run_gnina_for_stage(
     logger: logging.Logger,
     receptor_pdbqt: Optional[str] = None,
     control_lookup: Optional[Dict[str, Path]] = None,
-) -> tuple[Dict[str, Optional[float]], Dict[str, Dict[str, Optional[float]]]]:
+) -> tuple[Dict[str, Optional[float]], Dict[str, Dict[str, Optional[float]]], Dict[str, Any]]:
     """
     Run GNINA for the given stage and ligand list.
 
@@ -772,6 +773,7 @@ def run_gnina_for_stage(
 
     base_stage_name = stage_name
     gnina_stage_name = f"gnina_{base_stage_name}"
+    stage_dir = paths.docked_stage_dir(variant_token, gnina_stage_name, ph_label)
     logger.info(
         "[gnina.stage] pdb=%s stage=%s variant=%s ph=%s n_lig=%d",
         pdb_id,
@@ -1198,4 +1200,56 @@ def run_gnina_for_stage(
                 gnina_metrics[lig] = final_metrics
                 pbar.update(1)
 
-    return scores, gnina_metrics
+    # Completion audit: rerun missing GNINA outputs once before checkpointing.
+    stage_params_for_gnina = _resolve_gnina_stage_params(cfg, stage_info)
+
+    def _expected_gnina_path(lig: str) -> Path:
+        return stage_dir / f"{Path(lig).stem}_{gnina_stage_name}.pdbqt"
+
+    def _rerun_gnina_missing(lig: str) -> tuple[bool, Optional[str], Optional[Path]]:
+        try:
+            primary_r, metrics_r, _result_r, out_path = _dock_once(
+                lig,
+                dict(stage_params_for_gnina),
+                center,
+                box_size,
+                gnina_stage_name,
+            )
+            gnina_metrics[lig] = metrics_r
+            scores[lig] = metrics_r.get("gnina_primary_score")
+        except Exception as exc:
+            return False, f"rerun_error:{exc}", None
+        if out_path and Path(out_path).exists() and Path(out_path).stat().st_size > 0:
+            return True, "rerun_ok", None
+        return False, "rerun_no_output", None
+
+    completion_report_gnina = run_completion_audit(
+        engine="gnina",
+        pdb_id=pdb_id,
+        stage_name=gnina_stage_name,
+        ligands=ligands,
+        expected_output_path=_expected_gnina_path,
+        rerun_one=_rerun_gnina_missing,
+        stage_dir=stage_dir,
+        cfg=cfg,
+        logger=logger,
+        retries=1,
+        ph_label=ph_label,
+        variant=variant_token,
+    )
+    missing_after = completion_report_gnina.get("missing_ligands_after") or []
+    if missing_after:
+        for lig in missing_after:
+            if lig not in gnina_metrics:
+                gnina_metrics[lig] = {
+                    "minimized_affinity_kcal": None,
+                    "cnn_score": None,
+                    "cnn_affinity_pK": None,
+                    "gnina_primary_score": None,
+                    "valid": False,
+                    "reason": "completion_missing",
+                    "self_rmsd": None,
+                }
+            scores.setdefault(lig, gnina_metrics[lig].get("gnina_primary_score"))
+
+    return scores, gnina_metrics, completion_report_gnina

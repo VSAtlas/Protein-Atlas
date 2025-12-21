@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from docking_utils import (
     _write_audit_json,
     early_recenter_decision,
     final_pose_validation_and_screenshots,
+    run_completion_audit,
     norm,
 )
 from fallback_recenter import (
@@ -41,6 +43,7 @@ from ph_ensemble_docking import (
     init_ph_tags_and_manifest,
     prewarm_ph_ligand_microstates,
 )
+import prep_dock6
 from run_manifest import (
     update_manifest_for_docking_stage,
     update_manifest_for_protein_failure,
@@ -60,8 +63,13 @@ from docking_ledock import (
     write_ledock_scores_csv,
     annotate_ledock_fda_long_csv_with_t_scores_vs_decoys,
 )
+from docking_dock6 import (
+    run_dock6_for_stage,
+    should_run_dock6_for_target,
+    write_dock6_scores_csv,
+)
 from docking_consensus_score import compute_consensus_for_variant_ph
-from docking_vina import write_scores_csv
+from docking_vina import emit_vina_config, write_scores_csv
 from chemdb.target_difficulty import get_or_compute_target_difficulty
 from docking_ligands import (
     compute_stage_membership_from_scores,
@@ -71,6 +79,7 @@ from docking_ligands import (
     prepare_and_filter_ligands,
     select_ligands_for_next,
 )
+from run_vina import run_docking_task
 from single_ligand_index import (
     _ensure_single_ligand_index,
     _load_fda_name_map,
@@ -89,11 +98,14 @@ def _apply_force_carry_and_doping(
     stage1_original: List[str],
     forced_extracted_for_stage3: Optional[set] = None,
     invalids: Optional[Dict[str, Tuple[Optional[float], str]]] = None,
+    next_stage_is_stage3: bool = False,
+    control_norms: Optional[set[str]] = None,
 ) -> List[str]:
     """
     Mirror the existing Vina selection + doping flow:
       - percentile selection via select_ligands_for_next
       - optional force-carry of extracted controls into stage3
+        (filtered back out here; controls are injected at Stage3 run time)
       - optional rescue of self-RMSD near-miss ligands
     """
     use_stage1_base = (docking_mode == "polypharmacology" and stage_index == 1)
@@ -107,19 +119,37 @@ def _apply_force_carry_and_doping(
                 rescue.append((sc, lig))
         rescue = [lig for _, lig in sorted(rescue)[: int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]]
 
-    selected = select_ligands_for_next(
+    selected_raw = select_ligands_for_next(
         docking_mode,
         stage_index,
         stages_for_run,
         scores,
         logger,
         base_pool_n=(len(stage1_original) if use_stage1_base else None),
-        force_include=(forced_extracted_for_stage3 if use_stage1_base else None),
+        force_include=(forced_extracted_for_stage3 if next_stage_is_stage3 else None),
     )
+
+    def _filter_controls(seq: List[str]) -> List[str]:
+        if not control_norms:
+            return list(seq)
+        filt = []
+        for lig in seq:
+            if norm(lig) in control_norms:
+                continue
+            filt.append(lig)
+        return filt
+
+    selected = _filter_controls(selected_raw)
+    removed_selected = len(selected_raw) - len(selected)
+    if removed_selected and next_stage_is_stage3:
+        logger.info(
+            "[Force-carry] Dropped %d control ligand(s) from selection; controls are merged at Stage3 docking time.",
+            removed_selected,
+        )
 
     if rescue:
         sel_set = set(selected)
-        rescue_unique = [r for r in rescue if r not in sel_set]
+        rescue_unique = [r for r in _filter_controls(rescue) if r not in sel_set]
         ligands = rescue_unique + selected
     else:
         ligands = selected
@@ -131,6 +161,68 @@ def _use_ledock(cfg: Dict[str, Any]) -> bool:
         return should_run_ledock_for_target(cfg)
     except Exception:
         return False
+
+
+def _use_dock6(cfg: Dict[str, Any]) -> bool:
+    try:
+        return should_run_dock6_for_target(cfg)
+    except Exception:
+        return False
+
+
+def _is_stage3(stage_name: str) -> bool:
+    s = str(stage_name).lower()
+    return re.search(r"(?:^|_)stage3(?:$|_)", s) is not None
+
+
+def _split_controls_and_noncontrols(
+    ligands: List[str],
+    prepped_root: Optional[Path],
+    *,
+    allowed_subdirs: Optional[set[str]] = None,
+    control_stems: Optional[set[str]] = None,
+) -> tuple[list[str], list[str]]:
+    controls: list[str] = []
+    noncontrols: list[str] = []
+    allow = allowed_subdirs or {"controls", "reference"}
+    ctrl_stems_lower = {s.lower() for s in (control_stems or set())}
+
+    def _is_control_path(p: Path) -> bool:
+        if not prepped_root:
+            return False
+        try:
+            rel = p.resolve().relative_to(prepped_root.resolve())
+        except Exception:
+            return False
+        if not rel.parts:
+            return False
+        return rel.parts[0] in allow
+
+    def _is_control_stem(p: Path) -> bool:
+        stem = p.stem.split("_stage")[0].lower()
+        return stem in ctrl_stems_lower
+
+    for lig in ligands:
+        p = Path(lig)
+        if _is_control_path(p) or _is_control_stem(p):
+            controls.append(str(p))
+        else:
+            noncontrols.append(str(p))
+
+    return controls, noncontrols
+
+
+def _interleave_controls(noncontrols: List[str], controls: List[str]) -> List[str]:
+    merged: list[str] = []
+    i = 0
+    max_len = max(len(noncontrols), len(controls))
+    while i < max_len:
+        if i < len(noncontrols):
+            merged.append(noncontrols[i])
+        if i < len(controls):
+            merged.append(controls[i])
+        i += 1
+    return merged
 
 
 @dataclass
@@ -364,6 +456,24 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             run_mode=run_mode,
         )
 
+    def _norm_dedupe(seq):
+        seen = set()
+        out = []
+        for p in seq:
+            pn = norm(p)
+            if pn not in seen:
+                seen.add(pn)
+                out.append(pn)
+        return out
+
+    control_stems_lower_init = {s.lower() for s in control_stems}
+    control_pool_raw, noncontrol_pool_raw = _split_controls_and_noncontrols(
+        ligands,
+        paths.prepped_ligands_dir,
+        allowed_subdirs={"controls", "reference"},
+        control_stems=control_stems_lower_init,
+    )
+
     if not cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
         ctrl_stems_lower = {s.lower() for s in control_stems}
 
@@ -384,30 +494,26 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     if stem0 in ctrl_stems_lower:
                         prepped_control_pdbqts.append(p)
 
-        lig_set = {norm(x) for x in ligands}
+        lig_set = {norm(x) for x in control_pool_raw + noncontrol_pool_raw}
         missing_controls = [p for p in prepped_control_pdbqts if norm(p) not in lig_set]
 
         if missing_controls:
-            logger.info(f"[Controls] Adding {len(missing_controls)} prepared control(s) to Stage1.")
-            ligands = [str(p) for p in missing_controls] + ligands
+            logger.info(f"[Controls] Adding {len(missing_controls)} prepared control(s) to control pool for Stage3.")
+            control_pool_raw.extend(str(p) for p in missing_controls)
             for p in missing_controls:
                 try:
                     heavy_atom_counts.setdefault(str(p), _count_heavy_atoms_from_pdbqt(p))
                 except Exception:
                     heavy_atom_counts.setdefault(str(p), 0)
+                pains_flags.setdefault(str(p), False)
 
-    def _norm_dedupe(seq):
-        seen = set()
-        out = []
-        for p in seq:
-            pn = norm(p)
-            if pn not in seen:
-                seen.add(pn)
-                out.append(pn)
-        return out
+    control_pool = _norm_dedupe(control_pool_raw)
+    control_norms = {norm(p) for p in control_pool}
+    noncontrol_pool = [p for p in _norm_dedupe(noncontrol_pool_raw) if norm(p) not in control_norms]
 
-    ligands = _norm_dedupe(ligands)
+    ligands = noncontrol_pool[:]
 
+    base_controls = control_pool[:]
     base_ligands = ligands[:]
     base_heavy_atoms = dict(heavy_atom_counts)
     base_pains_flags = dict(pains_flags)
@@ -514,6 +620,23 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             )
             continue
 
+        try:
+            prep_dock6.ensure_dock6_site(
+                cfg=cfg,
+                pdb_id=paths.pdb_id,
+                variant=variant_token,
+                ph_label=ph_label,
+                logger=logger,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[dock6.surface.skip] pdb=%s variant=%s ph=%s reason=%s",
+                paths.pdb_id,
+                variant_label,
+                ph_print,
+                exc,
+            )
+
         _record_apo_holo_usage(cfg, paths.pdb_id, variant_token, ph_label, rec_path)
 
         if not rec_exists:
@@ -546,6 +669,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
         try:
 
             ligands = base_ligands[:]
+            controls_for_run = base_controls[:]
             heavy_atom_counts = dict(base_heavy_atoms)
             pains_flags = dict(base_pains_flags)
             center = tuple(base_center)
@@ -571,45 +695,39 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     )
                     for k in ligands
                 }
+                for c in controls_for_run:
+                    if c not in heavy_atom_counts and c in base_heavy_atoms:
+                        heavy_atom_counts[c] = base_heavy_atoms[c]
+                    pains_flags.setdefault(
+                        c,
+                        base_pains_flags.get(c, base_pains_flags.get(Path(c).stem, False)),
+                    )
             else:
                 ligands = base_ligands[:]
                 heavy_atom_counts = dict(base_heavy_atoms)
                 pains_flags = dict(base_pains_flags)
 
-            ctrl_stems_lower = {s.lower() for s in control_stems}
+            ctrl_stems_lower = control_stems_lower_init
             ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
             min_ha = int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10))
 
-            def _is_control_path(p: str) -> bool:
-                stem = Path(p).stem.split("_stage")[0]
+            def _eligible_control_path(p: str) -> bool:
+                stem = Path(p).stem.split("_stage")[0].lower()
                 if stem.upper() in ctrl_blacklist:
                     return False
-                if stem.lower() not in ctrl_stems_lower:
+                if stem not in ctrl_stems_lower:
                     return False
                 ha = heavy_atom_counts.get(p)
                 return (ha is None) or (ha >= min_ha)
 
-            ctrls = [p for p in ligands if _is_control_path(p)]
-            non_ctrls = [p for p in ligands if not _is_control_path(p)]
-            if ctrls:
-                ligands = ctrls + non_ctrls
+            controls_for_run = [c for c in controls_for_run if _eligible_control_path(c)]
+            control_norms_for_run = {norm(c) for c in controls_for_run}
+
+            if not ligands and controls_for_run:
                 logger.info(
-                    f"[Controls] Front-loading {len(ctrls)} controls. "
-                    f"First wave: {[Path(x).name for x in ligands[:int(cfg.get('MAX_PARALLEL_JOBS', 1))]]}"
+                    "[Controls] No non-control ligands selected; controls will run in Stage3 only."
                 )
-
-            present_ctrls = [
-                Path(l).stem.split("_stage")[0].lower()
-                for l in ligands
-                if Path(l).stem.split("_stage")[0].lower() in ctrl_stems_lower
-            ]
-
-            if not present_ctrls:
-                logger.warning(
-                    "[Controls] No control ligands present in Stage1 ligand list -- "
-                    "self-RMSD/locking will not be possible. (Check prep errors above.)"
-                )
-            if not ligands:
+            if not ligands and not controls_for_run:
                 logger.warning("No valid ligands after filtering; skipping protein.")
                 continue
 
@@ -618,7 +736,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 max_global_switches=int(cfg.get("MAX_GLOBAL_CENTER_SWITCHES", 2))
             )
 
-            stage1_original = ligands[:]
+            stage1_original = [l for l in ligands if norm(l) not in control_norms_for_run]
 
             # --- NO_LIBRARY_DOCKING: only plan ligands, do not dock -----------
             if bool(cfg.get("NO_LIBRARY_DOCKING", False)):
@@ -668,19 +786,19 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 # Skip all docking stages for this PH context.
                 continue
 
-            control_stems_lower = {s.lower() for s in control_stems}
-            forced_extracted_for_stage3 = {
-                lig for lig in stage1_original
-                if Path(lig).stem.split("_stage")[0].lower() in control_stems_lower
-            }
+            forced_extracted_for_stage3 = set(controls_for_run)
             logger.info(
-                f"[Force-carry] Extracted ligands earmarked for Stage3: {len(forced_extracted_for_stage3)}"
+                "[Force-carry] Stage3 control pool size=%d noncontrols_stage1=%d",
+                len(forced_extracted_for_stage3),
+                len(stage1_original),
             )
 
             score_history: Dict[str, Dict[str, Dict]] = defaultdict(dict)
             score_history_gnina: Dict[str, Dict[str, Dict]] = defaultdict(dict)
-            gnina_metrics_by_stage: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+            gnina_metrics_by_stage_best: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+            gnina_metrics_by_stage_full: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
             ledock_metrics_by_stage: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+            dock6_metrics_by_stage: Dict[str, Dict[Path, Dict[str, Any]]] = defaultdict(dict)
             gnina_records: List[Dict[str, Any]] = []
             validated_ligands_last: List[str] = []
             recenter_attempts = 0
@@ -689,12 +807,27 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             retry_mgr = RetryManager()
             gnina_jobs: List[Dict[str, Any]] = []
             ledock_jobs: List[Dict[str, Any]] = []
+            dock6_jobs: List[Dict[str, Any]] = []
             ledock_enabled = _use_ledock(cfg)
+            dock6_enabled = _use_dock6(cfg)
 
             i = 0
             while i < len(stages_for_run):
                 guard.reset_stage()
                 stage = stages_for_run[i]
+                stage_is_stage3 = _is_stage3(stage["name"])
+                stage_controls = sorted(controls_for_run, key=lambda p: Path(p).name) if stage_is_stage3 else []
+                stage_noncontrols = [
+                    l
+                    for l in ligands
+                    if norm(l) not in control_norms_for_run
+                    and Path(l).stem.split("_stage")[0].lower() not in ctrl_stems_lower
+                ]
+                stage_ligands = (
+                    _interleave_controls(stage_noncontrols, stage_controls)
+                    if stage_is_stage3
+                    else stage_noncontrols
+                )
 
                 if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                     fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
@@ -705,18 +838,29 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         fp,
                         ph_label=ph_label,
                         variant=variant_env or None,
+                        engine="vina",
                     ):
                         logger.info(f"[Checkpoint] Skipping {stage['name']} (fingerprint matched).")
                         i += 1
                         continue
 
-                if not ligands:
-                    logger.warning(f"No ligands to dock at {stage['name']}; stopping for this protein.")
-                    break
+                if not stage_ligands:
+                    logger.warning(f"No ligands to dock at {stage['name']}; skipping this stage.")
+                    i += 1
+                    continue
 
-                logger.info(f"Starting {stage['name']} with {len(ligands)} ligands...")
+                stage_ligands_for_audit = [norm(l) for l in stage_ligands]
+                stage_dir = paths.docked_stage_dir(variant_env or None, stage["name"], ph_label)
+
+                logger.info(
+                    "[ligand.stage] stage=%s ph=%s controls=%d noncontrols=%d docking_ligands=%d",
+                    stage["name"],
+                    ph_label if ph_label else "base",
+                    len(stage_controls),
+                    len(stage_noncontrols),
+                    len(stage_ligands),
+                )
                 if ph_label:
-                    stage_dir = paths.docked_stage_dir(variant_env or None, stage["name"], ph_label)
                     ph_log.info(
                         "[ph_ensemble.dock.stage] pdb_id=%s variant=%s ph=%s stage=%s receptor=%s out=%s",
                         paths.pdb_id,
@@ -727,76 +871,26 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         str(stage_dir),
                     )
 
-                if i == 0 and ctrls and non_ctrls:
-                    logger.info(
-                        f"Stage1 two-wave: {len(ctrls)} controls first, then {len(non_ctrls)} others."
-                    )
-
-                    s1, v1, d1, rd1, inv1 = run_one_stage(
-                        cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                        ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
-                    )
-
-                    try:
-                        dec = selector.consider_switch(stage['name'], s1, v1, rd1, receptor_pdbqt, center, guard)
-                        if dec.promoted and dec.new_center is not None:
-                            old = center
-                            center = dec.new_center
-                            guard.mark_switch()
-                            logger.info(
-                                f"[CENTER] Switched before library run: {old} -> {center} ({dec.reason}) [global switch]"
-                            )
-                    except Exception as e:
-                        logger.warning(f"CenterSelector (controls-only) failed gracefully: {e}")
-
-                    lock_score_max = float(cfg.get("CONTROL_LOCK_SCORE_MAX", -6.0))
-                    lock_min_hits = int(cfg.get("CONTROL_LOCK_MIN_HITS", 1))
-                    lock_center_max = float(cfg.get("CONTROL_LOCK_CENTER_MAX_DIST", 4.0))
-                    qualified_controls = []
-
-                    for lig in v1:
-                        stem = Path(lig).stem.split("_stage")[0].lower()
-                        ha = heavy_atom_counts.get(lig)
-                        if stem in control_stems_lower and (ha is None or ha >= min_ha):
-                            sc = s1.get(lig)
-                            if sc is not None and np.isfinite(sc) and sc <= lock_score_max:
-                                pose_path = rd1.get(lig)
-                                c = CenterSelector._pdbqt_centroid(pose_path) if pose_path else None
-                                if c is not None and np.linalg.norm(c - np.array(center, float)) <= lock_center_max:
-                                    qualified_controls.append(lig)
-
-                    if len(qualified_controls) >= lock_min_hits and not guard.locked:
-                        guard.lock()
-                        logger.info(
-                            "[CONTROL-LOCK] Early lock from controls-only wave "
-                            f"(n={len(qualified_controls)}, score<={lock_score_max}, dist<={lock_center_max} A); "
-                            "future center switches disabled."
-                        )
-
-                    s2, v2, d2, rd2, inv2 = run_one_stage(
-                        cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                        non_ctrls, logger, retry_mgr, control_lookup, ph_label=ph_label
-                    )
-
-                    scores, validated, distances = ({**s1, **s2}, v1 + v2, d1 + d2)
-                    raw_docked = {**rd1, **rd2}
-                    invalids = {**inv1, **inv2}
-                else:
-                    scores, validated, distances, raw_docked, invalids = run_one_stage(
-                        cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-                        ligands, logger, retry_mgr, control_lookup, ph_label=ph_label
-                    )
+                scores, validated, distances, raw_docked, invalids = run_one_stage(
+                    cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
+                    stage_ligands, logger, retry_mgr, control_lookup, ph_label=ph_label
+                )
 
                 validated_ligands_last = validated
 
+                ctrl_blacklist_set = ctrl_blacklist
+
                 def _is_control(lig: str) -> bool:
+                    lig_norm = norm(lig)
                     stem = Path(lig).stem.split("_stage")[0].lower()
-                    if stem.upper() in {s.strip().upper() for s in cfg.get("CONTROL_BLACKLIST", "").split(",") if s.strip()}:
+                    if stem.upper() in ctrl_blacklist_set:
+                        return False
+                    if lig_norm not in control_norms_for_run and stem not in ctrl_stems_lower:
                         return False
                     ha = heavy_atom_counts.get(lig)
-                    if ha is not None and ha < int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10)):
+                    if ha is not None and ha < min_ha:
                         return False
-                    return stem in {s.lower() for s in control_stems}
+                    return True
 
                 control_anchor_hit = any(_is_control(lig) for lig in validated)
 
@@ -831,7 +925,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     )
 
                 try:
-                    processed = {norm(x) for x in ligands}
+                    processed = {norm(x) for x in stage_ligands}
                     valid_set = {norm(x) for x in scores.keys()}
                     invalid_set = {norm(x) for x in invalids.keys()}
                     both = valid_set & invalid_set
@@ -850,6 +944,8 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 "Ligands missing from results: "
                                 + ", ".join(os.path.basename(x) for x in list(missing)[:10])
                             )
+                            for lig_m in missing:
+                                invalids[lig_m] = (None, "not_processed")
                 except Exception as _e:
                     logger.warning(f"Invariant check failed: {_e}")
 
@@ -959,16 +1055,25 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         else:
                             break
 
+                    next_stage_is_stage3 = _is_stage3(stages_for_run[i + 1]["name"])
+                    scores_for_selection = {
+                        lig: sc for lig, sc in scores.items() if norm(lig) not in control_norms_for_run
+                    }
+                    invalids_for_selection = {
+                        lig: val for lig, val in invalids.items() if norm(lig) not in control_norms_for_run
+                    }
                     ligands = _apply_force_carry_and_doping(
                         cfg,
                         docking_mode,
                         i,
                         stages_for_run,
-                        scores,
+                        scores_for_selection,
                         logger,
                         stage1_original=stage1_original,
                         forced_extracted_for_stage3=forced_extracted_for_stage3,
-                        invalids=invalids,
+                        invalids=invalids_for_selection,
+                        next_stage_is_stage3=next_stage_is_stage3,
+                        control_norms=control_norms_for_run,
                     )
                     if not ligands:
                         logger.warning(
@@ -1023,18 +1128,110 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 "box_size": tuple(box_size) if box_size is not None else None,
                             }
                         )
+                    if dock6_enabled:
+                        dock6_jobs.append(
+                            {
+                                "stage_name": stage["name"],
+                                "stage_info": dict(stage),
+                                "ligands": list(validated),
+                                "center": tuple(center) if center is not None else None,
+                                "box_size": tuple(box_size) if box_size is not None else None,
+                                "variant": variant_env or None,
+                                "ph_label": ph_label,
+                            }
+                        )
+
+                # Stage-level completion audit ensures every ligand has an output
+                # artifact (pose or failure marker) before marking the checkpoint.
+                threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
+
+                def _expected_vina_path(lig: str) -> Path:
+                    return stage_dir / f"{Path(lig).stem}_{stage['name']}.pdbqt"
+
+                def _rerun_vina_missing(lig: str) -> tuple[bool, Optional[str], Optional[Path]]:
+                    stage_for_cfg = dict(stage)
+                    stage_for_cfg["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
+                    if cfg.get("FAST_MODE"):
+                        stage_for_cfg["exhaustiveness"] = 1
+                    conf_path, out_path = emit_vina_config(
+                        cfg,
+                        paths.pdb_id,
+                        receptor_pdbqt,
+                        center,
+                        box_size,
+                        lig,
+                        stage["name"],
+                        stage_for_cfg,
+                        threads_per_vina,
+                        logger,
+                        variant=variant_env or None,
+                        ph_token=ph_label,
+                        legacy=legacy_mode,
+                    )
+                    try:
+                        Path(conf_path).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
+                    except Exception:
+                        return False, "rerun_config_outside_run_dir", None
+                    try:
+                        run_docking_task(
+                            cfg["VINA_EXE"],
+                            conf_path,
+                            lig,
+                            out_path,
+                            write_failure_marker_flag=True,
+                        )
+                    except Exception as exc:
+                        return False, f"rerun_error:{exc}", None
+                    if Path(out_path).exists() and Path(out_path).stat().st_size > 0:
+                        return True, "rerun_ok", None
+                    return False, "rerun_no_output", None
+
+                completion_report_vina = run_completion_audit(
+                    engine="vina",
+                    pdb_id=paths.pdb_id,
+                    stage_name=stage["name"],
+                    ligands=stage_ligands_for_audit,
+                    expected_output_path=_expected_vina_path,
+                    rerun_one=_rerun_vina_missing,
+                    stage_dir=stage_dir,
+                    cfg=cfg,
+                    logger=logger,
+                    retries=1,
+                    ph_label=ph_label,
+                    variant=variant_env or None,
+                )
+                missing_after_vina = completion_report_vina.get("missing_ligands_after") or []
+                if missing_after_vina:
+                    for lig_miss in missing_after_vina:
+                        if lig_miss not in score_history.get(stage["name"], {}):
+                            record_score(
+                                score_history,
+                                stage["name"],
+                                lig_miss,
+                                None,
+                                False,
+                                reason="completion_missing",
+                            )
+                            record_le(score_history, stage["name"], lig_miss, None, heavy_atom_counts)
 
                 if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                     try:
                         fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, stage)
-                        checkpoint_mark_done(
-                            cfg,
-                            paths.pdb_id,
-                            stage["name"],
-                            fp,
-                            ph_label=ph_label,
-                            variant=variant_env or None,
-                        )
+                        if completion_report_vina.get("success", False):
+                            checkpoint_mark_done(
+                                cfg,
+                                paths.pdb_id,
+                                stage["name"],
+                                fp,
+                                ph_label=ph_label,
+                                variant=variant_env or None,
+                            )
+                        else:
+                            logger.warning(
+                                "[Checkpoint] defer mark stage=%s pdb=%s reason=completion_missing",
+                                stage["name"],
+                                paths.pdb_id,
+                            )
                     except Exception:
                         pass
 
@@ -1061,6 +1258,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 gnina_fp,
                                 ph_label=ph_label,
                                 variant=variant_env or None,
+                                engine="gnina",
                             ):
                                 logger.info(f"[Checkpoint] Skipping {gnina_stage_name} (fingerprint matched).")
                                 if manifest_run_id:
@@ -1110,7 +1308,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                             )
 
                     try:
-                        scores_gnina, gnina_metrics = run_gnina_for_stage(
+                        scores_gnina, gnina_metrics, gnina_completion = run_gnina_for_stage(
                             cfg=cfg,
                             paths=paths,
                             pdb_id=paths.pdb_id,
@@ -1149,14 +1347,21 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 )
                         if bool(cfg.get("CHECKPOINT_ENABLE", True)) and gnina_fp is not None:
                             try:
-                                checkpoint_mark_done(
-                                    cfg,
-                                    paths.pdb_id,
-                                    gnina_stage_name,
-                                    gnina_fp,
-                                    ph_label=ph_label,
-                                    variant=variant_env or None,
-                                )
+                                if gnina_completion.get("success", False):
+                                    checkpoint_mark_done(
+                                        cfg,
+                                        paths.pdb_id,
+                                        gnina_stage_name,
+                                        gnina_fp,
+                                        ph_label=ph_label,
+                                        variant=variant_env or None,
+                                    )
+                                else:
+                                    logger.warning(
+                                        "[Checkpoint] defer mark gnina_stage=%s pdb=%s reason=completion_missing",
+                                        gnina_stage_name,
+                                        paths.pdb_id,
+                                    )
                             except Exception:
                                 pass
                     except Exception as e:
@@ -1183,6 +1388,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                     exc_info=True,
                                 )
                         raise
+                    gnina_stage_key = f"gnina_{job['stage_name']}"
                     for lig, sc in scores_gnina.items():
                         metrics_entry = gnina_metrics.get(
                             lig,
@@ -1208,9 +1414,22 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         le_val = compute_ligand_efficiency(primary_score, ha_val)
                         pains_val = pains_flags.get(lig, pains_flags.get(Path(lig).stem, False))
 
+                        gnina_metrics_by_stage_full[gnina_stage_key][lig] = {
+                            "minimized_affinity_kcal": minimized_affinity,
+                            "cnn_score": cnn_score,
+                            "cnn_affinity_pK": cnn_affinity,
+                            "gnina_primary_score": primary_score,
+                            "valid": bool(valid_flag),
+                            "reason": reason_str,
+                            "heavy_atoms": int(ha_val) if isinstance(ha_val, (int, float)) else None,
+                            "le": le_val,
+                            "self_rmsd": self_rmsd_val,
+                            "pains_flag": bool(pains_val) if pains_val is not None else False,
+                        }
+
                         gnina_records.append(
                             {
-                                "stage_name": f"gnina_{job['stage_name']}",
+                                "stage_name": gnina_stage_key,
                                 "ligand": lig,
                                 "primary_score": primary_score,
                                 "minimized_affinity_kcal": minimized_affinity,
@@ -1295,7 +1514,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     )
                     record_le(score_history_gnina, gnina_stage_name, lig, rec["primary_score"], heavy_atom_counts)
 
-                    gnina_metrics_by_stage[gnina_stage_name][lig] = {
+                    gnina_metrics_by_stage_best[gnina_stage_name][lig] = {
                         "minimized_affinity_kcal": rec["minimized_affinity_kcal"],
                         "cnn_score": rec["cnn_score"],
                         "cnn_affinity_pK": rec["cnn_affinity_pK"],
@@ -1308,14 +1527,141 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         "pains_flag": rec["pains_flag"],
                     }
 
-            if gnina_metrics_by_stage:
+            if gnina_metrics_by_stage_full:
                 write_gnina_scores_csv(
                     cfg,
                     paths.pdb_id,
-                    gnina_metrics_by_stage,
+                    gnina_metrics_by_stage_full,
                     ph_label=ph_label,
                     variant=variant_env or None,
                     csv_prefix=csv_prefix,
+                )
+
+            if dock6_jobs:
+                logger.info(
+                    "[dock6.scheduler] pdb=%s variant=%s ph=%s jobs=%d",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
+                    len(dock6_jobs),
+                )
+                for job in dock6_jobs:
+                    stage_name = job["stage_name"]
+                    stage_info = job["stage_info"]
+                    ligands = [Path(l) for l in job.get("ligands", [])]
+                    dock6_stage_name = f"dock6_{stage_name}"
+                    dock6_start_ts = time.time()
+                    if manifest_run_id:
+                        try:
+                            update_manifest_for_docking_stage(
+                                cfg,
+                                manifest_run_id,
+                                paths.pdb_id,
+                                variant_label,
+                                dock6_stage_name,
+                                status="running",
+                                elapsed_sec=None,
+                                ph_tag=ph_label,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "[run-manifest.docking-stage] failed to record DOCK6 start pdb=%s variant=%s ph=%s stage=%s",
+                                paths.pdb_id,
+                                variant_label,
+                                ph_label if ph_label is not None else "base",
+                                dock6_stage_name,
+                                exc_info=True,
+                            )
+
+                    try:
+                        dock6_scores, dock6_metrics = run_dock6_for_stage(
+                            cfg=cfg,
+                            paths=paths,
+                            pdb_id=paths.pdb_id,
+                            variant=variant_env or None,
+                            ph_label=ph_label,
+                            stage_name=stage_name,
+                            stage_info=stage_info,
+                            ligands=ligands,
+                            center=job.get("center"),
+                            box_size=job.get("box_size"),
+                            logger=logger,
+                        )
+                        dock6_metrics_by_stage[stage_name] = dock6_metrics
+                        valid_count = sum(1 for rec in dock6_metrics.values() if rec.get("valid"))
+                        invalid_count = max(len(dock6_metrics) - valid_count, 0)
+                        dock6_elapsed = time.time() - dock6_start_ts
+                        if manifest_run_id:
+                            try:
+                                update_manifest_for_docking_stage(
+                                    cfg,
+                                    manifest_run_id,
+                                    paths.pdb_id,
+                                    variant_label,
+                                    dock6_stage_name,
+                                    status="completed",
+                                    elapsed_sec=dock6_elapsed,
+                                    ph_tag=ph_label,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "[run-manifest.docking-stage] failed to record DOCK6 completion pdb=%s variant=%s ph=%s stage=%s",
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ph_label if ph_label is not None else "base",
+                                    dock6_stage_name,
+                                    exc_info=True,
+                                )
+                        logger.info(
+                            "[dock6.done] pdb=%s stage=%s variant=%s ph=%s valid=%d invalid=%d elapsed_sec=%.2f",
+                            paths.pdb_id,
+                            stage_name,
+                            variant_label,
+                            ph_label if ph_label else "base",
+                            valid_count,
+                            invalid_count,
+                            dock6_elapsed,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[dock6.error] pdb=%s stage=%s variant=%s ph=%s reason=%s",
+                            paths.pdb_id,
+                            stage_name,
+                            variant_label,
+                            ph_label if ph_label else "base",
+                            e,
+                            exc_info=True,
+                        )
+                        dock6_metrics_by_stage[stage_name] = {}
+                        if manifest_run_id:
+                            try:
+                                update_manifest_for_docking_stage(
+                                    cfg,
+                                    manifest_run_id,
+                                    paths.pdb_id,
+                                    variant_label,
+                                    dock6_stage_name,
+                                    status="failed",
+                                    ph_tag=ph_label,
+                                    error=str(e),
+                                    elapsed_sec=time.time() - dock6_start_ts,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "[run-manifest.docking-stage] failed to record DOCK6 failure pdb=%s variant=%s ph=%s stage=%s",
+                                    paths.pdb_id,
+                                    variant_label,
+                                    ph_label if ph_label is not None else "base",
+                                    dock6_stage_name,
+                                    exc_info=True,
+                                )
+
+            elif dock6_enabled:
+                logger.info(
+                    "[dock6.scheduler] pdb=%s variant=%s ph=%s action=skip reason=no_jobs",
+                    paths.pdb_id,
+                    variant_label,
+                    ph_label if ph_label else "base",
                 )
 
             if ledock_jobs:
@@ -1341,6 +1687,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 ledock_fp,
                                 ph_label=ph_label,
                                 variant=variant_env or None,
+                                engine="ledock",
                             ):
                                 logger.info(f"[Checkpoint] Skipping {ledock_stage_name} (fingerprint matched).")
                                 if manifest_run_id:
@@ -1391,7 +1738,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 exc_info=True,
                             )
                     try:
-                        scores_ledock, ledock_metrics = run_ledock_for_stage(
+                        scores_ledock, ledock_metrics, ledock_completion = run_ledock_for_stage(
                             cfg=cfg,
                             paths=paths,
                             pdb_id=paths.pdb_id,
@@ -1431,14 +1778,21 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 )
                         if bool(cfg.get("CHECKPOINT_ENABLE", True)) and ledock_fp is not None:
                             try:
-                                checkpoint_mark_done(
-                                    cfg,
-                                    paths.pdb_id,
-                                    ledock_stage_name,
-                                    ledock_fp,
-                                    ph_label=ph_label,
-                                    variant=variant_env or None,
-                                )
+                                if ledock_completion.get("success", False):
+                                    checkpoint_mark_done(
+                                        cfg,
+                                        paths.pdb_id,
+                                        ledock_stage_name,
+                                        ledock_fp,
+                                        ph_label=ph_label,
+                                        variant=variant_env or None,
+                                    )
+                                else:
+                                    logger.warning(
+                                        "[Checkpoint] defer mark ledock_stage=%s pdb=%s reason=completion_missing",
+                                        ledock_stage_name,
+                                        paths.pdb_id,
+                                    )
                             except Exception:
                                 pass
                         logger.info(
@@ -1497,6 +1851,16 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     cfg,
                     paths.pdb_id,
                     ledock_metrics_by_stage,
+                    ph_label=ph_label,
+                    variant=variant_env or None,
+                    csv_prefix=csv_prefix,
+                )
+
+            if dock6_metrics_by_stage:
+                write_dock6_scores_csv(
+                    cfg,
+                    paths.pdb_id,
+                    dock6_metrics_by_stage,
                     ph_label=ph_label,
                     variant=variant_env or None,
                     csv_prefix=csv_prefix,
@@ -1597,7 +1961,8 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         variant_label,
                         ph_label if ph_label else "base",
                     )
-                    ensure_mol2_for_ledock(cfg, stage1_original, logger)
+                    ligands_for_mol2 = _norm_dedupe(stage1_original + list(controls_for_run))
+                    ensure_mol2_for_ledock(cfg, ligands_for_mol2, logger)
                     logger.info(
                         "[ledock.mol2] completed_mol2_prep pdb=%s variant=%s ph=%s",
                         paths.pdb_id,

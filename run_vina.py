@@ -7,6 +7,7 @@ from typing import Tuple, Optional, List, Dict, Any, Iterable
 import logging, json
 _log = logging.getLogger("vina")
 
+from docking_utils import write_failure_marker
 from input_and_export_functions import extract_best_score
 try:
     from input_and_export_functions import load_config, validate_config
@@ -160,7 +161,14 @@ def _get_timeout() -> Optional[int]:
 # ----------------------------
 # Run a single docking task
 # ----------------------------
-def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path: str):
+def run_docking_task(
+    vina_exe: str,
+    config_path: str,
+    ligand_name: str,
+    out_path: str,
+    *,
+    write_failure_marker_flag: bool = False,
+):
     """
     Runs Vina with a prepared config file and extracts the best score.
     Returns (ligand_name, best_score or None).
@@ -169,6 +177,7 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
         from shutil import which
         from pathlib import Path
 
+        out_path_obj = Path(out_path)
         if not Path(config_path).exists():
             raise FileNotFoundError(f"[!] Vina config not found at: {config_path}")
 
@@ -192,6 +201,9 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
             check=False,
         )
 
+        stdout_tail = proc.stdout or ""
+        stderr_tail = proc.stderr or ""
+        failure_reason = None
 
         if _should_filter_stdout():
             _maybe_print_useful_lines(proc.stdout, proc.stderr)
@@ -201,6 +213,7 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
         if proc.returncode != 0:
             msg = proc.stderr.strip().splitlines()[-1] if proc.stderr else f"Return code {proc.returncode}"
             _log.warning("[vina.emit] Docking failed for %s: %s", ligand_name, msg)
+            failure_reason = msg
 
 
         # Primary parse using project helper
@@ -212,17 +225,39 @@ def run_docking_task(vina_exe: str, config_path: str, ligand_name: str, out_path
             score = robust_score
             if score is None:
                 _log.info("[parser] %s no Vina score found in %s (models_in_file=%d)", ligand_name, out_path, n_models)
+                failure_reason = failure_reason or "no_score"
+
+        if write_failure_marker_flag and failure_reason:
+            try:
+                write_failure_marker(out_path_obj, failure_reason, stdout_tail, stderr_tail)
+            except Exception:
+                pass
 
         return ligand_name, score
     
     except subprocess.TimeoutExpired:
         _log.error("[vina.emit] Docking timed out for %s (> %ss)", ligand_name, _get_timeout())
+        if write_failure_marker_flag:
+            try:
+                write_failure_marker(Path(out_path), "timeout")
+            except Exception:
+                pass
         return ligand_name, None
     except FileNotFoundError as e:
         _log.error("[vina.emit] File error for %s: %s", ligand_name, e)
+        if write_failure_marker_flag:
+            try:
+                write_failure_marker(Path(out_path), f"file_error:{e}")
+            except Exception:
+                pass
         return ligand_name, None
     except Exception as e:
         _log.error("[vina.emit] Docking crashed for %s: %s", ligand_name, e)
+        if write_failure_marker_flag:
+            try:
+                write_failure_marker(Path(out_path), f"exception:{e}")
+            except Exception:
+                pass
         return ligand_name, None
 
 

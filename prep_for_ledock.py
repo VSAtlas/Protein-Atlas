@@ -380,12 +380,15 @@ def symlink_mol2_for_stage(
     logger: logging.Logger,
 ) -> Dict[Path, Path]:
     """
-    Create symlinks for MOL2 ligands under stage_root using the source filename,
-    and return a mapping from original PDBQT path to alias MOL2 path.
+    Create symlinks for MOL2 ligands under stage_root using the original ligand
+    stem to keep downstream .dok names aligned, and return a mapping from
+    original PDBQT path to alias MOL2 path.
     """
     alias_map: Dict[Path, Path] = {}
     for idx, (lig_path, mol2_path) in enumerate(ligand_pairs, start=1):
-        alias_name = Path(mol2_path).name
+        alias_stem = Path(lig_path).stem
+        alias_ext = Path(mol2_path).suffix
+        alias_name = f"{alias_stem}{alias_ext}"
         alias_path = stage_root / alias_name
         try:
             if alias_path.exists() or alias_path.is_symlink():
