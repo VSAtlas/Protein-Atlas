@@ -141,7 +141,8 @@ def _resolve_scan_roots(docked_root: Path, run_id: Optional[str]) -> List[Path]:
     Determine which roots to scan for docking outputs.
 
     Priority:
-      - If run_id is provided and docked_root/run_id exists, scan that.
+      - If run_id is provided and docked_root/run_id exists, scan that first,
+        then fall back to docked_root for legacy layouts.
       - If run_id provided but missing, fall back to docked_root.
       - If no run_id: scan run-like subdirs (mtime desc) if present, then docked_root.
       - If docked_root is not a dir, just return [docked_root].
@@ -152,7 +153,10 @@ def _resolve_scan_roots(docked_root: Path, run_id: Optional[str]) -> List[Path]:
     if run_id:
         candidate = docked_root / run_id
         if candidate.is_dir():
-            return [candidate]
+            roots: List[Path] = [candidate]
+            if docked_root != candidate:
+                roots.append(docked_root)
+            return roots
         return [docked_root]
 
     run_subdirs = [
@@ -312,6 +316,78 @@ def _format_run_label(run_id: Optional[str]) -> str:
         if sep:
             label = label.replace(sep, "_")
     return label.replace(" ", "") or "none"
+
+def _normalize_run_id_token(val: str) -> str:
+    """Normalize run_id tokens for comparison."""
+    if val is None:
+        return ""
+    text = str(val).strip().strip("'\"")
+    return re.sub(r"[^0-9A-Za-z]+", "", text).lower()
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except Exception:
+        return False
+
+def filter_df_by_run_id(df: pd.DataFrame,
+                        cli_run_id: Optional[str],
+                        *,
+                        pdb_id: str,
+                        csv_path: Path,
+                        strict: bool,
+                        layout_label: str = "legacy") -> tuple[pd.DataFrame, str]:
+    """
+    Filter a dataframe by run_id with robust normalization.
+
+    Returns (filtered_df, status_reason).
+    status_reason is "ok" on match, or a mismatch/fallback label otherwise.
+    """
+    if not cli_run_id:
+        return df, "ok"
+
+    run_col = None
+    for cand in RUN_ID_COL_CANDIDATES:
+        if cand in df.columns:
+            run_col = cand
+            break
+    if run_col is None:
+        dbg("WARN", "run.filter", f"pdb={pdb_id} path={csv_path} reason=no_run_id_col")
+        return df, "ok_no_run_id_col"
+
+    target_norm = _normalize_run_id_token(cli_run_id)
+    series_raw = df[run_col].astype(str).str.strip().str.strip("'\"")
+    series_norm = series_raw.str.replace(r"[^0-9A-Za-z]+", "", regex=True).str.lower()
+    mask = series_norm == target_norm
+    kept = int(mask.sum())
+    total = len(df)
+    if kept > 0:
+        dbg("INFO", "run.filter",
+            f"pdb={pdb_id} path={csv_path} run_id={cli_run_id} kept={kept}/{total} col={run_col} layout={layout_label}")
+        return df.loc[mask].copy(), "ok"
+
+    value_counts = series_norm.value_counts(dropna=False)
+    sample = value_counts.head(5).to_dict()
+    dbg("WARN", "run.filter",
+        f"pdb={pdb_id} path={csv_path} run_id={cli_run_id} matched=0/{total} layout={layout_label} sample={sample}")
+
+    if strict:
+        dbg("ERROR", "run.filter",
+            f"pdb={pdb_id} path={csv_path} run_id={cli_run_id} matched=0 action=abort layout={layout_label}")
+        return df.loc[mask].copy(), "run_id_mismatch_new_layout"
+
+    if len(value_counts) == 1:
+        dbg("WARN", "run.filter",
+            f"pdb={pdb_id} layout=legacy_fallback action=use_singleton run_id_val={value_counts.index[0]} rows={total}")
+        return df.copy(), "run_id_mismatch_legacy_fallback"
+
+    top_value = value_counts.index[0]
+    top_rows = int(value_counts.iloc[0])
+    dbg("WARN", "run.filter",
+        f"pdb={pdb_id} layout=legacy_fallback action=use_top run_id_val={top_value} rows={top_rows}/{total}")
+    top_mask = series_norm == top_value
+    return df.loc[top_mask].copy(), "run_id_mismatch_legacy_fallback"
 
 
 def extract_compnd_molecules(pdb_lines: List[str]) -> List[str]:
@@ -659,6 +735,7 @@ class TargetEvaluation:
     ligand_basenames: Set[str]
     has_run_id_column: bool
     run_ids: Set[str]
+    status_reason: str = "ok"
 
 
 def derive_target_name(target_id: str,
@@ -724,6 +801,7 @@ CSV_BASENAMES = (
 )
 CONSENSUS_CSV_BASENAME = "consensus_docking_scores.csv"
 CONSENSUS_SCORE_CANDIDATES = ["consensus_score", "score", "consensus", "final_score"]
+RUN_ID_COL_CANDIDATES = ["run_id", "runid", "run"]
 
 def guess_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     lower = {c.lower(): c for c in df.columns}
@@ -1053,6 +1131,33 @@ def compute_decoy_stats_from_long_csv(
     sigma = float(decoys["best_score"].std(ddof=1))
     return mu, sigma, n_decoys
 
+def _make_placeholder_row(pdb_id: str,
+                          variant: Optional[str],
+                          ph_tag: Optional[str],
+                          run_id: Optional[str],
+                          bedroc_alpha: float,
+                          status_reason: str) -> pd.Series:
+    base_row = {
+        "run_id": str(run_id) if run_id else "(none)",
+        "pdb_id": pdb_id,
+        "variant": variant or "",
+        "pH": ph_tag or "",
+        "N": 0,
+        "n_actives": 0,
+        "actives_fraction": float("nan"),
+        "ROC_AUC": float("nan"),
+        "PR_AUC": float("nan"),
+        "logAUC": float("nan"),
+        "logAUC_adj": float("nan"),
+        f"BEDROC_alpha_{bedroc_alpha:g}": float("nan"),
+        "EF@1%": float("nan"),
+        "EF@2%": float("nan"),
+        "EF@5%": float("nan"),
+        "EF@10%": float("nan"),
+        "status_reason": status_reason,
+    }
+    return pd.Series(base_row)
+
 # --- aggregation helpers ---
 
 def _collapse_best_scores(df: pd.DataFrame, score_col: str, *, best_is_min: bool = True) -> tuple[pd.DataFrame, int]:
@@ -1152,6 +1257,7 @@ def _compute_metrics_and_plots(
     hist_xlabel: str,
     title_suffix: str = "",
     mode_label: str = "docking",
+    status_reason: str = "ok",
 ) -> TargetEvaluation:
     y_true = best["is_active"].astype(int).to_numpy()
     if score_high_is_better:
@@ -1166,10 +1272,12 @@ def _compute_metrics_and_plots(
         f"pdb={pdb_id} mode={mode_label} missing_name_detected={missing_name_detected} kept_rows={len(best)} ligands={N}")
     if N == 0 or n_act == 0 or n_act == N:
         dbg("WARN", "metrics", f"pdb={pdb_id} mode={mode_label} degenerate_set N={N} actives={n_act}")
+        reason = status_reason if status_reason != "ok" else "degenerate_set"
         return TargetEvaluation(metrics=None,
                                 ligand_basenames=ligand_basenames,
                                 has_run_id_column=has_run_id_col,
-                                run_ids=run_ids_present)
+                                run_ids=run_ids_present,
+                                status_reason=reason)
 
     ef = ef_at_fractions(y_true, y_low, fractions=(0.01,0.02,0.05,0.10))
     dbg("DEBUG", "metrics", f"pdb={pdb_id} mode={mode_label} start N={N} n_actives={n_act}")
@@ -1287,6 +1395,7 @@ def _compute_metrics_and_plots(
         f"BEDROC_alpha_{bedroc_alpha:g}": bed,
         **ef,
     }
+    row["status_reason"] = status_reason if status_reason else "ok"
     if variant_label:
         row["variant"] = variant_label
     pd.DataFrame([row]).to_csv(out_dir / "metrics.tsv", sep="\t", index=False)
@@ -1295,7 +1404,8 @@ def _compute_metrics_and_plots(
     return TargetEvaluation(metrics=pd.Series(row),
                             ligand_basenames=ligand_basenames,
                             has_run_id_column=has_run_id_col,
-                            run_ids=run_ids_present)
+                            run_ids=run_ids_present,
+                            status_reason=row["status_reason"])
 
 # --- evaluation ---
 
@@ -1308,23 +1418,35 @@ def evaluate_target(pdb_id: str,
                     logauc_lambda: float,
                     run_id: Optional[str],
                     valid_only: bool = False,
-                    valid_col_cli: Optional[str] = None) -> Optional[TargetEvaluation]:
+                    valid_col_cli: Optional[str] = None,
+                    new_layout_active: bool = False,
+                    layout_label: str = "legacy") -> Optional[TargetEvaluation]:
+    status_reason = "ok"
     try:
         df = pd.read_csv(csv_path)
         dbg("INFO", "csv", f"pdb={pdb_id} path={csv_path} rows={len(df)}")
     except Exception as e:
         dbg("ERROR", "csv", f"pdb={pdb_id} path={csv_path} err={e}")
-        return None
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=set(),
+                                has_run_id_column=False,
+                                run_ids=set(),
+                                status_reason="read_error")
 
     has_run_id_col = "run_id" in df.columns
-    if run_id:
-        total_rows = len(df)
-        if has_run_id_col:
-            mask = df["run_id"].astype(str) == str(run_id)
-            df = df.loc[mask].copy()
-            dbg("INFO", "filter", f"pdb={pdb_id} run_id={run_id} kept={len(df)}/{total_rows}")
-        else:
-            dbg("WARN", "filter", f"pdb={pdb_id} run_id={run_id} column_missing proceeding_unfiltered")
+    df, filter_reason = filter_df_by_run_id(df, run_id,
+                                            pdb_id=pdb_id,
+                                            csv_path=csv_path,
+                                            strict=new_layout_active,
+                                            layout_label=layout_label)
+    status_reason = filter_reason if filter_reason != "ok" else "ok"
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=set(),
+                                has_run_id_column=has_run_id_col,
+                                run_ids=set(),
+                                status_reason=final_reason)
 
     dbg("DEBUG", "schema", f"pdb={pdb_id} cols={list(df.columns)} has_variant={'variant' in df.columns} has_run_id={'run_id' in df.columns}")
 
@@ -1337,6 +1459,13 @@ def evaluate_target(pdb_id: str,
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df = df.dropna(subset=[score_col])
     drop_nonfinite = before_nf - len(df)
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=set(),
+                                has_run_id_column=has_run_id_col,
+                                run_ids=set(),
+                                status_reason=final_reason)
 
     # Apply pose validity filtering before best-pose aggregation.
     if valid_only:
@@ -1368,6 +1497,13 @@ def evaluate_target(pdb_id: str,
     before = len(df)
     df = df.dropna(subset=["is_active"])
     dropped_token = before - len(df)
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=used_ligand_basenames,
+                                has_run_id_column=has_run_id_col,
+                                run_ids=run_ids_present,
+                                status_reason=final_reason)
 
     best, drop_nan_best = _collapse_best_scores(df, score_col, best_is_min=True)
     missing_name_detected = missing_names + empty_names
@@ -1412,6 +1548,7 @@ def evaluate_target(pdb_id: str,
         hist_xlabel="Best docking score (lower = better)",
         title_suffix="",
         mode_label="docking",
+        status_reason=status_reason,
     )
 
 def evaluate_target_consensus(
@@ -1425,23 +1562,35 @@ def evaluate_target_consensus(
     run_id: Optional[str],
     variant_hint: Optional[str] = None,
     ph_tag: Optional[str] = None,  # kept for symmetry/future use
+    new_layout_active: bool = False,
+    layout_label: str = "legacy",
 ) -> Optional[TargetEvaluation]:
+    status_reason = "ok"
     try:
         df = pd.read_csv(csv_path)
         dbg("INFO", "consensus.csv", f"pdb={pdb_id} path={csv_path} rows={len(df)}")
     except Exception as e:
         dbg("ERROR", "consensus.csv", f"pdb={pdb_id} path={csv_path} err={e}")
-        return None
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=set(),
+                                has_run_id_column=False,
+                                run_ids=set(),
+                                status_reason="read_error")
 
     has_run_id_col = "run_id" in df.columns
-    if run_id:
-        total_rows = len(df)
-        if has_run_id_col:
-            mask = df["run_id"].astype(str) == str(run_id)
-            df = df.loc[mask].copy()
-            dbg("INFO", "consensus.filter", f"pdb={pdb_id} run_id={run_id} kept={len(df)}/{total_rows}")
-        else:
-            dbg("WARN", "consensus.filter", f"pdb={pdb_id} run_id={run_id} column_missing proceeding_unfiltered")
+    df, filter_reason = filter_df_by_run_id(df, run_id,
+                                            pdb_id=pdb_id,
+                                            csv_path=csv_path,
+                                            strict=new_layout_active,
+                                            layout_label=layout_label)
+    status_reason = filter_reason if filter_reason != "ok" else "ok"
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=set(),
+                                has_run_id_column=has_run_id_col,
+                                run_ids=set(),
+                                status_reason=final_reason)
 
     lig_col = guess_consensus_ligfile_col(df, lig_col_cli)
     score_col = guess_consensus_score_col(df, score_col_cli)
@@ -1455,6 +1604,13 @@ def evaluate_target_consensus(
     before_nf = len(df)
     df = df.dropna(subset=[score_col])
     drop_nonfinite = before_nf - len(df)
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=set(),
+                                has_run_id_column=has_run_id_col,
+                                run_ids=set(),
+                                status_reason=final_reason)
 
     raw_lig = df[lig_col]
     missing_names = int(raw_lig.isna().sum())
@@ -1475,6 +1631,13 @@ def evaluate_target_consensus(
     before = len(df)
     df = df.dropna(subset=["is_active"])
     dropped_token = before - len(df)
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(metrics=None,
+                                ligand_basenames=used_ligand_basenames,
+                                has_run_id_column=has_run_id_col,
+                                run_ids=run_ids_present,
+                                status_reason=final_reason)
 
     best, drop_nan_best = _collapse_best_scores(df, score_col, best_is_min=False)
     missing_name_detected = missing_names + empty_names
@@ -1522,6 +1685,7 @@ def evaluate_target_consensus(
         hist_xlabel="Consensus score (higher = better; negated for plot)",
         title_suffix=" (consensus)",
         mode_label="consensus",
+        status_reason=status_reason,
     )
 
 def emit_consensus_summary(df: pd.DataFrame, analysis_root: Path, run_label: str, pretty_enabled: bool) -> None:
@@ -2021,7 +2185,8 @@ def main():
     dbg("DEBUG", "paths", f"docked_root={docked_root} out_root={out_root} analysis_root={analysis_root} pdb_root={pdb_root_override or 'none'} prepped_root={prepped_root_override or 'none'}")
     scan_roots = _resolve_scan_roots(docked_root, args.run_id)
     dbg("INFO", "paths", f"scan_roots={[str(p) for p in scan_roots]}")
-    manifest_docked_root = scan_roots[0] if scan_roots else docked_root
+    manifest_docked_root_primary = scan_roots[0] if scan_roots else docked_root
+    legacy_root = docked_root
 
     if args.run_id:
         os.environ["ATLAS_RUN_ID"] = str(args.run_id)
@@ -2200,6 +2365,7 @@ def main():
         ph_hint: Optional[str],
         docked_root: Path,
         cfg: Dict,
+        fallback_root: Optional[Path] = None,
     ) -> Optional[Path]:
         """
         Variant/pH-aware wrapper around _resolve_docking_csv.
@@ -2208,6 +2374,7 @@ def main():
           1) If cfg and variant_hint/ph_hint are provided, try the exact
              docked/<PDB>/<VARIANT>/<PH>/<CSV_BASENAME> locations first.
           2) If that fails, fall back to _resolve_docking_csv(pdb_id, docked_root / pdb_id).
+          3) If still missing and fallback_root provided, try legacy fallback_root/pdb_id.
         """
         try:
             paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
@@ -2239,7 +2406,10 @@ def main():
                         dbg("INFO", "resolve", f"pdb={pdb_id} picked={candidate} via=manifest_hint")
                         return candidate
 
-        return _resolve_docking_csv(pdb_id, docked_root / pdb_id)
+        picked = _resolve_docking_csv(pdb_id, docked_root / pdb_id)
+        if picked is None and fallback_root and fallback_root != docked_root:
+            picked = _resolve_docking_csv(pdb_id, fallback_root / pdb_id)
+        return picked
 
     def _discover_docking_csvs(
         pdb_id: str,
@@ -2293,6 +2463,14 @@ def main():
         # Legacy root: docked/<PDB>/<basename>
         for basename in csv_basenames:
             _add(base_root / basename, None, None, "legacy")
+
+        if base_root.is_dir():
+            for ph_dir in sorted(base_root.iterdir()):
+                if not ph_dir.is_dir():
+                    continue
+                ph_label = ph_dir.name
+                for basename in csv_basenames:
+                    _add(ph_dir / basename, None, ph_label, "scan")
 
         for variant in ("APO", "HOLO"):
             variant_dir = base_root / variant
@@ -2364,8 +2542,9 @@ def main():
                 pdb_id=pdb_id,
                 variant_hint=variant_hint or None,
                 ph_hint=ph_hint or None,
-                docked_root=manifest_docked_root,
+                docked_root=manifest_docked_root_primary,
                 cfg=cfg,
+                fallback_root=legacy_root,
             )
             target_key = make_target_key(pdb_id, variant_upper, ph_hint or None)
             targets.append(TargetSpec(
@@ -2449,9 +2628,12 @@ def main():
             active_run_id = None
             dbg("WARN", "run", f"auto_select_failed err={_exc}")
     dbg("INFO", "run", f"active={active_run_id or '(none)'} source={'CLI' if args.run_id else 'auto'}")
+    run_dir = Path(args.docked_root) / str(active_run_id) if active_run_id else None
     if active_run_id:
         analysis_root = _compute_analysis_root(args, cfg, run_id_override=active_run_id)
         dbg("INFO", "paths", f"analysis_root_updated run_id={active_run_id} path={analysis_root}")
+    new_layout_root_exists = bool(run_dir and run_dir.exists())
+    dbg("INFO", "run.layout", f"run_id={active_run_id or '(none)'} new_layout_root_exists={new_layout_root_exists}")
     run_label_for_files = _format_run_label(active_run_id)
 
     if manifest_data is None and cfg and active_run_id:
@@ -2486,6 +2668,7 @@ def main():
 
     for spec in targets:
         evaluated: Optional[TargetEvaluation] = None
+        status_reason = "missing_csv"
         out_dir = analysis_root / spec.target_key
         if spec.csv_path:
             evaluated = evaluate_target(
@@ -2499,7 +2682,13 @@ def main():
                 run_id=active_run_id,
                 valid_only=args.valid_only,
                 valid_col_cli=args.valid_col,
+                new_layout_active=bool(run_dir and spec.csv_path and _is_under(spec.csv_path, run_dir)),
+                layout_label="new_run" if (run_dir and spec.csv_path and _is_under(spec.csv_path, run_dir)) else "legacy",
             )
+            if evaluated is not None:
+                status_reason = evaluated.status_reason or "ok"
+            else:
+                status_reason = "read_error"
         consensus_candidate: Optional[Path] = None
         if spec.csv_path:
             candidate = spec.csv_path.parent / CONSENSUS_CSV_BASENAME
@@ -2517,6 +2706,8 @@ def main():
                 run_id=active_run_id,
                 variant_hint=spec.variant,
                 ph_tag=spec.ph_tag,
+                new_layout_active=bool(run_dir and consensus_candidate and _is_under(consensus_candidate, run_dir)),
+                layout_label="new_run" if (run_dir and consensus_candidate and _is_under(consensus_candidate, run_dir)) else "legacy",
             )
             if cons_eval is not None and cons_eval.metrics is not None:
                 cons_metrics = cons_eval.metrics.copy()
@@ -2526,8 +2717,20 @@ def main():
                 cons_metrics["pdb_id"] = spec.pdb_id
                 cons_metrics["variant"] = spec.variant or ""
                 cons_metrics["pH"] = spec.ph_tag or ""
+                if "status_reason" not in cons_metrics:
+                    cons_metrics["status_reason"] = cons_eval.status_reason or "ok"
                 consensus_rows.append(cons_metrics)
-            elif cons_eval is None:
+            elif cons_eval is not None:
+                placeholder_cons = _make_placeholder_row(
+                    spec.pdb_id,
+                    spec.variant,
+                    spec.ph_tag,
+                    active_run_id,
+                    args.bedroc_alpha,
+                    cons_eval.status_reason or "empty_after_filter",
+                )
+                consensus_rows.append(placeholder_cons)
+            else:
                 dbg("WARN", "consensus.eval", f"pdb={spec.pdb_id} path={consensus_candidate} reason=evaluation_failed")
         if evaluated is not None:
             target_eval_results[spec.target_key] = evaluated
@@ -2539,47 +2742,29 @@ def main():
                 metrics["pdb_id"] = spec.pdb_id
                 metrics["variant"] = spec.variant or ""
                 metrics["pH"] = spec.ph_tag or ""
+                if "status_reason" not in metrics:
+                    metrics["status_reason"] = status_reason
                 rows.append(metrics)
-            elif manifest_driven:
-                base_row = {
-                    "run_id": str(active_run_id) if active_run_id else "(none)",
-                    "pdb_id": spec.pdb_id,
-                    "variant": spec.variant or "",
-                    "pH": spec.ph_tag or "",
-                    "N": 0,
-                    "n_actives": 0,
-                    "actives_fraction": float("nan"),
-                    "ROC_AUC": float("nan"),
-                    "PR_AUC": float("nan"),
-                    "logAUC": float("nan"),
-                    "logAUC_adj": float("nan"),
-                    f"BEDROC_alpha_{args.bedroc_alpha:g}": float("nan"),
-                    "EF@1%": float("nan"),
-                    "EF@2%": float("nan"),
-                    "EF@5%": float("nan"),
-                    "EF@10%": float("nan"),
-                }
-                rows.append(pd.Series(base_row))
-        elif manifest_driven:
-            base_row = {
-                "run_id": str(active_run_id) if active_run_id else "(none)",
-                "pdb_id": spec.pdb_id,
-                "variant": spec.variant or "",
-                "pH": spec.ph_tag or "",
-                "N": 0,
-                "n_actives": 0,
-                "actives_fraction": float("nan"),
-                "ROC_AUC": float("nan"),
-                "PR_AUC": float("nan"),
-                "logAUC": float("nan"),
-                "logAUC_adj": float("nan"),
-                f"BEDROC_alpha_{args.bedroc_alpha:g}": float("nan"),
-                "EF@1%": float("nan"),
-                "EF@2%": float("nan"),
-                "EF@5%": float("nan"),
-                "EF@10%": float("nan"),
-            }
-            rows.append(pd.Series(base_row))
+            else:
+                placeholder = _make_placeholder_row(
+                    spec.pdb_id,
+                    spec.variant,
+                    spec.ph_tag,
+                    active_run_id,
+                    args.bedroc_alpha,
+                    status_reason,
+                )
+                rows.append(placeholder)
+        else:
+            placeholder = _make_placeholder_row(
+                spec.pdb_id,
+                spec.variant,
+                spec.ph_tag,
+                active_run_id,
+                args.bedroc_alpha,
+                status_reason,
+            )
+            rows.append(placeholder)
 
     if not rows:
         dbg("ERROR", "metrics", "no targets produced evaluable rows")
@@ -2875,7 +3060,7 @@ def main():
     has_sections = bool(variant_col_present and ((apo_mask is not None and apo_mask.any()) or (holo_mask is not None and holo_mask.any())))
 
     preferred_cols = ("variant", "pH", "run_id", "target_name", "library_name", "pdb_id")
-    excluded_cols = {"run_id", "target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant", "pH"}
+    excluded_cols = {"run_id", "target_name", "library_name", "pdb_id", "N", "n_actives", "actives_fraction", "variant", "pH", "status_reason"}
 
     with open(summary_path, "w", newline="") as fh:
         if has_sections:
