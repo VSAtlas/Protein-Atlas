@@ -11,9 +11,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from input_and_export_functions import load_config
 
 COMPONENT = "[scorch-rescore]"
-SCORCH_SCRIPT = Path("/home/michael/atlas/tools/SCORCH/scorch.py")
+SCORCH_SCRIPT: Path | None = None
+SCORCH_ENV: str = "scorch-env"
+SCORCH_ROOT: Path | None = None
 VINA_STAGE_DIRS = ("stage1", "stage2", "stage3")
 GNINA_STAGE_DIRS = ("gnina_stage1", "gnina_stage2", "gnina_stage3")
 POST_STAGE_DIRS = ("ledock_pdbqt", "dock6_pdbqt")
@@ -89,12 +92,44 @@ def _resolve_roots(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path]:
 
 
 def _preflight(logger: logging.Logger) -> bool:
+    global SCORCH_SCRIPT, SCORCH_ENV, SCORCH_ROOT
+
     if shutil.which("micromamba") is None:
         logger.error("%s action=preflight status=failed reason=missing_micromamba", COMPONENT)
         return False
+
+    try:
+        cfg = load_config()
+    except Exception as exc:
+        logger.error("%s action=preflight status=failed reason=config_load_error error=%s", COMPONENT, exc)
+        return False
+
+    script_cfg = cfg.get("SCORCH_SCRIPT")
+    env_cfg = cfg.get("SCORCH_ENV")
+
+    if script_cfg:
+        SCORCH_SCRIPT = Path(script_cfg)
+
+    if env_cfg:
+        SCORCH_ENV = str(env_cfg)
+
+    if not SCORCH_SCRIPT:
+        logger.error("%s action=preflight status=failed reason=missing_scorch_script_cfg", COMPONENT)
+        return False
+
+    SCORCH_SCRIPT = SCORCH_SCRIPT.resolve()
     if not SCORCH_SCRIPT.exists():
         logger.error("%s action=preflight status=failed reason=missing_scorch path=%s", COMPONENT, SCORCH_SCRIPT)
         return False
+
+    SCORCH_ROOT = SCORCH_SCRIPT.parent
+    logger.info(
+        "%s action=preflight status=ok scorch_script=%s scorch_env=%s scorch_root=%s",
+        COMPONENT,
+        SCORCH_SCRIPT,
+        SCORCH_ENV,
+        SCORCH_ROOT,
+    )
     return True
 
 
@@ -199,7 +234,7 @@ def _scorch_command(receptor: Path, ligands: Path, threads: int) -> List[str]:
         "micromamba",
         "run",
         "-n",
-        "scorch-env",
+        SCORCH_ENV,
         "python",
         str(SCORCH_SCRIPT),
         "--receptor",
@@ -317,7 +352,11 @@ def _score_stage(
 
     cmd = _scorch_command(receptor, lig_path, threads)
     cmd[cmd.index("{out}")] = str(out_path)
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    run_kwargs = {"capture_output": True, "text": True}
+    if SCORCH_ROOT is not None:
+        run_kwargs["cwd"] = str(SCORCH_ROOT)
+
+    proc = subprocess.run(cmd, **run_kwargs)
     if proc.returncode != 0:
         logger.error(
             "%s action=score status=failed source=%s stage=%s returncode=%s stderr=%s",

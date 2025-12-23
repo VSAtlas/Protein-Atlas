@@ -44,6 +44,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+def _normalize_ligand_id(lig: str) -> str:
+    """Normalize ligand identifiers across engines by stripping one known extension."""
+    name = Path(lig).name
+    for ext in (".pdbqt", ".mol2", ".dok", ".sdf", ".pdb"):
+        if name.lower().endswith(ext):
+            return name[: -len(ext)]
+    return name
+
+
 def _to_bool_flag(raw: Any) -> bool:
     if raw is None:
         return False
@@ -69,8 +78,9 @@ def _load_best_scores_per_ligand(
     with csv_path.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            ligand = row.get("ligand")
-            if not ligand:
+            ligand_raw = row.get("ligand")
+            lig_id = _normalize_ligand_id(ligand_raw) if ligand_raw else ""
+            if not lig_id:
                 continue
 
             if valid_key is not None and not _to_bool_flag(row.get(valid_key)):
@@ -86,15 +96,15 @@ def _load_best_scores_per_ligand(
             if not math.isfinite(val):
                 continue
 
-            if ligand not in scores:
-                scores[ligand] = val
+            if lig_id not in scores:
+                scores[lig_id] = val
             else:
                 if higher_is_better:
-                    if val > scores[ligand]:
-                        scores[ligand] = val
+                    if val > scores[lig_id]:
+                        scores[lig_id] = val
                 else:
-                    if val < scores[ligand]:
-                        scores[ligand] = val
+                    if val < scores[lig_id]:
+                        scores[lig_id] = val
 
     logger.info("[consensus.load] path=%s key=%s n_ligands=%d", str(csv_path), value_key, len(scores))
     return scores
@@ -131,6 +141,46 @@ def _percentiles_from_scores(
     return percentiles
 
 
+def _pick_best_engine(
+    lig_id: str,
+    p_vina: Dict[str, float],
+    p_ledock: Dict[str, float],
+    p_dock6: Dict[str, float],
+    p_gnina_energy: Dict[str, float],
+    p_cnn: Dict[str, float],
+    vina_scores: Dict[str, float],
+    ledock_scores: Dict[str, float],
+    dock6_scores: Dict[str, float],
+    gnina_energy_scores: Dict[str, float],
+    cnn_scores: Dict[str, float],
+) -> (str, str):
+    priority = {
+        "gnina_cnn": 5,
+        "ledock": 4,
+        "dock6": 3,
+        "vina": 2,
+        "gnina_energy": 1,
+    }
+
+    candidates = []
+    if lig_id in cnn_scores:
+        candidates.append((p_cnn.get(lig_id, 0.0), priority["gnina_cnn"], "gnina", "gnina_cnn"))
+    if lig_id in ledock_scores:
+        candidates.append((p_ledock.get(lig_id, 0.0), priority["ledock"], "ledock", "ledock"))
+    if lig_id in dock6_scores:
+        candidates.append((p_dock6.get(lig_id, 0.0), priority["dock6"], "dock6", "dock6"))
+    if lig_id in vina_scores:
+        candidates.append((p_vina.get(lig_id, 0.0), priority["vina"], "vina", "vina"))
+    if lig_id in gnina_energy_scores:
+        candidates.append((p_gnina_energy.get(lig_id, 0.0), priority["gnina_energy"], "gnina", "gnina_energy"))
+
+    if not candidates:
+        return "", ""
+
+    best_p, _, best_engine, best_signal = max(candidates, key=lambda x: (x[0], x[1]))
+    return best_engine if best_p is not None else "", best_signal if best_p is not None else ""
+
+
 def compute_consensus_for_variant_ph(
     cfg: Dict[str, Any],
     paths: Any,
@@ -153,16 +203,21 @@ def compute_consensus_for_variant_ph(
         log.info("[consensus.skip] reason=missing_vina_csv path=%s", str(vina_csv))
         return None
 
-    ligands: List[str] = []
+    ligand_ids: List[str] = []
+    display_name_by_id: Dict[str, str] = {}
     seen = set()
     with vina_csv.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             lig = row.get("ligand")
-            if lig and lig not in seen:
-                seen.add(lig)
-                ligands.append(lig)
-    if not ligands:
+            if not lig:
+                continue
+            lig_id = _normalize_ligand_id(lig)
+            if lig_id and lig_id not in seen:
+                seen.add(lig_id)
+                ligand_ids.append(lig_id)
+                display_name_by_id[lig_id] = lig
+    if not ligand_ids:
         log.warning("[consensus.skip] reason=no_ligands path=%s", str(vina_csv))
         return None
 
@@ -223,11 +278,11 @@ def compute_consensus_for_variant_ph(
             logger=log,
         )
 
-    p_vina = _percentiles_from_scores(ligands, vina_scores, higher_is_better=False)
-    p_gnina_energy = _percentiles_from_scores(ligands, gnina_energy_scores, higher_is_better=False)
-    p_ledock = _percentiles_from_scores(ligands, ledock_scores, higher_is_better=False)
-    p_cnn = _percentiles_from_scores(ligands, cnn_scores, higher_is_better=True)
-    p_dock6 = _percentiles_from_scores(ligands, dock6_scores, higher_is_better=False)
+    p_vina = _percentiles_from_scores(ligand_ids, vina_scores, higher_is_better=False)
+    p_gnina_energy = _percentiles_from_scores(ligand_ids, gnina_energy_scores, higher_is_better=False)
+    p_ledock = _percentiles_from_scores(ligand_ids, ledock_scores, higher_is_better=False)
+    p_cnn = _percentiles_from_scores(ligand_ids, cnn_scores, higher_is_better=True)
+    p_dock6 = _percentiles_from_scores(ligand_ids, dock6_scores, higher_is_better=False)
 
     has_cnn = any(v > 0.0 for v in p_cnn.values())
     has_ledock = any(v > 0.0 for v in p_ledock.values())
@@ -237,7 +292,7 @@ def compute_consensus_for_variant_ph(
     alpha_dock6 = 0.6
     alpha_gnina_energy = 0.4
     p_energy: Dict[str, float] = {}
-    for lig in ligands:
+    for lig in ligand_ids:
         numerator = 0.0
         denom = 0.0
         if lig in vina_scores:
@@ -280,7 +335,7 @@ def compute_consensus_for_variant_ph(
     )
 
     out_rows = []
-    for lig in ligands:
+    for lig in ligand_ids:
         consensus_score = (
             w_energy * p_energy.get(lig, 0.0)
             + w_ledock * p_ledock.get(lig, 0.0)
@@ -291,13 +346,27 @@ def compute_consensus_for_variant_ph(
             for store in (vina_scores, gnina_energy_scores, ledock_scores, dock6_scores, cnn_scores)
             if lig in store
         )
+        best_engine, best_signal = _pick_best_engine(
+            lig,
+            p_vina,
+            p_ledock,
+            p_dock6,
+            p_gnina_energy,
+            p_cnn,
+            vina_scores,
+            ledock_scores,
+            dock6_scores,
+            gnina_energy_scores,
+            cnn_scores,
+        )
+        ligand_display = display_name_by_id.get(lig, lig)
         out_rows.append(
             {
                 "run_id": run_id,
                 "pdb_id": paths.pdb_id,
                 "variant": variant_label,
                 "ph_label": ph_label or "",
-                "ligand": lig,
+                "ligand": ligand_display,
                 "consensus_score": consensus_score,
                 "p_energy": p_energy.get(lig, 0.0),
                 "p_ledock": p_ledock.get(lig, 0.0),
@@ -306,6 +375,8 @@ def compute_consensus_for_variant_ph(
                 "p_gnina_energy": p_gnina_energy.get(lig, 0.0),
                 "p_dock6": p_dock6.get(lig, 0.0),
                 "n_engines_with_data": n_engines,
+                "best_engine": best_engine,
+                "best_signal": best_signal,
             }
         )
 

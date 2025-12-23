@@ -97,6 +97,13 @@ def _default_tools() -> Dict[str, str]:
     """
     Tool defaults prefer environment & PATH.
     """
+    base = _default_base_dir()
+    scorch_root = base.parent.parent / "tools" / "SCORCH"
+    if (scorch_root / "scorch.py").exists():
+        scorch_script_default = str(scorch_root / "scorch.py")
+    else:
+        scorch_script_default = which_or_exists(["scorch.py"])
+
     return {
         "VINA_PATH": which_or_exists(["vina"]),
         "VINA_EXE": which_or_exists(["vina"]),
@@ -110,6 +117,9 @@ def _default_tools() -> Dict[str, str]:
         "PREPARE_RECEPTOR_SCRIPT": os.environ.get("PREPARE_RECEPTOR_SCRIPT") or which_or_exists(["prepare_receptor4.py"]),
         # p2rank: either absolute prank or found on PATH
         "P2RANK_PATH": shutil.which("prank") or "prank",
+        # SCORCH: optional rescoring stage, default to sibling tools checkout
+        "SCORCH_SCRIPT": os.environ.get("SCORCH_SCRIPT") or scorch_script_default,
+        "SCORCH_ENV": os.environ.get("SCORCH_ENV") or "scorch-env",
     }
 
 def _default_runtime() -> Dict[str, Any]:
@@ -168,6 +178,9 @@ _ALLOWED_ENV_OVERRIDES = {
     "USE_LEDOCK",
     # DOCK6 follow-up toggle
     "USE_DOCK6",
+    # SCORCH rescoring knobs
+    "SCORCH_SCRIPT",
+    "SCORCH_ENV",
 
 }
 def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}"):
