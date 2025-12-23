@@ -26,6 +26,9 @@ STAGE_DIRS = {
     "ledock_stage1",
     "ledock_stage2",
     "ledock_stage3",
+    "dock6_stage1",
+    "dock6_stage2",
+    "dock6_stage3",
 }
 EXCLUDE_NAMES = {"receptor.pdbqt", "protein.pdbqt", "receptor.pdb", "protein.pdb"}
 ENGINE_BY_STAGE_DIR = {
@@ -38,6 +41,9 @@ ENGINE_BY_STAGE_DIR = {
     "ledock_stage1": "ledock",
     "ledock_stage2": "ledock",
     "ledock_stage3": "ledock",
+    "dock6_stage1": "dock6",
+    "dock6_stage2": "dock6",
+    "dock6_stage3": "dock6",
 }
 STAGE_NORMALIZED = {
     "stage1": "stage1",
@@ -49,6 +55,9 @@ STAGE_NORMALIZED = {
     "ledock_stage1": "stage1",
     "ledock_stage2": "stage2",
     "ledock_stage3": "stage3",
+    "dock6_stage1": "stage1",
+    "dock6_stage2": "stage2",
+    "dock6_stage3": "stage3",
 }
 VARIANT_CANON: Dict[str, str] = {}
 
@@ -123,6 +132,19 @@ def parse_args() -> argparse.Namespace:
         default=200,
         help="Chunk size for PoseBusters inputs to avoid huge argv",
     )
+    parser.add_argument(
+        "--include-dock6",
+        dest="include_dock6",
+        action="store_true",
+        default=True,
+        help="Include DOCK6 mol2 conversions (default: enabled)",
+    )
+    parser.add_argument(
+        "--skip-dock6",
+        dest="include_dock6",
+        action="store_false",
+        help="Skip DOCK6 mol2 conversions",
+    )
     return parser.parse_args()
 
 
@@ -143,7 +165,11 @@ def _find_stage(rel_parts: Tuple[str, ...]) -> str | None:
 
 def discover_inputs(run_root: Path, post_root: Path) -> List[LigandTask]:
     tasks: List[LigandTask] = []
-    for path in list(run_root.rglob("*.pdbqt")) + list(run_root.rglob("*.dok")):
+    for path in (
+        list(run_root.rglob("*.pdbqt"))
+        + list(run_root.rglob("*.dok"))
+        + list(run_root.rglob("*.mol2"))
+    ):
         if path.name in EXCLUDE_NAMES:
             logging.info("[pose-bust] action=skip reason=excluded input=%s", path)
             continue
@@ -152,10 +178,18 @@ def discover_inputs(run_root: Path, post_root: Path) -> List[LigandTask]:
         stage = _find_stage(rel_parts)
         if stage is None:
             continue
+        # Only accept dock6 mol2 files inside dock6 stage dirs
+        if path.suffix.lower() == ".mol2" and not stage.startswith("dock6_stage"):
+            continue
 
         rel_path = path.relative_to(run_root)
         out_path = (post_root / rel_path).with_suffix(".sdf")
-        kind = "dok" if path.suffix.lower() == ".dok" else "pdbqt"
+        if path.suffix.lower() == ".dok":
+            kind = "dok"
+        elif path.suffix.lower() == ".mol2":
+            kind = "dock6"
+        else:
+            kind = "pdbqt"
         tasks.append(
             LigandTask(input_path=path, output_path=out_path, stage=stage, kind=kind)
         )
@@ -395,6 +429,8 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
 def run_conversion(task: LigandTask, overwrite: bool) -> str:
     if task.kind == "dok":
         return _convert_dok(task, overwrite)
+    if task.kind == "dock6":
+        return _convert_dock6(task, overwrite)
 
     output = task.output_path
     if output.exists() and not overwrite:
@@ -481,6 +517,18 @@ def process_tasks(
 def validate_outputs(tasks: Iterable[LigandTask]) -> List[LigandTask]:
     missing: List[LigandTask] = []
     for task in tasks:
+        if task.kind == "dock6":
+            stage_dir = task.output_path.parent
+            sdfs = list(stage_dir.glob("*.sdf"))
+            if not sdfs:
+                missing.append(task)
+                logging.error(
+                    "[pose-bust] status=missing stage=%s input=%s output_dir=%s exists=False size_ok=False",
+                    task.stage,
+                    task.input_path,
+                    stage_dir,
+                )
+            continue
         try:
             exists = task.output_path.exists()
             size_ok = task.output_path.stat().st_size > 0 if exists else False
@@ -565,6 +613,159 @@ def _chunk_list(items: Sequence[Path], size: int) -> List[List[Path]]:
     if size <= 0:
         return [list(items)]
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
+
+
+def _split_dock6_mol2(input_path: Path) -> List[Tuple[str, List[str]]]:
+    blocks: List[Tuple[str, List[str]]] = []
+    current: List[str] = []
+    current_name: str | None = None
+    with input_path.open() as f:
+        lines = f.readlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == "@<TRIPOS>MOLECULE":
+            if current and current_name:
+                blocks.append((current_name, current))
+            current = [line]
+            if i + 1 < len(lines):
+                current_name = lines[i + 1].strip() or f"mol_{len(blocks)}"
+                current.append(lines[i + 1])
+                i += 2
+                continue
+            else:
+                current_name = f"mol_{len(blocks)}"
+        elif current is not None:
+            current.append(line)
+        i += 1
+    if current and current_name:
+        blocks.append((current_name, current))
+    return blocks
+
+
+def _sanitize_mol2_name(name: str) -> str:
+    candidate = name.strip()
+    for ext in (".mol2", ".sdf"):
+        if candidate.lower().endswith(ext):
+            candidate = candidate[: -len(ext)]
+    candidate = Path(candidate).stem or "mol"
+    candidate = candidate.replace(os.sep, "_").replace("\\", "_")
+    return candidate
+
+
+def _cleanup_stage_mol2(stage_dir: Path) -> None:
+    for mol2 in stage_dir.glob("*.mol2"):
+        try:
+            mol2.unlink()
+        except Exception:
+            pass
+
+
+def _convert_dock6(task: LigandTask, overwrite: bool) -> str:
+    # Skip if already converted unless overwrite
+    stage_dir = task.output_path.parent
+    if not overwrite:
+        existing = list(stage_dir.glob("*.sdf"))
+        if existing:
+            _cleanup_stage_mol2(stage_dir)
+            logging.info(
+                "[pose-bust] action=skip reason=exists stage=%s kind=dock6 input=%s sdfs=%d",
+                task.stage,
+                task.input_path,
+                len(existing),
+            )
+            return "skipped"
+
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    blocks = _split_dock6_mol2(task.input_path)
+    if not blocks:
+        logging.error(
+            "[pose-bust] action=convert status=failed reason=no_blocks stage=%s input=%s",
+            task.stage,
+            task.input_path,
+        )
+        return "failed"
+
+    mol_counts = 0
+    name_counts: Dict[str, int] = {}
+    failed_blocks = 0
+    for name, lines in blocks:
+        base_name = _sanitize_mol2_name(name if name else f"mol_{mol_counts}")
+        count = name_counts.get(base_name, 0) + 1
+        name_counts[base_name] = count
+        out_base = f"{base_name}" if count == 1 else f"{base_name}__dup{count}"
+        mol2_path = stage_dir / f"{out_base}.mol2"
+        sdf_path = stage_dir / f"{out_base}.sdf"
+
+        try:
+            with mol2_path.open("w") as f:
+                f.writelines(lines)
+        except Exception as exc:
+            logging.error(
+                "[pose-bust] action=split status=failed stage=%s input=%s mol_name=%s error=%s",
+                task.stage,
+                task.input_path,
+                out_base,
+                exc,
+            )
+            failed_blocks += 1
+            continue
+
+        if sdf_path.exists() and not overwrite:
+            mol_counts += 1
+            continue
+
+        cmd = ["obabel", "-imol2", str(mol2_path), "-osdf", "-O", str(sdf_path)]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            logging.error(
+                "[pose-bust] action=convert status=failed stage=%s kind=dock6 input=%s mol_name=%s returncode=%s stderr=%s",
+                task.stage,
+                task.input_path,
+                out_base,
+                proc.returncode,
+                proc.stderr.strip(),
+            )
+            try:
+                sdf_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            failed_blocks += 1
+            continue
+
+        try:
+            if not sdf_path.exists() or sdf_path.stat().st_size == 0:
+                logging.error(
+                    "[pose-bust] action=convert status=failed reason=empty_output stage=%s kind=dock6 input=%s mol_name=%s",
+                    task.stage,
+                    task.input_path,
+                    out_base,
+                )
+                failed_blocks += 1
+                continue
+        except OSError as exc:
+            logging.error(
+                "[pose-bust] action=convert status=failed reason=stat_error stage=%s kind=dock6 input=%s mol_name=%s error=%s",
+                task.stage,
+                task.input_path,
+                out_base,
+                exc,
+            )
+            failed_blocks += 1
+            continue
+
+        mol_counts += 1
+
+    logging.info(
+        "[pose-bust] action=convert status=ok stage=%s kind=dock6 input=%s molecules=%d failed_blocks=%d",
+        task.stage,
+        task.input_path,
+        mol_counts,
+        failed_blocks,
+    )
+    if failed_blocks == 0:
+        _cleanup_stage_mol2(stage_dir)
+    return "converted" if failed_blocks == 0 else "failed"
 
 
 def _df_missing_receptor(
@@ -830,16 +1031,6 @@ def run_posebusters_for_run(
         return {"ok": False}
 
     all_df = pd.concat(stage_frames, ignore_index=True)
-    all_csv = stage_root / "posebusters_all_stages.csv"
-    try:
-        all_df.to_csv(all_csv, index=False)
-    except Exception as exc:
-        logging.error(
-            "[pose-bust] action=posebusters status=failed reason=write_error output=%s error=%s",
-            all_csv,
-            exc,
-        )
-        return {"ok": False}
 
     dup_mask = all_df.duplicated(
         subset=["pdb_id", "variant", "ph", "stage_dir", "ligand_file"], keep="first"
@@ -849,29 +1040,6 @@ def run_posebusters_for_run(
             "[pose-bust] action=posebusters status=warning reason=duplicate_ligands overall_duplicates=%d",
             int(dup_mask.sum()),
         )
-    passfail_df = all_df.loc[
-        ~dup_mask,
-        [
-            "pdb_id",
-            "variant",
-            "ph",
-            "engine",
-            "stage",
-            "stage_dir",
-            "ligand_file",
-            "posebusters_pass",
-        ],
-    ]
-    passfail_csv = stage_root / "posebusters_passfail.csv"
-    try:
-        passfail_df.to_csv(passfail_csv, index=False)
-    except Exception as exc:
-        logging.error(
-            "[pose-bust] action=posebusters status=failed reason=write_error output=%s error=%s",
-            passfail_csv,
-            exc,
-        )
-        return {"ok": False}
 
     # Per (pdb_id, variant, ph) rollups
     group_fields = ["pdb_id", "variant", "ph"]
@@ -941,6 +1109,8 @@ def run_posebusters_for_run(
         )
 
     return {"ok": ok}
+
+
 def main() -> int:
     args = parse_args()
     logger = configure_logging()
@@ -976,6 +1146,8 @@ def main() -> int:
         return 1
 
     tasks = discover_inputs(run_root, output_root)
+    if not args.include_dock6:
+        tasks = [t for t in tasks if t.kind != "dock6"]
     if not tasks:
         logger.error(
             "[pose-bust] action=scan status=failed reason=no_ligands_found run_root=%s",
@@ -985,16 +1157,18 @@ def main() -> int:
 
     pdbqt_tasks = [t for t in tasks if t.kind == "pdbqt"]
     dok_tasks = [t for t in tasks if t.kind == "dok"]
+    dock6_tasks = [t for t in tasks if t.kind == "dock6"]
     if dok_tasks and shutil.which("ledock") is None:
         logger.error("[pose-bust] action=init status=failed reason=missing_ledock dok_tasks=%d", len(dok_tasks))
         return 1
 
     logger.info(
-        "[pose-bust] action=scan status=ok run_id=%s found=%d pdbqt=%d dok=%d docked_root=%s post_docked_root=%s",
+        "[pose-bust] action=scan status=ok run_id=%s found=%d pdbqt=%d dok=%d dock6=%d docked_root=%s post_docked_root=%s",
         args.run_id,
         len(tasks),
         len(pdbqt_tasks),
         len(dok_tasks),
+        len(dock6_tasks),
         docked_root,
         post_docked_root,
     )
@@ -1016,6 +1190,12 @@ def main() -> int:
             len(dok_tasks),
         )
         statuses.update(process_tasks(dok_tasks, args.overwrite, workers=1))
+    if dock6_tasks:
+        logger.info(
+            "[pose-bust] action=convert status=info note=serial_dock6 dock6_tasks=%d",
+            len(dock6_tasks),
+        )
+        statuses.update(process_tasks(dock6_tasks, args.overwrite, workers=1))
 
     converted = sum(1 for s in statuses.values() if s == "converted")
     skipped = sum(1 for s in statuses.values() if s == "skipped")
@@ -1026,15 +1206,18 @@ def main() -> int:
 
     converted_pdbqt = sum(1 for t, s in statuses.items() if t.kind == "pdbqt" and s == "converted")
     converted_dok = sum(1 for t, s in statuses.items() if t.kind == "dok" and s == "converted")
+    converted_dock6 = sum(1 for t, s in statuses.items() if t.kind == "dock6" and s == "converted")
     logger.info(
-        "[pose-bust] action=summary run_id=%s found=%d pdbqt=%d dok=%d converted=%d converted_pdbqt=%d converted_dok=%d skipped=%d failed=%d missing=%d",
+        "[pose-bust] action=summary run_id=%s found=%d pdbqt=%d dok=%d dock6=%d converted=%d converted_pdbqt=%d converted_dok=%d converted_dock6=%d skipped=%d failed=%d missing=%d",
         args.run_id,
         len(tasks),
         len(pdbqt_tasks),
         len(dok_tasks),
+        len(dock6_tasks),
         converted,
         converted_pdbqt,
         converted_dok,
+        converted_dock6,
         skipped,
         failed,
         len(missing),

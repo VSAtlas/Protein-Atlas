@@ -620,23 +620,6 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             )
             continue
 
-        try:
-            prep_dock6.ensure_dock6_site(
-                cfg=cfg,
-                pdb_id=paths.pdb_id,
-                variant=variant_token,
-                ph_label=ph_label,
-                logger=logger,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[dock6.surface.skip] pdb=%s variant=%s ph=%s reason=%s",
-                paths.pdb_id,
-                variant_label,
-                ph_print,
-                exc,
-            )
-
         _record_apo_holo_usage(cfg, paths.pdb_id, variant_token, ph_label, rec_path)
 
         if not rec_exists:
@@ -1536,6 +1519,30 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                     variant=variant_env or None,
                     csv_prefix=csv_prefix,
                 )
+
+            if dock6_jobs and dock6_enabled:
+                try:
+                    logger.info(
+                        "[DOCK6_PREP_ONCE] ensuring DOCK6 site for pdb=%s variant=%s ph=%s",
+                        paths.pdb_id,
+                        variant_label,
+                        ph_label if ph_label else "base",
+                    )
+                    prep_dock6.ensure_dock6_site(
+                        cfg=cfg,
+                        pdb_id=paths.pdb_id,
+                        variant=variant_env or None,
+                        ph_label=ph_label,
+                        logger=logger,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[dock6.surface.skip] pdb=%s variant=%s ph=%s reason=%s",
+                        paths.pdb_id,
+                        variant_label,
+                        ph_label if ph_label else "base",
+                        exc,
+                    )
 
             if dock6_jobs:
                 logger.info(

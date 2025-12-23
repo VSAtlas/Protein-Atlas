@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from input_and_export_functions import _to_bool, write_score_summary_to_csv
 from path_router import make_paths, ph_ensemble_dir
-import prep_dock6
 from prep_for_ledock import ensure_mol2_for_ledock, map_pdbqt_to_mol2_path
 
 
@@ -118,6 +117,53 @@ def should_run_dock6_for_target(cfg: Dict[str, Any]) -> bool:
         logging.getLogger(__name__).warning("[dock6.skip] reason=missing_exe")
         return False
     return True
+
+
+def get_dock6_stage_preset(cfg: Dict[str, Any], stage_key: str) -> Dict[str, Any]:
+    fast_mode = bool(cfg.get("FAST_MODE"))
+    fast_preset = {
+        "grid_prefix": "grid_fast",
+        "grid_spacing": 0.60,
+        "max_orientations": 150,
+        "minimize_ligand": False,
+        "simplex_max_iterations": 1000,
+        "simplex_max_cycles": 1,
+        "num_final_scored_poses": 1,
+    }
+    if fast_mode:
+        return fast_preset
+
+    stage = (stage_key or "").lower()
+    presets = {
+        "stage1": {
+            "grid_prefix": "grid_s1",
+            "grid_spacing": 0.50,
+            "max_orientations": 300,
+            "minimize_ligand": False,
+            "simplex_max_iterations": 1000,
+            "simplex_max_cycles": 1,
+            "num_final_scored_poses": 1,
+        },
+        "stage2": {
+            "grid_prefix": "grid_s2",
+            "grid_spacing": 0.35,
+            "max_orientations": 1000,
+            "minimize_ligand": True,
+            "simplex_max_iterations": 500,
+            "simplex_max_cycles": 1,
+            "num_final_scored_poses": 1,
+        },
+        "stage3": {
+            "grid_prefix": "grid_s3",
+            "grid_spacing": 0.30,
+            "max_orientations": 3000,
+            "minimize_ligand": True,
+            "simplex_max_iterations": 1500,
+            "simplex_max_cycles": 2,
+            "num_final_scored_poses": 3,
+        },
+    }
+    return presets.get(stage, presets["stage2"])
 
 
 def _build_multi_mol2_for_stage(
@@ -308,21 +354,17 @@ def run_dock6_for_stage(
     variant_for_ph = _variant_for_ph(variant_token, legacy_mode)
     ph_token = _normalize_ph_label(ph_label)
 
-    rec_ms = prep_dock6.ensure_dock6_site(cfg, pdb_id, variant_for_ph, ph_token, logger)
-    if rec_ms is None:
-        logger.warning("[dock6.skip] reason=site_prep_failed pdb=%s", pdb_id)
-        return scores, metrics
-
     # Ensure mol2 prep for all ligands up front so we always draw from prepped_ligands/<lib>/<lib>_mol2
     try:
         ensure_mol2_for_ledock(cfg, ligands, logger)
     except Exception as exc:
         logger.warning("[dock6.mol2.prep.warn] n=%d reason=%s", len(ligands), exc)
 
-    dock6_root = rec_ms.parent
-    grid_nrg = dock6_root / "grid.nrg"
-    if not grid_nrg.exists() or grid_nrg.stat().st_size == 0:
-        logger.warning("[dock6.skip] reason=missing_grid pdb=%s dir=%s", pdb_id, dock6_root)
+    ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
+    dock6_root = ensemble_dir / "dock6"
+    rec_ms = dock6_root / "rec.ms"
+    if not rec_ms.exists() or rec_ms.stat().st_size == 0:
+        logger.warning("[dock6.skip] reason=site_prep_missing pdb=%s variant=%s ph=%s dir=%s", pdb_id, variant_for_ph or "HOLO", ph_token or "base", dock6_root)
         return scores, metrics
 
     ligand_pairs: List[Tuple[Path, Path]] = []
@@ -348,6 +390,12 @@ def run_dock6_for_stage(
 
     mol2_by_pdbqt = {pdbqt: mol2 for pdbqt, mol2 in ligand_pairs}
     stage_key = stage_info.get("key") or stage_name
+    stage_preset = get_dock6_stage_preset(cfg, stage_key)
+    grid_prefix = stage_preset["grid_prefix"]
+    grid_nrg = dock6_root / f"{grid_prefix}.nrg"
+    if not grid_nrg.exists() or grid_nrg.stat().st_size == 0:
+        logger.warning("[dock6.skip] reason=missing_grid pdb=%s prefix=%s dir=%s", pdb_id, grid_prefix, dock6_root)
+        return scores, metrics
     prefix = f"dock6_{stage_key}"
     ligand_items = list(ligand_pairs)
     n_lig = len(ligand_items)
@@ -386,6 +434,11 @@ def run_dock6_for_stage(
     vdw_defn = _get_vdw_defn_file(cfg, logger)
     flex_defn = _get_flex_defn_file(cfg, logger)
     flex_drive = _get_flex_drive_file(cfg, logger)
+    max_orientations = int(stage_preset.get("max_orientations", 1000))
+    minimize_flag = "yes" if stage_preset.get("minimize_ligand", True) else "no"
+    simplex_max_iterations = int(stage_preset.get("simplex_max_iterations", 1000))
+    simplex_max_cycles = int(stage_preset.get("simplex_max_cycles", 1))
+    num_final_scored_poses = int(stage_preset.get("num_final_scored_poses", 1))
 
     logger.info(
         "[dock6.run] pdb=%s stage=%s ligands=%d exe=%s",
@@ -423,12 +476,12 @@ def run_dock6_for_stage(
             "orient_ligand yes",
             "automated_matching yes",
             "receptor_site_file selected_spheres.sph",
-            "max_orientations 1000",
+            f"max_orientations {max_orientations}",
             "critical_points no",
             "chemical_matching no",
             "use_ligand_spheres no",
             "bump_filter yes",
-            "bump_grid_prefix grid",
+            f"bump_grid_prefix {grid_prefix}",
             "max_bumps_anchor 2",
             "max_bumps_growth 2",
             "score_molecules yes",
@@ -439,11 +492,11 @@ def run_dock6_for_stage(
             "grid_score_vdw_scale 1.0",
             "grid_score_es_scale 1.0",
             "grid_lig_efficiency no",
-            "grid_score_grid_prefix grid",
-            "minimize_ligand yes",
-            "simplex_max_iterations 1000",
+            f"grid_score_grid_prefix {grid_prefix}",
+            f"minimize_ligand {minimize_flag}",
+            f"simplex_max_iterations {simplex_max_iterations}",
             "simplex_tors_premin_iterations 0",
-            "simplex_max_cycles 1",
+            f"simplex_max_cycles {simplex_max_cycles}",
             "simplex_score_converge 0.1",
             "simplex_cycle_converge 1.0",
             "simplex_trans_step 1.0",
@@ -459,7 +512,7 @@ def run_dock6_for_stage(
             f"ligand_outfile_prefix {local_prefix}",
             "write_mol_solvation no",
             "write_orientations yes",
-            "num_final_scored_poses 1",
+            f"num_final_scored_poses {num_final_scored_poses}",
             "num_preclustered_conformers 1",
             "score_threshold 100.0",
             "rank_ligands yes",

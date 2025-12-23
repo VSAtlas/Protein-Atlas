@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -476,48 +477,18 @@ def _log_site_alignment(
     )
 
 
-def _ensure_dock6_grids(
-    cfg: dict,
-    dock6_root: Path,
+def _write_grid_in(
+    grid_in_path: Path,
     receptor_pdb: Path,
-    logger: logging.Logger,
-) -> Optional[Path]:
-    """
-    Ensure DOCK6 grid files exist in dock6_root for the given receptor and site_box.
-    """
-    box_path = dock6_root / "site_box.pdb"
-    if not box_path.exists() or box_path.stat().st_size == 0:
-        logger.warning("[dock6.grid.skip] reason=missing_site_box dir=%s", dock6_root)
-        return None
-
-    if not receptor_pdb.exists() or receptor_pdb.stat().st_size == 0:
-        logger.warning(
-            "[dock6.grid.skip] reason=missing_receptor dir=%s receptor=%s",
-            dock6_root,
-            receptor_pdb,
-        )
-        return None
-
-    grid_nrg = dock6_root / "grid.nrg"
-    grid_bmp = dock6_root / "grid.bmp"
-    grid_in_path = dock6_root / "grid.in"
-    grid_out_path = dock6_root / "grid.out"
-
-    if grid_nrg.exists() and grid_nrg.stat().st_size > 0 and grid_bmp.exists() and grid_bmp.stat().st_size > 0:
-        logger.info(
-            "[dock6.grid.reuse] dir=%s nrg=%s bmp=%s -- regenerating grid anyway",
-            dock6_root,
-            grid_nrg,
-            grid_bmp,
-        )
-
-    rec_name = receptor_pdb.name if receptor_pdb.parent == dock6_root else str(receptor_pdb)
-    vdw_defn = _resolve_vdw_defn_path(cfg, logger)
-
+    vdw_defn: str,
+    grid_prefix: str,
+    grid_spacing: float,
+) -> None:
+    rec_name = receptor_pdb.name if receptor_pdb.parent == grid_in_path.parent else str(receptor_pdb)
     grid_contents = "\n".join(
         [
             "compute_grids yes",
-            "grid_spacing 0.3",
+            f"grid_spacing {grid_spacing}",
             "output_molecule yes",
             "",
             "contact_score no",
@@ -539,16 +510,14 @@ def _ensure_dock6_grids(
             "box_file site_box.pdb",
             f"vdw_definition_file {vdw_defn}",
             "",
-            "score_grid_prefix grid",
-            f"receptor_out_file {receptor_pdb.stem}.grid.pdb",
+            f"score_grid_prefix {grid_prefix}",
+            f"receptor_out_file {receptor_pdb.stem}_{grid_prefix}.grid.pdb",
         ]
     ) + "\n"
-
-    dock6_root.mkdir(parents=True, exist_ok=True)
     grid_in_path.write_text(grid_contents, encoding="utf-8")
-    logger.info("[dock6.grid.in] path=%s", grid_in_path)
 
-    grid_exe = _resolve_grid_exe(cfg, logger)
+
+def _run_grid(grid_exe: str, grid_in_path: Path, grid_out_path: Path, dock6_root: Path, logger: logging.Logger) -> bool:
     try:
         subprocess.run(
             [grid_exe, "-i", grid_in_path.name, "-o", grid_out_path.name],
@@ -557,6 +526,7 @@ def _ensure_dock6_grids(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        return True
     except Exception as exc:
         logger.error(
             "[dock6.grid.error] dir=%s exe=%s reason=%s",
@@ -564,6 +534,52 @@ def _ensure_dock6_grids(
             grid_exe,
             exc,
         )
+        return False
+
+
+def _ensure_dock6_grids(
+    cfg: dict,
+    dock6_root: Path,
+    receptor_pdb: Path,
+    logger: logging.Logger,
+    *,
+    grid_prefix: str,
+    grid_spacing: float,
+) -> Optional[Path]:
+    """
+    Ensure DOCK6 grid files exist in dock6_root for the given receptor and site_box.
+    """
+    box_path = dock6_root / "site_box.pdb"
+    if not box_path.exists() or box_path.stat().st_size == 0:
+        logger.warning("[dock6.grid.skip] reason=missing_site_box dir=%s", dock6_root)
+        return None
+
+    if not receptor_pdb.exists() or receptor_pdb.stat().st_size == 0:
+        logger.warning(
+            "[dock6.grid.skip] reason=missing_receptor dir=%s receptor=%s",
+            dock6_root,
+            receptor_pdb,
+        )
+        return None
+
+    grid_nrg = dock6_root / f"{grid_prefix}.nrg"
+    grid_bmp = dock6_root / f"{grid_prefix}.bmp"
+    grid_in_path = dock6_root / f"{grid_prefix}.in"
+    grid_out_path = dock6_root / f"{grid_prefix}.out"
+
+    if grid_nrg.exists() and grid_nrg.stat().st_size > 0 and grid_bmp.exists() and grid_bmp.stat().st_size > 0:
+        logger.info("[dock6.grid.reuse] dir=%s prefix=%s nrg=%s bmp=%s", dock6_root, grid_prefix, grid_nrg, grid_bmp)
+        return grid_nrg
+
+    vdw_defn = _resolve_vdw_defn_path(cfg, logger)
+    dock6_root.mkdir(parents=True, exist_ok=True)
+    _write_grid_in(grid_in_path, receptor_pdb, vdw_defn, grid_prefix, grid_spacing)
+    logger.info("[dock6.grid.in] path=%s", grid_in_path)
+
+    grid_exe = _resolve_grid_exe(cfg, logger)
+    logger.info("[DOCK6_GRID] building %s spacing=%s", grid_prefix, grid_spacing)
+    ok = _run_grid(grid_exe, grid_in_path, grid_out_path, dock6_root, logger)
+    if not ok:
         return None
 
     if not grid_nrg.exists() or grid_nrg.stat().st_size == 0:
@@ -572,7 +588,7 @@ def _ensure_dock6_grids(
     if not grid_bmp.exists() or grid_bmp.stat().st_size == 0:
         logger.warning("[dock6.grid.no_bmp] bmp missing or empty at %s", grid_bmp)
 
-    logger.info("[dock6.grid.ready] dir=%s nrg=%s bmp=%s", dock6_root, grid_nrg, grid_bmp)
+    logger.info("[DOCK6_GRID] ready %s", grid_prefix)
     return grid_nrg
 
 
@@ -600,6 +616,11 @@ def ensure_dock6_surface(
     if not ph_token:
         logger.warning("[dock6.surface.skip] reason=missing_ph_label pdb=%s", pdb_id)
         return None
+
+    if bool(cfg.get("FAST_MODE")):
+        grid_plan = [("grid_fast", 0.60)]
+    else:
+        grid_plan = [("grid_s1", 0.50), ("grid_s2", 0.35), ("grid_s3", 0.30)]
 
     ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
     withh_path = prep_for_ledock._resolve_withh_from_manifest(
@@ -633,6 +654,34 @@ def ensure_dock6_surface(
 
     noH_path = dock6_root / f"{base}_noH.pdb"
     ms_path = dock6_root / "rec.ms"
+
+    def _build_grids_once():
+        if not grid_plan:
+            return
+        with ThreadPoolExecutor(max_workers=len(grid_plan)) as pool:
+            futures = {}
+            for prefix, spacing in grid_plan:
+                futures[
+                    pool.submit(
+                        _ensure_dock6_grids,
+                        cfg=cfg,
+                        dock6_root=dock6_root,
+                        receptor_pdb=noH_path,
+                        logger=logger,
+                        grid_prefix=prefix,
+                        grid_spacing=spacing,
+                    )
+                ] = (prefix, spacing)
+            for fut in as_completed(futures):
+                prefix, _spacing = futures[fut]
+                res = None
+                try:
+                    res = fut.result()
+                except Exception as exc:
+                    logger.error("[dock6.grid.error] prefix=%s dir=%s reason=%s", prefix, dock6_root, exc)
+                    raise
+                if res is None:
+                    raise RuntimeError(f"dock6 grid failed for prefix {prefix}")
 
     if (
         noH_path.exists()
@@ -678,12 +727,7 @@ def ensure_dock6_surface(
                 logger=logger,
             )
             try:
-                _ensure_dock6_grids(
-                    cfg=cfg,
-                    dock6_root=dock6_root,
-                    receptor_pdb=noH_path,
-                    logger=logger,
-                )
+                _build_grids_once()
             except Exception as exc:
                 logger.error(
                     "[dock6.surface.grid.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
@@ -693,6 +737,7 @@ def ensure_dock6_surface(
                     dock6_root,
                     exc,
                 )
+                return None
         except Exception as exc:
             logger.error(
                 "[dock6.surface.site.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
@@ -765,12 +810,7 @@ def ensure_dock6_surface(
             logger=logger,
         )
         try:
-            _ensure_dock6_grids(
-                cfg=cfg,
-                dock6_root=dock6_root,
-                receptor_pdb=noH_path,
-                logger=logger,
-            )
+            _build_grids_once()
         except Exception as exc:
             logger.error(
                 "[dock6.surface.grid.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
@@ -780,6 +820,7 @@ def ensure_dock6_surface(
                 dock6_root,
                 exc,
             )
+            return None
     except Exception as exc:
         logger.error(
             "[dock6.surface.site.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
