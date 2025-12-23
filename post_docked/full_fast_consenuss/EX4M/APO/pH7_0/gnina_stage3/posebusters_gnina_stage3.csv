@@ -1,0 +1,5 @@
+pdb_id,variant,ph,engine,stage,stage_dir,ligand_file,posebusters_pass,posebusters_reason,mol_pred_loaded,sanitization,passes_valence_checks,internal_steric_clash,bond_lengths,bond_angles,most_extreme_clash_protein,most_extreme_relative_distance_protein
+EX4M,APO,pH7_0,gnina,stage3,gnina_stage3,EX4M.sanitized_gnina_stage3.sdf,False,missing_receptor,False,False,False,False,False,False,False,
+EX4M,APO,pH7_0,gnina,stage3,gnina_stage3,KEU_A510.sanitized_gnina_stage3.sdf,False,missing_receptor,False,False,False,False,False,False,False,
+EX4M,APO,pH7_0,gnina,stage3,gnina_stage3,KEU_B610.sanitized_gnina_stage3.sdf,False,missing_receptor,False,False,False,False,False,False,False,
+EX4M,APO,pH7_0,gnina,stage3,gnina_stage3,decoys_final_00016_gnina_stage3.sdf,False,missing_receptor,False,False,False,False,False,False,False,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -158,7 +160,17 @@ def _parse_dock6_ranked_mol2(
     ligand_pairs: List[Tuple[Path, Path]],
     logger: logging.Logger,
 ) -> Dict[Path, Dict[str, Any]]:
+    """
+    Parse a DOCK6 *_ranked.mol2 file and extract grid scores per ligand.
+
+    Supports header lines of the form:
+      '########## Name:ligand.mol2'
+      '########## Name: ligand.mol2'
+      '########## Name ligand.mol2'
+    by extracting the ligand name after 'Name' or after the first ':'.
+    """
     mol2_by_pdbqt: Dict[Path, Path] = {pdbqt: mol2 for pdbqt, mol2 in ligand_pairs}
+
     # Build a name map that includes both pdbqt and mol2 basenames/stems so either can match.
     name_map: Dict[str, Path] = {}
     for pdbqt_path, mol2_path in ligand_pairs:
@@ -177,15 +189,35 @@ def _parse_dock6_ranked_mol2(
     try:
         current_name: Optional[str] = None
         current_score: Optional[float] = None
+
         with ranked_path.open("r", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
-                if "Name:" in line:
+                # Extract the ligand name
+                if "Name" in line:
                     tokens = line.replace("#", " ").replace("\t", " ").split()
                     for idx, tok in enumerate(tokens):
-                        if tok.lower().startswith("name"):
-                            if idx + 1 < len(tokens):
-                                current_name = tokens[idx + 1]
+                        low = tok.lower()
+                        if low.startswith("name"):
+                            name_val: Optional[str] = None
+
+                            # Case 1: token looks like "Name:ligand" or "Name:ligand.mol2"
+                            if ":" in tok:
+                                parts = tok.split(":", 1)
+                                if len(parts) == 2 and parts[1].strip():
+                                    name_val = parts[1].strip()
+
+                            # Case 2: "Name" or "Name:" followed by the ligand name as next token
+                            if not name_val and idx + 1 < len(tokens):
+                                candidate = tokens[idx + 1].strip()
+                                # Avoid treating a bare ":" as the name
+                                if candidate and candidate != ":":
+                                    name_val = candidate
+
+                            if name_val:
+                                current_name = name_val
                             break
+
+                # Extract the grid score
                 if "Grid_Score" in line:
                     tokens = line.replace("#", " ").replace("\t", " ").split()
                     for idx, tok in enumerate(tokens):
@@ -196,16 +228,19 @@ def _parse_dock6_ranked_mol2(
                                 except Exception:
                                     current_score = None
                             break
+
+                    # Only record a row when we have both name and score
                     if current_name is not None and current_score is not None:
                         parsed.append((current_name, current_score))
                         current_name = None
                         current_score = None
+
     except Exception as exc:
         logger.warning("[dock6.parse.error] path=%s reason=%s", ranked_path, exc)
 
     used: set[Path] = set()
 
-    # first pass by name
+    # First pass: map by molecule name
     for name, score in parsed:
         match = name_map.get(name)
         if match and match not in used:
@@ -218,13 +253,14 @@ def _parse_dock6_ranked_mol2(
             }
             used.add(match)
 
-    # second pass by order
+    # Second pass: fall back to positional matching for anything not seen in the ranked file
     for idx, (pdbqt_path, _mol2_path) in enumerate(ligand_pairs):
         if pdbqt_path in metrics:
             continue
-        score = None
+        score: Optional[float] = None
         if idx < len(parsed):
             score = parsed[idx][1]
+
         metrics[pdbqt_path] = {
             "grid_score": score,
             "n_poses": 1 if score is not None else 0,
@@ -233,7 +269,7 @@ def _parse_dock6_ranked_mol2(
             "mol2_name": mol2_by_pdbqt.get(pdbqt_path, pdbqt_path).name,
         }
 
-    # ensure mol2_name is populated for all metrics
+    # Ensure mol2_name is populated for all metrics
     for lig, rec in metrics.items():
         if "mol2_name" not in rec or not rec.get("mol2_name"):
             rec["mol2_name"] = mol2_by_pdbqt.get(lig, lig).name
@@ -313,75 +349,44 @@ def run_dock6_for_stage(
     mol2_by_pdbqt = {pdbqt: mol2 for pdbqt, mol2 in ligand_pairs}
     stage_key = stage_info.get("key") or stage_name
     prefix = f"dock6_{stage_key}"
-    multi_mol2 = dock6_root / f"{prefix}_ligands.mol2"
-    input_path = dock6_root / f"{prefix}.in"
-    output_path = dock6_root / f"{prefix}.out"
-    ranked_path = dock6_root / f"{prefix}_ranked.mol2"
+    ligand_items = list(ligand_pairs)
+    n_lig = len(ligand_items)
 
-    _build_multi_mol2_for_stage(ligand_pairs, multi_mol2, logger)
+    cpu = int(cfg.get("CPU", os.cpu_count() or 1))
+    max_jobs = int(cfg.get("MAX_PARALLEL_JOBS", cpu))
+    n_workers_cap = max(1, min(cpu, max_jobs, n_lig))
 
+    raw_chunks = int(cfg.get("DOCK6_CHUNK_SIZE", 0) or 0)
+    if raw_chunks > 0:
+        target_batches = max(1, min(raw_chunks, n_lig))
+    else:
+        target_batches = max(1, min(n_workers_cap, n_lig))
+
+    chunk_size = max(1, math.ceil(n_lig / target_batches))
+
+    batches: List[List[Tuple[Path, Path]]] = []
+    for i in range(0, n_lig, chunk_size):
+        batches.append(ligand_items[i : i + chunk_size])
+
+    n_batches = len(batches)
+    max_workers = min(n_workers_cap, n_batches)
+
+    logger.info(
+        "[dock6.stage] pdb=%s stage=%s variant=%s ph=%s n_lig=%d n_batches=%d max_workers=%d",
+        pdb_id,
+        stage_name,
+        variant_for_ph or "HOLO",
+        ph_token or "ph_ensemble",
+        n_lig,
+        n_batches,
+        max_workers,
+    )
+
+    dock6_exe = _get_dock6_exe(cfg)
     vdw_defn = _get_vdw_defn_file(cfg, logger)
     flex_defn = _get_flex_defn_file(cfg, logger)
     flex_drive = _get_flex_drive_file(cfg, logger)
 
-    config_lines = [
-        "conformer_search_type rigid",
-        "use_internal_energy no",
-        f"ligand_atom_file {multi_mol2.name}",
-        "limit_max_ligands yes",
-        f"max_ligands {len(ligand_pairs)}",
-        "skip_molecule no",
-        "read_mol_solvation no",
-        "calculate_rmsd no",
-        "use_database_filter no",
-        "orient_ligand yes",
-        "automated_matching yes",
-        "receptor_site_file selected_spheres.sph",
-        "max_orientations 1000",
-        "critical_points no",
-        "chemical_matching no",
-        "use_ligand_spheres no",
-        "bump_filter yes",
-        "bump_grid_prefix grid",
-        "max_bumps_anchor 2",
-        "max_bumps_growth 2",
-        "score_molecules yes",
-        "contact_score_primary no",
-        "grid_score_primary yes",
-        "grid_score_secondary no",
-        "grid_score_rep_rad_scale 1.0",
-        "grid_score_vdw_scale 1.0",
-        "grid_score_es_scale 1.0",
-        "grid_lig_efficiency no",
-        "grid_score_grid_prefix grid",
-        "minimize_ligand yes",
-        "simplex_max_iterations 1000",
-        "simplex_tors_premin_iterations 0",
-        "simplex_max_cycles 1",
-        "simplex_score_converge 0.1",
-        "simplex_cycle_converge 1.0",
-        "simplex_trans_step 1.0",
-        "simplex_rot_step 0.1",
-        "simplex_tors_step 10.0",
-        "simplex_final_min no",
-        "simplex_random_seed 0",
-        "simplex_restraint_min no",
-        "atom_model all",
-        f"vdw_defn_file {vdw_defn}",
-        f"flex_defn_file {flex_defn}",
-        f"flex_drive_file {flex_drive}",
-        f"ligand_outfile_prefix {prefix}",
-        "write_mol_solvation no",
-        "write_orientations yes",
-        "num_final_scored_poses 1",
-        "num_preclustered_conformers 1",
-        "score_threshold 100.0",
-        "rank_ligands yes",
-        f"max_ranked_ligands {max(len(ligand_pairs), 1)}",
-    ]
-    input_path.write_text("\n".join(config_lines) + "\n", encoding="utf-8")
-
-    dock6_exe = _get_dock6_exe(cfg)
     logger.info(
         "[dock6.run] pdb=%s stage=%s ligands=%d exe=%s",
         pdb_id,
@@ -389,43 +394,165 @@ def run_dock6_for_stage(
         len(ligand_pairs),
         dock6_exe,
     )
-    start_ts = time.time()
-    try:
-        subprocess.run(
-            [dock6_exe, "-i", input_path.name, "-o", output_path.name],
-            check=True,
-            cwd=str(dock6_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except Exception as exc:
-        logger.warning("[dock6.error] pdb=%s stage=%s reason=%s", pdb_id, stage_name, exc)
-        for lig, _ in ligand_pairs:
-            if lig in metrics:
-                continue
-            metrics[lig] = {
-                "grid_score": None,
-                "n_poses": 0,
-                "valid": False,
-                "reason": "dock6_run_failed",
-                "mol2_name": mol2_by_pdbqt.get(lig, lig).name,
-            }
-        return scores, metrics
 
-    if not ranked_path.exists() or ranked_path.stat().st_size == 0:
-        for lig, _ in ligand_pairs:
-            if lig in metrics:
-                continue
-            metrics[lig] = {
-                "grid_score": None,
-                "n_poses": 0,
-                "valid": False,
-                "reason": "no_ranked_output",
-                "mol2_name": mol2_by_pdbqt.get(lig, lig).name,
-            }
+    start_ts = time.time()
+    all_artifacts: List[Path] = []
+
+    def _run_dock6_batch(
+        batch_idx: int,
+        batch_pairs: List[Tuple[Path, Path]],
+    ) -> Tuple[Dict[Path, Dict[str, Any]], List[Path]]:
+        local_prefix = prefix if n_batches == 1 else f"{prefix}_b{batch_idx}"
+        multi_mol2 = dock6_root / f"{local_prefix}_ligands.mol2"
+        input_path = dock6_root / f"{local_prefix}.in"
+        output_path = dock6_root / f"{local_prefix}.out"
+        ranked_path = dock6_root / f"{local_prefix}_ranked.mol2"
+
+        _build_multi_mol2_for_stage(batch_pairs, multi_mol2, logger)
+
+        local_config_lines = [
+            "conformer_search_type rigid",
+            "use_internal_energy no",
+            f"ligand_atom_file {multi_mol2.name}",
+            "limit_max_ligands yes",
+            f"max_ligands {len(batch_pairs)}",
+            "skip_molecule no",
+            "read_mol_solvation no",
+            "calculate_rmsd no",
+            "use_database_filter no",
+            "orient_ligand yes",
+            "automated_matching yes",
+            "receptor_site_file selected_spheres.sph",
+            "max_orientations 1000",
+            "critical_points no",
+            "chemical_matching no",
+            "use_ligand_spheres no",
+            "bump_filter yes",
+            "bump_grid_prefix grid",
+            "max_bumps_anchor 2",
+            "max_bumps_growth 2",
+            "score_molecules yes",
+            "contact_score_primary no",
+            "grid_score_primary yes",
+            "grid_score_secondary no",
+            "grid_score_rep_rad_scale 1.0",
+            "grid_score_vdw_scale 1.0",
+            "grid_score_es_scale 1.0",
+            "grid_lig_efficiency no",
+            "grid_score_grid_prefix grid",
+            "minimize_ligand yes",
+            "simplex_max_iterations 1000",
+            "simplex_tors_premin_iterations 0",
+            "simplex_max_cycles 1",
+            "simplex_score_converge 0.1",
+            "simplex_cycle_converge 1.0",
+            "simplex_trans_step 1.0",
+            "simplex_rot_step 0.1",
+            "simplex_tors_step 10.0",
+            "simplex_final_min no",
+            "simplex_random_seed 0",
+            "simplex_restraint_min no",
+            "atom_model all",
+            f"vdw_defn_file {vdw_defn}",
+            f"flex_defn_file {flex_defn}",
+            f"flex_drive_file {flex_drive}",
+            f"ligand_outfile_prefix {local_prefix}",
+            "write_mol_solvation no",
+            "write_orientations yes",
+            "num_final_scored_poses 1",
+            "num_preclustered_conformers 1",
+            "score_threshold 100.0",
+            "rank_ligands yes",
+            f"max_ranked_ligands {max(len(batch_pairs), 1)}",
+        ]
+        input_path.write_text("\n".join(local_config_lines) + "\n", encoding="utf-8")
+
+        logger.info(
+            "[dock6.cmd] pdb=%s stage=%s batch=%d n_lig=%d exe=%s cwd=%s",
+            pdb_id,
+            stage_name,
+            batch_idx,
+            len(batch_pairs),
+            dock6_exe,
+            str(dock6_root),
+        )
+
+        try:
+            subprocess.run(
+                [dock6_exe, "-i", input_path.name, "-o", output_path.name],
+                check=True,
+                cwd=str(dock6_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[dock6.error] pdb=%s stage=%s batch=%d reason=%s",
+                pdb_id,
+                stage_name,
+                batch_idx,
+                exc,
+            )
+            batch_metrics: Dict[Path, Dict[str, Any]] = {}
+            for lig, _mol2 in batch_pairs:
+                batch_metrics[lig] = {
+                    "grid_score": None,
+                    "n_poses": 0,
+                    "valid": False,
+                    "reason": "dock6_run_failed",
+                    "mol2_name": mol2_by_pdbqt.get(lig, lig).name,
+                }
+            return batch_metrics, [input_path, output_path, multi_mol2, ranked_path]
+
+        if not ranked_path.exists() or ranked_path.stat().st_size == 0:
+            batch_metrics = {}
+            for lig, _mol2 in batch_pairs:
+                batch_metrics[lig] = {
+                    "grid_score": None,
+                    "n_poses": 0,
+                    "valid": False,
+                    "reason": "no_ranked_output",
+                    "mol2_name": mol2_by_pdbqt.get(lig, lig).name,
+                }
+        else:
+            batch_metrics = _parse_dock6_ranked_mol2(ranked_path, batch_pairs, logger)
+
+        return batch_metrics, [input_path, output_path, multi_mol2, ranked_path]
+
+    if n_batches == 1:
+        batch_metrics, artifact_paths = _run_dock6_batch(0, batches[0])
+        metrics.update(batch_metrics)
+        all_artifacts.extend(artifact_paths)
     else:
-        parsed = _parse_dock6_ranked_mol2(ranked_path, ligand_pairs, logger)
-        metrics.update(parsed)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures: Dict[Any, int] = {}
+            for idx, batch_pairs in enumerate(batches):
+                futures[pool.submit(_run_dock6_batch, idx, batch_pairs)] = idx
+
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                try:
+                    batch_metrics, artifact_paths = fut.result()
+                    metrics.update(batch_metrics)
+                    all_artifacts.extend(artifact_paths)
+                except Exception as exc:
+                    logger.warning(
+                        "[dock6.error] pdb=%s stage=%s batch=%d reason=%s",
+                        pdb_id,
+                        stage_name,
+                        idx,
+                        exc,
+                    )
+                    for lig, _mol2 in batches[idx]:
+                        if lig in metrics:
+                            continue
+                        metrics[lig] = {
+                            "grid_score": None,
+                            "n_poses": 0,
+                            "valid": False,
+                            "reason": "dock6_run_failed",
+                            "mol2_name": mol2_by_pdbqt.get(lig, lig).name,
+                        }
 
     scores = {lig: rec.get("grid_score") for lig, rec in metrics.items()}
 
@@ -440,7 +567,7 @@ def run_dock6_for_stage(
         dock_dest = dock_root / f"dock6_{stage_key}"
     dock_dest.mkdir(parents=True, exist_ok=True)
 
-    for fname in (input_path, output_path, multi_mol2, ranked_path):
+    for fname in all_artifacts:
         if fname.exists():
             try:
                 shutil.copy2(fname, dock_dest / fname.name)

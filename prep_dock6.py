@@ -504,8 +504,12 @@ def _ensure_dock6_grids(
     grid_out_path = dock6_root / "grid.out"
 
     if grid_nrg.exists() and grid_nrg.stat().st_size > 0 and grid_bmp.exists() and grid_bmp.stat().st_size > 0:
-        logger.info("[dock6.grid.reuse] dir=%s nrg=%s bmp=%s", dock6_root, grid_nrg, grid_bmp)
-        return grid_nrg
+        logger.info(
+            "[dock6.grid.reuse] dir=%s nrg=%s bmp=%s -- regenerating grid anyway",
+            dock6_root,
+            grid_nrg,
+            grid_bmp,
+        )
 
     rec_name = receptor_pdb.name if receptor_pdb.parent == dock6_root else str(receptor_pdb)
     vdw_defn = _resolve_vdw_defn_path(cfg, logger)
@@ -547,7 +551,7 @@ def _ensure_dock6_grids(
     grid_exe = _resolve_grid_exe(cfg, logger)
     try:
         subprocess.run(
-            [grid_exe, "-i", str(grid_in_path), "-o", str(grid_out_path)],
+            [grid_exe, "-i", grid_in_path.name, "-o", grid_out_path.name],
             check=True,
             cwd=str(dock6_root),
             stdout=subprocess.PIPE,
