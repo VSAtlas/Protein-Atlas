@@ -1,6 +1,6 @@
 # Consensus equations (rank-based)
 # N = number of candidate ligands for this (variant, pH)
-# E = set of engines/signals (e.g. vina, gnina_energy, gnina_cnn, ledock)
+# E = set of engines/signals (e.g. vina, gnina_energy, gnina_cnn, ledock, dock6)
 # r_e(l) = rank of ligand l under engine e, in {1, 2, ..., N} with 1 = best, N = worst
 # Rank percentile in [0, 1]:
 # p_e(l) = 1 - (r_e(l) - 1) / (N - 1)
@@ -8,11 +8,17 @@
 # Best ligand under engine e: r_e(l) = 1 -> p_e(l) = 1
 # Worst or missing ligand: r_e(l) = N -> p_e(l) = 0
 # Consensus score (higher is better):
-# S(l) = sum_e ( w_e * p_e(l) )
-# with weights w_e >= 0 and sum_e w_e = 1
-# Energy-family combination:
-# p_energy(l) = 0.6 * p_vina(l) + 0.4 * p_gnina_energy(l)
-# If gnina_energy is not available: p_energy(l) = p_vina(l)
+# S(l) = sum_e ( w_e * p_e(l) ) where weights w_e >= 0 and the sum over participating engines is 1.
+# (Implementation groups engines into energy, ledock, and cnn families.)
+# Energy-family combination (per ligand):
+# alpha_vina = 0.4
+# alpha_dock6 = 0.6
+# alpha_gnina_energy = 0.4
+# p_energy(l) = (alpha_vina * p_vina(l)
+#              + alpha_dock6 * p_dock6(l)
+#              + alpha_gnina_energy * p_gnina_energy(l)) / denom(l)
+# denom(l) = sum of alpha_x for engines x in {vina, dock6, gnina_energy} that have a valid score for ligand l.
+# If no energy engines have a score for l, set p_energy(l) = 0.
 # Full runs (CNN available):
 # w_energy = 0.25
 # w_ledock = 0.30
@@ -141,6 +147,7 @@ def compute_consensus_for_variant_ph(
     vina_csv = variant_root / f"{csv_prefix}docking_score_long.csv"
     gnina_csv = variant_root / f"{csv_prefix}gnina_docking_score_long.csv"
     ledock_csv = variant_root / f"{csv_prefix}ledock_docking_score_long.csv"
+    dock6_csv = variant_root / f"{csv_prefix}dock6_docking_score_long.csv"
 
     if not vina_csv.exists():
         log.info("[consensus.skip] reason=missing_vina_csv path=%s", str(vina_csv))
@@ -200,19 +207,49 @@ def compute_consensus_for_variant_ph(
         higher_is_better=False,
         logger=log,
     )
+    dock6_scores = _load_best_scores_per_ligand(
+        dock6_csv,
+        value_key="dock6_best_score_kcal",
+        valid_key=None,
+        higher_is_better=False,
+        logger=log,
+    )
+    if not dock6_scores and dock6_csv.exists():
+        dock6_scores = _load_best_scores_per_ligand(
+            dock6_csv,
+            value_key="dock6_grid_score",
+            valid_key=None,
+            higher_is_better=False,
+            logger=log,
+        )
 
     p_vina = _percentiles_from_scores(ligands, vina_scores, higher_is_better=False)
     p_gnina_energy = _percentiles_from_scores(ligands, gnina_energy_scores, higher_is_better=False)
     p_ledock = _percentiles_from_scores(ligands, ledock_scores, higher_is_better=False)
     p_cnn = _percentiles_from_scores(ligands, cnn_scores, higher_is_better=True)
+    p_dock6 = _percentiles_from_scores(ligands, dock6_scores, higher_is_better=False)
 
     has_cnn = any(v > 0.0 for v in p_cnn.values())
     has_ledock = any(v > 0.0 for v in p_ledock.values())
+    has_dock6 = any(v > 0.0 for v in p_dock6.values())
 
-    if any(v > 0.0 for v in p_gnina_energy.values()):
-        p_energy = {lig: 0.6 * p_vina.get(lig, 0.0) + 0.4 * p_gnina_energy.get(lig, 0.0) for lig in ligands}
-    else:
-        p_energy = {lig: p_vina.get(lig, 0.0) for lig in ligands}
+    alpha_vina = 0.4
+    alpha_dock6 = 0.6
+    alpha_gnina_energy = 0.4
+    p_energy: Dict[str, float] = {}
+    for lig in ligands:
+        numerator = 0.0
+        denom = 0.0
+        if lig in vina_scores:
+            numerator += alpha_vina * p_vina.get(lig, 0.0)
+            denom += alpha_vina
+        if lig in dock6_scores:
+            numerator += alpha_dock6 * p_dock6.get(lig, 0.0)
+            denom += alpha_dock6
+        if lig in gnina_energy_scores:
+            numerator += alpha_gnina_energy * p_gnina_energy.get(lig, 0.0)
+            denom += alpha_gnina_energy
+        p_energy[lig] = numerator / denom if denom > 0 else 0.0
 
     if has_cnn:
         w_energy_base = 0.25
@@ -251,7 +288,7 @@ def compute_consensus_for_variant_ph(
         )
         n_engines = sum(
             1
-            for store in (vina_scores, gnina_energy_scores, ledock_scores, cnn_scores)
+            for store in (vina_scores, gnina_energy_scores, ledock_scores, dock6_scores, cnn_scores)
             if lig in store
         )
         out_rows.append(
@@ -267,6 +304,7 @@ def compute_consensus_for_variant_ph(
                 "p_cnn": p_cnn.get(lig, 0.0),
                 "p_vina": p_vina.get(lig, 0.0),
                 "p_gnina_energy": p_gnina_energy.get(lig, 0.0),
+                "p_dock6": p_dock6.get(lig, 0.0),
                 "n_engines_with_data": n_engines,
             }
         )
