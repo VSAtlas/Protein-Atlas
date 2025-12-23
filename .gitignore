@@ -43,3 +43,4 @@ analysis/out/
 # Ignore generated analysis output
 /analysis/difficulty/
 analysis/dud_eval/
+post_docked/
