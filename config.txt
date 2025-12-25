@@ -45,6 +45,21 @@ REDUCE_EXE=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_src/reduce
 REDUCE_LOCAL_CANDIDATE=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_src/reduce
 REDUCE_HET_DICT=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
 
+
+
+
+# DOCK6 surface generator
+DOCK6_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/dock6
+DMS_EXE=/stor/work/VDS_Beckham/atlas/tools/dms/bin/dms
+SPHGEN_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/sphgen
+SPHERE_SELECTOR_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/sphere_selector
+SHOWBOX_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/showbox
+GRID_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/grid
+DOCK6_VDW_DEFN_FILE=/stor/work/VDS_Beckham/atlas/tools/dock6/parameters/vdw_AMBER_parm99.defn
+
+#LeDock
+LEPRO_EXE=/stor/work/VDS_Beckham/atlas/tools/ledock/lepro_linux_x86
+
 # Vina wrapper
 VINA_EXE=${OVERALL_DIR}/vina1.sh
 
@@ -94,6 +109,16 @@ CTRL_REDOCK_EXHAUSTIVENESS = 24
 #run at  64 for more accuracy
 CTRL_REDOCK_NMODES =9
 THREADS_PER_VINA_CTRL =8
+
+
+# GNINA follow-up docking toggle:
+#   true  -> allow GNINA for difficult targets (default)
+#   false -> completely disable GNINA, Vina only
+GNINA_EXE=/stor/work/VDS_Beckham/atlas/tools/gnina/gnina
+USE_GNINA = true
+USE_LEDOCK = true
+USE_DOCK6 = true
+
 
 CHAIN_PRUNE=1
 CHAIN_POCKET_RADIUS_ANG=10.0
@@ -201,7 +226,7 @@ MIN_PARENT_HEAVY=8
 VINA_TIMEOUT_SEC=0
 FILTER_VINA_STDOUT=false
 DISCOVERY_SELECTION_PCTS=1.0,0.1,0.01,0.001,0.001
-POLYPHARM_SELECTION_PCTS=1.0,0.05,0.005
+POLYPHARM_SELECTION_PCTS=1.0,0.05,0.01
 
 
 # --- Single-ligand (optional) ---
@@ -215,6 +240,111 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 LIBRARY_SUBDIR_DEFAULT = fda_library
 TEST_MODE_ENABLE = dud
 TEST_LIBRARY_MAP = {
+    "TEST": "test_library_10",
+    "EX4M": "test_library_10",
+    "3EML": "aa2ar",
+    "2HZI": "abl1",
+    "3BKL": "ace",
+    "1E66": "aces",
+    "2E1W": "ada",
+    "2OI0": "ada17",
+    "2VT4": "adrb1",
+    "3NY8": "adrb2",
+    "3CQW": "akt1",
+    "3D0E": "akt2",
+    "2HV5": "aldr",
+    "1L2S": "ampc",
+    "2AM9": "andr",
+    "1S3B": "aofb",
+    "3L5D": "bace1",
+    "3D4Q": "braf",
+    "1BCD": "cah2", #should be cah2
+    "2CNK": "casp3",
+    "1H00": "cdk2",
+    "3BWM": "comt",
+    "1R9O": "cp2c9",
+    "3NXU": "cp3a4",
+    "3KRJ": "csf1r",
+    "3ODU": "cxcr4",
+    "1LRU": "def",
+    "3FRJ": "dhi1",
+    "2I78": "dpp4",
+    "3PBL": "drd3",
+    "3NXO": "dyr",
+    "2RGP": "egfr",
+    "1SJ0": "esr1",
+    "2FSZ": "esr2",
+    "3KL6": "fa10",
+    "1W7X": "fa7",
+    "2NNQ": "fabp4",
+    "3BZ3": "fak1",
+    "3C4F": "fgfr1",
+    "1J4H": "fkb1a",
+    "3E37": "fnta",
+    "1ZW5": "fpps",
+    "3BQD": "gcr",
+    "2V3F": "glcm",
+    "3KGC": "gria2",
+    "1VSO": "grik1",
+    "3MAX": "hdac2",
+    "3F07": "hdac8",
+    "3NF7": "hivint",
+    "1XL2": "hivpr",
+    "3LAN": "hivrt",
+    "3CCW": "hmdh",
+    "1UYG": "hs90a",
+    "3F9M": "hxk4",
+    "2OJ9": "igf1r",
+    "2H7L": "inha",
+    "2ICA": "ital",
+    "3LPB": "jak2",
+    "3CJO": "kif11",
+    "3G0E": "kit",
+    "2B8T": "kith",
+    "2I0E": "kpcb",
+    "2OF2": "lck",
+    "3CHP": "lkha4",
+    "3M2W": "mapk2",
+    "2AA2": "mcr",
+    "3LQ8": "met",
+    "2OJG": "mk01",
+    "2ZDT": "mk10",
+    "2QD9": "mk14",
+    "830C": "mmp13",
+    "3EQH": "mp2k1",
+    "1QW6": "nos1",
+    "1B9V": "nram",
+    "1KVO": "pa2ga",
+    "3L3M": "parp1",
+    "1UDT": "pde5a",
+    "2OYU": "pgh1",
+    "3LN1": "pgh2",
+    "2OWB": "plk1",
+    "3BGS": "pnph",
+    "2P54": "ppara",
+    "2ZNP": "ppard",
+    "2GTK": "pparg",
+    "3KBA": "prgr",
+    "2AZR": "ptn1",
+    "1NJS": "pur2",
+    "1C8K": "pygm",
+    "1D3G": "pyrd",
+    "3G6Z": "reni",
+    "2ETR": "rock1",
+    "1MV9": "rxra",
+    "1LI4": "sahh",
+    "3EL8": "src",
+    "3HMM": "tgfr1",
+    "1Q4X": "thb",
+    "1YPE": "thrb",
+    "2AYW": "try1",
+    "2ZEC": "tryb1",
+    "1SYN": "tysy",
+    "1SQT": "urok",
+    "2P2I": "vgfr2",
+    "3BIZ": "wee1",
+    "3HL5": "xiap",
+    "2OWB": "plk1",
     "1BN1": "cah2",
     "1T46": "kit",
     "2GQG": "abl1",
@@ -256,7 +386,6 @@ TEST_LIBRARY_MAP = {
     "1UY6": "hs90a",
     "4UND": "parp1",
     "5IKR": "ptgs2",
-    "2AM9": "andr",
     "1A28": "prgr",
     "3G6U": "gcr",
     "2AA2": "mcr",
@@ -305,7 +434,6 @@ TEST_LIBRARY_MAP = {
     "5W3J": "ace",
     "6KKN": "cah2",
 }
-
 #specify which pdb
 SPECIFIED_PROTEINS = 
 

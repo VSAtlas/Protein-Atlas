@@ -751,20 +751,37 @@ def ensure_dock6_surface(
 
     strip_hydrogens(withh_path, noH_path, logger=logger)
 
+    from pathlib import Path
+
     dms_exe = _resolve_dms_exe(cfg, logger)
+
+    # Prefer running dms from its install root so it can find lib/dms/radii and lib/dms/dmsd
+    dms_cwd = str(dock6_root)
+    try:
+        dms_path = Path(dms_exe)
+        if dms_path.is_absolute() and dms_path.exists():
+            dms_root = dms_path.resolve().parent.parent  # .../dms
+            radii = dms_root / "lib" / "dms" / "radii"
+            dmsd = dms_root / "lib" / "dms" / "dmsd"
+            if radii.exists() and dmsd.exists():
+                dms_cwd = str(dms_root)
+    except Exception:
+        pass
+
     try:
         subprocess.run(
             [dms_exe, str(noH_path), "-n", "-w", "1.4", "-v", "-o", str(ms_path)],
             check=True,
-            cwd=str(dock6_root),
+            cwd=dms_cwd,
         )
     except Exception as exc:
         logger.error(
-            "[dock6.surface.dms.error] pdb=%s variant=%s ph=%s exe=%s reason=%s",
+            "[dock6.surface.dms.error] pdb=%s variant=%s ph=%s exe=%s cwd=%s reason=%s",
             pdb_id,
             variant_for_ph or "HOLO",
             ph_token,
             dms_exe,
+            dms_cwd,
             exc,
         )
         return None
