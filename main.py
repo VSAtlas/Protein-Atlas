@@ -1754,9 +1754,19 @@ def main() -> None:
         sys.exit(0)
 
     try:
+        _maybe_run_scorch_rescore(cfg, run_id, verbose=False)
+    except Exception:
+        logging.warning("[scorch-rescore.hook] action=skip reason=unexpected_exception", exc_info=True)
+
+    try:
         _maybe_run_dud_eval(cfg, run_id, pdb_files)
     except Exception:
         logging.warning("[dud-eval.invoke] action=skip reason=unexpected_exception", exc_info=True)
+
+    try:
+        _log_rescore_verification(run_id)
+    except Exception:
+        logging.warning("[post-check.invoke] action=skip reason=unexpected_exception", exc_info=True)
 
 
 def _maybe_run_dud_eval(cfg: Mapping[str, Any], run_id: str, pdb_files: list[str]) -> None:
@@ -1814,6 +1824,111 @@ def _maybe_run_dud_eval(cfg: Mapping[str, Any], run_id: str, pdb_files: list[str
             result.returncode,
             "analysis/dud_eval",
         )
+
+
+def _maybe_run_scorch_rescore(cfg: Mapping[str, Any], run_id: str, verbose: bool = False) -> None:
+    """
+    Best-effort post-run SCORCH rescoring. Never raises.
+    """
+    logger = logging.getLogger("scorch-rescore-hook")
+    if not run_id:
+        logger.info("[scorch-rescore.skip] reason=missing_run_id")
+        return
+
+    repo_root = Path(__file__).resolve().parent
+    script_path = repo_root / "rescoring_scorch.py"
+    if not script_path.exists():
+        logger.warning("[scorch-rescore.skip] reason=missing_script path=%s", script_path)
+        return
+
+    def _as_int(val: Any, fallback: int) -> int:
+        try:
+            return int(val)
+        except Exception:
+            return fallback
+
+    total_cpu = _as_int(cfg.get("CPU") or cfg.get("MAX_PARALLEL_JOBS") or (os.cpu_count() or 1), os.cpu_count() or 1)
+    max_jobs_cfg = _as_int(cfg.get("MAX_PARALLEL_JOBS") or total_cpu, total_cpu)
+    total_cpu = max(1, total_cpu)
+    max_jobs_cfg = max(1, max_jobs_cfg)
+
+    jobs = max(1, min(max_jobs_cfg, total_cpu))
+    threads = max(1, total_cpu // jobs)
+
+    scorch_jobs = cfg.get("SCORCH_JOBS")
+    scorch_threads = cfg.get("SCORCH_THREADS")
+    if scorch_jobs is not None:
+        jobs = max(1, min(_as_int(scorch_jobs, jobs), total_cpu))
+        threads = max(1, total_cpu // jobs)
+    if scorch_threads is not None:
+        threads = max(1, min(_as_int(scorch_threads, threads), total_cpu))
+        if jobs * threads > total_cpu:
+            threads = max(1, total_cpu // jobs)
+
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--run-id",
+        run_id,
+        "--repo-root",
+        str(repo_root),
+        "--threads",
+        str(threads),
+        "--jobs",
+        str(jobs),
+    ]
+    if verbose or logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+        cmd.append("--verbose")
+
+    logger.info(
+        "[scorch-rescore.invoke] run_id=%s jobs=%d threads=%d total_cpu=%d cmd=%s",
+        run_id,
+        jobs,
+        threads,
+        total_cpu,
+        shlex.join(str(c) for c in cmd),
+    )
+    try:
+        proc = subprocess.run(cmd, cwd=str(repo_root), check=False)
+    except Exception:
+        logger.warning("[scorch-rescore.invoke] action=skip reason=execution_failed", exc_info=True)
+        return
+
+    if proc.returncode != 0:
+        logger.warning(
+            "[scorch-rescore.result] status=failed run_id=%s returncode=%d",
+            run_id,
+            proc.returncode,
+        )
+    else:
+        logger.info("[scorch-rescore.result] status=ok run_id=%s", run_id)
+
+
+def _log_rescore_verification(run_id: str) -> None:
+    """
+    Lightweight best-effort check for consensus and SCORCH outputs.
+    """
+    logger = logging.getLogger("post-run-checks")
+    if not run_id:
+        logger.info("[post-check.skip] reason=missing_run_id")
+        return
+
+    repo_root = Path(__file__).resolve().parent
+    docked_root = repo_root / "docked" / run_id
+    post_root = repo_root / "post_docked" / run_id
+
+    consensus_paths = [p for p in docked_root.rglob("consensus_docking_scores.csv") if p.is_file()]
+    scorch_paths = [p for p in post_root.rglob("scorch_scores_all.csv") if p.is_file()]
+
+    if consensus_paths:
+        logger.info("[post-check.consensus] found=%d sample=%s", len(consensus_paths), consensus_paths[0])
+    else:
+        logger.warning("[post-check.consensus] reason=missing_files run_id=%s", run_id)
+
+    if scorch_paths:
+        logger.info("[post-check.scorch] found=%d sample=%s", len(scorch_paths), scorch_paths[0])
+    else:
+        logger.warning("[post-check.scorch] reason=missing_files run_id=%s", run_id)
 
 
 def _send_run_email(status: int, start_time: str, end_time: str) -> None:

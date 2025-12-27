@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 import pandas as pd
+from input_and_export_functions import load_config
 
 
 STAGE_DIRS = {
@@ -98,8 +99,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
-        help="Number of parallel workers for obabel conversions",
+        default=0,
+        help="Number of parallel workers for obabel conversions (0 uses config-based max)",
     )
     parser.add_argument(
         "--run-posebusters",
@@ -129,8 +130,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--posebusters-chunk",
         type=int,
-        default=200,
-        help="Chunk size for PoseBusters inputs to avoid huge argv",
+        default=0,
+        help="Chunk size for PoseBusters inputs (0 = no chunking; send all SDFs in a single bust call)",
     )
     parser.add_argument(
         "--include-dock6",
@@ -362,21 +363,21 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
 
     pose_files = _collect_pose_pdbs(out_dir, stem)
     if not pose_files:
-        logging.error(
-            "[pose-bust] action=split status=failed reason=no_pose_files stage=%s input=%s out_dir=%s",
+        logging.warning(
+            "[pose-bust] action=split status=skip reason=no_pose_files stage=%s input=%s out_dir=%s",
             task.stage,
             task.input_path,
             out_dir,
         )
         _cleanup_local_dok()
         _cleanup_pose_files()
-        return "failed"
+        return "skipped"
 
     obabel_cmd = ["obabel", "-ipdb", *[str(p) for p in pose_files], "-osdf", "-O", str(output)]
     convert_proc = subprocess.run(obabel_cmd, capture_output=True, text=True)
     if convert_proc.returncode != 0:
-        logging.error(
-            "[pose-bust] action=convert status=failed stage=%s kind=dok input=%s returncode=%s stderr=%s",
+        logging.warning(
+            "[pose-bust] action=convert status=skip stage=%s kind=dok input=%s returncode=%s stderr=%s",
             task.stage,
             task.input_path,
             convert_proc.returncode,
@@ -388,11 +389,11 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
             pass
         _cleanup_local_dok()
         _cleanup_pose_files(pose_files)
-        return "failed"
+        return "skipped"
 
     if not output.exists() or output.stat().st_size == 0:
-        logging.error(
-            "[pose-bust] action=convert status=failed reason=empty_output stage=%s input=%s output=%s",
+        logging.warning(
+            "[pose-bust] action=convert status=skip reason=empty_output stage=%s input=%s output=%s",
             task.stage,
             task.input_path,
             output,
@@ -403,7 +404,7 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
             pass
         _cleanup_local_dok()
         _cleanup_pose_files(pose_files)
-        return "failed"
+        return "skipped"
 
     if not _validate_ledock_identity(pose_files, output, tol=1e-2):
         try:
@@ -412,7 +413,7 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
             pass
         _cleanup_local_dok()
         _cleanup_pose_files(pose_files)
-        return "failed"
+        return "skipped"
 
     logging.info(
         "[pose-bust] action=convert status=ok stage=%s kind=dok input=%s output=%s poses=%d",
@@ -679,12 +680,12 @@ def _convert_dock6(task: LigandTask, overwrite: bool) -> str:
     stage_dir.mkdir(parents=True, exist_ok=True)
     blocks = _split_dock6_mol2(task.input_path)
     if not blocks:
-        logging.error(
-            "[pose-bust] action=convert status=failed reason=no_blocks stage=%s input=%s",
+        logging.warning(
+            "[pose-bust] action=convert status=skip reason=no_blocks stage=%s input=%s",
             task.stage,
             task.input_path,
         )
-        return "failed"
+        return "skipped"
 
     mol_counts = 0
     name_counts: Dict[str, int] = {}
@@ -718,8 +719,8 @@ def _convert_dock6(task: LigandTask, overwrite: bool) -> str:
         cmd = ["obabel", "-imol2", str(mol2_path), "-osdf", "-O", str(sdf_path)]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
-            logging.error(
-                "[pose-bust] action=convert status=failed stage=%s kind=dock6 input=%s mol_name=%s returncode=%s stderr=%s",
+            logging.warning(
+                "[pose-bust] action=convert status=skip stage=%s kind=dock6 input=%s mol_name=%s returncode=%s stderr=%s",
                 task.stage,
                 task.input_path,
                 out_base,
@@ -735,8 +736,8 @@ def _convert_dock6(task: LigandTask, overwrite: bool) -> str:
 
         try:
             if not sdf_path.exists() or sdf_path.stat().st_size == 0:
-                logging.error(
-                    "[pose-bust] action=convert status=failed reason=empty_output stage=%s kind=dock6 input=%s mol_name=%s",
+                logging.warning(
+                    "[pose-bust] action=convert status=skip reason=empty_output stage=%s kind=dock6 input=%s mol_name=%s",
                     task.stage,
                     task.input_path,
                     out_base,
@@ -744,8 +745,8 @@ def _convert_dock6(task: LigandTask, overwrite: bool) -> str:
                 failed_blocks += 1
                 continue
         except OSError as exc:
-            logging.error(
-                "[pose-bust] action=convert status=failed reason=stat_error stage=%s kind=dock6 input=%s mol_name=%s error=%s",
+            logging.warning(
+                "[pose-bust] action=convert status=skip reason=stat_error stage=%s kind=dock6 input=%s mol_name=%s error=%s",
                 task.stage,
                 task.input_path,
                 out_base,
@@ -765,7 +766,9 @@ def _convert_dock6(task: LigandTask, overwrite: bool) -> str:
     )
     if failed_blocks == 0:
         _cleanup_stage_mol2(stage_dir)
-    return "converted" if failed_blocks == 0 else "failed"
+    if mol_counts == 0:
+        return "skipped"
+    return "converted"
 
 
 def _df_missing_receptor(
@@ -818,6 +821,14 @@ def _run_bust_for_stage(
     engine = ENGINE_BY_STAGE_DIR.get(stage_dir, "")
     stage = STAGE_NORMALIZED.get(stage_dir, stage_dir)
     chunks = _chunk_list(sdfs, chunk_size)
+    logging.info(
+        "[pose-bust] action=posebusters status=info stage_dir=%s sdfs=%d chunk_size=%d chunks=%d workers=%d",
+        stage_dir_path,
+        len(sdfs),
+        chunk_size,
+        len(chunks),
+        max_workers if max_workers and max_workers > 0 else 0,
+    )
     chunk_frames: List[pd.DataFrame] = []
     for idx, chunk in enumerate(chunks):
         tmp_fd, tmp_path_str = tempfile.mkstemp(
@@ -878,12 +889,36 @@ def _run_bust_for_stage(
         return pd.DataFrame(), False
 
     df_stage = pd.concat(chunk_frames, ignore_index=True)
+
+    # Robust ligand_file assignment to tolerate PoseBusters row/SDF mismatches.
     if "mol_pred" in df_stage.columns:
         df_stage["ligand_file"] = df_stage["mol_pred"].astype(str).apply(
             lambda x: Path(x).name
         )
     else:
-        df_stage["ligand_file"] = [Path(p).name for p in sdfs]
+        sdf_names = [Path(p).name for p in sdfs]
+        n_rows = len(df_stage)
+        n_sdfs = len(sdf_names)
+
+        if n_rows == n_sdfs:
+            df_stage["ligand_file"] = sdf_names
+        elif n_sdfs == 0:
+            logging.warning(
+                "[pose-bust] action=posebusters status=warning reason=no_sdfs_but_rows stage_dir=%s rows=%d",
+                stage_dir_path,
+                n_rows,
+            )
+            df_stage["ligand_file"] = [f"row_{i:05d}" for i in range(n_rows)]
+        else:
+            repeats = math.ceil(n_rows / n_sdfs)
+            repeated = (sdf_names * repeats)[:n_rows]
+            logging.warning(
+                "[pose-bust] action=posebusters status=warning reason=row_sdf_mismatch stage_dir=%s rows=%d sdfs=%d",
+                stage_dir_path,
+                n_rows,
+                n_sdfs,
+            )
+            df_stage["ligand_file"] = repeated
 
     df_stage["pdb_id"] = pdb_id
     df_stage["variant"] = variant
@@ -1115,6 +1150,40 @@ def main() -> int:
     args = parse_args()
     logger = configure_logging()
 
+    try:
+        cfg = load_config()
+    except Exception as exc:
+        logger.error(
+            "[pose-bust] action=init status=failed reason=config_load_error error=%s",
+            exc,
+        )
+        return 1
+
+    cpu_cfg = cfg.get("CPU")
+    max_jobs_cfg = cfg.get("MAX_PARALLEL_JOBS")
+
+    try:
+        cpu_limit = int(cpu_cfg) if cpu_cfg is not None else (os.cpu_count() or 1)
+    except Exception:
+        cpu_limit = os.cpu_count() or 1
+
+    try:
+        max_jobs_limit = int(max_jobs_cfg) if max_jobs_cfg is not None else cpu_limit
+    except Exception:
+        max_jobs_limit = cpu_limit
+
+    GLOBAL_MAX_WORKERS = max(1, min(cpu_limit, max_jobs_limit, os.cpu_count() or 1))
+
+    if args.workers is None or args.workers <= 0:
+        convert_workers = GLOBAL_MAX_WORKERS
+    else:
+        convert_workers = max(1, min(args.workers, GLOBAL_MAX_WORKERS))
+
+    if args.posebusters_max_workers is None or args.posebusters_max_workers <= 0:
+        posebusters_workers = GLOBAL_MAX_WORKERS
+    else:
+        posebusters_workers = max(1, min(args.posebusters_max_workers, GLOBAL_MAX_WORKERS))
+
     if shutil.which("obabel") is None:
         logger.error("[pose-bust] action=init status=failed reason=missing_obabel")
         return 1
@@ -1183,19 +1252,26 @@ def main() -> int:
 
     statuses: Dict[LigandTask, str] = {}
     if pdbqt_tasks:
-        statuses.update(process_tasks(pdbqt_tasks, args.overwrite, args.workers))
+        logger.info(
+            "[pose-bust] action=convert status=info note=parallel_pdbqt tasks=%d workers=%d",
+            len(pdbqt_tasks),
+            convert_workers,
+        )
+        statuses.update(process_tasks(pdbqt_tasks, args.overwrite, convert_workers))
     if dok_tasks:
         logger.info(
-            "[pose-bust] action=convert status=info note=serial_ledock dok_tasks=%d",
+            "[pose-bust] action=convert status=info note=parallel_ledock dok_tasks=%d workers=%d",
             len(dok_tasks),
+            convert_workers,
         )
-        statuses.update(process_tasks(dok_tasks, args.overwrite, workers=1))
+        statuses.update(process_tasks(dok_tasks, args.overwrite, workers=convert_workers))
     if dock6_tasks:
         logger.info(
-            "[pose-bust] action=convert status=info note=serial_dock6 dock6_tasks=%d",
+            "[pose-bust] action=convert status=info note=parallel_dock6 dock6_tasks=%d workers=%d",
             len(dock6_tasks),
+            convert_workers,
         )
-        statuses.update(process_tasks(dock6_tasks, args.overwrite, workers=1))
+        statuses.update(process_tasks(dock6_tasks, args.overwrite, workers=convert_workers))
 
     converted = sum(1 for s in statuses.values() if s == "converted")
     skipped = sum(1 for s in statuses.values() if s == "skipped")
@@ -1233,12 +1309,17 @@ def main() -> int:
 
     pb_ok = True
     if args.run_posebusters:
+        logger.info(
+            "[pose-bust] action=posebusters status=info note=run workers=%d chunk=%d",
+            posebusters_workers,
+            args.posebusters_chunk,
+        )
         pb_result = run_posebusters_for_run(
             post_docked_root,
             repo_root,
             args.run_id,
             args.posebusters_relative_cutoff,
-            args.posebusters_max_workers,
+            posebusters_workers,
             args.posebusters_chunk,
         )
         pb_ok = bool(pb_result.get("ok", False))

@@ -200,6 +200,70 @@ def make_target_key(pdb_id: str,
     return f"{pdb_id}__{variant_norm}__{ph_norm}"
 
 
+def _resolve_reranked_scorch_path(
+    spec: TargetSpec,
+    docked_root: Path,
+    post_docked_root: Path,
+    run_id: Optional[str],
+    run_dir: Optional[Path],
+) -> Optional[Path]:
+    """
+    Best-effort resolution of consensus_reranked_scorch.csv for a target.
+    Prefers new layout (post_docked/<run_id>/...) but falls back to legacy.
+    """
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    if spec.csv_path:
+        try:
+            rel = spec.csv_path.parent.relative_to(docked_root)
+            cand = post_docked_root / rel / RERANKED_SCORCH_BASENAME
+            if str(cand) not in seen:
+                candidates.append(cand)
+                seen.add(str(cand))
+        except Exception:
+            pass
+
+    if run_dir and spec.csv_path and _is_under(spec.csv_path, run_dir):
+        try:
+            rel_new = spec.csv_path.parent.relative_to(run_dir)
+            base = post_docked_root / (run_id or "")
+            cand = base / rel_new / RERANKED_SCORCH_BASENAME
+            if str(cand) not in seen:
+                candidates.append(cand)
+                seen.add(str(cand))
+        except Exception:
+            pass
+
+    if run_id:
+        base = post_docked_root / run_id
+        combos = [
+            base / spec.pdb_id / (spec.variant or "") / (spec.ph_tag or "") / RERANKED_SCORCH_BASENAME,
+            base / spec.pdb_id / (spec.variant or "") / RERANKED_SCORCH_BASENAME,
+            base / spec.pdb_id / RERANKED_SCORCH_BASENAME,
+        ]
+        for cand in combos:
+            if str(cand) not in seen:
+                candidates.append(cand)
+                seen.add(str(cand))
+
+    legacy_base = post_docked_root
+    legacy_candidates = [
+        legacy_base / spec.pdb_id / (spec.variant or "") / (spec.ph_tag or "") / RERANKED_SCORCH_BASENAME,
+        legacy_base / spec.pdb_id / (spec.variant or "") / RERANKED_SCORCH_BASENAME,
+        legacy_base / spec.pdb_id / RERANKED_SCORCH_BASENAME,
+    ]
+    for cand in legacy_candidates:
+        if str(cand) not in seen:
+            candidates.append(cand)
+            seen.add(str(cand))
+
+    for cand in candidates:
+        if cand.exists() and cand.is_file():
+            return cand
+    return None
+
+
 
 def _fmt_counts_and_round(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy with big counts comma-formatted and floats rounded to 3 dp (for display only)."""
@@ -800,6 +864,7 @@ CSV_BASENAMES = (
     "docking_score_long.csv",      # legacy name (fallback)
 )
 CONSENSUS_CSV_BASENAME = "consensus_docking_scores.csv"
+RERANKED_SCORCH_BASENAME = "consensus_reranked_scorch.csv"
 CONSENSUS_SCORE_CANDIDATES = ["consensus_score", "score", "consensus", "final_score"]
 RUN_ID_COL_CANDIDATES = ["run_id", "runid", "run"]
 
@@ -840,6 +905,67 @@ def guess_consensus_score_col(df: pd.DataFrame, override: Optional[str]) -> str:
     if col:
         return col
     return guess_score_col(df, override=None)
+
+
+def guess_reranked_scorch_score_col(df: pd.DataFrame, override: Optional[str]) -> str:
+    if override and override in df.columns:
+        return override
+    for cand in ("scorch_composite", "SCORCH_score_used", "final_rank", "consensus_score"):
+        if cand in df.columns:
+            return cand
+    lower = {c.lower(): c for c in df.columns}
+    for cand in ("scorch_composite", "scorch_score_used", "final_rank", "consensus_score"):
+        if cand in lower:
+            return lower[cand]
+    return guess_consensus_score_col(df, None)
+
+
+def read_reranked_scorch_csv(path: Path) -> pd.DataFrame:
+    """
+    Read a reranked SCORCH CSV, tolerating optional metadata preamble lines.
+
+    The file may start with comment-style metadata (e.g., '# run_id=...').
+    We first attempt a normal read; if required columns are missing, re-read
+    after skipping metadata lines.
+    """
+    def _detect_preamble(lines: List[str]) -> int:
+        count = 0
+        meta_prefixes = ("run_id", "pdb_id", "variant", "ph", "ph_label")
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                count += 1
+                continue
+            if stripped.startswith("#"):
+                count += 1
+                continue
+            low = stripped.lower()
+            if any(low.startswith(f"{p}=") or low.startswith(f"{p}:") for p in meta_prefixes):
+                count += 1
+                continue
+            break
+        return count
+
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        pass
+
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            head: List[str] = []
+            for _ in range(5):
+                try:
+                    head.append(next(fh))
+                except StopIteration:
+                    break
+    except Exception:
+        return pd.read_csv(path)
+
+    skip = _detect_preamble(head)
+    if skip <= 0:
+        return pd.read_csv(path)
+    return pd.read_csv(path, skiprows=skip)
 
 def guess_ligfile_col(df: pd.DataFrame, override: Optional[str]) -> str:
     if override and override in df.columns:
@@ -1688,6 +1814,159 @@ def evaluate_target_consensus(
         status_reason=status_reason,
     )
 
+
+def evaluate_target_post_docked_reranked_scorch(
+    pdb_id: str,
+    csv_path: Path,
+    out_dir: Path,
+    lig_col_cli: Optional[str],
+    score_col_cli: Optional[str],
+    bedroc_alpha: float,
+    logauc_lambda: float,
+    run_id: Optional[str],
+    variant_hint: Optional[str] = None,
+    ph_tag: Optional[str] = None,
+    new_layout_active: bool = False,
+    layout_label: str = "post_docked",
+) -> Optional[TargetEvaluation]:
+    status_reason = "ok"
+    try:
+        df = read_reranked_scorch_csv(csv_path)
+        dbg("INFO", "reranked.csv", f"pdb={pdb_id} path={csv_path} rows={len(df)}")
+    except Exception as e:
+        dbg("ERROR", "reranked.csv", f"pdb={pdb_id} path={csv_path} err={e}")
+        return TargetEvaluation(
+            metrics=None,
+            ligand_basenames=set(),
+            has_run_id_column=False,
+            run_ids=set(),
+            status_reason="read_error",
+        )
+
+    has_run_id_col = "run_id" in df.columns
+    df, filter_reason = filter_df_by_run_id(
+        df,
+        run_id,
+        pdb_id=pdb_id,
+        csv_path=csv_path,
+        strict=new_layout_active,
+        layout_label=layout_label,
+    )
+    status_reason = filter_reason if filter_reason != "ok" else "ok"
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(
+            metrics=None,
+            ligand_basenames=set(),
+            has_run_id_column=has_run_id_col,
+            run_ids=set(),
+            status_reason=final_reason,
+        )
+
+    lig_col = guess_consensus_ligfile_col(df, lig_col_cli)
+    score_col = guess_reranked_scorch_score_col(df, score_col_cli)
+    dbg(
+        "DEBUG",
+        "reranked.schema",
+        f"pdb={pdb_id} ligand_col={lig_col} score_col={score_col} cols={list(df.columns)}",
+    )
+
+    df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    score_eval_col = "_score_eval"
+    if score_col.lower() == "final_rank":
+        df[score_eval_col] = -pd.to_numeric(df[score_col], errors="coerce")
+    else:
+        df[score_eval_col] = df[score_col]
+
+    before_nf = len(df)
+    df = df.dropna(subset=[score_eval_col])
+    drop_nonfinite = before_nf - len(df)
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(
+            metrics=None,
+            ligand_basenames=set(),
+            has_run_id_column=has_run_id_col,
+            run_ids=set(),
+            status_reason=final_reason,
+        )
+
+    raw_lig = df[lig_col]
+    missing_names = int(raw_lig.isna().sum())
+    empty_names = int(raw_lig.astype(str).str.strip().eq("").sum())
+    lig_paths = raw_lig.astype(str)
+    parsed = lig_paths.apply(parse_name_and_label)
+    df["lig_id"] = parsed.apply(lambda t: t[0])
+    df["is_active"] = parsed.apply(lambda t: t[1])
+    used_ligand_basenames: Set[str] = {os.path.basename(p) for p in lig_paths.tolist() if p}
+
+    run_ids_present: Set[str] = set()
+    if has_run_id_col and "run_id" in df.columns:
+        try:
+            run_ids_present = set(df["run_id"].dropna().astype(str).unique().tolist())
+        except Exception:
+            run_ids_present = set()
+
+    before = len(df)
+    df = df.dropna(subset=["is_active"])
+    dropped_token = before - len(df)
+    if df.empty:
+        final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
+        return TargetEvaluation(
+            metrics=None,
+            ligand_basenames=used_ligand_basenames,
+            has_run_id_column=has_run_id_col,
+            run_ids=run_ids_present,
+            status_reason=final_reason,
+        )
+
+    best, drop_nan_best = _collapse_best_scores(df, score_eval_col, best_is_min=False)
+    missing_name_detected = missing_names + empty_names
+
+    variant_label: Optional[str] = variant_hint.upper() if variant_hint else None
+    if variant_label is None and "variant" in df.columns:
+        variant_series = df["variant"].dropna()
+        if not variant_series.empty:
+            normalized = variant_series.astype(str).str.strip()
+            normalized = normalized[normalized != ""]
+            if not normalized.empty:
+                upper = normalized.str.upper()
+                has_apo = bool((upper == "APO").any())
+                has_holo = bool((upper == "HOLO").any())
+                if has_apo and not has_holo:
+                    variant_label = "APO"
+                elif has_holo and not has_apo:
+                    variant_label = "HOLO"
+                elif has_apo or has_holo:
+                    variant_label = "MIXED"
+                unique_vals = sorted(set(upper.tolist()))
+                counts = {val: int((upper == val).sum()) for val in unique_vals}
+                dbg("DEBUG", "reranked.variant", f"pdb={pdb_id} unique={unique_vals} counts={counts}")
+
+    return _compute_metrics_and_plots(
+        pdb_id=pdb_id,
+        best=best,
+        out_dir=out_dir,
+        bedroc_alpha=bedroc_alpha,
+        logauc_lambda=logauc_lambda,
+        score_high_is_better=True,
+        missing_name_detected=missing_name_detected,
+        drop_nonfinite=drop_nonfinite,
+        dropped_token=dropped_token,
+        drop_nan_best=drop_nan_best,
+        token_regex="active|decoy",
+        variant_label=variant_label,
+        run_id=run_id,
+        ligand_basenames=used_ligand_basenames,
+        has_run_id_col=has_run_id_col,
+        run_ids_present=run_ids_present,
+        hist_xlabel="Reranked SCORCH score (higher = better)",
+        title_suffix=" (reranked_scorch)",
+        mode_label="post_docked_scorch",
+        status_reason=status_reason,
+    )
+
 def emit_consensus_summary(df: pd.DataFrame, analysis_root: Path, run_label: str, pretty_enabled: bool) -> None:
     if df is None or df.empty:
         dbg("INFO", "consensus.summary", "no consensus rows to write")
@@ -1758,6 +2037,75 @@ def emit_consensus_summary(df: pd.DataFrame, analysis_root: Path, run_label: str
                 pretty_path = summary_path.with_name(summary_path.stem + "_pretty.txt")
                 _write_pretty_summary([("CONSENSUS", _df[cols])], pretty_path)
                 print(f"[consensus] pretty_summary_out={pretty_path}")
+
+
+def emit_reranked_scorch_summary(df: pd.DataFrame, analysis_root: Path, run_label: str, pretty_enabled: bool) -> None:
+    if df is None or df.empty:
+        dbg("INFO", "reranked.summary", "no reranked rows to write")
+        return
+
+    preferred_cols = ("variant", "pH", "run_id", "target_name", "library_name", "pdb_id")
+    summary_root = analysis_root / "post_docked"
+    summary_path = summary_root / f"consensus_reranked_scorch_summary_{run_label}.tsv"
+    summary_root.mkdir(parents=True, exist_ok=True)
+
+    variant_col_present = "variant" in df.columns
+    variant_upper = df["variant"].astype(str).str.upper() if variant_col_present else None
+    apo_mask = (variant_upper == "APO") if variant_col_present else None
+    holo_mask = (variant_upper == "HOLO") if variant_col_present else None
+    has_sections = bool(
+        variant_col_present
+        and ((apo_mask is not None and apo_mask.any()) or (holo_mask is not None and holo_mask.any()))
+    )
+
+    with open(summary_path, "w", newline="") as fh:
+        sections: List[tuple[str | None, pd.DataFrame]] = []
+        if has_sections:
+            apo_rows = df.loc[apo_mask].sort_values("pdb_id") if apo_mask is not None else pd.DataFrame()
+            holo_rows = df.loc[holo_mask].sort_values("pdb_id") if holo_mask is not None else pd.DataFrame()
+            n_apo = len(apo_rows)
+            n_holo = len(holo_rows)
+
+            if n_apo:
+                apo_out = apo_rows
+                a_cols = [c for c in preferred_cols if c in apo_out.columns] + [c for c in apo_out.columns if c not in preferred_cols]
+                fh.write("Apo\n")
+                apo_out[a_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
+                sections.append(("POST_DOCKED_SCORCH - Apo", apo_out[a_cols]))
+
+            if n_holo:
+                if n_apo:
+                    fh.write("\n")
+                holo_out = holo_rows
+                h_cols = [c for c in preferred_cols if c in holo_out.columns] + [c for c in holo_out.columns if c not in preferred_cols]
+                fh.write("Holo\n")
+                holo_out[h_cols].to_csv(fh, sep="\t", index=False, float_format="%.3f")
+                sections.append(("POST_DOCKED_SCORCH - Holo", holo_out[h_cols]))
+
+            leftover_mask = ~(apo_mask | holo_mask) if (apo_mask is not None and holo_mask is not None) else pd.Series(False, index=df.index)
+            leftover_rows = df.loc[leftover_mask].sort_values("pdb_id") if not df.empty else pd.DataFrame()
+            if not leftover_rows.empty:
+                if n_apo or n_holo:
+                    fh.write("\n")
+                lo_base = leftover_rows
+                l_cols = [c for c in preferred_cols if c in lo_base.columns] + [c for c in lo_base.columns if c not in preferred_cols]
+                lo_base[l_cols].to_csv(fh, sep="\t", index=False)
+                sections.append(("POST_DOCKED_SCORCH - Unlabeled", lo_base[l_cols]))
+
+            dbg("INFO", "reranked.summary", f"sections=Apo:{n_apo} Holo:{n_holo} other={len(leftover_rows)} out={summary_path}")
+            if pretty_enabled and sections:
+                pretty_path = summary_path.with_name(summary_path.stem + "_pretty.txt")
+                _write_pretty_summary(sections, pretty_path)
+                print(f"[post_docked_scorch] pretty_summary_out={pretty_path}")
+        else:
+            _df = df.copy()
+            cols = [c for c in preferred_cols if c in _df.columns] + [c for c in _df.columns if c not in preferred_cols]
+            _df[cols].to_csv(fh, sep="\t", index=False)
+            dbg("INFO", "reranked.summary", f"out={summary_path} rows={len(_df)}")
+            if pretty_enabled:
+                pretty_path = summary_path.with_name(summary_path.stem + "_pretty.txt")
+                _write_pretty_summary([("POST_DOCKED_SCORCH", _df[cols])], pretty_path)
+                print(f"[post_docked_scorch] pretty_summary_out={pretty_path}")
 
 def _load_default_cfg() -> Dict:
     cfg_path = Path("config.txt")
@@ -2125,6 +2473,8 @@ def main():
                     help="Root folder (or a single target folder) to scan for docking_score_long.csv.")
     ap.add_argument("--out-dir", type=str, default="analysis/dud_eval",
                     help="Output root directory (run_id is appended automatically when provided).")
+    ap.add_argument("--post-docked-root", type=str, default="post_docked",
+                    help="Root folder for post-docked outputs (consensus reranked with SCORCH).")
     ap.add_argument("--lig-col", type=str, default=None,
                     help="Column containing ligand filename/path (auto-detected if omitted).")
     ap.add_argument("--score-col", type=str, default=None,
@@ -2177,6 +2527,7 @@ def main():
     cfg = _load_default_cfg()
     docked_root = Path(args.docked_root)
     out_root = Path(args.out_dir)
+    post_docked_root = Path(args.post_docked_root)
     pdb_root_override = Path(args.pdb_root) if args.pdb_root else None
     prepped_root_override = Path(args.prepped_root) if args.prepped_root else None
     log_root_override = Path(args.log_root) if getattr(args, "log_root", None) else None
@@ -2614,6 +2965,7 @@ def main():
 
     rows: List[pd.Series] = []
     consensus_rows: List[pd.Series] = []
+    reranked_rows: List[pd.Series] = []
     target_eval_results: Dict[str, TargetEvaluation] = {}
     csv_paths_by_target: Dict[str, Path] = {}
     for spec in targets:
@@ -2732,6 +3084,48 @@ def main():
                 consensus_rows.append(placeholder_cons)
             else:
                 dbg("WARN", "consensus.eval", f"pdb={spec.pdb_id} path={consensus_candidate} reason=evaluation_failed")
+        reranked_candidate: Optional[Path] = _resolve_reranked_scorch_path(
+            spec, docked_root, post_docked_root, active_run_id, run_dir
+        )
+        if reranked_candidate is not None:
+            post_run_root = post_docked_root / str(active_run_id) if active_run_id else None
+            new_layout_reranked = bool(post_run_root and _is_under(reranked_candidate, post_run_root))
+            reranked_eval = evaluate_target_post_docked_reranked_scorch(
+                pdb_id=spec.pdb_id,
+                csv_path=reranked_candidate,
+                out_dir=analysis_root / "post_docked" / "consensus_reranked_scorch" / spec.target_key,
+                lig_col_cli=args.lig_col,
+                score_col_cli=args.score_col,
+                bedroc_alpha=args.bedroc_alpha,
+                logauc_lambda=args.logauc_lambda,
+                run_id=active_run_id,
+                variant_hint=spec.variant,
+                ph_tag=spec.ph_tag,
+                new_layout_active=new_layout_reranked,
+                layout_label="post_docked_new" if new_layout_reranked else "post_docked_legacy",
+            )
+            if reranked_eval is not None and reranked_eval.metrics is not None:
+                rer_metrics = reranked_eval.metrics.copy()
+                for col in ("variant", "pH"):
+                    if col in rer_metrics.index:
+                        rer_metrics.drop(index=col, inplace=True)
+                rer_metrics["pdb_id"] = spec.pdb_id
+                rer_metrics["variant"] = spec.variant or ""
+                rer_metrics["pH"] = spec.ph_tag or ""
+                rer_metrics["run_id"] = active_run_id or ""
+                if "status_reason" not in rer_metrics:
+                    rer_metrics["status_reason"] = reranked_eval.status_reason or "ok"
+                reranked_rows.append(rer_metrics)
+            elif reranked_eval is not None:
+                placeholder_reranked = _make_placeholder_row(
+                    spec.pdb_id,
+                    spec.variant,
+                    spec.ph_tag,
+                    active_run_id,
+                    args.bedroc_alpha,
+                    reranked_eval.status_reason or "empty_after_filter",
+                )
+                reranked_rows.append(placeholder_reranked)
         if evaluated is not None:
             target_eval_results[spec.target_key] = evaluated
             if evaluated.metrics is not None:
@@ -2772,6 +3166,7 @@ def main():
 
     df_all = pd.DataFrame(rows)
     df_consensus_all = pd.DataFrame(consensus_rows) if consensus_rows else pd.DataFrame()
+    df_reranked_all = pd.DataFrame(reranked_rows) if reranked_rows else pd.DataFrame()
     for col in ("variant", "pH"):
         if col not in df_all.columns:
             df_all[col] = ""
@@ -2898,6 +3293,45 @@ def main():
         if "target_name" not in df_consensus_all.columns:
             df_consensus_all["target_name"] = df_consensus_all["pdb_id"].map(names).fillna("")
 
+    if not df_reranked_all.empty:
+        for col in ("variant", "pH"):
+            if col not in df_reranked_all.columns:
+                df_reranked_all[col] = ""
+        reranked_has_variant = (
+            "variant" in df_reranked_all.columns and df_reranked_all["variant"].astype(str).str.strip().ne("").any()
+        )
+        reranked_has_ph = "pH" in df_reranked_all.columns and df_reranked_all["pH"].astype(str).str.strip().ne("").any()
+        if not reranked_has_variant and "variant" in df_reranked_all.columns:
+            df_reranked_all = df_reranked_all.drop(columns=["variant"])
+        if not reranked_has_ph and "pH" in df_reranked_all.columns:
+            df_reranked_all = df_reranked_all.drop(columns=["pH"])
+        sort_cols_reranked = [c for c in ("pdb_id", "variant", "pH") if c in df_reranked_all.columns]
+        df_reranked_all = df_reranked_all.sort_values(sort_cols_reranked or ["pdb_id"])
+
+        if args.report_library:
+            if manifest_data:
+                df_reranked_all["library_name"] = df_reranked_all.apply(
+                    lambda r: _manifest_library_for_target(
+                        manifest=manifest_data,
+                        pdb_id=str(r.get("pdb_id", "")),
+                        variant_label=(
+                            "" if "variant" not in df_reranked_all.columns else ("" if pd.isna(r.get("variant", "")) else str(r.get("variant", "")))
+                        ),
+                        ph_tag=(
+                            "" if "pH" not in df_reranked_all.columns else ("" if pd.isna(r.get("pH", "")) else str(r.get("pH", "")))
+                        ),
+                    ),
+                    axis=1,
+                )
+                df_reranked_all["library_name"] = df_reranked_all["library_name"].fillna("")
+            else:
+                df_reranked_all["library_name"] = df_reranked_all.get("library_name", pd.Series("", index=df_reranked_all.index))
+        else:
+            if "library_name" not in df_reranked_all.columns:
+                df_reranked_all["library_name"] = ""
+        if "target_name" not in df_reranked_all.columns:
+            df_reranked_all["target_name"] = df_reranked_all["pdb_id"].map(names).fillna("")
+
     control_targets = [t for t in targets if t.target_key in target_eval_results]
 
     df = df_all.copy()
@@ -2946,6 +3380,17 @@ def main():
         df_consensus = df_consensus.loc[~cons_exclude_mask].copy()
         sort_cols_cons = [c for c in ("pdb_id", "variant", "pH") if c in df_consensus.columns]
         df_consensus = df_consensus.sort_values(sort_cols_cons or ["pdb_id"])
+    if not df_reranked_all.empty:
+        rer_lib_norm = df_reranked_all["library_name"].astype(str).str.strip()
+        rer_pdb_norm = df_reranked_all["pdb_id"].astype(str).str.strip()
+        rer_mask_fda = rer_lib_norm.str.lower().isin({"fda_library", "fda"})
+        rer_mask_pdb = rer_lib_norm.str.upper() == rer_pdb_norm.str.upper()
+        rer_exclude_mask = rer_mask_fda | rer_mask_pdb
+        if rer_exclude_mask.any():
+            dbg("INFO", "reranked.exclude", f"excluded={int(rer_exclude_mask.sum())} reason=library_filter")
+        df_reranked_all = df_reranked_all.loc[~rer_exclude_mask].copy()
+        sort_cols_rer = [c for c in ("pdb_id", "variant", "pH") if c in df_reranked_all.columns]
+        df_reranked_all = df_reranked_all.sort_values(sort_cols_rer or ["pdb_id"])
 
     control_long_records: List[Dict] = []
     control_summary_records: List[Dict] = []
@@ -3124,6 +3569,7 @@ def main():
     macro_path = analysis_root / "summary_macro.tsv"
     macro_df.to_csv(macro_path, sep="\t", index=False)
     emit_consensus_summary(df_consensus, analysis_root, run_label_for_files, getattr(args, "pretty_summary", True))
+    emit_reranked_scorch_summary(df_reranked_all, analysis_root, run_label_for_files, getattr(args, "pretty_summary", True))
 
     if getattr(args, "emit_control_report", False):
         long_columns = [

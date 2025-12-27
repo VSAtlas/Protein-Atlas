@@ -73,6 +73,7 @@ from prep_ligands import prep_ligands_from_pdb
 from protein_functions import detect_active_site
 from run_vina import run_docking_task, validate_all_poses
 from docking_subruns import ProteinDockingContext, SubrunSpec, subruns_for_test_mode, run_ligand_pipeline_subrun
+from druggability_evaluation import evaluate_druggability_for_active_site
 
 import docking_controls
 from docking_controls import (
@@ -233,6 +234,24 @@ def get_active_site_center_and_size(
             center_t,
             box_t,
         )
+        try:
+            evaluate_druggability_for_active_site(
+                cfg,
+                pdb_id=pdb_id,
+                variant=variant_token,
+                ph_label=ph_key,
+                center=center_t,
+                box_size=box_t,
+                logger=logger,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[druggability.fpocket.skip] pdb=%s variant=%s ph=%s err=%s",
+                pdb_id,
+                variant_key,
+                ph_key,
+                exc,
+            )
         return center_t, box_t
 
     logger.warning(

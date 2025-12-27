@@ -44,3 +44,4 @@ analysis/out/
 /analysis/difficulty/
 analysis/dud_eval/
 post_docked/
+.aider*

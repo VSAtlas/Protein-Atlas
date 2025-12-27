@@ -409,6 +409,121 @@ def _git_info(repo_root: Path) -> Dict[str, Any]:
     return info
 
 
+def update_manifest_for_druggability_and_engine_plan(
+    cfg: Mapping[str, Any],
+    run_id: str,
+    pdb_id: str,
+    variant_label: Optional[str],
+    *,
+    ph_tag: Optional[str],
+    tier: Optional[str],
+    use_gnina: bool,
+    use_ledock: bool,
+    use_dock6: bool,
+) -> None:
+    """
+    Record fpocket druggability tier (A/B/C) and planned engines for (pdb, variant, pH).
+
+    Best-effort only: errors are logged and ignored.
+    """
+    ph_label = ph_tag if ph_tag is not None else "base"
+    try:
+        if not run_id:
+            logging.debug(
+                "[run-manifest.druggability-plan.skip] no run_id pdb=%s variant=%s ph=%s",
+                pdb_id,
+                variant_label,
+                ph_label,
+            )
+            return
+
+        _, manifest_path = get_manifest_paths(cfg, run_id)
+        manifest = _load_manifest(manifest_path)
+        if manifest is None:
+            logging.warning(
+                "[run-manifest.druggability-plan.skip] manifest missing run_id=%s path=%s pdb=%s variant=%s ph=%s",
+                run_id,
+                manifest_path,
+                pdb_id,
+                variant_label,
+                ph_label,
+            )
+            return
+
+        entry = _ensure_protein(manifest, pdb_id, variant_label, ph_tag)
+        stages = entry.setdefault("stages", {})
+
+        pocket_stage = stages.get("pocket_detection")
+        if not isinstance(pocket_stage, MutableMapping):
+            pocket_stage = _default_stage_entry()
+            stages["pocket_detection"] = pocket_stage
+
+        pocket_details = pocket_stage.get("details")
+        if not isinstance(pocket_details, MutableMapping):
+            pocket_details = {}
+        pocket_stage["details"] = pocket_details
+
+        tier_norm = None
+        if tier is not None:
+            try:
+                t = str(tier).strip().upper()
+            except Exception:
+                t = ""
+            if t in {"A", "B", "C"}:
+                tier_norm = t
+
+        if tier_norm is not None:
+            pocket_details["druggability_tier"] = tier_norm
+
+        docking_stage = stages.get("docking")
+        if not isinstance(docking_stage, MutableMapping):
+            docking_stage = _default_stage_entry()
+            stages["docking"] = docking_stage
+
+        docking_details = docking_stage.get("details")
+        if not isinstance(docking_details, MutableMapping):
+            docking_details = {}
+        docking_stage["details"] = docking_details
+
+        engine_plan = docking_details.get("engine_plan")
+        if not isinstance(engine_plan, MutableMapping):
+            engine_plan = {}
+        docking_details["engine_plan"] = engine_plan
+
+        if tier_norm is not None:
+            engine_plan["tier"] = tier_norm
+
+        engines = {
+            "vina": True,
+            "gnina": bool(use_gnina),
+            "ledock": bool(use_ledock),
+            "dock6": bool(use_dock6),
+        }
+        engine_plan["engines"] = engines
+
+        _refresh_summary(manifest)
+        _write_manifest(manifest_path, manifest)
+
+        logging.debug(
+            "[run-manifest.druggability-plan.ok] run_id=%s pdb=%s variant=%s ph=%s tier=%s engines=%r",
+            run_id,
+            pdb_id,
+            variant_label,
+            ph_label,
+            tier_norm,
+            engines,
+        )
+    except Exception:
+        logging.warning(
+            "[run-manifest.druggability-plan.error] run_id=%s pdb=%s variant=%s ph=%s",
+            run_id,
+            pdb_id,
+            variant_label,
+            ph_label,
+            exc_info=True,
+        )
+
+
 def _resources_snapshot() -> Dict[str, Any]:
     host = None
     try:

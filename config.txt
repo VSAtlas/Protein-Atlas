@@ -1,4 +1,4 @@
-OVERALL_DIR=/stor/work/VDS_Beckham/atlas/code/protein_automation
+OVERALL_DIR=/home/michael/atlas/code/protein_automation
 
 # Core I/O directories
 INPUT_DIR=${OVERALL_DIR}/input_pdbs
@@ -18,73 +18,88 @@ PDBQT_DIR=${OVERALL_DIR}/pdbqts
 DOCKED_DIR=${OVERALL_DIR}/docked
 
 # P2Rank
-P2RANK_PATH=/stor/work/VDS_Beckham/atlas/tools/p2rank/bin/p2rank.jar
+P2RANK_PATH=/home/michael/atlas/tools/p2rank/bin/p2rank.jar
 P2RANK_OUTPUT_DIR=${OVERALL_DIR}/p2rank_out
 
-# PROPKA (env-local; keep as-is unless you moved the env)
-PROPKA_EXE=/stor/home/mpg2352/micromamba/envs/docking-env/bin/propka3
+# PROPKA (env-local)
+PROPKA_EXE=/home/michael/atlas/micromamba/envs/docking-env/bin/propka3
 
 # MGLTools / AutoDockTools
-MGLTOOLS_PATH=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7
-MGLTOOLS_DIR=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7
-MGLTOOLS_PYTHON=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/bin/pythonsh
+MGLTOOLS_PATH=/home/michael/atlas/tools/MGLTOOLS-1.5.7
+MGLTOOLS_DIR=/home/michael/atlas/tools/MGLTOOLS-1.5.7
+MGLTOOLS_PYTHON=/home/michael/atlas/tools/MGLTOOLS-1.5.7/bin/pythonsh
 
-PREPARE_RECEPTOR_SCRIPT=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
-PREPARE_LIGAND_SCRIPT=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
-PREPARE_LIGAND4=/stor/work/VDS_Beckham/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+PREPARE_RECEPTOR_SCRIPT=/home/michael/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
+PREPARE_LIGAND_SCRIPT=/home/michael/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+PREPARE_LIGAND4=/home/michael/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
 
-ADFRSUITE_BIN=/stor/work/VDS_Beckham/atlas/tools/ADFRsuite/bin
+ADFRSUITE_BIN=/home/michael/atlas/tools/ADFRsuite/bin
 
 # Phenix
-PHENIX_DIR=/stor/work/VDS_Beckham/atlas/tools/phenix/phenix-1.21.2-5419/build/bin
-PHENIX_LIB_PATH=/stor/work/VDS_Beckham/atlas/tools/phenix/phenix-1.21.2-5419/conda_base/lib
+PHENIX_DIR=/home/michael/atlas/tools/phenix/phenix-1.21.2-5419/build/bin
+PHENIX_LIB_PATH=/home/michael/atlas/tools/phenix/phenix-1.21.2-5419/conda_base/lib
 PHENIX_CLEAN_SCRIPT=${OVERALL_DIR}/phenix_clean.py
 
 # Reduce
-REDUCE_EXE=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_src/reduce
-REDUCE_LOCAL_CANDIDATE=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_src/reduce
-REDUCE_HET_DICT=/stor/work/VDS_Beckham/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
-
-
-
+REDUCE_EXE=/home/michael/atlas/tools/reduce/reduce_src/reduce
+REDUCE_LOCAL_CANDIDATE=/home/michael/atlas/tools/reduce/reduce_src/reduce
+REDUCE_HET_DICT=/home/michael/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
 
 # DOCK6 surface generator
-DOCK6_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/dock6
-DMS_EXE=/stor/work/VDS_Beckham/atlas/tools/dms/bin/dms
-SPHGEN_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/sphgen
-SPHERE_SELECTOR_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/sphere_selector
-SHOWBOX_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/showbox
-GRID_EXE=/stor/work/VDS_Beckham/atlas/tools/dock6/bin/grid
-DOCK6_VDW_DEFN_FILE=/stor/work/VDS_Beckham/atlas/tools/dock6/parameters/vdw_AMBER_parm99.defn
+DOCK6_EXE = /home/michael/atlas/tools/dock6/bin/dock6
+DMS_EXE=/home/michael/atlas/tools/dms/bin/dms
+SPHGEN_EXE=/home/michael/atlas/tools/dock6/bin/sphgen
+SPHERE_SELECTOR_EXE=/home/michael/atlas/tools/dock6/bin/sphere_selector
+SHOWBOX_EXE=/home/michael/atlas/tools/dock6/bin/showbox
+GRID_EXE=/home/michael/atlas/tools/dock6/bin/grid
+DOCK6_VDW_DEFN_FILE=/home/michael/atlas/tools/dock6/parameters/vdw_AMBER_parm99.defn
 
 #LeDock
-LEPRO_EXE=/stor/work/VDS_Beckham/atlas/tools/ledock/lepro_linux_x86
-
+LEPRO_EXE=/home/michael/atlas/tools/ledock/lepro_linux_x86
 # Vina wrapper
 VINA_EXE=${OVERALL_DIR}/vina1.sh
 
-# Open Babel (env-local; keep as-is unless env moved)
-OPENBABEL_PATH=/stor/home/mpg2352/micromamba/envs/docking-env/bin/obabel
-BABEL_LIBDIR=/stor/home/mpg2352/micromamba/envs/docking-env/lib/openbabel/3.1.0
+# Open Babel (env-local)
+OPENBABEL_PATH=/home/michael/atlas/micromamba/envs/docking-env/bin/obabel
+BABEL_LIBDIR=/home/michael/atlas/micromamba/envs/docking-env/lib/openbabel/3.1.0
 BABEL_DATADIR=
+
+FPOCKET_EXE=/home/michael/atlas/tools/fpocket/bin/fpocket
+
+USE_PROTEIN_DRUGGABILITY = true
+
+DRUGGABILITY_TIER_A_DRUGGABILITY_MIN = 0.50
+DRUGGABILITY_TIER_A_OPENNESS_MAX = 0.55
+DRUGGABILITY_TIER_A_POLAR_FRAC_MAX = 0.45
+
+DRUGGABILITY_TIER_B_DRUGGABILITY_MIN = 0.30
+DRUGGABILITY_TIER_B_DRUGGABILITY_MAX = 0.50
+DRUGGABILITY_TIER_B_OPENNESS_MIN = 0.55
+DRUGGABILITY_TIER_B_OPENNESS_MAX = 0.65
+DRUGGABILITY_TIER_B_POLAR_FRAC_MIN = 0.45
+DRUGGABILITY_TIER_B_POLAR_FRAC_MAX = 0.60
+
+DRUGGABILITY_TIER_C_DRUGGABILITY_MAX = 0.30
+DRUGGABILITY_TIER_C_OPENNESS_MIN = 0.65
+DRUGGABILITY_TIER_C_POLAR_FRAC_MIN = 0.60
+
 
 PYMOL_PATH=pymol
 PYMOL_EXE=pymol
 
 CPU_ONLY=True
-CPU=64
-MAX_PARALLEL_JOBS=64
+CPU=110
+MAX_PARALLEL_JOBS=110
 FORCE_REPROCESS=True
 DOCKING_MODE=polypharmacology
 FINAL_STAGE_POLY = stage3
 FINAL_STAGE_DISC = stage5
-QUIET_CONSOLE=False
 
 EARLY_RECENTER_RATIO=0.70
 EARLY_RECENTER_MIN_EVAL=10
 EARLY_RECENTER_FAR_A=15.0
 EARLY_RECENTER_MEDIAN_A=10.0
-ALLOW_BOX_EXPAND=True
+ALLOW_BOX_EXPAND=true
 MAX_RECENTER_ATTEMPTS=1
 CONTROL_CENTER_POLICY = best_redock
 #first | closest_to_p2rank_top | best_redock | average_when_close
@@ -108,17 +123,14 @@ PH_ENSEMBLE=true
 CTRL_REDOCK_EXHAUSTIVENESS = 24
 #run at  64 for more accuracy
 CTRL_REDOCK_NMODES =9
-THREADS_PER_VINA_CTRL =8
-
 
 # GNINA follow-up docking toggle:
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
-GNINA_EXE=/stor/work/VDS_Beckham/atlas/tools/gnina/gnina
-USE_GNINA = true
-USE_LEDOCK = true
-USE_DOCK6 = true
-
+USE_GNINA = false
+USE_LEDOCK = false
+USE_DOCK6 = false
+USE_SCORCH = false
 
 CHAIN_PRUNE=1
 CHAIN_POCKET_RADIUS_ANG=10.0
@@ -241,6 +253,9 @@ LIBRARY_SUBDIR_DEFAULT = fda_library
 TEST_MODE_ENABLE = dud
 TEST_LIBRARY_MAP = {
     "TEST": "test_library_10",
+    "TEMP": "test_library_10",
+    "T3MP": "test_library_10",
+    "EXAM": "test_library_100",
     "EX4M": "test_library_10",
     "3EML": "aa2ar",
     "2HZI": "abl1",
@@ -434,11 +449,13 @@ TEST_LIBRARY_MAP = {
     "5W3J": "ace",
     "6KKN": "cah2",
 }
+
 #specify which pdb
 SPECIFIED_PROTEINS = 
 
 
 #logging
-LOG_LEVEL_FILE=DEBUG
-LOG_TOPICS=untagged
-LOG_LEVEL_CONSOLE=DEBUG
+LOG_LEVEL_FILE = all
+LOG_LEVEL_CONSOLE = all
+LOG_TOPICS = all
+QUIET_CONSOLE = false

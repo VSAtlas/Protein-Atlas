@@ -49,11 +49,12 @@ from run_manifest import (
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,
     update_manifest_for_protein_success,
+    update_manifest_for_druggability_and_engine_plan,
 )
+from druggability_orchestrator import EnginePolicy, decide_engine_policy
 from record_data import compute_ligand_efficiency, record_le
 from docking_gnina import (
     run_gnina_for_stage,
-    should_run_gnina_for_target,
     write_gnina_scores_csv,
     annotate_gnina_fda_long_csv_with_t_scores_vs_decoys,
 )
@@ -70,7 +71,6 @@ from docking_dock6 import (
 )
 from docking_consensus_score import compute_consensus_for_variant_ph
 from docking_vina import emit_vina_config, write_scores_csv
-from chemdb.target_difficulty import get_or_compute_target_difficulty
 from docking_ligands import (
     compute_stage_membership_from_scores,
     _count_heavy_atoms_from_pdbqt,
@@ -1064,27 +1064,44 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         )
                         break
 
-                # Difficulty-gated GNINA follow-up for the completed Vina stage.
-                # Runs after selection logic to keep Vina pipeline semantics unchanged.
+                # Engine follow-ups controlled by fpocket druggability tiers (or legacy flags).
                 if validated:
-                    try:
-                        variant_root = Path(paths.docked_variant_root(variant_env or None, ph_label))
-                        vina_long = variant_root / "docking_score_long.csv"
-                        analysis_root = Path(cfg.get("OVERALL_DIR", ".")) / "analysis" / "difficulty"
-                        run_id_token = str(cfg.get("RUN_ID") or "")
-                        if run_id_token:
-                            analysis_root = analysis_root / run_id_token
-                        td = get_or_compute_target_difficulty(
-                            cfg=cfg,
-                            pdb_id=paths.pdb_id,
-                            csv_path=vina_long,
-                            analysis_root=analysis_root,
-                            run_id=run_id_token or None,
-                        )
-                    except Exception:
-                        td = None
+                    policy = decide_engine_policy(
+                        cfg=cfg,
+                        pdb_id=paths.pdb_id,
+                        variant=variant_env or None,
+                        ph_label=ph_label,
+                        center=center,
+                        ledock_enabled=ledock_enabled,
+                        dock6_enabled=dock6_enabled,
+                        logger=logger,
+                    )
 
-                    if should_run_gnina_for_target(td, cfg):
+                    run_id_token = str(cfg.get("RUN_ID") or "")
+                    if run_id_token:
+                        try:
+                            update_manifest_for_druggability_and_engine_plan(
+                                cfg=cfg,
+                                run_id=run_id_token,
+                                pdb_id=paths.pdb_id,
+                                variant_label=variant_env or None,
+                                ph_tag=ph_label,
+                                tier=policy.tier,
+                                use_gnina=policy.use_gnina,
+                                use_ledock=policy.use_ledock,
+                                use_dock6=policy.use_dock6,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "[run-manifest.druggability-plan.skip] run_id=%s pdb=%s variant=%s ph=%s",
+                                run_id_token,
+                                paths.pdb_id,
+                                variant_env,
+                                ph_label,
+                                exc_info=True,
+                            )
+
+                    if policy.use_gnina:
                         gnina_jobs.append(
                             {
                                 "stage_name": stage["name"],
@@ -1096,12 +1113,14 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                         )
                     else:
                         logger.info(
-                            "[gnina.skip] pdb=%s difficulty=%s",
+                            "[gnina.skip] pdb=%s ph=%s tier=%s reason=%s",
                             paths.pdb_id,
-                            getattr(td, "difficulty", "unknown") if td is not None else "unknown",
+                            ph_label if ph_label else "base",
+                            policy.tier,
+                            policy.reason,
                         )
 
-                    if ledock_enabled:
+                    if policy.use_ledock:
                         ledock_jobs.append(
                             {
                                 "stage_name": stage["name"],
@@ -1111,7 +1130,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                                 "box_size": tuple(box_size) if box_size is not None else None,
                             }
                         )
-                    if dock6_enabled:
+                    if policy.use_dock6:
                         dock6_jobs.append(
                             {
                                 "stage_name": stage["name"],
@@ -2001,52 +2020,10 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 should_eval_difficulty = False
 
             if should_eval_difficulty:
-                try:
-                    from chemdb.target_difficulty import evaluate_difficulty_for_target
-
-                    dock_dir = paths.docked_variant_root(variant_env or None, ph_label)
-                    csv_basename = f"{csv_prefix}docking_score_long.csv"
-                    vina_csv = dock_dir / csv_basename
-                    if not vina_csv.exists():
-                        logger.warning(
-                            "[difficulty] pdb=%s csv=%s action=skip reason=missing_csv",
-                            paths.pdb_id,
-                            vina_csv,
-                        )
-                    elif vina_csv.stat().st_size == 0:
-                        logger.warning(
-                            "[difficulty] pdb=%s csv=%s action=skip reason=empty_csv",
-                            paths.pdb_id,
-                            vina_csv,
-                        )
-                    else:
-                        run_id_token = str(manifest_run_id or cfg.get("RUN_ID") or "")
-                        analysis_root = Path(cfg.get("OVERALL_DIR", ".")) / "analysis" / "dud_eval"
-                        if run_id_token:
-                            analysis_root = analysis_root / run_id_token
-
-                        difficulty_info = evaluate_difficulty_for_target(
-                            pdb_id=paths.pdb_id,
-                            csv_path=vina_csv,
-                            analysis_root=analysis_root,
-                            lig_col="ligand",
-                            score_col="score",
-                            bedroc_alpha=float(cfg.get("DUD_EVAL_BEDROC_ALPHA", 20.0)),
-                            logauc_lambda=float(cfg.get("DUD_EVAL_LOGAUC_LAMBDA", 1e-3)),
-                            run_id=run_id_token or None,
-                        )
-                        cfg.setdefault("_TARGET_DIFFICULTY", {})[paths.pdb_id] = {
-                            "difficulty": difficulty_info.difficulty,
-                            "roc_auc": difficulty_info.roc_auc,
-                            "N": difficulty_info.N,
-                            "n_actives": difficulty_info.n_actives,
-                        }
-                except Exception:
-                    logger.warning(
-                        "[difficulty] pdb=%s action=skip reason=exception",
-                        paths.pdb_id,
-                        exc_info=True,
-                    )
+                logger.info(
+                    "[difficulty] pdb=%s action=skip reason=druggability_orchestrator_enabled",
+                    paths.pdb_id,
+                )
 
             try:
                 summary = {
