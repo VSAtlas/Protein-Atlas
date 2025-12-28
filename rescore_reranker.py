@@ -13,9 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 COMPONENT = "[rescore-reranker]"
 NUMERIC_PRIORITY = [
     "consensus_score",
+    "final_score",
     "scorch_composite",
     "SCORCH_score_used",
     "SCORCH_certainty_used",
+    "rescored_flag",
     "consensus_rank",
     "final_rank",
     "p_energy",
@@ -156,6 +158,8 @@ def _ordered_fields(original_fields: List[str]) -> List[str]:
         "SCORCH_score_used",
         "SCORCH_certainty_used",
         "scorch_composite",
+        "final_score",
+        "rescored_flag",
         "consensus_rank",
         "final_rank",
     ]:
@@ -223,18 +227,35 @@ def rerank_consensus_with_scorch(
     if not consensus_csv.exists() or consensus_csv.stat().st_size == 0:
         logger.warning("%s action=skip reason=missing_consensus path=%s", COMPONENT, str(consensus_csv))
         return False
+    degraded = False
+    sc_rows: List[Dict[str, str]] = []
     if not scorch_csv.exists() or scorch_csv.stat().st_size == 0:
-        logger.warning("%s action=skip reason=missing_scorch path=%s", COMPONENT, str(scorch_csv))
-        return False
+        degraded = True
+        logger.warning("%s action=rerank status=degraded reason=missing_or_empty_scorch path=%s", COMPONENT, str(scorch_csv))
+    else:
+        try:
+            sc_rows, _ = _read_csv(scorch_csv)
+            if not sc_rows:
+                degraded = True
+                logger.warning(
+                    "%s action=rerank status=degraded reason=missing_or_empty_scorch path=%s",
+                    COMPONENT,
+                    str(scorch_csv),
+                )
+        except Exception as exc:
+            degraded = True
+            logger.warning(
+                "%s action=rerank status=degraded reason=read_error_scorch path=%s error=%s",
+                COMPONENT,
+                str(scorch_csv),
+                exc,
+            )
+            sc_rows = []
 
     cons_rows, cons_fields = _read_csv(consensus_csv)
-    sc_rows, _ = _read_csv(scorch_csv)
 
     if not cons_rows:
         logger.warning("%s action=skip reason=empty_consensus path=%s", COMPONENT, str(consensus_csv))
-        return False
-    if not sc_rows:
-        logger.warning("%s action=skip reason=empty_scorch path=%s", COMPONENT, str(scorch_csv))
         return False
 
     best_by_source: Dict[Tuple[str, str, str, str, str], ScorchPick] = {}
@@ -302,6 +323,15 @@ def rerank_consensus_with_scorch(
             comp = pick.scorch_score * pick.scorch_certainty
         rr["scorch_composite"] = "" if comp is None else f"{comp:.6g}"
 
+        rescored = (rr["scorch_composite"] != "") or (rr["SCORCH_score_used"] != "")
+        rr["rescored_flag"] = "1" if rescored else "0"
+        if rescored and rr["scorch_composite"] != "":
+            rr["final_score"] = rr["scorch_composite"]
+        elif rescored and rr["SCORCH_score_used"] != "":
+            rr["final_score"] = rr["SCORCH_score_used"]
+        else:
+            rr["final_score"] = str(rr.get("consensus_score", "")).strip()
+
         enriched.append(rr)
 
     def group_key(row: Dict[str, Any]) -> Tuple[str, str, str, str]:
@@ -326,22 +356,38 @@ def rerank_consensus_with_scorch(
             enriched[i]["consensus_rank"] = str(rank)
 
     for _, idxs in groups.items():
-        sortable = []
+        rescored_idxs: List[int] = []
+        nonrescored_idxs: List[int] = []
         for i in idxs:
-            comp = _as_float(enriched[i].get("scorch_composite"))
-            scs = _as_float(enriched[i].get("SCORCH_score_used"))
-            cs = _as_float(enriched[i].get("consensus_score"))
-            sortable.append(
-                (
-                    comp if comp is not None else -1e18,
-                    scs if scs is not None else -1e18,
-                    cs if cs is not None else -1e18,
-                    i,
-                )
-            )
-        sortable.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
-        for rank, (_, _, _, i) in enumerate(sortable, start=1):
+            comp = enriched[i].get("scorch_composite")
+            scs = enriched[i].get("SCORCH_score_used")
+            if str(comp).strip() != "" or str(scs).strip() != "":
+                rescored_idxs.append(i)
+            else:
+                nonrescored_idxs.append(i)
+
+        def _rescored_key(i: int) -> Tuple[float, float, float]:
+            comp = _as_float(enriched[i].get("scorch_composite")) or -1e18
+            scs = _as_float(enriched[i].get("SCORCH_score_used")) or -1e18
+            cs = _as_float(enriched[i].get("consensus_score")) or -1e18
+            return (comp, scs, cs)
+
+        rescored_sorted = sorted(rescored_idxs, key=lambda idx: _rescored_key(idx), reverse=True)
+        nonrescored_sorted = sorted(
+            nonrescored_idxs,
+            key=lambda idx: _as_float(enriched[idx].get("consensus_score")) or -1e18,
+            reverse=True,
+        )
+
+        final_order = rescored_sorted + nonrescored_sorted
+        for rank, i in enumerate(final_order, start=1):
             enriched[i]["final_rank"] = str(rank)
+
+    for row in enriched:
+        rescored = bool(str(row.get("scorch_composite", "")).strip() or str(row.get("SCORCH_score_used", "")).strip())
+        row["rescored_flag"] = "1" if rescored else "0"
+        fr = _as_float(row.get("final_rank"))
+        row["final_score"] = "" if fr is None else f"{(-fr):.6g}"
 
     out_fields = _ordered_fields(cons_fields)
     pretty_fields = [f for f in out_fields if f not in {"run_id", "pdb_id", "variant", "ph_label"}]

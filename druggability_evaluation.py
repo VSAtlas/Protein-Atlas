@@ -4,9 +4,19 @@ import logging
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+try:
+    import requests  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    requests = None  # type: ignore
+
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    yaml = None  # type: ignore
 
 from installation import load_config
 from path_router import make_paths
@@ -17,6 +27,7 @@ config = load_config()
 # Defaults
 _DEFAULT_FPOCKET_EXE = Path("/home/michael/atlas/tools/fpocket/bin/fpocket")
 _DEFAULT_FPOCKET_OUTPUT_ROOT = Path(__file__).resolve().parent / "fpocket"
+_PROTEIN_CLASS_RULES: Optional[Dict[str, Any]] = None
 
 
 def _cfg_float(key: str, default: float) -> float:
@@ -25,6 +36,28 @@ def _cfg_float(key: str, default: float) -> float:
         return float(raw)
     except Exception:
         return default
+
+
+def _cfg_str(key: str, default: str = "") -> str:
+    raw = config.get(key)
+    if raw is None:
+        return default
+    return str(raw)
+
+
+def _cfg_str_list(key: str, default: str = "") -> List[str]:
+    """
+    Split a semi-colon or comma separated string into a cleaned list of lowercased tokens.
+    """
+    value = _cfg_str(key, default)
+    if not value:
+        return []
+    tokens: List[str] = []
+    for chunk in value.replace(",", ";").split(";"):
+        t = chunk.strip().lower()
+        if t:
+            tokens.append(t)
+    return tokens
 
 
 @dataclass
@@ -40,6 +73,339 @@ class DruggabilityMetrics:
     tier: str
     triggers: List[str]
     info_path: Path
+
+    # New metadata fields (best-effort; may be None/empty)
+    uniprot_id: Optional[str] = None
+    ec_numbers: List[str] = field(default_factory=list)
+    protein_name: Optional[str] = None
+    protein_family: Optional[str] = None
+    protein_class: Optional[str] = None
+    # Family-based prior difficulty (optional)
+    family_prior_tier: Optional[str] = None
+    family_prior_triggers: List[str] = field(default_factory=list)
+
+
+def _fetch_uniprot_and_ec_for_pdb(
+    pdb_id: str,
+    logger: logging.Logger,
+    entity_id: int = 1,
+    timeout: float = 10.0,
+) -> Tuple[Optional[str], List[str], Optional[str]]:
+    """
+    Best-effort lookup of UniProt ID and EC numbers for a PDB entry via RCSB + UniProt.
+
+    Returns (uniprot_id, ec_numbers, pdb_description).
+    """
+    pdb_id = pdb_id.upper()
+    if requests is None:
+        logger.debug(
+            "[druggability.family.skip] pdb_id=%s reason=missing_requests", pdb_id
+        )
+        return None, [], None
+
+    uniprot_id: Optional[str] = None
+    ec_numbers: List[str] = []
+    pdb_description: Optional[str] = None
+
+    annotation_url = (
+        f"https://data.rcsb.org/rest/v1/core/polymer_entity/{pdb_id}/{entity_id}"
+    )
+    try:
+        logger.info(
+            "[druggability.family.rcsb.query] pdb_id=%s entity=%d url=%s",
+            pdb_id,
+            entity_id,
+            annotation_url,
+        )
+        resp = requests.get(annotation_url, timeout=timeout)
+        resp.raise_for_status()
+        entity_data = resp.json()
+
+        identifiers = entity_data.get("rcsb_polymer_entity_container_identifiers", {})
+        uniprot_ids = identifiers.get("uniprot_ids", []) or []
+        if uniprot_ids:
+            uniprot_id = str(uniprot_ids[0]).strip() or None
+
+        ec_list = entity_data.get("entity", {}).get("rcsb_enzyme_class_list", [])
+        for ec_entry in ec_list:
+            ec = ec_entry.get("ec")
+            if ec:
+                ec_clean = str(ec).strip().rstrip(".")
+                if ec_clean and ec_clean not in ec_numbers:
+                    ec_numbers.append(ec_clean)
+
+        pdb_description = (
+            entity_data.get("rcsb_polymer_entity", {}).get("pdbx_description", None)
+        )
+    except Exception as exc:
+        logger.warning(
+            "[druggability.family.rcsb.error] pdb_id=%s url=%s err=%s",
+            pdb_id,
+            annotation_url,
+            exc,
+        )
+
+    if not uniprot_id:
+        logger.warning(
+            "[druggability.family.uniprot.missing] pdb_id=%s reason=no_uniprot_from_rcsb",
+            pdb_id,
+        )
+        return None, ec_numbers, pdb_description
+
+    if not ec_numbers:
+        uniprot_txt_url = f"https://rest.uniprot.org/uniprotkb/{uniprot_id}.txt"
+        try:
+            logger.info(
+                "[druggability.family.uniprot.query] pdb_id=%s uniprot=%s url=%s",
+                pdb_id,
+                uniprot_id,
+                uniprot_txt_url,
+            )
+            u_resp = requests.get(uniprot_txt_url, timeout=timeout)
+            u_resp.raise_for_status()
+            for line in u_resp.text.splitlines():
+                if line.startswith("DE   EC="):
+                    chunk = line.split("EC=", 1)[-1]
+                    for token in chunk.split(";"):
+                        ec_candidate = token.strip()
+                        if ec_candidate and "." in ec_candidate and ec_candidate != "-":
+                            ec_clean = ec_candidate.rstrip(".")
+                            if ec_clean and ec_clean not in ec_numbers:
+                                ec_numbers.append(ec_clean)
+        except Exception as exc:
+            logger.warning(
+                "[druggability.family.uniprot.error] pdb_id=%s uniprot=%s url=%s err=%s",
+                pdb_id,
+                uniprot_id,
+                uniprot_txt_url,
+                exc,
+            )
+
+    return uniprot_id, ec_numbers, pdb_description
+
+
+def _fetch_protein_name_and_family_from_uniprot(
+    uniprot_id: str,
+    logger: logging.Logger,
+    timeout: float = 10.0,
+    pdb_description: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Best-effort extraction of (protein_name, protein_family) from UniProt text entry.
+
+    For now, protein_family is a simple textual label you can later postprocess;
+    we prefer DE RecName and fall back to RCSB description or the UniProt ID.
+    """
+    if requests is None:
+        logger.debug(
+            "[druggability.family.uniprot.skip] uniprot=%s reason=missing_requests",
+            uniprot_id,
+        )
+        return None, pdb_description or None
+
+    protein_name: Optional[str] = None
+    family_label: Optional[str] = None
+
+    txt_url = f"https://rest.uniprot.org/uniprotkb/{uniprot_id}.txt"
+    try:
+        logger.info(
+            "[druggability.family.uniprot.name.query] uniprot=%s url=%s",
+            uniprot_id,
+            txt_url,
+        )
+        resp = requests.get(txt_url, timeout=timeout)
+        resp.raise_for_status()
+        lines = resp.text.splitlines()
+
+        for line in lines:
+            if line.startswith("DE   RecName: Full=") and not protein_name:
+                try:
+                    chunk = line.split("Full=", 1)[1]
+                    protein_name = chunk.strip().rstrip(";.")
+                except Exception:
+                    continue
+            if line.startswith("ID   ") and protein_name is None:
+                try:
+                    token = line.split()[1]
+                    protein_name = token.strip()
+                except Exception:
+                    continue
+
+        if protein_name:
+            family_label = protein_name
+        elif pdb_description:
+            family_label = pdb_description
+        else:
+            family_label = uniprot_id
+
+    except Exception as exc:
+        logger.warning(
+            "[druggability.family.uniprot.name.error] uniprot=%s url=%s err=%s",
+            uniprot_id,
+            txt_url,
+            exc,
+        )
+        if pdb_description:
+            family_label = pdb_description
+        else:
+            family_label = uniprot_id
+
+    return protein_name, family_label
+
+
+def _load_protein_class_rules(logger: logging.Logger) -> Dict[str, Any]:
+    global _PROTEIN_CLASS_RULES
+    if _PROTEIN_CLASS_RULES is not None:
+        return _PROTEIN_CLASS_RULES
+
+    rules: Dict[str, Any] = {}
+    if yaml is None:
+        logger.debug("[druggability.family.yaml.skip] reason=missing_yaml_module")
+        _PROTEIN_CLASS_RULES = rules
+        return rules
+
+    try:
+        root = Path(__file__).resolve().parent
+        yaml_path = root / "chemdb" / "protein_names.yaml"
+        if not yaml_path.is_file():
+            logger.warning("[druggability.family.yaml.missing] path=%s", yaml_path)
+            _PROTEIN_CLASS_RULES = rules
+            return rules
+
+        with yaml_path.open("r", encoding="utf-8") as fh:
+            loaded = yaml.safe_load(fh) or {}
+        if not isinstance(loaded, dict):
+            logger.warning(
+                "[druggability.family.yaml.invalid] path=%s type=%s",
+                yaml_path,
+                type(loaded),
+            )
+            _PROTEIN_CLASS_RULES = rules
+            return rules
+
+        rules = loaded
+        classes = (loaded.get("classes") or {}).keys()
+        logger.info(
+            "[druggability.family.yaml.loaded] path=%s classes=%s",
+            yaml_path,
+            ",".join(classes),
+        )
+    except Exception as exc:
+        logger.warning("[druggability.family.yaml.error] err=%s", exc)
+        rules = {}
+
+    _PROTEIN_CLASS_RULES = rules
+    return rules
+
+
+def _extract_pdb_header_text(receptor_pdb: Path, logger: logging.Logger) -> str:
+    """
+    Extract informative header/keyword lines from a PDB file.
+    """
+    if not receptor_pdb.is_file():
+        return ""
+
+    lines: List[str] = []
+    try:
+        with receptor_pdb.open("r", encoding="utf-8", errors="ignore") as fh:
+            for i, line in enumerate(fh):
+                if i > 500:
+                    break
+                tag = line[:6].strip().upper()
+                if tag in {"HEADER", "TITLE", "KEYWDS", "COMPND"}:
+                    lines.append(line[6:].strip())
+    except Exception as exc:
+        logger.warning(
+            "[druggability.family.pdb_header.error] path=%s err=%s",
+            receptor_pdb,
+            exc,
+        )
+        return ""
+
+    return " ".join(lines)
+
+
+def _infer_family_prior_from_metadata(
+    uniprot_id: Optional[str],
+    protein_name: Optional[str],
+    protein_family: Optional[str],
+    ec_numbers: List[str],
+    pdb_header_text: str,
+    logger: logging.Logger,
+) -> Tuple[Optional[str], List[str], Optional[str]]:
+    """
+    Use YAML-driven canonical classes to infer a family-based difficulty prior.
+
+    Returns (family_prior_tier, triggers, protein_class_name).
+    """
+    rules = _load_protein_class_rules(logger)
+    classes = rules.get("classes") or {}
+    if not isinstance(classes, dict) or not classes:
+        return None, [], None
+
+    parts: List[str] = []
+    for val in (pdb_header_text, protein_name, protein_family, uniprot_id):
+        if val:
+            parts.append(str(val))
+    if ec_numbers:
+        parts.extend(ec_numbers)
+    text = " ".join(parts).lower()
+
+    best_class: Optional[str] = None
+    best_tier: Optional[str] = None
+    triggers: List[str] = []
+    best_val: Optional[int] = None
+
+    def tier_to_val(t: str) -> int:
+        return {"A": 0, "B": 1, "C": 2}.get(t.upper(), 1)
+
+    for class_name, info in classes.items():
+        if not isinstance(info, dict):
+            continue
+        cname = str(class_name).strip()
+        tier_prior = str(info.get("tier_prior", "B")).upper()
+        if tier_prior not in {"A", "B", "C"}:
+            tier_prior = "B"
+        class_val = tier_to_val(tier_prior)
+
+        text_keywords = info.get("text_keywords") or []
+        ec_prefixes = info.get("ec_prefixes") or []
+
+        class_triggers: List[str] = []
+
+        for raw_kw in text_keywords:
+            kw = str(raw_kw).strip().lower()
+            if kw and kw in text:
+                class_triggers.append(f"{cname}:kw:{kw}")
+
+        for raw_prefix in ec_prefixes:
+            prefix = str(raw_prefix).strip().lower()
+            if not prefix:
+                continue
+            for ec in ec_numbers:
+                if ec.lower().startswith(prefix):
+                    class_triggers.append(f"{cname}:ec:{prefix}")
+                    break
+
+        if not class_triggers:
+            continue
+
+        if best_val is None or class_val > best_val:
+            best_val = class_val
+            best_class = cname
+            best_tier = tier_prior
+            triggers = class_triggers
+
+    if best_class and best_tier:
+        logger.info(
+            "[druggability.family.prior] uniprot=%s class=%s tier=%s triggers=%s",
+            uniprot_id or "",
+            best_class,
+            best_tier,
+            ",".join(triggers),
+        )
+
+    return best_tier, triggers, best_class
 
 
 def get_fpocket_exe(cfg: Dict[str, Any]) -> Optional[Path]:
@@ -293,6 +659,53 @@ def _summarize_fpocket_info(
     has_metal = _detect_metal_near_center(receptor_pdb, center)
     tier, triggers = _classify_druggability(druggability, volume, openness, polar_frac, has_metal)
 
+    pdb_header_text = _extract_pdb_header_text(receptor_pdb, logger)
+
+    # --- New: protein family metadata ---
+    uniprot_id: Optional[str] = None
+    ec_numbers: List[str] = []
+    protein_name: Optional[str] = None
+    protein_family: Optional[str] = None
+    try:
+        uniprot_id, ec_numbers, pdb_desc = _fetch_uniprot_and_ec_for_pdb(
+            pdb_id=pdb_id,
+            logger=logger,
+        )
+        if uniprot_id:
+            protein_name, protein_family = _fetch_protein_name_and_family_from_uniprot(
+                uniprot_id=uniprot_id,
+                logger=logger,
+                pdb_description=pdb_desc,
+            )
+    except Exception as exc:
+        logger.warning(
+            "[druggability.fpocket.family.error] pdb_id=%s variant=%s ph=%s err=%s",
+            pdb_id,
+            variant,
+            ph_label,
+            exc,
+        )
+    family_prior_tier: Optional[str] = None
+    family_prior_triggers: List[str] = []
+    protein_class: Optional[str] = None
+    try:
+        family_prior_tier, family_prior_triggers, protein_class = _infer_family_prior_from_metadata(
+            uniprot_id=uniprot_id,
+            protein_name=protein_name,
+            protein_family=protein_family,
+            ec_numbers=ec_numbers or [],
+            pdb_header_text=pdb_header_text,
+            logger=logger,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[druggability.fpocket.family_prior.error] pdb_id=%s variant=%s ph=%s err=%s",
+            pdb_id,
+            variant,
+            ph_label,
+            exc,
+        )
+
     metrics = DruggabilityMetrics(
         pdb_id=pdb_id,
         variant=variant,
@@ -305,10 +718,17 @@ def _summarize_fpocket_info(
         tier=tier,
         triggers=triggers,
         info_path=info_path,
+        uniprot_id=uniprot_id,
+        ec_numbers=ec_numbers or [],
+        protein_name=protein_name,
+        protein_family=protein_family,
+        protein_class=protein_class,
+        family_prior_tier=family_prior_tier,
+        family_prior_triggers=family_prior_triggers,
     )
 
     logger.info(
-        "[druggability.fpocket.tier] pdb_id=%s variant=%s ph=%s tier=%s druggability=%.3f volume=%.1f open=%.3f polar_frac=%.3f has_metal=%d triggers=%s",
+        "[druggability.fpocket.tier] pdb_id=%s variant=%s ph=%s tier=%s druggability=%.3f volume=%.1f open=%.3f polar_frac=%.3f has_metal=%d uniprot=%s class=%s family=%s family_prior=%s family_triggers=%s ec=%s triggers=%s",
         pdb_id,
         variant or "HOLO",
         ph_label or "base",
@@ -318,6 +738,12 @@ def _summarize_fpocket_info(
         metrics.openness,
         metrics.polar_fraction,
         1 if metrics.has_metal else 0,
+        metrics.uniprot_id or "",
+        metrics.protein_class or "",
+        metrics.protein_family or "",
+        metrics.family_prior_tier or "",
+        ";".join(metrics.family_prior_triggers or []),
+        ";".join(metrics.ec_numbers or []),
         ",".join(metrics.triggers),
     )
     return metrics

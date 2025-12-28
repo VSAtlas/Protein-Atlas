@@ -1,0 +1,4 @@
+variant	pH	pdb_id	run_id	target_name	library_name	controls_found	control_id	rmsd_to_crystal_A	redock_best_energy_kcal_mol	chosen	max_spread_A	policy
+HOLO	pH7_2+7_7-dup2	2OJG	full_scorch_TEST2	MITOGEN-ACTIVATED PROTEIN KINASE 1	mk01	4	2OJG_top_ligand.sanitized.pdbqt	2.08	-9.027	0	24.31	best_redock thr=8.00A
+HOLO	pH7_2+7_7-dup2	2OJG	full_scorch_TEST2	MITOGEN-ACTIVATED PROTEIN KINASE 1	mk01	4	2OJG.sanitized.pdbqt	2.08	-8.996	0	24.31	best_redock thr=8.00A
+HOLO	pH7_2+7_7-dup2	2OJG	full_scorch_TEST2	MITOGEN-ACTIVATED PROTEIN KINASE 1	mk01	4	19A_A360.sanitized.pdbqt	2.08	-8.996	1	24.31	best_redock thr=8.00A

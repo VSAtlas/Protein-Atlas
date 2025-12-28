@@ -40,6 +40,10 @@ def _use_gnina_flag(cfg: Dict[str, Any]) -> bool:
     raw = cfg.get("USE_GNINA", cfg.get("use_gnina", False))
     return _normalize_bool(raw, default=False)
 
+def _use_family_prior(cfg: Dict[str, Any]) -> bool:
+    raw = cfg.get("USE_PROTEIN_FAMILY_PRIOR", cfg.get("use_protein_family_prior", False))
+    return _normalize_bool(raw, default=False)
+
 
 def _load_druggability_metrics(
     cfg: Dict[str, Any],
@@ -166,11 +170,30 @@ def decide_engine_policy(
         )
         return policy
 
-    if metrics.tier == "A":
+    use_family = _use_family_prior(cfg)
+    base_tier = metrics.tier
+    family_prior = getattr(metrics, "family_prior_tier", None)
+
+    effective_tier = base_tier
+
+    if use_family and family_prior in {"A", "B", "C"}:
+        if family_prior == "C":
+            effective_tier = "C"
+        elif family_prior == "A":
+            if base_tier == "C":
+                effective_tier = "B"
+            else:
+                effective_tier = base_tier
+        else:
+            effective_tier = base_tier
+    else:
+        effective_tier = base_tier
+
+    if effective_tier == "A":
         base_tier_use_gnina = False
         base_tier_use_ledock = True
         base_tier_use_dock6 = False
-    elif metrics.tier == "B":
+    elif effective_tier == "B":
         base_tier_use_gnina = False
         base_tier_use_ledock = True
         base_tier_use_dock6 = True
@@ -191,17 +214,26 @@ def decide_engine_policy(
         use_dock6=use_dock6,
         reason=f"metrics;triggers={triggers_str}",
     )
+    family_triggers = getattr(metrics, "family_prior_triggers", None) or []
+    family_triggers_str = ";".join(family_triggers)
+    protein_class = getattr(metrics, "protein_class", None) or ""
     logger.info(
-        "[druggability.orchestrator.policy] pdb_id=%s variant=%s ph=%s tier=%s druggability=%.3f volume=%.1f open=%.3f polar_frac=%.3f has_metal=%d use_pd=1 use_gnina=%d use_ledock=%d use_dock6=%d triggers=%s",
+        "[druggability.orchestrator.policy] pdb_id=%s variant=%s ph=%s tier_base=%s tier_family=%s tier_effective=%s class=%s druggability=%.3f volume=%.1f open=%.3f polar_frac=%.3f has_metal=%d uniprot=%s family=%s family_triggers=%s use_pd=1 use_gnina=%d use_ledock=%d use_dock6=%d triggers=%s",
         pdb_id,
         variant,
         ph_label,
-        metrics.tier,
+        base_tier,
+        family_prior or "",
+        effective_tier,
+        protein_class,
         metrics.druggability,
         metrics.volume,
         metrics.openness,
         metrics.polar_fraction,
         int(metrics.has_metal),
+        getattr(metrics, "uniprot_id", None) or "",
+        getattr(metrics, "protein_family", None) or "",
+        family_triggers_str,
         int(policy.use_gnina),
         int(policy.use_ledock),
         int(policy.use_dock6),

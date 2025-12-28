@@ -68,20 +68,35 @@ FPOCKET_EXE=/home/michael/atlas/tools/fpocket/bin/fpocket
 
 USE_PROTEIN_DRUGGABILITY = true
 
-DRUGGABILITY_TIER_A_DRUGGABILITY_MIN = 0.50
-DRUGGABILITY_TIER_A_OPENNESS_MAX = 0.55
-DRUGGABILITY_TIER_A_POLAR_FRAC_MAX = 0.45
+DRUGGABILITY_TIER_A_DRUGGABILITY_MIN = 0.90
+DRUGGABILITY_TIER_A_OPENNESS_MAX     = 0.55
+DRUGGABILITY_TIER_A_POLAR_FRAC_MAX   = 0.38
 
 DRUGGABILITY_TIER_B_DRUGGABILITY_MIN = 0.30
-DRUGGABILITY_TIER_B_DRUGGABILITY_MAX = 0.50
-DRUGGABILITY_TIER_B_OPENNESS_MIN = 0.55
-DRUGGABILITY_TIER_B_OPENNESS_MAX = 0.65
-DRUGGABILITY_TIER_B_POLAR_FRAC_MIN = 0.45
-DRUGGABILITY_TIER_B_POLAR_FRAC_MAX = 0.60
+DRUGGABILITY_TIER_B_DRUGGABILITY_MAX = 0.90
+DRUGGABILITY_TIER_B_OPENNESS_MIN     = 0.55
+DRUGGABILITY_TIER_B_OPENNESS_MAX     = 0.65
+DRUGGABILITY_TIER_B_POLAR_FRAC_MIN   = 0.45
+DRUGGABILITY_TIER_B_POLAR_FRAC_MAX   = 0.60
 
-DRUGGABILITY_TIER_C_DRUGGABILITY_MAX = 0.30
-DRUGGABILITY_TIER_C_OPENNESS_MIN = 0.65
-DRUGGABILITY_TIER_C_POLAR_FRAC_MIN = 0.60
+DRUGGABILITY_TIER_C_DRUGGABILITY_MAX = 0.02
+DRUGGABILITY_TIER_C_OPENNESS_MIN     = 0.65
+DRUGGABILITY_TIER_C_POLAR_FRAC_MIN   = 0.60
+
+# --- Protein family difficulty prior (druggability + family integration) ---
+USE_PROTEIN_FAMILY_PRIOR = true
+
+# Family-tier keyword heuristics (lowercase, semi-colon or comma separated substrings).
+# These are deliberately conservative and can be tuned as you calibrate on DUD-E.
+FAMILY_PRIOR_TIER_A_KEYWORDS = kinase;protein kinase;tyrosine kinase;serine/threonine kinase;cdk;mapk;thymidylate synthase;dihydrofolate reductase;dehydrogenase;reductase;androgen receptor;estrogen receptor;thyroid hormone receptor
+FAMILY_PRIOR_TIER_B_KEYWORDS = protease;trypsin;thrombin;factor vii;factor x;plasmin;metalloprotease;gpcr;g-protein coupled receptor;adrenergic receptor;cytochrome p450;cyp2c9;ion channel
+FAMILY_PRIOR_TIER_C_KEYWORDS = hsp90;heat shock protein 90;chaperone;comt;catechol o-methyltransferase;farnesyl pyrophosphate synthase;fpps;fpps;metalloenzyme
+
+# Optional EC-prefix clues for families (e.g. 3.4.21 for serine proteases).
+# Leave empty or trim as needed; these are best-effort hints only.
+FAMILY_PRIOR_TIER_A_EC_PREFIXES = 2.7.10;2.7.11;2.7.12
+FAMILY_PRIOR_TIER_B_EC_PREFIXES = 3.4.21;3.4.23;3.4.24
+FAMILY_PRIOR_TIER_C_EC_PREFIXES = 1.14.13;1.14.14
 
 
 PYMOL_PATH=pymol
@@ -130,7 +145,9 @@ CTRL_REDOCK_NMODES =9
 USE_GNINA = false
 USE_LEDOCK = false
 USE_DOCK6 = false
-USE_SCORCH = false
+USE_SCORCH = true
+SCORCH_TOP_FRACTION = 0.1
+
 
 CHAIN_PRUNE=1
 CHAIN_POCKET_RADIUS_ANG=10.0
@@ -238,7 +255,7 @@ MIN_PARENT_HEAVY=8
 VINA_TIMEOUT_SEC=0
 FILTER_VINA_STDOUT=false
 DISCOVERY_SELECTION_PCTS=1.0,0.1,0.01,0.001,0.001
-POLYPHARM_SELECTION_PCTS=1.0,0.05,0.01
+POLYPHARM_SELECTION_PCTS=1.0,0.1,0.05
 
 
 # --- Single-ligand (optional) ---

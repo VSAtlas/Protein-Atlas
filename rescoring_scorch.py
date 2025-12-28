@@ -26,7 +26,7 @@ COMPONENT = "[scorch-rescore]"
 SCORCH_SCRIPT: Path | None = None
 SCORCH_ENV: str = "scorch-env"
 SCORCH_ROOT: Path | None = None
-SCORCH_TOP_FRACTION_DEFAULT = 0.5
+SCORCH_TOP_FRACTION_DEFAULT = 0.15
 SCORCH_TOP_FRACTION_KEY = "SCORCH_TOP_FRACTION"
 VINA_STAGE_DIRS = ("stage1", "stage2", "stage3")
 GNINA_STAGE_DIRS = ("gnina_stage1", "gnina_stage2", "gnina_stage3")
@@ -191,15 +191,72 @@ def _collect_stage_pdbqts(ph_root: Path, stage_dir: str) -> List[Path]:
     return sorted(collected)
 
 
-def _load_consensus_top_ligands(
-    consensus_csv: Path, frac: float, logger: logging.Logger
-) -> Tuple[List[Dict[str, str]], int]:
+def _pose_base_from_path(p: Path) -> str:
+    stem = p.stem
+    stem = stem.replace(".sanitized", "")
+    stem = re.sub(r"(__ledock_stage\d+)$", "", stem)
+    stem = re.sub(r"(__dock6_stage\d+)$", "", stem)
+    stem = re.sub(r"(_gnina_stage\d+)$", "", stem)
+    stem = re.sub(r"(_stage\d+)$", "", stem)
+    stem = stem.replace("__", "_")
+    stem = re.sub(r"_+$", "", stem)
+    return stem
+
+
+def _stage_priority(name: str) -> int:
+    name_lower = name.lower()
+    if name_lower.endswith("stage3") or "stage3" in name_lower:
+        return 3
+    if name_lower.endswith("stage2") or "stage2" in name_lower:
+        return 2
+    if name_lower.endswith("stage1") or "stage1" in name_lower:
+        return 1
+    return 0
+
+
+def _collect_best_pose_per_base(
+    ph_root: Path, stage_dirs: Sequence[str], allowed_bases: Optional[Set[str]], logger: logging.Logger
+) -> Tuple[List[Path], Dict[int, int], int]:
+    best: Dict[str, Tuple[int, Path]] = {}
+    total_candidates = 0
+    for stage_dir in stage_dirs:
+        stage_pdbqts = _collect_stage_pdbqts(ph_root, stage_dir)
+        total_candidates += len(stage_pdbqts)
+        for pdbqt in stage_pdbqts:
+            base = _pose_base_from_path(pdbqt)
+            if allowed_bases is not None and base not in allowed_bases:
+                continue
+            priority = _stage_priority(stage_dir)
+            current = best.get(base)
+            if current is None or priority > current[0]:
+                best[base] = (priority, pdbqt)
+
+    stage_counts: Dict[int, int] = {}
+    for priority, _ in best.values():
+        stage_counts[priority] = stage_counts.get(priority, 0) + 1
+
+    ligands = [entry[1] for entry in sorted(best.values(), key=lambda t: (-t[0], str(t[1])))]
+    logger.debug(
+        "%s action=collect_best status=ok stage_dirs=%s candidates=%d selected=%d stage3=%d stage2=%d stage1=%d stage0=%d",
+        COMPONENT,
+        ",".join(stage_dirs),
+        total_candidates,
+        len(ligands),
+        stage_counts.get(3, 0),
+        stage_counts.get(2, 0),
+        stage_counts.get(1, 0),
+        stage_counts.get(0, 0),
+    )
+    return ligands, stage_counts, total_candidates
+
+
+def _load_consensus_top_bases(consensus_csv: Path, frac: float, logger: logging.Logger) -> Tuple[Set[str], int, int]:
     rows: List[Dict[str, str]] = []
     try:
         with consensus_csv.open() as handle:
             reader = csv.DictReader(handle)
             fieldnames = reader.fieldnames or []
-            missing = {"ligand", "consensus_score", "best_engine"} - set(fieldnames)
+            missing = {"ligand", "consensus_score"} - set(fieldnames)
             if missing:
                 logger.error(
                     "%s action=select status=failed reason=missing_fields path=%s missing=%s",
@@ -207,7 +264,7 @@ def _load_consensus_top_ligands(
                     consensus_csv,
                     ",".join(sorted(missing)),
                 )
-                return [], 0
+                return set(), 0, 0
             for row in reader:
                 rows.append(row)
     except Exception as exc:
@@ -217,10 +274,10 @@ def _load_consensus_top_ligands(
             consensus_csv,
             exc,
         )
-        return [], 0
+        return set(), 0, 0
 
     if not rows:
-        return [], 0
+        return set(), 0, 0
 
     def _score(row: Dict[str, str]) -> float:
         try:
@@ -230,80 +287,12 @@ def _load_consensus_top_ligands(
 
     rows_sorted = sorted(rows, key=_score, reverse=True)
     k = max(1, math.ceil(len(rows_sorted) * frac))
-    return rows_sorted[:k], len(rows_sorted)
-
-
-def _consensus_ligand_base(ligand: str) -> str:
-    base = Path(ligand).name
-    for ext in (".pdbqt", ".mol2", ".sdf"):
-        if base.endswith(ext):
-            base = base[: -len(ext)]
-            break
-    base = base.replace(".sanitized", "")
-    return base
-
-
-def _build_stage_stem_map(ph_root: Path, stage_dir: str) -> Dict[str, Path]:
-    stage_map: Dict[str, Path] = {}
-    for path in _collect_stage_pdbqts(ph_root, stage_dir):
-        if path.stem not in stage_map:
-            stage_map[path.stem] = path
-    return stage_map
-
-
-def _pick_vina_pose(base: str, vina_maps: Dict[str, Dict[str, Path]]) -> Optional[Path]:
-    for stage_dir in ("stage3", "stage2", "stage1"):
-        stage_map = vina_maps.get(stage_dir, {})
-        stem = f"{base}_{stage_dir}"
-        if stem in stage_map:
-            return stage_map[stem]
-        if base in stage_map:
-            return stage_map[base]
-    return None
-
-
-def _pick_gnina_pose(base: str, gnina_maps: Dict[str, Dict[str, Path]]) -> Optional[Path]:
-    for stage_dir in ("gnina_stage3", "gnina_stage2", "gnina_stage1"):
-        stage_map = gnina_maps.get(stage_dir, {})
-        stem = f"{base}_{stage_dir}"
-        if stem in stage_map:
-            return stage_map[stem]
-        if base in stage_map:
-            return stage_map[base]
-    return None
-
-
-def _extract_stage_num_from_stem(stem: str) -> int:
-    match = re.search(r"stage(\d+)", stem)
-    if match:
-        try:
-            return int(match.group(1))
-        except ValueError:
-            return -1
-    return -1
-
-
-def _normalize_prepped_stem_to_base(stem: str) -> str:
-    base = stem.replace(".sanitized", "")
-    base = re.sub(r"(__ledock_stage\d+|__dock6_stage\d+)$", "", base)
-    if base.endswith(".mol2"):
-        base = base[: -len(".mol2")]
-    base = base.replace("__", "_")
-    return base
-
-
-def _build_prepped_pose_map(prepped_root: Path) -> Dict[str, Path]:
-    pose_map: Dict[str, Tuple[int, Path]] = {}
-    if not prepped_root.exists():
-        return {}
-    for path in prepped_root.rglob("*.pdbqt"):
-        stem = path.stem
-        base = _normalize_prepped_stem_to_base(stem)
-        stage_num = _extract_stage_num_from_stem(stem)
-        best = pose_map.get(base)
-        if best is None or stage_num > best[0]:
-            pose_map[base] = (stage_num, path)
-    return {base: pair[1] for base, pair in pose_map.items()}
+    allowed: Set[str] = set()
+    for row in rows_sorted[:k]:
+        lig = str(row.get("ligand", "")).strip()
+        base = Path(lig).stem.replace(".sanitized", "")
+        allowed.add(base)
+    return allowed, len(rows_sorted), k
 
 
 def _materialize_inputs(
@@ -500,8 +489,7 @@ def _score_stage(
     threads: int,
     overwrite: bool,
     logger: logging.Logger,
-    ligands_override: Optional[List[Path]] = None,
-    ph_root_for_hash: Optional[Path] = None,
+    allowed_bases: Optional[Set[str]] = None,
 ) -> Tuple[bool, Optional[Path]]:
     pdb_id, variant, ph = combo
     combo_post_root = post_root / pdb_id / variant / ph
@@ -518,38 +506,57 @@ def _score_stage(
         )
         return True, out_path
 
-    if ligands_override is not None:
-        ligands_available = ligands_override
-        if not ligands_available:
-            logger.warning(
-                "%s action=score status=skip source=%s stage=%s reason=no_selected_ligands",
-                COMPONENT,
-                spec.source,
-                spec.stage_dir,
-            )
-            return True, None
-        ph_root = ph_root_for_hash or ligands_available[0].parent
-        lig_path = _materialize_inputs(ph_root, combo_post_root, spec.stage_dir, ligands_available, overwrite, logger)
-        if lig_path is None:
-            logger.error(
-                "%s action=score status=failed source=%s stage=%s reason=materialize_failed",
-                COMPONENT,
-                spec.source,
-                spec.stage_dir,
-            )
-            return False, None
-    elif spec.source in {"vina", "gnina"}:
+    if spec.source in {"vina", "gnina"}:
         ph_root = run_root / pdb_id / variant / ph
-        ligands_available = _collect_stage_pdbqts(ph_root, spec.stage_dir)
+        stage_counts: Optional[Dict[int, int]] = None
+        stage_dirs: Sequence[str] = (spec.stage_dir,)
+        if spec.stage_dir == "vina_best":
+            stage_dirs = ("stage3", "stage2", "stage1")
+            ligands_available, stage_counts, before_count = _collect_best_pose_per_base(
+                ph_root, stage_dirs, allowed_bases, logger
+            )
+        elif spec.stage_dir == "gnina_best":
+            stage_dirs = ("gnina_stage3", "gnina_stage2", "gnina_stage1")
+            ligands_available, stage_counts, before_count = _collect_best_pose_per_base(
+                ph_root, stage_dirs, allowed_bases, logger
+            )
+        else:
+            ligands_available = _collect_stage_pdbqts(ph_root, spec.stage_dir)
+            before_count = len(ligands_available)
+            if allowed_bases is not None:
+                ligands_available = [p for p in ligands_available if _pose_base_from_path(p) in allowed_bases]
         if not ligands_available:
             logger.warning(
-                "%s action=score status=skip source=%s stage=%s reason=no_pdbqt path=%s",
+                "%s action=score status=skip source=%s stage=%s reason=no_pdbqt stage_dirs=%s path=%s",
                 COMPONENT,
                 spec.source,
                 spec.stage_dir,
-                ph_root / spec.stage_dir,
+                ",".join(stage_dirs),
+                ph_root,
             )
             return True, None
+        if stage_counts is not None:
+            logger.debug(
+                "%s action=score source=%s stage=%s candidates=%d ligands_unique=%d stage3=%d stage2=%d stage1=%d stage0=%d",
+                COMPONENT,
+                spec.source,
+                spec.stage_dir,
+                before_count,
+                len(ligands_available),
+                stage_counts.get(3, 0),
+                stage_counts.get(2, 0),
+                stage_counts.get(1, 0),
+                stage_counts.get(0, 0),
+            )
+        else:
+            logger.debug(
+                "%s action=score source=%s stage=%s ligands_before=%d ligands_after=%d",
+                COMPONENT,
+                spec.source,
+                spec.stage_dir,
+                before_count,
+                len(ligands_available),
+            )
         lig_path = _materialize_inputs(ph_root, combo_post_root, spec.stage_dir, ligands_available, overwrite, logger)
         if lig_path is None:
             logger.error(
@@ -571,15 +578,26 @@ def _score_stage(
             )
             return True, None
         ligands_available = list(lig_path.rglob("*.pdbqt")) if lig_path.is_dir() else ([lig_path] if lig_path.suffix == ".pdbqt" else [])
+        before_count = len(ligands_available)
+        if allowed_bases is not None:
+            ligands_available = [p for p in ligands_available if _pose_base_from_path(p) in allowed_bases]
         if not ligands_available:
             logger.warning(
-                "%s action=score status=skip source=%s stage=%s reason=no_pdbqt path=%s",
+                "%s action=score status=skip source=%s stage=%s reason=no_selected_pdbqt path=%s",
                 COMPONENT,
                 spec.source,
                 spec.stage_dir,
                 lig_path,
             )
             return True, None
+        logger.debug(
+            "%s action=score source=%s stage=%s ligands_before=%d ligands_after=%d",
+            COMPONENT,
+            spec.source,
+            spec.stage_dir,
+            before_count,
+            len(ligands_available),
+        )
 
     cmd = _scorch_command(receptor, lig_path, threads)
     cmd[cmd.index("{out}")] = str(out_path)
@@ -761,12 +779,11 @@ def main() -> int:
         return 1
 
     specs: List[StageSpec] = [
-        StageSpec("vina", "vina_selected", "scorch_scores_vina_selected.csv"),
-        StageSpec("gnina", "gnina_selected", "scorch_scores_gnina_selected.csv"),
-        StageSpec("ledock", "ledock_selected", "scorch_scores_ledock_selected.csv"),
-        StageSpec("dock6", "dock6_selected", "scorch_scores_dock6_selected.csv"),
+        StageSpec("vina", "vina_best", "scorch_scores_vina_best.csv"),
+        StageSpec("gnina", "gnina_best", "scorch_scores_gnina_best.csv"),
+        StageSpec("ledock", "ledock_pdbqt", "scorch_scores_ledock.csv"),
+        StageSpec("dock6", "dock6_pdbqt", "scorch_scores_dock6.csv"),
     ]
-    spec_by_source = {spec.source: spec for spec in specs}
 
     combos = discover_combos(run_root, post_run_root)
     logger.info("%s action=discover status=ok combos=%d", COMPONENT, len(combos))
@@ -782,10 +799,9 @@ def main() -> int:
         logger.warning("%s action=discover status=skip reason=no_combos run_id=%s", COMPONENT, args.run_id)
         return 0
 
-    tasks: List[Tuple[StageSpec, Tuple[str, str, str], Path, List[Path], Path]] = []
+    tasks: List[Tuple[StageSpec, Tuple[str, str, str], Path, Set[str]]] = []
     skipped_missing_receptor = 0
     skipped_missing_consensus = 0
-    skipped_no_selected = 0
     combos_with_tasks: Set[Tuple[str, str, str]] = set()
     for combo in sorted(combos):
         pdb_id, variant, ph = combo
@@ -802,7 +818,8 @@ def main() -> int:
             skipped_missing_receptor += 1
             continue
         consensus_csv = run_root / pdb_id / variant / ph / "consensus_docking_scores.csv"
-        if not consensus_csv.exists():
+        allowed_bases, total_rows, selected_rows = _load_consensus_top_bases(consensus_csv, top_fraction, logger)
+        if total_rows == 0:
             logger.warning(
                 "%s action=select status=skip reason=missing_consensus pdb_id=%s variant=%s ph=%s path=%s",
                 COMPONENT,
@@ -813,101 +830,30 @@ def main() -> int:
             )
             skipped_missing_consensus += 1
             continue
-
-        selected_rows, total_rows = _load_consensus_top_ligands(consensus_csv, top_fraction, logger)
-        if not selected_rows:
-            logger.warning(
-                "%s action=select status=skip reason=no_consensus_rows pdb_id=%s variant=%s ph=%s path=%s",
-                COMPONENT,
-                pdb_id,
-                variant,
-                ph,
-                consensus_csv,
-            )
-            skipped_no_selected += 1
-            continue
-
-        ph_root = run_root / pdb_id / variant / ph
-        vina_maps = {stage: _build_stage_stem_map(ph_root, stage) for stage in VINA_STAGE_DIRS}
-        gnina_maps = {stage: _build_stage_stem_map(ph_root, stage) for stage in GNINA_STAGE_DIRS}
-        ledock_root = post_run_root / pdb_id / variant / ph / "ledock_pdbqt"
-        dock6_root = post_run_root / pdb_id / variant / ph / "dock6_pdbqt"
-        ledock_map = _build_prepped_pose_map(ledock_root)
-        dock6_map = _build_prepped_pose_map(dock6_root)
-
-        selected_by_source: Dict[str, List[Path]] = {"vina": [], "gnina": [], "ledock": [], "dock6": []}
-        missing_pose = 0
-        for row in selected_rows:
-            base = _consensus_ligand_base(row.get("ligand", ""))
-            engine = str(row.get("best_engine", "")).strip().lower()
-            pose_path: Optional[Path] = None
-            if engine == "vina":
-                pose_path = _pick_vina_pose(base, vina_maps)
-            elif engine == "gnina":
-                pose_path = _pick_gnina_pose(base, gnina_maps)
-            elif engine == "ledock":
-                pose_path = ledock_map.get(base)
-            elif engine == "dock6":
-                pose_path = dock6_map.get(base)
-            if pose_path:
-                selected_by_source[engine].append(pose_path)
-            else:
-                missing_pose += 1
-                logger.debug(
-                    "%s action=select status=skip reason=missing_pose engine=%s ligand=%s pdb_id=%s variant=%s ph=%s",
-                    COMPONENT,
-                    engine or "unknown",
-                    base,
-                    pdb_id,
-                    variant,
-                    ph,
-                )
-
-        found_counts = {k: len(v) for k, v in selected_by_source.items()}
         logger.info(
-            "%s action=select status=ok pdb_id=%s variant=%s ph=%s consensus_rows=%d selected=%d frac=%.2f "
-            "vina_found=%d gnina_found=%d ledock_found=%d dock6_found=%d missing_pose=%d",
+            "%s action=select status=ok pdb_id=%s variant=%s ph=%s consensus_rows=%d selected=%d frac=%.2f path=%s",
             COMPONENT,
             pdb_id,
             variant,
             ph,
             total_rows,
-            len(selected_rows),
+            len(allowed_bases),
             top_fraction,
-            found_counts["vina"],
-            found_counts["gnina"],
-            found_counts["ledock"],
-            found_counts["dock6"],
-            missing_pose,
+            consensus_csv,
         )
-
-        for engine, paths in selected_by_source.items():
-            if not paths:
-                continue
-            spec = spec_by_source.get(engine)
-            if not spec:
-                continue
-            ph_root_for_hash = ph_root if engine in {"vina", "gnina"} else (ledock_root if engine == "ledock" else dock6_root)
-            tasks.append((spec, combo, receptor, paths, ph_root_for_hash))
-            combos_with_tasks.add(combo)
+        for spec in specs:
+            tasks.append((spec, combo, receptor, allowed_bases))
+        combos_with_tasks.add(combo)
 
     total_jobs = len(tasks)
     completed = 0
     failed_jobs = 0
+    combos_attempted = len(combos_with_tasks)
 
     if args.jobs <= 1:
-        for spec, combo, receptor, ligs, ph_root_for_hash in tasks:
+        for spec, combo, receptor, allowed_bases in tasks:
             ok, _ = _score_stage(
-                spec,
-                combo,
-                run_root,
-                post_run_root,
-                receptor,
-                args.threads,
-                args.overwrite,
-                logger,
-                ligs,
-                ph_root_for_hash,
+                spec, combo, run_root, post_run_root, receptor, args.threads, args.overwrite, logger, allowed_bases
             )
             if ok:
                 completed += 1
@@ -926,10 +872,9 @@ def main() -> int:
                     args.threads,
                     args.overwrite,
                     logger,
-                    ligs,
-                    ph_root_for_hash,
+                    allowed_bases,
                 ): (spec, combo)
-                for spec, combo, receptor, ligs, ph_root_for_hash in tasks
+                for spec, combo, receptor, allowed_bases in tasks
             }
             for future in as_completed(future_map):
                 try:
@@ -980,17 +925,16 @@ def main() -> int:
             logger.warning("%s action=rerank status=skip reason=reranker_import_failed combo=%s", COMPONENT, combo)
 
     logger.info(
-        "%s action=summary status=%s combos=%d combos_scored=%d total_jobs=%d completed=%d failed=%d missing_receptor=%d missing_consensus=%d no_selected=%d",
+        "%s action=summary status=%s combos=%d combos_attempted=%d total_jobs=%d completed=%d failed=%d missing_receptor=%d missing_consensus=%d",
         COMPONENT,
         "ok" if failed_jobs == 0 else "failed",
         len(combos),
-        len(combos_with_tasks),
+        combos_attempted,
         total_jobs,
         completed,
         failed_jobs,
         skipped_missing_receptor,
         skipped_missing_consensus,
-        skipped_no_selected,
     )
     return 0 if failed_jobs == 0 else 1
 

@@ -52,6 +52,7 @@ from run_manifest import (
     update_manifest_for_druggability_and_engine_plan,
 )
 from druggability_orchestrator import EnginePolicy, decide_engine_policy
+from druggability_evaluation import evaluate_druggability_for_active_site
 from record_data import compute_ligand_efficiency, record_le
 from docking_gnina import (
     run_gnina_for_stage,
@@ -723,6 +724,60 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
 
             # --- NO_LIBRARY_DOCKING: only plan ligands, do not dock -----------
             if bool(cfg.get("NO_LIBRARY_DOCKING", False)):
+                run_id_token = str(cfg.get("RUN_ID") or "")
+                if run_id_token:
+                    try:
+                        if cfg.get("USE_PROTEIN_DRUGGABILITY"):
+                            try:
+                                evaluate_druggability_for_active_site(
+                                    cfg,
+                                    pdb_id=paths.pdb_id,
+                                    variant=variant_env or None,
+                                    ph_label=ph_label,
+                                    center=center,
+                                    box_size=box_size,
+                                    logger=logger,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "[druggability.fpocket.skip] pdb=%s variant=%s ph=%s reason=eval_failed_no_docking",
+                                    paths.pdb_id,
+                                    variant_env,
+                                    ph_label,
+                                    exc_info=True,
+                                )
+
+                        policy = decide_engine_policy(
+                            cfg=cfg,
+                            pdb_id=paths.pdb_id,
+                            variant=variant_env or None,
+                            ph_label=ph_label,
+                            center=center,
+                            ledock_enabled=_use_ledock(cfg),
+                            dock6_enabled=_use_dock6(cfg),
+                            logger=logger,
+                        )
+                        update_manifest_for_druggability_and_engine_plan(
+                            cfg=cfg,
+                            run_id=run_id_token,
+                            pdb_id=paths.pdb_id,
+                            variant_label=variant_env or None,
+                            ph_tag=ph_label,
+                            tier=policy.tier,
+                            use_gnina=policy.use_gnina,
+                            use_ledock=policy.use_ledock,
+                            use_dock6=policy.use_dock6,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "[run-manifest.druggability-plan.skip] run_id=%s pdb=%s variant=%s ph=%s",
+                            run_id_token,
+                            paths.pdb_id,
+                            variant_env,
+                            ph_label,
+                            exc_info=True,
+                        )
+
                 # How many ligands would be docked for this PH / mode?
                 preview_n = int(cfg.get("NO_DOCKING_PREVIEW_N", 10))
                 preview_names = ", ".join(

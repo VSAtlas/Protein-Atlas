@@ -1,0 +1,70 @@
+# Canonical protein classes and their decoding rules for family difficulty prior.
+# All string matching is done case-insensitively.
+
+classes:
+  KINASE:
+    tier_prior: A
+    text_keywords:
+      - kinase
+      - protein kinase
+      - tyrosine kinase
+      - serine/threonine kinase
+      - cdk
+      - map kinase
+    ec_prefixes:
+      - "2.7.10"
+      - "2.7.11"
+      - "2.7.12"
+
+  PROTEASE:
+    tier_prior: B
+    text_keywords:
+      - protease
+      - peptidase
+      - serine protease
+      - trypsin
+      - thrombin
+      - factor vii
+      - factor x
+    ec_prefixes:
+      - "3.4.21"
+      - "3.4.23"
+      - "3.4.24"
+
+  NUCLEAR_RECEPTOR:
+    tier_prior: A
+    text_keywords:
+      - nuclear receptor
+      - thyroid hormone receptor
+      - androgen receptor
+      - estrogen receptor
+      - glucocorticoid receptor
+
+  GPCR:
+    tier_prior: B
+    text_keywords:
+      - g protein-coupled receptor
+      - g-protein coupled receptor
+      - gpcr
+      - adrenergic receptor
+      - chemokine receptor
+
+  METALLOENZYME:
+    tier_prior: C
+    text_keywords:
+      - metalloenzyme
+      - zinc enzyme
+      - zinc metalloprotease
+      - carbonic anhydrase
+      - comt
+      - catechol o-methyltransferase
+      - farnesyl pyrophosphate synthase
+      - fpps
+    ec_prefixes:
+      - "1.14.13"
+      - "1.14.14"
+
+  OTHER:
+    tier_prior: B
+    text_keywords: []
+    ec_prefixes: []

@@ -910,14 +910,29 @@ def guess_consensus_score_col(df: pd.DataFrame, override: Optional[str]) -> str:
 def guess_reranked_scorch_score_col(df: pd.DataFrame, override: Optional[str]) -> str:
     if override and override in df.columns:
         return override
-    for cand in ("scorch_composite", "SCORCH_score_used", "final_rank", "consensus_score"):
+    lower = {c.lower(): c for c in df.columns}
+
+    def _has_numeric(col: str) -> bool:
+        if col not in df.columns:
+            return False
+        try:
+            ser = pd.to_numeric(df[col], errors="coerce")
+            return ser.notna().any()
+        except Exception:
+            return False
+
+    if "final_score" in df.columns and _has_numeric("final_score"):
+        return "final_score"
+    if "final_score" in lower and _has_numeric(lower["final_score"]):
+        return lower["final_score"]
+
+    for cand in ("final_rank", "scorch_composite", "SCORCH_score_used", "consensus_score"):
         if cand in df.columns:
             return cand
-    lower = {c.lower(): c for c in df.columns}
-    for cand in ("scorch_composite", "scorch_score_used", "final_rank", "consensus_score"):
+    for cand in ("final_rank", "scorch_score_used", "consensus_score"):
         if cand in lower:
             return lower[cand]
-    return guess_consensus_score_col(df, None)
+    return guess_score_col(df, None)
 
 
 def read_reranked_scorch_csv(path: Path) -> pd.DataFrame:
@@ -1871,6 +1886,21 @@ def evaluate_target_post_docked_reranked_scorch(
         f"pdb={pdb_id} ligand_col={lig_col} score_col={score_col} cols={list(df.columns)}",
     )
 
+    if score_col in ("scorch_composite", "SCORCH_score_used"):
+        dbg(
+            "WARN",
+            "post_scorch.score_col",
+            f"pdb={pdb_id} score_col={score_col} may evaluate rescored subset only if rescoring was partial; prefer final_score for full-library metrics",
+        )
+
+    rescored_frac = None
+    if "rescored_flag" in df.columns:
+        try:
+            rescored_series = pd.to_numeric(df["rescored_flag"], errors="coerce")
+            rescored_frac = rescored_series.fillna(0).mean()
+        except Exception:
+            rescored_frac = None
+
     df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     score_eval_col = "_score_eval"
@@ -1882,6 +1912,25 @@ def evaluate_target_post_docked_reranked_scorch(
     before_nf = len(df)
     df = df.dropna(subset=[score_eval_col])
     drop_nonfinite = before_nf - len(df)
+    if rescored_frac is not None and rescored_frac < 0.999:
+        dbg(
+            "INFO",
+            "post_scorch.partial",
+            f"pdb={pdb_id} rescored_frac={rescored_frac:.4f} score_col={score_col}",
+        )
+        if score_col != "final_score":
+            dbg(
+                "WARN",
+                "post_scorch.subset",
+                f"pdb={pdb_id} score_col={score_col} may drop unrescored ligands; consider --score-col final_score",
+            )
+    elif score_col != "final_score" and drop_nonfinite > 0:
+        dbg(
+            "WARN",
+            "post_scorch.subset",
+            f"pdb={pdb_id} score_col={score_col} dropped={drop_nonfinite} rows without scores",
+        )
+
     if df.empty:
         final_reason = status_reason if status_reason != "ok" else "empty_after_filter"
         return TargetEvaluation(
@@ -2475,10 +2524,18 @@ def main():
                     help="Output root directory (run_id is appended automatically when provided).")
     ap.add_argument("--post-docked-root", type=str, default="post_docked",
                     help="Root folder for post-docked outputs (consensus reranked with SCORCH).")
+    ap.add_argument("--post-docked-basename", type=str, default="consensus_reranked_scorch.csv",
+                    help="Filename for post-docked reranked SCORCH CSV (default: consensus_reranked_scorch.csv).")
+    try:
+        ap.add_argument("--eval-post-docked-scorch", action=argparse.BooleanOptionalAction, default=True,
+                        help="Evaluate post-docked consensus reranked with SCORCH (default: on).")
+    except Exception:
+        ap.add_argument("--eval-post-docked-scorch", action="store_true", default=True,
+                        help="Evaluate post-docked consensus reranked with SCORCH (default: on).")
     ap.add_argument("--lig-col", type=str, default=None,
                     help="Column containing ligand filename/path (auto-detected if omitted).")
     ap.add_argument("--score-col", type=str, default=None,
-                    help="Score column (lower is better). Auto-detected if omitted.")
+                    help="Score column (lower is better). Auto-detected if omitted; for reranked SCORCH, defaults to final_score for full-library evaluation (override for subset analyses, e.g., --score-col scorch_composite).")
     ap.add_argument("--run-id", type=str, default=None,
                     help="Filter docking_score_long.csv rows to a specific run identifier.")
     ap.add_argument("--pdb-id", action="append", default=None,
@@ -2517,6 +2574,10 @@ def main():
         ap.set_defaults(pretty_summary=True)
 
     args = ap.parse_args()
+
+    global RERANKED_SCORCH_BASENAME
+    if getattr(args, "post_docked_basename", None):
+        RERANKED_SCORCH_BASENAME = args.post_docked_basename
 
     set_log_level(args.log_level)
     dbg("DEBUG", "args", f"log_level={args.log_level} target_name_from_pdb={'ON' if args.target_name_from_pdb else 'OFF'} report_library={'ON' if args.report_library else 'OFF'} control_report={'ON' if args.emit_control_report else 'OFF'} run_id={args.run_id or 'none'}")
@@ -3084,9 +3145,11 @@ def main():
                 consensus_rows.append(placeholder_cons)
             else:
                 dbg("WARN", "consensus.eval", f"pdb={spec.pdb_id} path={consensus_candidate} reason=evaluation_failed")
-        reranked_candidate: Optional[Path] = _resolve_reranked_scorch_path(
-            spec, docked_root, post_docked_root, active_run_id, run_dir
-        )
+        reranked_candidate: Optional[Path] = None
+        if getattr(args, "eval_post_docked_scorch", True):
+            reranked_candidate = _resolve_reranked_scorch_path(
+                spec, docked_root, post_docked_root, active_run_id, run_dir
+            )
         if reranked_candidate is not None:
             post_run_root = post_docked_root / str(active_run_id) if active_run_id else None
             new_layout_reranked = bool(post_run_root and _is_under(reranked_candidate, post_run_root))

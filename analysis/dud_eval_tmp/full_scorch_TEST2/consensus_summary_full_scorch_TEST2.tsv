@@ -1,0 +1,3 @@
+Holo
+variant	pH	run_id	target_name	library_name	pdb_id	N	n_actives	actives_fraction	ROC_AUC	PR_AUC	logAUC	logAUC_adj	BEDROC_alpha_20	EF@1%	EF@2%	EF@5%	EF@10%	status_reason
+HOLO	pH7_2+7_7-dup2	full_scorch_TEST2	MITOGEN-ACTIVATED PROTEIN KINASE 1	mk01	2OJG	4763	137	0.029	0.813	0.231	0.435	0.291	0.491	13.762	14.638	9.349	5.843	ok

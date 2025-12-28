@@ -45,3 +45,9 @@ analysis/out/
 analysis/dud_eval/
 post_docked/
 .aider*
+
+# fpocket binaries/output
+fpocket
+fpocket*
+fpocket_out/
+*.fpocket/
