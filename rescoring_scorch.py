@@ -203,6 +203,37 @@ def _pose_base_from_path(p: Path) -> str:
     return stem
 
 
+def _control_base_from_path(p: Path) -> str:
+    # Match docking_controls canonicalization for extracted control ligands.
+    stem = p.stem.split("_stage")[0]
+    return stem.split(".sanitized")[0]
+
+
+def _load_control_bases(processed_root: Path, pdb_id: str, logger: logging.Logger) -> Set[str]:
+    roots = [
+        processed_root / pdb_id / "ligands_raw",
+        processed_root / f"{pdb_id}_NOLIG" / "ligands_raw",
+    ]
+    bases: Set[str] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            base = _control_base_from_path(path)
+            if base:
+                bases.add(base)
+    logger.debug(
+        "%s action=controls status=ok pdb_id=%s bases=%d roots=%s",
+        COMPONENT,
+        pdb_id,
+        len(bases),
+        ",".join(str(r) for r in roots),
+    )
+    return bases
+
+
 def _stage_priority(name: str) -> int:
     name_lower = name.lower()
     if name_lower.endswith("stage3") or "stage3" in name_lower:
@@ -250,7 +281,9 @@ def _collect_best_pose_per_base(
     return ligands, stage_counts, total_candidates
 
 
-def _load_consensus_top_bases(consensus_csv: Path, frac: float, logger: logging.Logger) -> Tuple[Set[str], int, int]:
+def _load_consensus_top_bases(
+    consensus_csv: Path, frac: float, logger: logging.Logger, control_bases: Optional[Set[str]] = None
+) -> Tuple[Set[str], int, int, int, int]:
     rows: List[Dict[str, str]] = []
     try:
         with consensus_csv.open() as handle:
@@ -264,7 +297,7 @@ def _load_consensus_top_bases(consensus_csv: Path, frac: float, logger: logging.
                     consensus_csv,
                     ",".join(sorted(missing)),
                 )
-                return set(), 0, 0
+                return set(), 0, 0, 0, 0
             for row in reader:
                 rows.append(row)
     except Exception as exc:
@@ -274,10 +307,10 @@ def _load_consensus_top_bases(consensus_csv: Path, frac: float, logger: logging.
             consensus_csv,
             exc,
         )
-        return set(), 0, 0
+        return set(), 0, 0, 0, 0
 
     if not rows:
-        return set(), 0, 0
+        return set(), 0, 0, 0, 0
 
     def _score(row: Dict[str, str]) -> float:
         try:
@@ -285,14 +318,30 @@ def _load_consensus_top_bases(consensus_csv: Path, frac: float, logger: logging.
         except Exception:
             return float("-inf")
 
-    rows_sorted = sorted(rows, key=_score, reverse=True)
-    k = max(1, math.ceil(len(rows_sorted) * frac))
-    allowed: Set[str] = set()
-    for row in rows_sorted[:k]:
+    control_set = control_bases or set()
+    scored_rows: List[Tuple[float, str, bool]] = []
+    for row in rows:
         lig = str(row.get("ligand", "")).strip()
-        base = Path(lig).stem.replace(".sanitized", "")
+        if not lig:
+            continue
+        base = _pose_base_from_path(Path(lig))
+        if not base:
+            continue
+        scored_rows.append((_score(row), base, base in control_set))
+
+    if not scored_rows:
+        return set(), len(rows), 0, 0, 0
+
+    controls_in_consensus = {base for _, base, is_ctrl in scored_rows if is_ctrl}
+    non_controls = [(score, base) for score, base, is_ctrl in scored_rows if not is_ctrl]
+    non_controls_sorted = sorted(non_controls, key=lambda item: item[0], reverse=True)
+    k = max(1, math.ceil(len(non_controls_sorted) * frac)) if non_controls_sorted else 0
+
+    allowed: Set[str] = set(controls_in_consensus)
+    for _, base in non_controls_sorted[:k]:
         allowed.add(base)
-    return allowed, len(rows_sorted), k
+
+    return allowed, len(rows), k, len(non_controls_sorted), len(controls_in_consensus)
 
 
 def _materialize_inputs(
@@ -803,6 +852,7 @@ def main() -> int:
     skipped_missing_receptor = 0
     skipped_missing_consensus = 0
     combos_with_tasks: Set[Tuple[str, str, str]] = set()
+    control_cache: Dict[str, Set[str]] = {}
     for combo in sorted(combos):
         pdb_id, variant, ph = combo
         receptor = processed_root / pdb_id / variant / "receptor" / "ph_ensemble" / f"{pdb_id}_{ph}.pdbqt"
@@ -818,7 +868,11 @@ def main() -> int:
             skipped_missing_receptor += 1
             continue
         consensus_csv = run_root / pdb_id / variant / ph / "consensus_docking_scores.csv"
-        allowed_bases, total_rows, selected_rows = _load_consensus_top_bases(consensus_csv, top_fraction, logger)
+        if pdb_id not in control_cache:
+            control_cache[pdb_id] = _load_control_bases(processed_root, pdb_id, logger)
+        allowed_bases, total_rows, selected_rows, noncontrol_rows, control_rows = _load_consensus_top_bases(
+            consensus_csv, top_fraction, logger, control_cache[pdb_id]
+        )
         if total_rows == 0:
             logger.warning(
                 "%s action=select status=skip reason=missing_consensus pdb_id=%s variant=%s ph=%s path=%s",
@@ -831,13 +885,15 @@ def main() -> int:
             skipped_missing_consensus += 1
             continue
         logger.info(
-            "%s action=select status=ok pdb_id=%s variant=%s ph=%s consensus_rows=%d selected=%d frac=%.2f path=%s",
+            "%s action=select status=ok pdb_id=%s variant=%s ph=%s consensus_rows=%d noncontrol_rows=%d selected_noncontrol=%d controls_in_consensus=%d frac=%.2f path=%s",
             COMPONENT,
             pdb_id,
             variant,
             ph,
             total_rows,
-            len(allowed_bases),
+            noncontrol_rows,
+            selected_rows,
+            control_rows,
             top_fraction,
             consensus_csv,
         )

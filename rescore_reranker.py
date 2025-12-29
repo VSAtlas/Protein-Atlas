@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from input_and_export_functions import load_config
+
 COMPONENT = "[rescore-reranker]"
+SCORCH_WEIGHT_DEFAULT = 0.65
+CNN_WEIGHT_DEFAULT = 0.35
+SCORCH_WEIGHT_KEY = "SCORCH_WEIGHT"
+CNN_WEIGHT_KEY = "CNN_WEIGHT"
 NUMERIC_PRIORITY = [
     "consensus_score",
     "final_score",
@@ -26,6 +32,13 @@ NUMERIC_PRIORITY = [
     "p_ledock",
     "p_dock6",
     "p_cnn",
+    "cnn_score_used",
+    "cnn_affinity_used",
+    "cnn_vs_used",
+    "cnn_rescored_flag",
+    "scorch_pct",
+    "cnn_pct",
+    "ml_blend_score",
     "n_engines_with_data",
 ]
 TEXT_PRIORITY = [
@@ -45,6 +58,47 @@ def _as_float(x: Any) -> Optional[float]:
         return float(s)
     except Exception:
         return None
+
+
+def _parse_weight(cfg: Dict[str, Any], key: str, default: float, logger: logging.Logger) -> float:
+    raw = cfg.get(key)
+    if raw is None:
+        raw = cfg.get(key.lower())
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except Exception as exc:
+        logger.warning(
+            "%s action=preflight status=degraded reason=invalid_weight key=%s value=%s error=%s default=%.3f",
+            COMPONENT,
+            key,
+            raw,
+            exc,
+            default,
+        )
+        return default
+
+
+def _load_blend_weights(repo_root: Path, logger: logging.Logger) -> Tuple[float, float]:
+    try:
+        cfg = load_config(config_path=str(repo_root / "config.txt"), base_dir=repo_root)
+    except Exception as exc:
+        logger.warning(
+            "%s action=preflight status=degraded reason=config_load_failed error=%s",
+            COMPONENT,
+            exc,
+        )
+        return SCORCH_WEIGHT_DEFAULT, CNN_WEIGHT_DEFAULT
+    scorch_weight = _parse_weight(cfg, SCORCH_WEIGHT_KEY, SCORCH_WEIGHT_DEFAULT, logger)
+    cnn_weight = _parse_weight(cfg, CNN_WEIGHT_KEY, CNN_WEIGHT_DEFAULT, logger)
+    logger.info(
+        "%s action=preflight status=ok scorch_weight=%.3f cnn_weight=%.3f",
+        COMPONENT,
+        scorch_weight,
+        cnn_weight,
+    )
+    return scorch_weight, cnn_weight
 
 
 def _norm_engine(x: Any) -> str:
@@ -81,6 +135,10 @@ def _scorch_ligand_base(lig_id: str) -> str:
     return s
 
 
+def _cnn_ligand_base(lig_id: str) -> str:
+    return _scorch_ligand_base(lig_id)
+
+
 def find_consensus_csv(docked_combo_dir: Path) -> Optional[Path]:
     candidates = [
         docked_combo_dir / "consensus_docking_scores.csv",
@@ -105,6 +163,15 @@ class ScorchPick:
     stage_num: int
     scorch_score: Optional[float]
     scorch_certainty: Optional[float]
+
+
+@dataclass(frozen=True)
+class CnnPick:
+    ligand_base: str
+    stage_num: int
+    cnn_score: Optional[float]
+    cnn_affinity: Optional[float]
+    cnn_vs: Optional[float]
 
 
 def _read_csv(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
@@ -158,6 +225,13 @@ def _ordered_fields(original_fields: List[str]) -> List[str]:
         "SCORCH_score_used",
         "SCORCH_certainty_used",
         "scorch_composite",
+        "cnn_score_used",
+        "cnn_affinity_used",
+        "cnn_vs_used",
+        "cnn_rescored_flag",
+        "scorch_pct",
+        "cnn_pct",
+        "ml_blend_score",
         "final_score",
         "rescored_flag",
         "consensus_rank",
@@ -212,6 +286,27 @@ def _sort_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(rows, key=_rank_key)
 
 
+def _percentile_map(values: List[float]) -> Dict[float, float]:
+    if not values:
+        return {}
+    if len(values) == 1:
+        return {values[0]: 1.0}
+    sorted_vals = sorted(values, reverse=True)
+    n = len(sorted_vals)
+    pct_by_value: Dict[float, float] = {}
+    i = 0
+    while i < n:
+        v = sorted_vals[i]
+        j = i
+        while j + 1 < n and sorted_vals[j + 1] == v:
+            j += 1
+        # Average ties: map equal values to the mean rank they span.
+        avg_rank = (i + j) / 2.0 + 1.0
+        pct_by_value[v] = 1.0 - (avg_rank - 1.0) / (n - 1.0)
+        i = j + 1
+    return pct_by_value
+
+
 def rerank_consensus_with_scorch(
     consensus_csv: Path,
     scorch_csv: Path,
@@ -219,6 +314,8 @@ def rerank_consensus_with_scorch(
     logger: logging.Logger,
     *,
     overwrite: bool = False,
+    scorch_weight: float = SCORCH_WEIGHT_DEFAULT,
+    cnn_weight: float = CNN_WEIGHT_DEFAULT,
     ) -> bool:
     if out_csv.exists() and out_csv.stat().st_size > 0 and not overwrite:
         logger.info("%s action=skip reason=exists out=%s", COMPONENT, str(out_csv))
@@ -251,6 +348,28 @@ def rerank_consensus_with_scorch(
                 exc,
             )
             sc_rows = []
+
+    cnn_csv = scorch_csv.parent / "cnn_rescoring.csv"
+    cnn_rows: List[Dict[str, str]] = []
+    if not cnn_csv.exists() or cnn_csv.stat().st_size == 0:
+        logger.warning("%s action=rerank status=degraded reason=missing_or_empty_cnn path=%s", COMPONENT, str(cnn_csv))
+    else:
+        try:
+            cnn_rows, _ = _read_csv(cnn_csv)
+            if not cnn_rows:
+                logger.warning(
+                    "%s action=rerank status=degraded reason=missing_or_empty_cnn path=%s",
+                    COMPONENT,
+                    str(cnn_csv),
+                )
+        except Exception as exc:
+            logger.warning(
+                "%s action=rerank status=degraded reason=read_error_cnn path=%s error=%s",
+                COMPONENT,
+                str(cnn_csv),
+                exc,
+            )
+            cnn_rows = []
 
     cons_rows, cons_fields = _read_csv(consensus_csv)
 
@@ -296,6 +415,35 @@ def rerank_consensus_with_scorch(
         if cur2 is None or (pick.stage_num, pick.scorch_score or -1e9) > (cur2.stage_num, cur2.scorch_score or -1e9):
             best_any[k2] = pick
 
+    best_cnn: Dict[str, CnnPick] = {}
+    for r in cnn_rows:
+        lig_id = str(r.get("ligand", "")).strip()
+        if not lig_id:
+            continue
+        lig_base = _cnn_ligand_base(lig_id)
+        cnn_score = _as_float(r.get("cnn_score"))
+        cnn_affinity = _as_float(r.get("cnn_affinity"))
+        if cnn_score is None or cnn_affinity is None:
+            continue
+        cnn_vs = cnn_score * cnn_affinity
+        stage_priority = str(r.get("stage_priority", "")).strip().lower()
+        stage_num = _extract_stage_num(stage_priority)
+
+        pick = CnnPick(
+            ligand_base=lig_base,
+            stage_num=stage_num,
+            cnn_score=cnn_score,
+            cnn_affinity=cnn_affinity,
+            cnn_vs=cnn_vs,
+        )
+        cur = best_cnn.get(lig_base)
+        if cur is None:
+            best_cnn[lig_base] = pick
+        else:
+            cur_vs = cur.cnn_vs if cur.cnn_vs is not None else -1e18
+            if cnn_vs > cur_vs or (cnn_vs == cur_vs and stage_num > cur.stage_num):
+                best_cnn[lig_base] = pick
+
     enriched: List[Dict[str, Any]] = []
     for r in cons_rows:
         rr: Dict[str, Any] = dict(r)
@@ -323,7 +471,13 @@ def rerank_consensus_with_scorch(
             comp = pick.scorch_score * pick.scorch_certainty
         rr["scorch_composite"] = "" if comp is None else f"{comp:.6g}"
 
-        rescored = (rr["scorch_composite"] != "") or (rr["SCORCH_score_used"] != "")
+        cnn_pick = best_cnn.get(lig_base)
+        rr["cnn_score_used"] = "" if (not cnn_pick or cnn_pick.cnn_score is None) else f"{cnn_pick.cnn_score:.6g}"
+        rr["cnn_affinity_used"] = "" if (not cnn_pick or cnn_pick.cnn_affinity is None) else f"{cnn_pick.cnn_affinity:.6g}"
+        rr["cnn_vs_used"] = "" if (not cnn_pick or cnn_pick.cnn_vs is None) else f"{cnn_pick.cnn_vs:.6g}"
+        rr["cnn_rescored_flag"] = "1" if rr["cnn_vs_used"] != "" else "0"
+
+        rescored = (rr["scorch_composite"] != "") or (rr["SCORCH_score_used"] != "") or (rr["cnn_vs_used"] != "")
         rr["rescored_flag"] = "1" if rescored else "0"
         if rescored and rr["scorch_composite"] != "":
             rr["final_score"] = rr["scorch_composite"]
@@ -356,21 +510,59 @@ def rerank_consensus_with_scorch(
             enriched[i]["consensus_rank"] = str(rank)
 
     for _, idxs in groups.items():
+        scorch_values: List[float] = []
+        cnn_values: List[float] = []
+        for i in idxs:
+            comp_val = _as_float(enriched[i].get("scorch_composite"))
+            scs_val = _as_float(enriched[i].get("SCORCH_score_used"))
+            scorch_val = comp_val if comp_val is not None else scs_val
+            if scorch_val is not None:
+                scorch_values.append(scorch_val)
+            cnn_val = _as_float(enriched[i].get("cnn_vs_used"))
+            if cnn_val is not None:
+                cnn_values.append(cnn_val)
+
+        scorch_pct_map = _percentile_map(scorch_values)
+        cnn_pct_map = _percentile_map(cnn_values)
+
+        for i in idxs:
+            comp_val = _as_float(enriched[i].get("scorch_composite"))
+            scs_val = _as_float(enriched[i].get("SCORCH_score_used"))
+            scorch_val = comp_val if comp_val is not None else scs_val
+            if scorch_val is None or not scorch_pct_map:
+                scorch_pct = 0.5
+            else:
+                scorch_pct = scorch_pct_map.get(scorch_val, 0.5)
+
+            cnn_val = _as_float(enriched[i].get("cnn_vs_used"))
+            if cnn_val is None or not cnn_pct_map:
+                cnn_pct = 0.5
+            else:
+                cnn_pct = cnn_pct_map.get(cnn_val, 0.5)
+
+            ml_blend = scorch_weight * scorch_pct + cnn_weight * cnn_pct
+            enriched[i]["scorch_pct"] = f"{scorch_pct:.6g}"
+            enriched[i]["cnn_pct"] = f"{cnn_pct:.6g}"
+            enriched[i]["ml_blend_score"] = f"{ml_blend:.6g}"
+
+    for _, idxs in groups.items():
         rescored_idxs: List[int] = []
         nonrescored_idxs: List[int] = []
         for i in idxs:
             comp = enriched[i].get("scorch_composite")
             scs = enriched[i].get("SCORCH_score_used")
-            if str(comp).strip() != "" or str(scs).strip() != "":
+            cnn_vs = enriched[i].get("cnn_vs_used")
+            if str(comp).strip() != "" or str(scs).strip() != "" or str(cnn_vs).strip() != "":
                 rescored_idxs.append(i)
             else:
                 nonrescored_idxs.append(i)
 
-        def _rescored_key(i: int) -> Tuple[float, float, float]:
+        def _rescored_key(i: int) -> Tuple[float, float, float, float]:
+            ml = _as_float(enriched[i].get("ml_blend_score")) or -1e18
             comp = _as_float(enriched[i].get("scorch_composite")) or -1e18
             scs = _as_float(enriched[i].get("SCORCH_score_used")) or -1e18
             cs = _as_float(enriched[i].get("consensus_score")) or -1e18
-            return (comp, scs, cs)
+            return (ml, comp, scs, cs)
 
         rescored_sorted = sorted(rescored_idxs, key=lambda idx: _rescored_key(idx), reverse=True)
         nonrescored_sorted = sorted(
@@ -384,7 +576,11 @@ def rerank_consensus_with_scorch(
             enriched[i]["final_rank"] = str(rank)
 
     for row in enriched:
-        rescored = bool(str(row.get("scorch_composite", "")).strip() or str(row.get("SCORCH_score_used", "")).strip())
+        rescored = bool(
+            str(row.get("scorch_composite", "")).strip()
+            or str(row.get("SCORCH_score_used", "")).strip()
+            or str(row.get("cnn_vs_used", "")).strip()
+        )
         row["rescored_flag"] = "1" if rescored else "0"
         fr = _as_float(row.get("final_rank"))
         row["final_score"] = "" if fr is None else f"{(-fr):.6g}"
@@ -416,7 +612,15 @@ def rerank_consensus_with_scorch(
     return True
 
 
-def rerank_run(run_id: str, repo_root: Path, overwrite: bool, logger: logging.Logger) -> int:
+def rerank_run(
+    run_id: str,
+    repo_root: Path,
+    overwrite: bool,
+    logger: logging.Logger,
+    *,
+    scorch_weight: float = SCORCH_WEIGHT_DEFAULT,
+    cnn_weight: float = CNN_WEIGHT_DEFAULT,
+) -> int:
     post_root = repo_root / "post_docked" / run_id
     dock_root = repo_root / "docked" / run_id
     if not post_root.exists():
@@ -455,7 +659,15 @@ def rerank_run(run_id: str, repo_root: Path, overwrite: bool, logger: logging.Lo
                 continue
 
             out_csv = combo_dir / "consensus_reranked_scorch.csv"
-            if rerank_consensus_with_scorch(consensus_csv, scorch_csv, out_csv, logger, overwrite=overwrite):
+            if rerank_consensus_with_scorch(
+                consensus_csv,
+                scorch_csv,
+                out_csv,
+                logger,
+                overwrite=overwrite,
+                scorch_weight=scorch_weight,
+                cnn_weight=cnn_weight,
+            ):
                 ok += 1
             else:
                 fail += 1
@@ -488,7 +700,15 @@ def main() -> int:
 
     logger = _configure_logging(args.verbose)
     repo_root = Path(args.repo_root).resolve()
-    return rerank_run(args.run_id, repo_root, args.overwrite, logger)
+    scorch_weight, cnn_weight = _load_blend_weights(repo_root, logger)
+    return rerank_run(
+        args.run_id,
+        repo_root,
+        args.overwrite,
+        logger,
+        scorch_weight=scorch_weight,
+        cnn_weight=cnn_weight,
+    )
 
 
 if __name__ == "__main__":

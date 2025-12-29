@@ -210,7 +210,8 @@ Examples:
 
 """
 from activesite import extract_and_remove_ligands, get_atom_rules
-import sys, hashlib, re, logging, json, time, os, shutil, re, shlex, subprocess
+import sys, hashlib, re, logging, json, time, os, shutil, re, shlex, subprocess, math
+import csv
 from dataclasses import dataclass, field
 import datetime
 import yaml
@@ -262,6 +263,14 @@ from docking import (
     _resolve_test_mode,
     process_one_protein,
 )
+from prep_for_mmgbsa import prep_mmgbsa_from_sdfs
+from protein_prep_mmgbsa import (
+    prep_mmgbsa_receptor,
+    run_tleap,
+    write_leap_for_ligands,
+)
+from mmgbsa_trajectory import make_mmgbsa_trajectory
+from run_mmgbsa import run_mmgbsa
 from path_router import (
     expand_variants,
     make_paths,
@@ -269,6 +278,7 @@ from path_router import (
     receptor_file,
     docked_dir,
     config_dir as router_config_dir,
+    ph_ensemble_dir as router_ph_ensemble_dir,
 )
 from fallback_recenter import RecenterParams
 from apo_holo_mode import (
@@ -1759,6 +1769,30 @@ def main() -> None:
         logging.warning("[scorch-rescore.hook] action=skip reason=unexpected_exception", exc_info=True)
 
     try:
+        failed_lookup = {(entry[0], entry[1]) for entry in failed_entries}
+        for variant in variants:
+            label = "legacy" if variant is None else str(variant).lower()
+            variant_token = None if variant is None else str(variant).upper()
+            legacy_mode = variant is None
+            for pdb_file in pdb_files:
+                pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
+                if (pdb_id, label) in failed_lookup:
+                    continue
+                _maybe_run_mmgbsa_for_pdb(
+                    cfg,
+                    pdb_file,
+                    pdb_id,
+                    variant_token,
+                    run_id,
+                    test_mode,
+                    legacy_mode,
+                )
+    except Exception:
+        if _to_bool(cfg.get("MMGBSA_STRICT", False)):
+            raise
+        logging.warning("[mmgbsa.pipeline] action=skip reason=unexpected_exception", exc_info=True)
+
+    try:
         _maybe_run_dud_eval(cfg, run_id, pdb_files)
     except Exception:
         logging.warning("[dud-eval.invoke] action=skip reason=unexpected_exception", exc_info=True)
@@ -1929,6 +1963,698 @@ def _log_rescore_verification(run_id: str) -> None:
         logger.info("[post-check.scorch] found=%d sample=%s", len(scorch_paths), scorch_paths[0])
     else:
         logger.warning("[post-check.scorch] reason=missing_files run_id=%s", run_id)
+
+
+def _mmgbsa_find_vina_config(
+    run_id: str,
+    pdb_id: str,
+    stage_dir: str,
+    variant_token: Optional[str],
+    ph_label: Optional[str],
+    legacy_mode: bool,
+) -> Optional[Path]:
+    cfg_dir = router_config_dir(
+        run_id,
+        pdb_id,
+        stage_dir,
+        variant=variant_token,
+        ph_tag=ph_label,
+        legacy=legacy_mode,
+    )
+    if not cfg_dir.exists():
+        return None
+    txt_files = sorted(cfg_dir.glob("*.txt"))
+    return txt_files[0] if txt_files else None
+
+
+def _mmgbsa_parse_vina_config(cfg_path: Path) -> tuple[Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float]]]:
+    center_vals: dict[str, float] = {}
+    size_vals: dict[str, float] = {}
+    try:
+        lines = cfg_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return None, None
+
+    for line in lines:
+        if "=" not in line:
+            continue
+        key, raw_val = line.split("=", 1)
+        key = key.strip().lower()
+        val_text = raw_val.strip()
+        try:
+            val = float(val_text)
+        except Exception:
+            continue
+        if key in {"center_x", "center_y", "center_z"}:
+            center_vals[key] = val
+        elif key in {"size_x", "size_y", "size_z"}:
+            size_vals[key] = val
+
+    if len(center_vals) == 3:
+        center = (center_vals["center_x"], center_vals["center_y"], center_vals["center_z"])
+    else:
+        center = None
+
+    if len(size_vals) == 3:
+        size = (size_vals["size_x"], size_vals["size_y"], size_vals["size_z"])
+    else:
+        size = None
+
+    return center, size
+
+
+def _mmgbsa_resolve_center_radius(
+    cfg: Mapping[str, Any],
+    run_id: str,
+    pdb_id: str,
+    stage_dir: str,
+    variant_token: Optional[str],
+    ph_label: Optional[str],
+    legacy_mode: bool,
+) -> tuple[Optional[Tuple[float, float, float]], float, Optional[Path]]:
+    fallback_radius = float(cfg.get("MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK", 6.0))
+    cfg_path = _mmgbsa_find_vina_config(run_id, pdb_id, stage_dir, variant_token, ph_label, legacy_mode)
+    if not cfg_path:
+        return None, fallback_radius, None
+
+    center, size = _mmgbsa_parse_vina_config(cfg_path)
+    if center is None:
+        return None, fallback_radius, cfg_path
+
+    radius = fallback_radius
+    if size is not None:
+        radius = max(size) / 2.0
+    return center, radius, cfg_path
+
+
+def _mmgbsa_resolve_receptor_pdb(
+    cfg: Mapping[str, Any],
+    pdb_id: str,
+    pdb_file: str,
+    variant_token: Optional[str],
+    ph_label: Optional[str],
+    legacy_mode: bool,
+) -> Optional[Path]:
+    paths = make_paths(cfg, base_id=pdb_id, pdb_file=pdb_file)
+    candidates: List[Path] = []
+
+    if ph_label:
+        ensemble_dir = router_ph_ensemble_dir(pdb_id, variant=variant_token, legacy=legacy_mode)
+        tag = f"{pdb_id}_{ph_label}"
+        candidates.append(ensemble_dir / f"{tag}.withH.pdb")
+        candidates.append(ensemble_dir / f"{tag}.pdb")
+
+    candidates.append(paths.receptor_cleaned_pdb(variant_token))
+    candidates.append(paths.receptor_dir(variant_token) / f"{pdb_id}.pdb")
+
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return None
+
+
+def _mmgbsa_normalize_ligand_base(name: str) -> str:
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    s = re.sub(r"\.(pdbqt|mol2|sdf)$", "", s, flags=re.IGNORECASE)
+    s = s.replace(".sanitized", "")
+    return s
+
+
+def _mmgbsa_sdf_base_candidates(stem: str, stage_dir_label: str) -> List[str]:
+    candidates: set[str] = set()
+    base = stem.replace(".sanitized", "")
+    candidates.add(base)
+
+    if stage_dir_label:
+        for sep in ("_", "__"):
+            suffix = f"{sep}{stage_dir_label}"
+            if base.endswith(suffix):
+                candidates.add(base[: -len(suffix)])
+
+    for pattern in (
+        r"(_+gnina_stage\d+)$",
+        r"(_+ledock_stage\d+)$",
+        r"(_+dock6_stage\d+)$",
+        r"(_+stage\d+)$",
+    ):
+        stripped = re.sub(pattern, "", base, flags=re.IGNORECASE)
+        if stripped != base:
+            candidates.add(stripped)
+
+    cleaned = set()
+    for cand in candidates:
+        cleaned.add(re.sub(r"_+$", "", cand))
+    return sorted(cleaned)
+
+
+def _mmgbsa_index_sdfs(sdfs: List[Path], stage_dir_label: str) -> Dict[str, Path]:
+    mapping: Dict[str, Path] = {}
+    for sdf in sdfs:
+        for key in _mmgbsa_sdf_base_candidates(sdf.stem, stage_dir_label):
+            if key and key not in mapping:
+                mapping[key] = sdf
+    return mapping
+
+
+def _mmgbsa_load_reranked_bases(csv_path: Path, logger: logging.Logger) -> List[str]:
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        return []
+
+    rows: List[Tuple[Optional[int], int, str]] = []
+    try:
+        with csv_path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for idx, row in enumerate(reader):
+                lig_base = row.get("ligand_base") or _mmgbsa_normalize_ligand_base(row.get("ligand", ""))
+                if not lig_base:
+                    continue
+                rank_val = None
+                rank_raw = str(row.get("final_rank", "")).strip()
+                if rank_raw:
+                    try:
+                        rank_val = int(float(rank_raw))
+                    except Exception:
+                        rank_val = None
+                rows.append((rank_val, idx, lig_base))
+    except Exception as exc:
+        logger.warning(
+            "[mmgbsa.pipeline] selection=reranked_top_pct failed reason=csv_read_error path=%s err=%s",
+            csv_path,
+            exc,
+        )
+        return []
+
+    if not rows:
+        return []
+
+    rows.sort(key=lambda x: (x[0] if x[0] is not None else 1_000_000_000, x[1]))
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for _, _, base in rows:
+        if base in seen:
+            continue
+        seen.add(base)
+        ordered.append(base)
+    return ordered
+
+
+def _mmgbsa_select_sdfs(
+    stage_dir: Path,
+    max_ligands: Optional[int],
+    reranked_csv: Optional[Path] = None,
+    top_pct: Optional[float] = None,
+    logger: Optional[logging.Logger] = None,
+) -> Tuple[List[Path], bool]:
+    sdfs = sorted(stage_dir.glob("*.sdf"))
+    if not sdfs:
+        return [], False
+
+    if logger is None:
+        logger = logging.getLogger("mmgbsa.pipeline")
+
+    if reranked_csv is not None and top_pct is not None and top_pct > 0:
+        if not reranked_csv.exists():
+            logger.warning(
+                "[mmgbsa.pipeline] selection=reranked_top_pct failed reason=missing_reranked_csv path=%s",
+                reranked_csv,
+            )
+        else:
+            ordered_bases = _mmgbsa_load_reranked_bases(reranked_csv, logger)
+            if ordered_bases:
+                base_map = _mmgbsa_index_sdfs(sdfs, stage_dir.name)
+                pct_val = float(top_pct)
+                if pct_val > 100.0:
+                    pct_val = 100.0
+                if pct_val <= 0.0:
+                    pct_val = 0.0
+                total = len(ordered_bases)
+                target = max(1, int(math.ceil(total * pct_val / 100.0))) if total else 0
+                selected: List[Path] = []
+                for base in ordered_bases:
+                    path = base_map.get(base)
+                    if not path:
+                        continue
+                    if path in selected:
+                        continue
+                    selected.append(path)
+                    if len(selected) >= target:
+                        break
+                if selected:
+                    logger.info(
+                        "[mmgbsa.pipeline] selection=reranked_top_pct pct=%.3g total=%d target=%d selected=%d path=%s",
+                        pct_val,
+                        total,
+                        target,
+                        len(selected),
+                        reranked_csv,
+                    )
+                    return selected, True
+                logger.warning(
+                    "[mmgbsa.pipeline] selection=reranked_top_pct failed reason=no_matching_sdfs path=%s stage_dir=%s",
+                    reranked_csv,
+                    stage_dir,
+                )
+            else:
+                logger.warning(
+                    "[mmgbsa.pipeline] selection=reranked_top_pct failed reason=empty_csv path=%s",
+                    reranked_csv,
+                )
+
+    actives = [p for p in sdfs if "actives_final" in p.name]
+    if actives:
+        sdfs = actives
+    if max_ligands is not None and max_ligands > 0:
+        sdfs = sdfs[:max_ligands]
+    return sdfs, False
+
+
+def _mmgbsa_parse_delta_total(csv_path: Path) -> Optional[float]:
+    if not csv_path.exists():
+        return None
+    try:
+        lines = csv_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return None
+
+    in_delta = False
+    header = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("DELTA Energy Terms"):
+            in_delta = True
+            header = None
+            continue
+        if not in_delta:
+            continue
+        if header is None:
+            header = [t.strip() for t in stripped.split(",")]
+            continue
+        values = [t.strip() for t in stripped.split(",")]
+        if not header:
+            return None
+        try:
+            idx = header.index("DELTA TOTAL")
+        except ValueError:
+            return None
+        if idx >= len(values):
+            return None
+        try:
+            return float(values[idx])
+        except Exception:
+            return None
+    return None
+
+
+def _mmgbsa_append_summary(summary_path: Path, row: Dict[str, object]) -> None:
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    exists = summary_path.exists() and summary_path.stat().st_size > 0
+    fieldnames = ["stage_dir", "ligand_stem", "delta_total", "results_csv", "ok", "notes"]
+    with summary_path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if not exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def _maybe_run_mmgbsa_for_pdb(
+    cfg: Mapping[str, Any],
+    pdb_file: str,
+    pdb_id: str,
+    variant_token: Optional[str],
+    run_id: str,
+    test_mode: str,
+    legacy_mode: bool,
+) -> None:
+    logger = logging.getLogger("mmgbsa.pipeline")
+    if not _to_bool(cfg.get("MMGBSA_ENABLED", False)):
+        logger.info("[mmgbsa.pipeline] action=skip reason=disabled")
+        return
+
+    variant_dir = (variant_token or "legacy").upper()
+    post_root = Path(cfg.get("OVERALL_DIR", ".")) / "post_docked" / run_id / pdb_id
+    post_base = post_root if legacy_mode else post_root / variant_dir
+    if not post_base.exists():
+        logger.info("[mmgbsa.pipeline] action=skip reason=missing_post_docked path=%s", post_base)
+        return
+
+    try:
+        max_ligands_val = int(cfg.get("MMGBSA_MAX_LIGANDS", 1))
+    except Exception:
+        max_ligands_val = 1
+    if max_ligands_val <= 0:
+        max_ligands_val = None
+
+    try:
+        top_pct_val = float(cfg.get("MMGBSA_RERANKED_TOP_PCT", 0))
+    except Exception:
+        top_pct_val = 0.0
+    if top_pct_val <= 0:
+        top_pct_val = None
+
+    force = _to_bool(cfg.get("MMGBSA_FORCE", False))
+    strict = _to_bool(cfg.get("MMGBSA_STRICT", False))
+    stage_dir_name = str(cfg.get("MMGBSA_INPUT_STAGE_DIR", "stage1") or "stage1")
+    used_reranked = False
+
+    test_override: Dict[str, object] = {}
+    if test_mode != "off" and top_pct_val is None:
+        test_stage = stage_dir_name
+        candidate_dir = post_base / "pH7_0" / test_stage
+        if candidate_dir.is_dir():
+            actives = sorted(candidate_dir.glob("actives_final*.sdf"))
+            if actives:
+                test_override = {"ph_dir": candidate_dir.parent, "sdfs": [actives[0]], "stage_dir": test_stage}
+            else:
+                sdfs = sorted(candidate_dir.glob("*.sdf"))
+                if sdfs:
+                    test_override = {"ph_dir": candidate_dir.parent, "sdfs": [sdfs[0]], "stage_dir": test_stage}
+
+    if test_override:
+        ph_dirs = [test_override["ph_dir"]]
+    else:
+        ph_dirs = sorted([p for p in post_base.iterdir() if p.is_dir()])
+
+    if not ph_dirs:
+        logger.info("[mmgbsa.pipeline] action=skip reason=no_ph_dirs path=%s", post_base)
+        return
+
+    amber_prefix = cfg.get("MMGBSA_AMBERTOOLS_PREFIX") or cfg.get("AMBERTOOLS_PREFIX")
+    amber_prefix = str(amber_prefix).strip() if amber_prefix else None
+
+    for ph_dir in ph_dirs:
+        ph_label = ph_dir.name
+        if test_override:
+            sdfs = list(test_override["sdfs"])
+            stage_dir_label = str(test_override["stage_dir"])
+        else:
+            stage_dir_label = stage_dir_name
+            stage_dir = ph_dir / stage_dir_label
+            reranked_csv = ph_dir / "consensus_reranked_scorch.csv"
+            sdfs, used_reranked = _mmgbsa_select_sdfs(
+                stage_dir,
+                max_ligands_val,
+                reranked_csv=reranked_csv,
+                top_pct=top_pct_val,
+                logger=logger,
+            )
+
+        if not sdfs:
+            logger.info(
+                "[mmgbsa.pipeline] action=skip reason=no_sdfs pdb=%s variant=%s ph=%s stage=%s",
+                pdb_id,
+                variant_dir,
+                ph_label,
+                stage_dir_label,
+            )
+            continue
+
+        center, radius, cfg_path = _mmgbsa_resolve_center_radius(
+            cfg,
+            run_id,
+            pdb_id,
+            stage_dir_label,
+            variant_token,
+            ph_label,
+            legacy_mode,
+        )
+        if center is None:
+            logger.warning(
+                "[mmgbsa.pipeline] action=skip reason=missing_center pdb=%s variant=%s ph=%s cfg=%s",
+                pdb_id,
+                variant_dir,
+                ph_label,
+                cfg_path,
+            )
+            continue
+
+        receptor_candidates = [
+            ph_dir / stage_dir_label / "receptor.pdb",
+            ph_dir / "receptor.pdb",
+        ]
+        receptor_pdb = next((cand for cand in receptor_candidates if cand.exists()), None)
+        if receptor_pdb is None:
+            receptor_pdb = _mmgbsa_resolve_receptor_pdb(
+                cfg,
+                pdb_id,
+                pdb_file,
+                variant_token,
+                ph_label,
+                legacy_mode,
+            )
+
+        if receptor_pdb is None:
+            logger.warning(
+                "[mmgbsa.pipeline] action=skip reason=missing_receptor pdb=%s variant=%s ph=%s",
+                pdb_id,
+                variant_dir,
+                ph_label,
+            )
+            continue
+
+        receptor_input = receptor_pdb
+        if "post_docked" not in receptor_pdb.parts:
+            receptor_input_dir = ph_dir / "mmgbsa_receptor_inputs"
+            receptor_input_dir.mkdir(parents=True, exist_ok=True)
+            receptor_input = receptor_input_dir / receptor_pdb.name
+            if not receptor_input.exists() or force:
+                try:
+                    shutil.copy2(receptor_pdb, receptor_input)
+                except Exception as exc:
+                    logger.error(
+                        "[mmgbsa.pipeline] action=skip reason=receptor_copy_failed pdb=%s variant=%s ph=%s err=%s",
+                        pdb_id,
+                        variant_dir,
+                        ph_label,
+                        exc,
+                    )
+                    if strict:
+                        raise
+                    continue
+            logger.info(
+                "[mmgbsa.pipeline] receptor_materialized source=%s dest=%s",
+                receptor_pdb,
+                receptor_input,
+            )
+
+        logger.info(
+            "[mmgbsa.pipeline] start pdb=%s variant=%s ph=%s ligands=%d",
+            pdb_id,
+            variant_dir,
+            ph_label,
+            len(sdfs),
+        )
+
+        try:
+            receptor_result = prep_mmgbsa_receptor(
+                pdb_path=str(receptor_input),
+                runid=run_id,
+                center=center,
+                radius=radius,
+                force=force,
+            )
+        except Exception as exc:
+            logger.error(
+                "[mmgbsa.pipeline] action=skip reason=receptor_prep_failed pdb=%s variant=%s ph=%s err=%s",
+                pdb_id,
+                variant_dir,
+                ph_label,
+                exc,
+            )
+            if strict:
+                raise
+            continue
+
+        mmgbsa_dir = ph_dir / "mmgbsa"
+        summary_path = mmgbsa_dir / "mmgbsa_results_summary.csv"
+        work_root = mmgbsa_dir / "work"
+
+        max_ligands_override = 0 if (not test_override and used_reranked) else None
+        prep_results = prep_mmgbsa_from_sdfs(
+            [str(p) for p in sdfs],
+            cfg=cfg,
+            max_ligands=max_ligands_override,
+            force=force,
+            amber_prefix=amber_prefix,
+        )
+
+        ligand_entries: List[dict] = []
+        for res in prep_results:
+            if res.get("error"):
+                _mmgbsa_append_summary(
+                    summary_path,
+                    {
+                        "stage_dir": res.get("stage_dir", stage_dir_label),
+                        "ligand_stem": Path(res.get("sdf_path", "ligand")).stem,
+                        "delta_total": "",
+                        "results_csv": "",
+                        "ok": False,
+                        "notes": res.get("error", "prep_failed"),
+                    },
+                )
+                continue
+            ligand_entries.append(
+                {
+                    "stage_dir": res.get("stage_dir", stage_dir_label),
+                    "ligand_base": Path(res.get("sdf_path", "ligand")).stem,
+                    "mol2_path": res.get("mol2_path"),
+                    "frcmod_path": res.get("frcmod_path"),
+                }
+            )
+
+        if not ligand_entries:
+            logger.info(
+                "[mmgbsa.pipeline] action=skip reason=ligand_prep_failed pdb=%s variant=%s ph=%s",
+                pdb_id,
+                variant_dir,
+                ph_label,
+            )
+            continue
+
+        topo_results = write_leap_for_ligands(
+            receptor_pdb_path=receptor_result["output_path"],
+            ligand_mol2_frcmod_pairs=ligand_entries,
+            out_dir_base=str(work_root),
+            force=force or _to_bool(cfg.get("MMGBSA_TLEAP_FORCE", False)),
+        )
+
+        run_tleap_flag = _to_bool(cfg.get("MMGBSA_TLEAP_ENABLED", True)) and _to_bool(
+            cfg.get("MMGBSA_TLEAP_RUN", True)
+        )
+
+        for topo in topo_results:
+            ligand_stem = topo.get("ligand_base")
+            stage_dir = topo.get("stage_dir")
+            out_dir = Path(topo.get("output_dir", work_root))
+            notes = ""
+            ok = False
+            results_csv = ""
+            delta_total = ""
+
+            try:
+                if run_tleap_flag and not topo.get("skip_tleap"):
+                    run_tleap(topo["leap_file"], str(out_dir))
+
+                required = {
+                    "complex_prmtop": topo.get("complex_prmtop"),
+                    "complex_inpcrd": topo.get("complex_inpcrd"),
+                    "receptor_prmtop": topo.get("receptor_prmtop"),
+                    "ligand_prmtop": topo.get("ligand_prmtop"),
+                }
+                missing = []
+                for key, value in required.items():
+                    if not value:
+                        missing.append(key)
+                        continue
+                    path = Path(value)
+                    if not path.exists() or path.stat().st_size == 0:
+                        missing.append(key)
+
+                if missing:
+                    notes = f"missing_topology:{','.join(missing)}"
+                    _mmgbsa_append_summary(
+                        summary_path,
+                        {
+                            "stage_dir": stage_dir,
+                            "ligand_stem": ligand_stem,
+                            "delta_total": "",
+                            "results_csv": "",
+                            "ok": False,
+                            "notes": notes,
+                        },
+                    )
+                    continue
+
+                traj_result = make_mmgbsa_trajectory(
+                    complex_prmtop=topo["complex_prmtop"],
+                    complex_inpcrd=topo["complex_inpcrd"],
+                    out_dir=str(out_dir),
+                    cfg=cfg,
+                    force=force,
+                    run_cpptraj=_to_bool(cfg.get("MMGBSA_CPPTRAJ_RUN", True)),
+                )
+                traj_path = Path(traj_result.get("trajout_path") or "")
+                if not traj_path.exists() or traj_path.stat().st_size == 0:
+                    default_traj = str(cfg.get("MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd")
+                    candidate = out_dir / default_traj
+                    if candidate.exists() and candidate.stat().st_size > 0:
+                        traj_path = candidate
+                    else:
+                        notes = "missing_trajectory"
+                        _mmgbsa_append_summary(
+                            summary_path,
+                            {
+                                "stage_dir": stage_dir,
+                                "ligand_stem": ligand_stem,
+                                "delta_total": "",
+                                "results_csv": "",
+                                "ok": False,
+                                "notes": notes,
+                            },
+                        )
+                        continue
+
+                mmpbsa_result = run_mmgbsa(
+                    complex_prmtop=topo["complex_prmtop"],
+                    receptor_prmtop=topo["receptor_prmtop"],
+                    ligand_prmtop=topo["ligand_prmtop"],
+                    trajectory_path=str(traj_path),
+                    work_dir=str(out_dir),
+                    cfg=cfg,
+                    force=force,
+                    run=_to_bool(cfg.get("MMGBSA_MMPBSA_RUN", True)),
+                )
+
+                results_csv = mmpbsa_result.get("out_csv", "")
+                results_dat = mmpbsa_result.get("out_dat", "")
+                if not mmpbsa_result.get("enabled", True):
+                    notes = "mmpbsa_disabled"
+                else:
+                    if results_csv and results_dat and Path(results_csv).exists() and Path(results_dat).exists():
+                        delta_val = _mmgbsa_parse_delta_total(Path(results_csv))
+                        if delta_val is not None:
+                            delta_total = f"{delta_val:.6g}"
+                        ok = True
+                    else:
+                        notes = "missing_outputs"
+
+            except Exception as exc:
+                notes = f"error:{type(exc).__name__}"
+                ok = False
+                logger.error(
+                    "[mmgbsa.pipeline] ligand_failed pdb=%s variant=%s ph=%s stage=%s ligand=%s err=%s",
+                    pdb_id,
+                    variant_dir,
+                    ph_label,
+                    stage_dir,
+                    ligand_stem,
+                    exc,
+                )
+                if strict:
+                    raise
+
+            _mmgbsa_append_summary(
+                summary_path,
+                {
+                    "stage_dir": stage_dir,
+                    "ligand_stem": ligand_stem,
+                    "delta_total": delta_total,
+                    "results_csv": results_csv,
+                    "ok": ok,
+                    "notes": notes,
+                },
+            )
+
+        logger.info(
+            "[mmgbsa.pipeline] done pdb=%s variant=%s ph=%s summary=%s",
+            pdb_id,
+            variant_dir,
+            ph_label,
+            summary_path,
+        )
 
 
 def _send_run_email(status: int, start_time: str, end_time: str) -> None:
