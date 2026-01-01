@@ -51,3 +51,11 @@ fpocket
 fpocket*
 fpocket_out/
 *.fpocket/
+
+ \DeepCoy_duds/
+
+ pocket/
+
+# large/generated
+/DeepCoy_duds/
+/fpocket/

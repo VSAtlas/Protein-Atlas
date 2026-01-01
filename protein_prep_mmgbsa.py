@@ -22,6 +22,7 @@ from prep_for_mmgbsa import prep_mmgbsa_from_sdf
 
 _COMPONENT_RECEPTOR = "mmgbsa.receptor"
 _COMPONENT_LEAP = "mmgbsa.leap"
+_NTERM_H_ALLOWLIST = {"H", "H1", "H2", "H3", "HT1", "HT2", "HT3", "HN"}
 
 
 def _get_logger() -> logging.Logger:
@@ -183,6 +184,101 @@ def _distance_sq(a: Tuple[float, float, float], b: Tuple[float, float, float]) -
     dy = a[1] - b[1]
     dz = a[2] - b[2]
     return dx * dx + dy * dy + dz * dz
+
+
+def _sanitize_receptor_lines(
+    kept_lines: List[str],
+    strip_nterm_h: bool,
+    insert_ter_on_chainbreak: bool,
+    chainbreak_cn_max_a: float,
+) -> Tuple[List[str], Dict[str, object]]:
+    if not kept_lines or not (strip_nterm_h or insert_ter_on_chainbreak):
+        return kept_lines, {
+            "inserted_TER_count": 0,
+            "nterm_h_stripped_count": 0,
+            "nterm_h_stripped_residues": [],
+        }
+
+    residue_first_idx: Dict[str, int] = {}
+    residue_chain_order: Dict[str, List[str]] = {}
+    residue_coords: Dict[str, Dict[str, Tuple[float, float, float]]] = {}
+
+    for idx, line in enumerate(kept_lines):
+        if not line.startswith("ATOM"):
+            continue
+        key = _residue_key(line)
+        chain = (line[21:22] or "-").strip() or "-"
+        if key not in residue_first_idx:
+            residue_first_idx[key] = idx
+            residue_chain_order.setdefault(chain, []).append(key)
+
+        atom_name = line[12:16].strip().upper()
+        if atom_name in {"C", "N"}:
+            coords = _parse_coords(line)
+            if coords is not None:
+                residue_coords.setdefault(key, {})[atom_name] = coords
+
+    break_before: set[str] = set()
+    if insert_ter_on_chainbreak:
+        threshold_sq = float(chainbreak_cn_max_a) ** 2
+        for chain, keys in residue_chain_order.items():
+            for idx in range(1, len(keys)):
+                prev_key = keys[idx - 1]
+                next_key = keys[idx]
+                prev_coords = residue_coords.get(prev_key, {})
+                next_coords = residue_coords.get(next_key, {})
+                if "C" in prev_coords and "N" in next_coords:
+                    if _distance_sq(prev_coords["C"], next_coords["N"]) > threshold_sq:
+                        break_before.add(next_key)
+
+    segment_start_keys: set[str] = set()
+    if strip_nterm_h:
+        for chain, keys in residue_chain_order.items():
+            if keys:
+                segment_start_keys.add(keys[0])
+        pending_segment_start = False
+        for line in kept_lines:
+            if line.startswith("TER"):
+                pending_segment_start = True
+                continue
+            if pending_segment_start and line.startswith("ATOM"):
+                segment_start_keys.add(_residue_key(line))
+                pending_segment_start = False
+        if break_before:
+            segment_start_keys |= break_before
+
+    sanitized_lines: List[str] = []
+    inserted_ter_count = 0
+    nterm_h_stripped_count = 0
+    stripped_residues: set[str] = set()
+    seen_residues: set[str] = set()
+
+    for line in kept_lines:
+        if line.startswith("ATOM"):
+            key = _residue_key(line)
+            if key not in seen_residues:
+                if insert_ter_on_chainbreak and key in break_before:
+                    if not sanitized_lines or not sanitized_lines[-1].startswith("TER"):
+                        sanitized_lines.append("TER\n")
+                        inserted_ter_count += 1
+                seen_residues.add(key)
+
+            if strip_nterm_h and key in segment_start_keys:
+                atom_name = line[12:16].strip().upper()
+                if atom_name in _NTERM_H_ALLOWLIST:
+                    element = line[76:78].strip().upper()
+                    if (element and element == "H") or (not element and atom_name.startswith("H")):
+                        nterm_h_stripped_count += 1
+                        stripped_residues.add(key)
+                        continue
+
+        sanitized_lines.append(line)
+
+    return sanitized_lines, {
+        "inserted_TER_count": inserted_ter_count,
+        "nterm_h_stripped_count": nterm_h_stripped_count,
+        "nterm_h_stripped_residues": sorted(stripped_residues),
+    }
 
 
 def _looks_like_pkgs_cache(prefix: Path) -> bool:
@@ -661,6 +757,31 @@ def prep_mmgbsa_receptor(
             water_lines_kept += 1
 
         kept_lines.append(line)
+
+    strip_nterm_h = _to_bool(cfg.get("MMGBSA_TLEAP_STRIP_NTERM_H", True), default=True)
+    insert_ter_on_break = _to_bool(cfg.get("MMGBSA_TLEAP_INSERT_TER_ON_CHAINBREAK", True), default=True)
+    chainbreak_cn_max = _to_float(cfg.get("MMGBSA_TLEAP_CHAINBREAK_CN_MAX_A", 2.2), 2.2)
+
+    if strip_nterm_h or insert_ter_on_break:
+        kept_lines, sanitize_info = _sanitize_receptor_lines(
+            kept_lines=kept_lines,
+            strip_nterm_h=strip_nterm_h,
+            insert_ter_on_chainbreak=insert_ter_on_break,
+            chainbreak_cn_max_a=chainbreak_cn_max,
+        )
+        log_kvs = {
+            "inserted_TER_count": sanitize_info.get("inserted_TER_count", 0),
+            "nterm_h_stripped_count": sanitize_info.get("nterm_h_stripped_count", 0),
+        }
+        stripped_res = sanitize_info.get("nterm_h_stripped_residues") or []
+        if stripped_res:
+            shown = stripped_res[:10]
+            extra = len(stripped_res) - len(shown)
+            if extra > 0:
+                log_kvs["nterm_h_stripped_residues"] = ",".join(shown) + f",+{extra} more"
+            else:
+                log_kvs["nterm_h_stripped_residues"] = ",".join(shown)
+        _log_receptor(logger, "INFO", log_kvs, "sanitize")
 
     tmp_path = _tmp_path(out_path)
     with tmp_path.open("w", encoding="utf-8") as handle:

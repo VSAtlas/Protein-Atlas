@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -198,6 +199,32 @@ def _normalize_ph_label(ph_label: Optional[str]) -> Optional[str]:
     return token or None
 
 
+def _canonicalize_ph_key(raw: str | None, pdb_id: str | None = None) -> Optional[str]:
+    token = str(raw).strip() if raw is not None else ""
+    if not token:
+        return None
+
+    # Normalize degenerate tokens to a stable base key for withH selection.
+    looks_like_path = any(sep in token for sep in ("/", "\\")) or "." in Path(token).name
+    if looks_like_path:
+        token = Path(token).name
+        token = Path(token).stem
+        if token.endswith(".withH"):
+            token = token[: -len(".withH")]
+
+    if pdb_id:
+        prefix = f"{str(pdb_id).upper()}_"
+        if token.upper().startswith(prefix):
+            token = token[len(prefix) :]
+
+    if "+" in token:
+        token = token.split("+", 1)[0]
+
+    token = re.sub(r"-dup\d*$", "", token, flags=re.IGNORECASE)
+    token = token.strip()
+    return token or None
+
+
 def _variant_for_ph(variant: Optional[str], legacy_mode: bool) -> Optional[str]:
     v = (str(variant).strip().upper() or None) if variant is not None else None
     if v:
@@ -265,11 +292,24 @@ def _resolve_withh_from_manifest(
     members = payload.get("members") if isinstance(payload, dict) else None
     if not isinstance(members, list):
         return None
+    want = _canonicalize_ph_key(ph_label, pdb_id)
+    if not want:
+        logger.info(
+            "[ledock.manifest.miss] pdb=%s raw=%s want=%s path=%s",
+            pdb_id,
+            ph_label,
+            want,
+            manifest_path,
+        )
+        return None
     for entry in members:
-        entry_label = _label_from_manifest_entry(entry, str(pdb_id).upper())
-        if not entry_label:
+        entry_label_raw = _label_from_manifest_entry(entry, str(pdb_id).upper())
+        if not entry_label_raw:
             continue
-        if entry_label.strip().lower() != ph_label.lower():
+        entry_key = _canonicalize_ph_key(entry_label_raw, pdb_id)
+        if not entry_key:
+            continue
+        if entry_key.strip().lower() != want.lower():
             continue
         withh = entry.get("withH") or entry.get("withH_pdb") or entry.get("withH_path")
         if not withh:
@@ -279,9 +319,10 @@ def _resolve_withh_from_manifest(
             path = manifest_path.parent / path
         return path
     logger.info(
-        "[ledock.manifest.miss] pdb=%s ph=%s path=%s",
+        "[ledock.manifest.miss] pdb=%s raw=%s want=%s path=%s",
         pdb_id,
         ph_label,
+        want,
         manifest_path,
     )
     return None
@@ -300,9 +341,17 @@ def ensure_ledock_receptor(
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     variant_token = (str(variant).strip().upper() or None) if variant is not None else None
     variant_for_ph = _variant_for_ph(variant_token, legacy_mode)
-    ph_token = _normalize_ph_label(ph_label)
-    if not ph_token:
+    ph_token_raw = _normalize_ph_label(ph_label)
+    if not ph_token_raw:
         logger.warning("[ledock.receptor.skip] reason=missing_ph_label pdb=%s", pdb_id)
+        return None
+    ph_key = _canonicalize_ph_key(ph_token_raw, pdb_id)
+    if not ph_key:
+        logger.warning(
+            "[ledock.receptor.skip] reason=invalid_ph_label pdb=%s raw=%s",
+            pdb_id,
+            ph_token_raw,
+        )
         return None
 
     ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
@@ -312,15 +361,15 @@ def ensure_ledock_receptor(
             "[ledock.receptor] pdb=%s variant=%s ph=%s receptor_pdb=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_token_raw,
             pro_path,
         )
         return pro_path
 
-    withh_path = _resolve_withh_from_manifest(ensemble_dir, pdb_id, ph_token, logger)
+    withh_path = _resolve_withh_from_manifest(ensemble_dir, pdb_id, ph_key, logger)
     if withh_path is None:
         prefix = f"{str(pdb_id).upper()}_"
-        fallback_label = ph_token
+        fallback_label = ph_key
         if not fallback_label.startswith(prefix):
             fallback_label = f"{prefix}{fallback_label}"
         candidate = ensemble_dir / f"{fallback_label}.withH.pdb"
@@ -329,7 +378,7 @@ def ensure_ledock_receptor(
                 "[ledock.receptor.missing] pdb=%s variant=%s ph=%s path=%s",
                 pdb_id,
                 variant_for_ph or "HOLO",
-                ph_token,
+                ph_token_raw,
                 candidate,
             )
             return None
@@ -349,7 +398,7 @@ def ensure_ledock_receptor(
             "[ledock.lepro.error] pdb=%s variant=%s ph=%s reason=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_token_raw,
             exc,
         )
         return None
@@ -359,7 +408,7 @@ def ensure_ledock_receptor(
             "[ledock.receptor] pdb=%s variant=%s ph=%s receptor_pdb=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_token_raw,
             pro_path,
         )
         return pro_path
@@ -368,7 +417,7 @@ def ensure_ledock_receptor(
         "[ledock.receptor.missing] pdb=%s variant=%s ph=%s path=%s",
         pdb_id,
         variant_for_ph or "HOLO",
-        ph_token,
+        ph_token_raw,
         pro_path,
     )
     return None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -232,6 +233,12 @@ def _sanitize_mol_name(name: str) -> str:
     return cleaned or "mol"
 
 
+def _strip_trailing_mol2(name: str) -> str:
+    # Normalize DOCK6 mol names to avoid base mismatches across stage outputs.
+    cleaned = name.strip()
+    return re.sub(r"\.mol2$", "", cleaned, flags=re.IGNORECASE)
+
+
 def _safe_unlink(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
@@ -296,7 +303,7 @@ def convert_dock6(task: Dock6Task, overwrite: bool, logger: logging.Logger) -> D
     name_counts: Dict[str, int] = {}
     for mol_name, lines in blocks:
         result.molecules += 1
-        base_name = _sanitize_mol_name(mol_name)
+        base_name = _sanitize_mol_name(_strip_trailing_mol2(mol_name))
         name_counts[base_name] = name_counts.get(base_name, 0) + 1
         count = name_counts[base_name]
         prefix = f"{base_name}__{task.stage_dir}"
@@ -634,6 +641,60 @@ def _cleanup_residual_mol2(post_run_root: Path, logger: logging.Logger) -> None:
     )
 
 
+def _migrate_dock6_pdbqt_names(post_run_root: Path, overwrite: bool, logger: logging.Logger) -> None:
+    if not overwrite or not post_run_root.exists():
+        return
+
+    renamed = 0
+    overwritten = 0
+    skipped = 0
+    failed = 0
+    for path in post_run_root.rglob("dock6_pdbqt/*.pdbqt"):
+        if ".mol2__dock6_stage" not in path.name.lower():
+            continue
+        new_name = re.sub(r"\.mol2(?=__dock6_stage\d+)", "", path.name, flags=re.IGNORECASE)
+        if new_name == path.name:
+            continue
+        new_path = path.with_name(new_name)
+        if new_path.exists():
+            try:
+                new_path.unlink()
+            except Exception as exc:
+                failed += 1
+                logger.warning(
+                    "%s action=migrate status=failed kind=dock6 reason=unlink_failed source=%s target=%s error=%s | remove collision",
+                    COMPONENT,
+                    path,
+                    new_path,
+                    exc,
+                )
+                continue
+            overwritten += 1
+        try:
+            path.replace(new_path)
+            renamed += 1
+        except Exception as exc:
+            failed += 1
+            logger.warning(
+                "%s action=migrate status=failed kind=dock6 reason=rename_failed source=%s target=%s error=%s | normalize dock6 name",
+                COMPONENT,
+                path,
+                new_path,
+                exc,
+            )
+
+    if renamed or overwritten or skipped or failed:
+        logger.info(
+            "%s action=migrate status=ok kind=dock6 renamed=%d overwritten=%d skipped=%d failed=%d root=%s | normalize dock6 names",
+            COMPONENT,
+            renamed,
+            overwritten,
+            skipped,
+            failed,
+            post_run_root,
+        )
+
+
 def main() -> int:
     args = parse_args()
     logger = configure_logging()
@@ -651,6 +712,8 @@ def main() -> int:
             run_root,
         )
         return 1
+
+    _migrate_dock6_pdbqt_names(post_run_root, args.overwrite, logger)
 
     ledock_tasks, dock6_tasks = discover_tasks(run_root, post_run_root, logger)
     (

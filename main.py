@@ -210,15 +210,16 @@ Examples:
 
 """
 from activesite import extract_and_remove_ligands, get_atom_rules
-import sys, hashlib, re, logging, json, time, os, shutil, re, shlex, subprocess, math
+import sys, hashlib, re, logging, json, time, os, shutil, re, shlex, subprocess, math, random
 import csv
+import statistics
 from dataclasses import dataclass, field
 import datetime
 import yaml
 from pathlib import Path
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple, Any, Mapping
+from typing import Dict, List, Optional, Tuple, Any, Mapping, Sequence
 import numpy as np
 from tqdm import tqdm
 import traceback
@@ -269,7 +270,7 @@ from protein_prep_mmgbsa import (
     run_tleap,
     write_leap_for_ligands,
 )
-from mmgbsa_trajectory import make_mmgbsa_trajectory
+from mmgbsa_trajectory import make_mmgbsa_trajectory, run_implicit_md
 from run_mmgbsa import run_mmgbsa
 from path_router import (
     expand_variants,
@@ -2109,6 +2110,135 @@ def _mmgbsa_sdf_base_candidates(stem: str, stage_dir_label: str) -> List[str]:
     return sorted(cleaned)
 
 
+def _mmgbsa_default_pose_group_regexes() -> List[str]:
+    return [
+        r"(_pose\d+)$",
+        r"(_rank\d+)$",
+        r"(_conf\d+)$",
+        r"(_model\d+)$",
+        r"(_p\d+)$",
+        r"(_stage\d+)(_pose\d+)$",
+        r"(_gnina_stage\d+)(_pose\d+)$",
+        r"(_ledock_stage\d+)(_pose\d+)$",
+        r"(_dock6_stage\d+)(_pose\d+)$",
+    ]
+
+
+def _mmgbsa_pose_group_regexes(cfg: Mapping[str, Any], logger: logging.Logger) -> List[re.Pattern]:
+    raw = str(cfg.get("MMGBSA_POSE_GROUP_REGEXES", "") or "").strip()
+    patterns: List[str] = []
+    if raw:
+        for part in raw.split(","):
+            part = part.strip()
+            if part:
+                patterns.append(part)
+    if not patterns:
+        patterns = _mmgbsa_default_pose_group_regexes()
+
+    compiled: List[re.Pattern] = []
+    for pat in patterns:
+        try:
+            compiled.append(re.compile(pat, flags=re.IGNORECASE))
+        except re.error as exc:
+            logger.warning(
+                "[mmgbsa.pipeline] selection=pose_regex_invalid regex=%s err=%s",
+                pat,
+                exc,
+            )
+    if not compiled:
+        compiled = [re.compile(pat, flags=re.IGNORECASE) for pat in _mmgbsa_default_pose_group_regexes()]
+    return compiled
+
+
+def _mmgbsa_pose_candidates(stem: str, stage_dir_label: str, regexes: List[re.Pattern]) -> List[str]:
+    base = stem.replace(".sanitized", "")
+    seeds: set[str] = {base}
+    for regex in regexes:
+        stripped = regex.sub("", base)
+        if stripped != base:
+            seeds.add(stripped)
+
+    candidates: set[str] = set()
+    for seed in seeds:
+        for cand in _mmgbsa_sdf_base_candidates(seed, stage_dir_label):
+            candidates.add(cand)
+        for regex in regexes:
+            stripped = regex.sub("", seed)
+            if stripped != seed:
+                for cand in _mmgbsa_sdf_base_candidates(stripped, stage_dir_label):
+                    candidates.add(cand)
+
+    cleaned: set[str] = set()
+    for cand in candidates:
+        cleaned.add(re.sub(r"_+$", "", cand))
+    return sorted([c for c in cleaned if c])
+
+
+def _mmgbsa_canonical_ligand_id(
+    stem: str,
+    stage_dir_label: str,
+    regexes: List[re.Pattern],
+    logger: logging.Logger,
+) -> str:
+    candidates = _mmgbsa_pose_candidates(stem, stage_dir_label, regexes)
+    if not candidates:
+        return _mmgbsa_normalize_ligand_base(stem)
+
+    min_len = min(len(cand) for cand in candidates)
+    shortest = sorted([cand for cand in candidates if len(cand) == min_len])
+    chosen = shortest[0]
+    if len(shortest) > 1:
+        logger.warning(
+            "[mmgbsa.pipeline] selection=ligand_id_collision stem=%s candidates=%s chosen=%s",
+            stem,
+            shortest,
+            chosen,
+        )
+    return chosen
+
+
+def _mmgbsa_group_pose_sdfs(
+    sdfs: List[Path],
+    stage_dir_label: str,
+    regexes: List[re.Pattern],
+    logger: logging.Logger,
+) -> Dict[str, List[Path]]:
+    grouped: Dict[str, List[Path]] = {}
+    for sdf in sdfs:
+        ligand_id = _mmgbsa_canonical_ligand_id(sdf.stem, stage_dir_label, regexes, logger)
+        if not ligand_id:
+            ligand_id = sdf.stem
+        grouped.setdefault(ligand_id, []).append(sdf)
+    return grouped
+
+
+def _mmgbsa_pose_numeric_rank(stem: str) -> Optional[int]:
+    primary = re.search(r"(?:pose|rank|conf|model|p)(\d+)$", stem, flags=re.IGNORECASE)
+    if primary:
+        try:
+            return int(primary.group(1))
+        except Exception:
+            return None
+
+    trailing = re.search(r"(\d+)$", stem)
+    if trailing:
+        try:
+            return int(trailing.group(1))
+        except Exception:
+            return None
+    return None
+
+
+def _mmgbsa_pose_sort_key(path: Path, mode: str) -> Tuple[int, object, str]:
+    stem = path.stem.lower()
+    if mode == "name_numeric":
+        rank = _mmgbsa_pose_numeric_rank(path.stem)
+        if rank is not None:
+            return (0, rank, stem)
+        return (1, stem, stem)
+    return (0, stem, stem)
+
+
 def _mmgbsa_index_sdfs(sdfs: List[Path], stage_dir_label: str) -> Dict[str, Path]:
     mapping: Dict[str, Path] = {}
     for sdf in sdfs:
@@ -2163,16 +2293,26 @@ def _mmgbsa_load_reranked_bases(csv_path: Path, logger: logging.Logger) -> List[
 def _mmgbsa_select_sdfs(
     stage_dir: Path,
     max_ligands: Optional[int],
+    poses_per_ligand: int,
+    pose_sort_mode: str,
+    pose_group_regexes: List[re.Pattern],
     reranked_csv: Optional[Path] = None,
     top_pct: Optional[float] = None,
     logger: Optional[logging.Logger] = None,
-) -> Tuple[List[Path], bool]:
+) -> Tuple[List[Path], bool, bool, List[str]]:
     sdfs = sorted(stage_dir.glob("*.sdf"))
     if not sdfs:
-        return [], False
+        return [], False, False, []
 
     if logger is None:
         logger = logging.getLogger("mmgbsa.pipeline")
+
+    used_reranked = False
+    used_actives = False
+    stage_label = stage_dir.name
+    pose_groups = _mmgbsa_group_pose_sdfs(sdfs, stage_label, pose_group_regexes, logger)
+    selected_group_map = pose_groups
+    selected_ligands: List[str] = []
 
     if reranked_csv is not None and top_pct is not None and top_pct > 0:
         if not reranked_csv.exists():
@@ -2183,51 +2323,78 @@ def _mmgbsa_select_sdfs(
         else:
             ordered_bases = _mmgbsa_load_reranked_bases(reranked_csv, logger)
             if ordered_bases:
-                base_map = _mmgbsa_index_sdfs(sdfs, stage_dir.name)
                 pct_val = float(top_pct)
                 if pct_val > 100.0:
                     pct_val = 100.0
                 if pct_val <= 0.0:
                     pct_val = 0.0
-                total = len(ordered_bases)
-                target = max(1, int(math.ceil(total * pct_val / 100.0))) if total else 0
-                selected: List[Path] = []
+                ordered_ligands: List[str] = []
+                seen: set[str] = set()
                 for base in ordered_bases:
-                    path = base_map.get(base)
-                    if not path:
+                    ligand_id = _mmgbsa_canonical_ligand_id(base, stage_label, pose_group_regexes, logger)
+                    if ligand_id in seen or ligand_id not in pose_groups:
                         continue
-                    if path in selected:
-                        continue
-                    selected.append(path)
-                    if len(selected) >= target:
-                        break
-                if selected:
+                    seen.add(ligand_id)
+                    ordered_ligands.append(ligand_id)
+
+                total = len(ordered_ligands)
+                target = max(1, int(math.ceil(total * pct_val / 100.0))) if total else 0
+                if ordered_ligands and target:
+                    selected_ligands = ordered_ligands[:target]
+                    used_reranked = True
                     logger.info(
                         "[mmgbsa.pipeline] selection=reranked_top_pct pct=%.3g total=%d target=%d selected=%d path=%s",
                         pct_val,
                         total,
                         target,
-                        len(selected),
+                        len(selected_ligands),
                         reranked_csv,
                     )
-                    return selected, True
-                logger.warning(
-                    "[mmgbsa.pipeline] selection=reranked_top_pct failed reason=no_matching_sdfs path=%s stage_dir=%s",
-                    reranked_csv,
-                    stage_dir,
-                )
+                else:
+                    logger.warning(
+                        "[mmgbsa.pipeline] selection=reranked_top_pct failed reason=no_matching_sdfs path=%s stage_dir=%s",
+                        reranked_csv,
+                        stage_dir,
+                    )
             else:
                 logger.warning(
                     "[mmgbsa.pipeline] selection=reranked_top_pct failed reason=empty_csv path=%s",
                     reranked_csv,
                 )
 
-    actives = [p for p in sdfs if "actives_final" in p.name]
-    if actives:
-        sdfs = actives
+    if not selected_ligands:
+        actives = [p for p in sdfs if "actives_final" in p.name]
+        if actives:
+            used_actives = True
+            selected_group_map = _mmgbsa_group_pose_sdfs(actives, stage_label, pose_group_regexes, logger)
+            selected_ligands = sorted(selected_group_map.keys())
+        else:
+            selected_group_map = pose_groups
+            selected_ligands = sorted(pose_groups.keys())
+
     if max_ligands is not None and max_ligands > 0:
-        sdfs = sdfs[:max_ligands]
-    return sdfs, False
+        selected_ligands = selected_ligands[:max_ligands]
+
+    selected_sdfs: List[Path] = []
+    for ligand_id in selected_ligands:
+        group = selected_group_map.get(ligand_id, [])
+        if not group:
+            continue
+        sorted_group = sorted(group, key=lambda p: _mmgbsa_pose_sort_key(p, pose_sort_mode))
+        if poses_per_ligand > 0:
+            sorted_group = sorted_group[:poses_per_ligand]
+        selected_sdfs.extend(sorted_group)
+
+    logger.info(
+        "[mmgbsa.pipeline] selection=poses stage_dir=%s ligand_ids=%d poses_per_ligand=%d poses_selected=%d reranked=%s actives_only=%s",
+        stage_label,
+        len(selected_ligands),
+        poses_per_ligand,
+        len(selected_sdfs),
+        used_reranked,
+        used_actives,
+    )
+    return selected_sdfs, used_reranked, used_actives, selected_ligands
 
 
 def _mmgbsa_parse_delta_total(csv_path: Path) -> Optional[float]:
@@ -2280,6 +2447,200 @@ def _mmgbsa_append_summary(summary_path: Path, row: Dict[str, object]) -> None:
         writer.writerow(row)
 
 
+def _mmgbsa_write_pose_aggregate(
+    summary_path: Path,
+    out_path: Path,
+    stage_dir_label: str,
+    pose_group_regexes: List[re.Pattern],
+    agg_method: str,
+    logger: logging.Logger,
+) -> None:
+    if not summary_path.exists() or summary_path.stat().st_size == 0:
+        logger.info("[mmgbsa.pipeline] aggregate=skip reason=missing_summary path=%s", summary_path)
+        return
+
+    groups: Dict[Tuple[str, str], Dict[str, object]] = {}
+    try:
+        with summary_path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                stage_dir = str(row.get("stage_dir") or stage_dir_label or "").strip()
+                ligand_stem = str(row.get("ligand_stem") or "").strip()
+                if not ligand_stem:
+                    continue
+                ligand_id = _mmgbsa_canonical_ligand_id(ligand_stem, stage_dir, pose_group_regexes, logger)
+                key = (stage_dir, ligand_id)
+                entry = groups.setdefault(key, {"total": 0, "ok": []})
+                entry["total"] = int(entry.get("total", 0)) + 1
+
+                ok_val = _to_bool(row.get("ok", False))
+                delta_val = None
+                if ok_val:
+                    raw = str(row.get("delta_total", "")).strip()
+                    if raw:
+                        try:
+                            delta_val = float(raw)
+                        except Exception:
+                            delta_val = None
+                if ok_val and delta_val is not None:
+                    entry["ok"].append((delta_val, ligand_stem))
+    except Exception as exc:
+        logger.warning(
+            "[mmgbsa.pipeline] aggregate=skip reason=read_error path=%s err=%s",
+            summary_path,
+            exc,
+        )
+        return
+
+    agg_method_norm = str(agg_method or "min").strip().lower()
+    if agg_method_norm not in ("min", "median"):
+        logger.warning(
+            "[mmgbsa.pipeline] aggregate=unknown_method method=%s fallback=min",
+            agg_method_norm,
+        )
+        agg_method_norm = "min"
+
+    rows_out: List[Dict[str, object]] = []
+    for (stage_dir, ligand_id), entry in sorted(groups.items()):
+        ok_list = list(entry.get("ok", []))
+        n_total = int(entry.get("total", 0))
+        n_ok = len(ok_list)
+        agg_delta = ""
+        best_pose = ""
+        included: List[str] = []
+
+        if n_ok:
+            deltas = [val for val, _ in ok_list]
+            if agg_method_norm == "median":
+                agg_val = float(statistics.median(deltas))
+                best = min(ok_list, key=lambda x: (abs(x[0] - agg_val), x[0], x[1]))
+            else:
+                agg_val = min(deltas)
+                best = min(ok_list, key=lambda x: (x[0], x[1]))
+            agg_delta = f"{agg_val:.6g}"
+            best_pose = best[1]
+            included = [stem for _, stem in ok_list]
+
+        rows_out.append(
+            {
+                "stage_dir": stage_dir,
+                "ligand_id": ligand_id,
+                "n_poses_total": n_total,
+                "n_poses_ok": n_ok,
+                "agg_method": agg_method_norm,
+                "agg_delta": agg_delta,
+                "best_pose_stem": best_pose,
+                "pose_stems_included": ";".join(included),
+            }
+        )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_suffix(out_path.suffix + ".part")
+    fieldnames = [
+        "stage_dir",
+        "ligand_id",
+        "n_poses_total",
+        "n_poses_ok",
+        "agg_method",
+        "agg_delta",
+        "best_pose_stem",
+        "pose_stems_included",
+    ]
+    with tmp_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows_out)
+    os.replace(tmp_path, out_path)
+    logger.info(
+        "[mmgbsa.pipeline] aggregate=pose_delta path=%s rows=%d method=%s",
+        out_path,
+        len(rows_out),
+        agg_method_norm,
+    )
+
+
+def _mmgbsa_md_seed_list(cfg: Mapping[str, Any], n_reps: int, logger: logging.Logger) -> List[int]:
+    try:
+        base_seed = int(cfg.get("MMGBSA_MD_BASE_SEED", 12345))
+    except Exception:
+        base_seed = 12345
+
+    mode = str(cfg.get("MMGBSA_MD_SEED_MODE", "increment") or "increment").strip().lower()
+    if n_reps < 1:
+        n_reps = 1
+
+    seeds: List[int] = []
+    if mode == "random":
+        rng = random.Random(base_seed)
+        for _ in range(n_reps):
+            seeds.append(rng.randint(1, 2_147_483_647))
+    else:
+        for idx in range(n_reps):
+            seeds.append(max(1, base_seed + idx))
+
+    logger.info(
+        "[mmgbsa.pipeline] md_seeds mode=%s base=%s reps=%d",
+        mode,
+        base_seed,
+        n_reps,
+    )
+    return seeds
+
+
+def _mmgbsa_md_aggregate(deltas: List[float], method: str) -> Optional[float]:
+    if not deltas:
+        return None
+    method_norm = str(method or "mean").strip().lower()
+    if method_norm == "median":
+        return float(statistics.median(deltas))
+    if method_norm == "min":
+        return float(min(deltas))
+    return float(statistics.mean(deltas))
+
+
+_MMGBSA_DEPRECATED_MD_KEYS = ("MMGBSA_MD_RUN", "MMGBSA_TRAJ_MODE")
+_MMGBSA_DEPRECATED_MD_WARNED = False
+
+
+def _mmgbsa_effective_md_config(cfg: Mapping[str, Any], logger: Optional[logging.Logger]) -> Dict[str, object]:
+    global _MMGBSA_DEPRECATED_MD_WARNED
+    deprecated_keys = []
+    for key in _MMGBSA_DEPRECATED_MD_KEYS:
+        if key in cfg and str(cfg.get(key)).strip() != "":
+            deprecated_keys.append(key)
+
+    md_enabled_raw = cfg.get("MMGBSA_MD_ENABLED", None)
+    md_enabled_set = "MMGBSA_MD_ENABLED" in cfg and str(md_enabled_raw).strip() != ""
+    if md_enabled_set:
+        md_enabled = _to_bool(md_enabled_raw)
+    else:
+        traj_mode = str(cfg.get("MMGBSA_TRAJ_MODE", "") or "").strip().upper()
+        md_enabled = traj_mode == "IMPLICIT_MD" or _to_bool(cfg.get("MMGBSA_MD_RUN", False))
+
+    if deprecated_keys and not _MMGBSA_DEPRECATED_MD_WARNED and logger is not None:
+        logger.warning(
+            "[mmgbsa.pipeline] deprecated_keys=%s msg=Deprecated MMGBSA keys detected; please use MMGBSA_MD_ENABLED",
+            ",".join(sorted(deprecated_keys)),
+        )
+        _MMGBSA_DEPRECATED_MD_WARNED = True
+
+    return {
+        "md_enabled": md_enabled,
+        "effective_mode": "IMPLICIT_MD" if md_enabled else "ONEFRAME",
+        "deprecated_keys": deprecated_keys,
+    }
+
+
+def _mmgbsa_apply_env_overrides(cfg: Mapping[str, Any], keys: Sequence[str]) -> Dict[str, Any]:
+    updated = dict(cfg)
+    for key in keys:
+        value = os.environ.get(key)
+        if value is None or str(value).strip() == "":
+            continue
+        updated[key] = value
+    return updated
+
+
 def _maybe_run_mmgbsa_for_pdb(
     cfg: Mapping[str, Any],
     pdb_file: str,
@@ -2290,6 +2651,40 @@ def _maybe_run_mmgbsa_for_pdb(
     legacy_mode: bool,
 ) -> None:
     logger = logging.getLogger("mmgbsa.pipeline")
+    cfg = _mmgbsa_apply_env_overrides(
+        cfg,
+        [
+            "MMGBSA_MAX_LIGANDS",
+            "MMGBSA_RERANKED_TOP_PCT",
+            "MMGBSA_TRAJ_MODE",
+            "MMGBSA_MMPBSA_USE_TRAJ_FRAMES",
+            "MMGBSA_MD_ENABLED",
+            "MMGBSA_MD_RUN",
+            "MMGBSA_MD_ENGINE",
+            "MMGBSA_MD_NREPLICATES",
+            "MMGBSA_MD_SEED_MODE",
+            "MMGBSA_MD_BASE_SEED",
+            "MMGBSA_MD_IGB",
+            "MMGBSA_MD_SALTCON",
+            "MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY",
+            "MMGBSA_MD_RESTRAINT_WT",
+            "MMGBSA_MD_RESTRAINT_MASK",
+            "MMGBSA_MD_DT_PS",
+            "MMGBSA_MD_HEAT_PS",
+            "MMGBSA_MD_EQUIL_PS",
+            "MMGBSA_MD_PROD_PS",
+            "MMGBSA_MD_TEMP0",
+            "MMGBSA_MD_NTT",
+            "MMGBSA_MD_GAMMA_LN",
+            "MMGBSA_MD_NTC",
+            "MMGBSA_MD_NTF",
+            "MMGBSA_MD_FRAME_STRIDE_PS",
+            "MMGBSA_MD_TRAJ_FORMAT",
+            "MMGBSA_MD_TRAJ_NAME",
+            "MMGBSA_MD_REP_AGG",
+            "MMGBSA_MD_COPY_BEST_REPLICATE",
+        ],
+    )
     if not _to_bool(cfg.get("MMGBSA_ENABLED", False)):
         logger.info("[mmgbsa.pipeline] action=skip reason=disabled")
         return
@@ -2315,10 +2710,35 @@ def _maybe_run_mmgbsa_for_pdb(
     if top_pct_val <= 0:
         top_pct_val = None
 
+    try:
+        poses_per_ligand = int(cfg.get("MMGBSA_POSES_PER_LIGAND", 1))
+    except Exception:
+        poses_per_ligand = 1
+    if poses_per_ligand <= 0:
+        poses_per_ligand = 1
+
+    pose_sort_mode = str(cfg.get("MMGBSA_POSE_SORT_MODE", "name_numeric") or "name_numeric").strip().lower()
+    pose_group_regexes = _mmgbsa_pose_group_regexes(cfg, logger)
+
+    agg_enabled = _to_bool(cfg.get("MMGBSA_AGGREGATE_PER_LIGAND", False))
+    agg_method = str(cfg.get("MMGBSA_AGG_METHOD", "min") or "min").strip().lower()
+    agg_output_name = str(cfg.get("MMGBSA_AGG_OUTPUT_CSV", "mmgbsa_pose_aggregate.csv") or "mmgbsa_pose_aggregate.csv")
+
+    md_cfg = _mmgbsa_effective_md_config(cfg, logger)
+    md_enabled = _to_bool(md_cfg.get("md_enabled", False))
+    effective_mode = str(md_cfg.get("effective_mode", "ONEFRAME") or "ONEFRAME")
+    try:
+        md_reps = int(cfg.get("MMGBSA_MD_NREPLICATES", 1))
+    except Exception:
+        md_reps = 1
+    if md_reps < 1:
+        md_reps = 1
+    md_rep_agg = str(cfg.get("MMGBSA_MD_REP_AGG", "mean") or "mean").strip().lower()
+    md_copy_best = _to_bool(cfg.get("MMGBSA_MD_COPY_BEST_REPLICATE", False))
+
     force = _to_bool(cfg.get("MMGBSA_FORCE", False))
     strict = _to_bool(cfg.get("MMGBSA_STRICT", False))
     stage_dir_name = str(cfg.get("MMGBSA_INPUT_STAGE_DIR", "stage1") or "stage1")
-    used_reranked = False
 
     test_override: Dict[str, object] = {}
     if test_mode != "off" and top_pct_val is None:
@@ -2350,13 +2770,27 @@ def _maybe_run_mmgbsa_for_pdb(
         if test_override:
             sdfs = list(test_override["sdfs"])
             stage_dir_label = str(test_override["stage_dir"])
+            pose_groups = _mmgbsa_group_pose_sdfs(sdfs, stage_dir_label, pose_group_regexes, logger)
+            selected_ligands = sorted(pose_groups.keys())
+            logger.info(
+                "[mmgbsa.pipeline] selection=poses stage_dir=%s ligand_ids=%d poses_per_ligand=%d poses_selected=%d reranked=%s actives_only=%s",
+                stage_dir_label,
+                len(selected_ligands),
+                poses_per_ligand,
+                len(sdfs),
+                False,
+                False,
+            )
         else:
             stage_dir_label = stage_dir_name
             stage_dir = ph_dir / stage_dir_label
             reranked_csv = ph_dir / "consensus_reranked_scorch.csv"
-            sdfs, used_reranked = _mmgbsa_select_sdfs(
+            sdfs, _, _, selected_ligands = _mmgbsa_select_sdfs(
                 stage_dir,
                 max_ligands_val,
+                poses_per_ligand,
+                pose_sort_mode,
+                pose_group_regexes,
                 reranked_csv=reranked_csv,
                 top_pct=top_pct_val,
                 logger=logger,
@@ -2371,6 +2805,49 @@ def _maybe_run_mmgbsa_for_pdb(
                 stage_dir_label,
             )
             continue
+
+        expected_frames = None
+        if md_enabled:
+            try:
+                prod_ps = float(cfg.get("MMGBSA_MD_PROD_PS", 100.0))
+            except Exception:
+                prod_ps = 100.0
+            try:
+                stride_ps = float(cfg.get("MMGBSA_MD_FRAME_STRIDE_PS", 2.0))
+            except Exception:
+                stride_ps = 2.0
+            if stride_ps > 0:
+                expected_frames = max(1, int(prod_ps / stride_ps))
+
+        mmpbsa_interval = 1
+        for key in ("MMGBSA_GENERAL_INTERVAL", "MMGBSA_MMPBSA_INTERVAL"):
+            val = cfg.get(key, None)
+            if val is None or str(val).strip() == "":
+                continue
+            try:
+                mmpbsa_interval = int(val)
+            except Exception:
+                mmpbsa_interval = 1
+            break
+
+        try:
+            mmpbsa_igb = int(cfg.get("MMGBSA_GB_IGB", 5))
+        except Exception:
+            mmpbsa_igb = 5
+        try:
+            mmpbsa_saltcon = float(cfg.get("MMGBSA_GB_SALTCON", 0.150))
+        except Exception:
+            mmpbsa_saltcon = 0.150
+        logger.info(
+            "[mmgbsa.pipeline] effective_cfg mode=%s md_enabled=%s expected_frames_per_rep=%s replicates=%d mmpbsa_interval=%d igb=%d saltcon=%.3f",
+            effective_mode,
+            md_enabled,
+            expected_frames if md_enabled else "n/a",
+            md_reps,
+            mmpbsa_interval,
+            mmpbsa_igb,
+            mmpbsa_saltcon,
+        )
 
         center, radius, cfg_path = _mmgbsa_resolve_center_radius(
             cfg,
@@ -2472,11 +2949,10 @@ def _maybe_run_mmgbsa_for_pdb(
         summary_path = mmgbsa_dir / "mmgbsa_results_summary.csv"
         work_root = mmgbsa_dir / "work"
 
-        max_ligands_override = 0 if (not test_override and used_reranked) else None
         prep_results = prep_mmgbsa_from_sdfs(
             [str(p) for p in sdfs],
             cfg=cfg,
-            max_ligands=max_ligands_override,
+            max_ligands=0,
             force=force,
             amber_prefix=amber_prefix,
         )
@@ -2568,58 +3044,220 @@ def _maybe_run_mmgbsa_for_pdb(
                     )
                     continue
 
-                traj_result = make_mmgbsa_trajectory(
-                    complex_prmtop=topo["complex_prmtop"],
-                    complex_inpcrd=topo["complex_inpcrd"],
-                    out_dir=str(out_dir),
-                    cfg=cfg,
-                    force=force,
-                    run_cpptraj=_to_bool(cfg.get("MMGBSA_CPPTRAJ_RUN", True)),
-                )
-                traj_path = Path(traj_result.get("trajout_path") or "")
-                if not traj_path.exists() or traj_path.stat().st_size == 0:
-                    default_traj = str(cfg.get("MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd")
-                    candidate = out_dir / default_traj
-                    if candidate.exists() and candidate.stat().st_size > 0:
-                        traj_path = candidate
+                if not md_enabled:
+                    traj_result = make_mmgbsa_trajectory(
+                        complex_prmtop=topo["complex_prmtop"],
+                        complex_inpcrd=topo["complex_inpcrd"],
+                        out_dir=str(out_dir),
+                        cfg=cfg,
+                        force=force,
+                        run_cpptraj=_to_bool(cfg.get("MMGBSA_CPPTRAJ_RUN", True)),
+                    )
+                    traj_path = Path(traj_result.get("trajout_path") or "")
+                    if not traj_path.exists() or traj_path.stat().st_size == 0:
+                        default_traj = str(cfg.get("MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd")
+                        candidate = out_dir / default_traj
+                        if candidate.exists() and candidate.stat().st_size > 0:
+                            traj_path = candidate
+                        else:
+                            notes = "missing_trajectory"
+                            _mmgbsa_append_summary(
+                                summary_path,
+                                {
+                                    "stage_dir": stage_dir,
+                                    "ligand_stem": ligand_stem,
+                                    "delta_total": "",
+                                    "results_csv": "",
+                                    "ok": False,
+                                    "notes": notes,
+                                },
+                            )
+                            continue
+
+                    mmpbsa_result = run_mmgbsa(
+                        complex_prmtop=topo["complex_prmtop"],
+                        receptor_prmtop=topo["receptor_prmtop"],
+                        ligand_prmtop=topo["ligand_prmtop"],
+                        trajectory_path=str(traj_path),
+                        work_dir=str(out_dir),
+                        cfg=cfg,
+                        force=force,
+                        run=_to_bool(cfg.get("MMGBSA_MMPBSA_RUN", True)),
+                    )
+
+                    results_csv = mmpbsa_result.get("out_csv", "")
+                    results_dat = mmpbsa_result.get("out_dat", "")
+                    if not mmpbsa_result.get("enabled", True):
+                        notes = "mmpbsa_disabled"
                     else:
-                        notes = "missing_trajectory"
-                        _mmgbsa_append_summary(
-                            summary_path,
-                            {
-                                "stage_dir": stage_dir,
-                                "ligand_stem": ligand_stem,
-                                "delta_total": "",
-                                "results_csv": "",
-                                "ok": False,
-                                "notes": notes,
-                            },
-                        )
-                        continue
-
-                mmpbsa_result = run_mmgbsa(
-                    complex_prmtop=topo["complex_prmtop"],
-                    receptor_prmtop=topo["receptor_prmtop"],
-                    ligand_prmtop=topo["ligand_prmtop"],
-                    trajectory_path=str(traj_path),
-                    work_dir=str(out_dir),
-                    cfg=cfg,
-                    force=force,
-                    run=_to_bool(cfg.get("MMGBSA_MMPBSA_RUN", True)),
-                )
-
-                results_csv = mmpbsa_result.get("out_csv", "")
-                results_dat = mmpbsa_result.get("out_dat", "")
-                if not mmpbsa_result.get("enabled", True):
-                    notes = "mmpbsa_disabled"
+                        if results_csv and results_dat and Path(results_csv).exists() and Path(results_dat).exists():
+                            delta_val = _mmgbsa_parse_delta_total(Path(results_csv))
+                            if delta_val is not None:
+                                delta_total = f"{delta_val:.6g}"
+                            ok = True
+                        else:
+                            notes = "missing_outputs"
                 else:
-                    if results_csv and results_dat and Path(results_csv).exists() and Path(results_dat).exists():
-                        delta_val = _mmgbsa_parse_delta_total(Path(results_csv))
-                        if delta_val is not None:
-                            delta_total = f"{delta_val:.6g}"
+                    rep_seeds = _mmgbsa_md_seed_list(cfg, md_reps, logger)
+                    rep_results: List[Dict[str, object]] = []
+                    for rep_idx, seed in enumerate(rep_seeds, start=1):
+                        rep_dir = out_dir / f"rep{rep_idx}"
+                        md_result = run_implicit_md(
+                            complex_prmtop=topo["complex_prmtop"],
+                            complex_inpcrd=topo["complex_inpcrd"],
+                            out_dir=str(out_dir),
+                            cfg=cfg,
+                            replicate_index=rep_idx,
+                            seed=int(seed),
+                            force=force,
+                            run=True,
+                        )
+                        traj_path = Path(md_result.get("traj_path") or "")
+                        rep_notes = ""
+                        rep_ok = False
+                        rep_delta = None
+                        rep_csv = ""
+                        rep_dat = ""
+                        rep_log = ""
+
+                        if not md_result.get("ok"):
+                            rep_notes = "md_failed"
+                        elif not traj_path.exists() or traj_path.stat().st_size == 0:
+                            rep_notes = "missing_trajectory"
+                        else:
+                            try:
+                                mmpbsa_result = run_mmgbsa(
+                                    complex_prmtop=topo["complex_prmtop"],
+                                    receptor_prmtop=topo["receptor_prmtop"],
+                                    ligand_prmtop=topo["ligand_prmtop"],
+                                    trajectory_path=str(traj_path),
+                                    work_dir=str(rep_dir),
+                                    cfg=cfg,
+                                    force=force,
+                                    run=_to_bool(cfg.get("MMGBSA_MMPBSA_RUN", True)),
+                                )
+                                rep_csv = mmpbsa_result.get("out_csv", "")
+                                rep_dat = mmpbsa_result.get("out_dat", "")
+                                rep_log = mmpbsa_result.get("log_path", "")
+                                if not mmpbsa_result.get("enabled", True):
+                                    rep_notes = "mmpbsa_disabled"
+                                elif rep_csv and rep_dat and Path(rep_csv).exists() and Path(rep_dat).exists():
+                                    delta_val = _mmgbsa_parse_delta_total(Path(rep_csv))
+                                    if delta_val is not None:
+                                        rep_delta = float(delta_val)
+                                        rep_ok = True
+                                    else:
+                                        rep_notes = "missing_delta"
+                                else:
+                                    rep_notes = "missing_outputs"
+                            except Exception as exc:
+                                rep_notes = f"mmpbsa_error:{type(exc).__name__}"
+                                logger.warning(
+                                    "[mmgbsa.pipeline] md_replicate_failed pdb=%s variant=%s ph=%s stage=%s ligand=%s rep=%d err=%s",
+                                    pdb_id,
+                                    variant_dir,
+                                    ph_label,
+                                    stage_dir,
+                                    ligand_stem,
+                                    rep_idx,
+                                    exc,
+                                )
+                                if strict:
+                                    raise
+
+                        rep_results.append(
+                            {
+                                "replicate": rep_idx,
+                                "seed": seed,
+                                "ok": rep_ok,
+                                "delta_total": rep_delta,
+                                "results_csv": rep_csv,
+                                "results_dat": rep_dat,
+                                "log_path": rep_log,
+                                "traj_path": str(traj_path),
+                                "work_dir": str(rep_dir),
+                                "notes": rep_notes,
+                            }
+                        )
+
+                    ok_reps = [r for r in rep_results if r.get("ok")]
+                    n_ok = len(ok_reps)
+                    agg_delta_val = _mmgbsa_md_aggregate(
+                        [float(r["delta_total"]) for r in ok_reps if r.get("delta_total") is not None],
+                        md_rep_agg,
+                    )
+                    if agg_delta_val is not None:
+                        delta_total = f"{agg_delta_val:.6g}"
                         ok = True
                     else:
-                        notes = "missing_outputs"
+                        ok = False
+
+                    best_rep = None
+                    if ok_reps:
+                        if md_rep_agg == "min":
+                            best_rep = min(ok_reps, key=lambda r: (r.get("delta_total", 0), r.get("replicate", 0)))
+                        elif md_rep_agg == "median":
+                            best_rep = min(
+                                ok_reps,
+                                key=lambda r: (abs(float(r.get("delta_total", 0)) - float(agg_delta_val or 0)), r.get("replicate", 0)),
+                            )
+                        else:
+                            best_rep = min(
+                                ok_reps,
+                                key=lambda r: (abs(float(r.get("delta_total", 0)) - float(agg_delta_val or 0)), r.get("replicate", 0)),
+                            )
+
+                    if best_rep:
+                        results_csv = str(best_rep.get("results_csv", ""))
+                    notes = f"md_reps_ok={n_ok}/{len(rep_results)} agg={md_rep_agg}"
+
+                    replicate_summary = {
+                        "ok": ok,
+                        "n_reps_total": len(rep_results),
+                        "n_reps_ok": n_ok,
+                        "agg_method": md_rep_agg,
+                        "agg_delta": agg_delta_val,
+                        "best_replicate": best_rep,
+                        "replicates": rep_results,
+                    }
+                    summary_json = out_dir / "mmgbsa_replicate_summary.json"
+                    try:
+                        tmp_json = summary_json.with_suffix(".json.part")
+                        with tmp_json.open("w", encoding="utf-8") as handle:
+                            json.dump(replicate_summary, handle, indent=2, sort_keys=True)
+                        os.replace(tmp_json, summary_json)
+                    except Exception as exc:
+                        logger.warning(
+                            "[mmgbsa.pipeline] md_replicate_summary_failed pdb=%s variant=%s ph=%s stage=%s ligand=%s err=%s",
+                            pdb_id,
+                            variant_dir,
+                            ph_label,
+                            stage_dir,
+                            ligand_stem,
+                            exc,
+                        )
+
+                    if md_copy_best and best_rep:
+                        for filename in ("FINAL_RESULTS_MMPBSA.dat", "FINAL_RESULTS_MMPBSA.csv", "mmpbsa.log", "mmpbsa.in"):
+                            src = Path(best_rep.get("work_dir", "")) / filename
+                            dest = out_dir / filename
+                            if not src.exists():
+                                continue
+                            if dest.exists() and not force:
+                                continue
+                            try:
+                                shutil.copy2(src, dest)
+                            except Exception as exc:
+                                logger.warning(
+                                    "[mmgbsa.pipeline] md_copy_best_failed pdb=%s variant=%s ph=%s stage=%s ligand=%s file=%s err=%s",
+                                    pdb_id,
+                                    variant_dir,
+                                    ph_label,
+                                    stage_dir,
+                                    ligand_stem,
+                                    filename,
+                                    exc,
+                                )
 
             except Exception as exc:
                 notes = f"error:{type(exc).__name__}"
@@ -2646,6 +3284,17 @@ def _maybe_run_mmgbsa_for_pdb(
                     "ok": ok,
                     "notes": notes,
                 },
+            )
+
+        if agg_enabled:
+            agg_path = mmgbsa_dir / agg_output_name
+            _mmgbsa_write_pose_aggregate(
+                summary_path=summary_path,
+                out_path=agg_path,
+                stage_dir_label=stage_dir_label,
+                pose_group_regexes=pose_group_regexes,
+                agg_method=agg_method,
+                logger=logger,
             )
 
         logger.info(

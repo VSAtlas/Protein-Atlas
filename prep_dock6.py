@@ -612,9 +612,17 @@ def ensure_dock6_surface(
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
     variant_token = (str(variant).strip().upper() or None) if variant is not None else None
     variant_for_ph = prep_for_ledock._variant_for_ph(variant_token, legacy_mode)
-    ph_token = prep_for_ledock._normalize_ph_label(ph_label)
-    if not ph_token:
+    ph_raw = prep_for_ledock._normalize_ph_label(ph_label)
+    if not ph_raw:
         logger.warning("[dock6.surface.skip] reason=missing_ph_label pdb=%s", pdb_id)
+        return None
+    ph_key = prep_for_ledock._canonicalize_ph_key(ph_raw, pdb_id)
+    if not ph_key:
+        logger.warning(
+            "[dock6.surface.skip] reason=invalid_ph_label pdb=%s raw=%s",
+            pdb_id,
+            ph_raw,
+        )
         return None
 
     if bool(cfg.get("FAST_MODE")):
@@ -624,11 +632,11 @@ def ensure_dock6_surface(
 
     ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
     withh_path = prep_for_ledock._resolve_withh_from_manifest(
-        ensemble_dir, pdb_id, ph_token, logger
+        ensemble_dir, pdb_id, ph_key, logger
     )
     if withh_path is None:
         prefix = f"{str(pdb_id).upper()}_"
-        fallback_label = ph_token
+        fallback_label = ph_key
         if not fallback_label.startswith(prefix):
             fallback_label = f"{prefix}{fallback_label}"
         candidate = ensemble_dir / f"{fallback_label}.withH.pdb"
@@ -638,7 +646,7 @@ def ensure_dock6_surface(
             logger.warning(
                 "[dock6.surface.skip] reason=withH_missing pdb=%s ph=%s dir=%s",
                 pdb_id,
-                ph_token,
+                ph_raw,
                 ensemble_dir,
             )
             return None
@@ -693,7 +701,7 @@ def ensure_dock6_surface(
             "[dock6.surface.reuse] pdb=%s variant=%s ph=%s noH=%s ms=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_raw,
             noH_path,
             ms_path,
         )
@@ -704,7 +712,7 @@ def ensure_dock6_surface(
                 "[dock6.surface.sphgen.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
                 pdb_id,
                 variant_for_ph or "HOLO",
-                ph_token,
+                ph_raw,
                 dock6_root,
                 exc,
             )
@@ -730,20 +738,20 @@ def ensure_dock6_surface(
                 _build_grids_once()
             except Exception as exc:
                 logger.error(
-                    "[dock6.surface.grid.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
-                    pdb_id,
-                    variant_for_ph or "HOLO",
-                    ph_token,
-                    dock6_root,
-                    exc,
-                )
-                return None
+                "[dock6.surface.grid.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
+                pdb_id,
+                variant_for_ph or "HOLO",
+                ph_raw,
+                dock6_root,
+                exc,
+            )
+            return None
         except Exception as exc:
             logger.error(
                 "[dock6.surface.site.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
                 pdb_id,
                 variant_for_ph or "HOLO",
-                ph_token,
+                ph_raw,
                 dock6_root,
                 exc,
             )
@@ -779,7 +787,7 @@ def ensure_dock6_surface(
             "[dock6.surface.dms.error] pdb=%s variant=%s ph=%s exe=%s cwd=%s reason=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_raw,
             dms_exe,
             dms_cwd,
             exc,
@@ -791,7 +799,7 @@ def ensure_dock6_surface(
             "[dock6.surface.dms.empty] pdb=%s variant=%s ph=%s path=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_raw,
             ms_path,
         )
         return None
@@ -803,7 +811,7 @@ def ensure_dock6_surface(
             "[dock6.surface.sphgen.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_raw,
             dock6_root,
             exc,
         )
@@ -833,7 +841,7 @@ def ensure_dock6_surface(
                 "[dock6.surface.grid.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
                 pdb_id,
                 variant_for_ph or "HOLO",
-                ph_token,
+                ph_raw,
                 dock6_root,
                 exc,
             )
@@ -843,7 +851,7 @@ def ensure_dock6_surface(
             "[dock6.surface.site.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
             pdb_id,
             variant_for_ph or "HOLO",
-            ph_token,
+            ph_raw,
             dock6_root,
             exc,
         )
@@ -852,7 +860,7 @@ def ensure_dock6_surface(
         "[dock6.surface.ready] pdb=%s variant=%s ph=%s noH=%s ms=%s",
         pdb_id,
         variant_for_ph or "HOLO",
-        ph_token,
+        ph_raw,
         noH_path,
         ms_path,
     )

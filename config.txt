@@ -66,7 +66,7 @@ BABEL_DATADIR=
 
 FPOCKET_EXE=/home/michael/atlas/tools/fpocket/bin/fpocket
 
-USE_PROTEIN_DRUGGABILITY = true
+USE_PROTEIN_DRUGGABILITY = false
 
 DRUGGABILITY_TIER_A_DRUGGABILITY_MIN = 0.90
 DRUGGABILITY_TIER_A_OPENNESS_MAX     = 0.55
@@ -130,6 +130,15 @@ WATER_KEEP_POLICY = "near_controls"
 #NOTE near center = center of active site, keep in mind
 # with active site recentering, this may not retain the exact waters you want if the site moves too much!!!!
 #CURRENTLY this value actually does nothing, but it will
+# -------------------------------
+# MMGBSA overview
+# -------------------------------
+# ONEFRAME mode = single-point rescoring: complex.inpcrd -> 1-frame trajectory -> MMPBSA on that one snapshot.
+# Multi-frame requires either:
+#   (A) IMPLICIT_MD mode to GENERATE a real multi-frame trajectory, or
+#   (B) an EXTERNAL multi-frame trajectory that already exists.
+#
+# Important: "use all frames" cannot create frames; it only controls how many frames MMPBSA reads from an existing trajectory.
 
 # ---- MMGBSA receptor prep ----
 MMGBSA_STRIP_METALS = true
@@ -137,43 +146,83 @@ MMGBSA_WATER_POLICY = ACTIVE_SITE
 MMGBSA_WATER_KEEP_RADIUS_A = 6.0
 MMGBSA_WATER_USE_ALIASES = true
 MMGBSA_METAL_USE_ALIASES = true
+
+# ---- Topology / tleap ----
 MMGBSA_TOPOLOGY_PREP_ENABLED = true
 MMGBSA_TLEAP_RUN = true
 MMGBSA_TOPOLOGY_DIRNAME = mmgbsa_topologies
 MMGBSA_AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
-MMGBSA_CPPTRAJ_ENABLED = true
-MMGBSA_CPPTRAJ_RUN = true
-MMGBSA_TRAJOUT_NAME = mdcrd
-MMGBSA_TRAJOUT_FORMAT = mdcrd
-MMGBSA_TRAJIN_SOURCE = INPCRD
-MMGBSA_TRAJIN_PATH =
-MMGBSA_TRAJIN_FORMAT = inpcrd
-MMGBSA_TRAJ_STARTFRAME = 1
-MMGBSA_TRAJ_ENDFRAME = 1
-MMGBSA_TRAJ_INTERVAL = 1
-MMGBSA_MMPBSA_ENABLED = true
-MMGBSA_MMPBSA_RUN = true
-MMGBSA_MMPBSA_STARTFRAME = 1
-MMGBSA_MMPBSA_ENDFRAME = 1
-MMGBSA_MMPBSA_INTERVAL = 1
-MMGBSA_MMPBSA_VERBOSE = 2
+
+# ---- Trajectory + MMPBSA (minimal) ----
+MMGBSA_MD_ENABLED = true
+MMGBSA_MD_TEMP0 = 300
+MMGBSA_MD_HEAT_PS = 10
+MMGBSA_MD_EQUIL_PS = 20
+MMGBSA_MD_PROD_PS = 100
+MMGBSA_MD_FRAME_STRIDE_PS = 2
+MMGBSA_MD_NREPLICATES = 1
+MMGBSA_MD_BASE_SEED = 12345
+MMGBSA_MD_SEED_MODE = increment
+MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY = true
+MMGBSA_MD_RESTRAINT_WT = 5.0
+MMGBSA_MD_RESTRAINT_MASK = :1-999999 & !@H=
+
 MMGBSA_GB_IGB = 5
 MMGBSA_GB_SALTCON = 0.150
-MMGBSA_MMPBSA_INPUT_NAME = mmpbsa.in
-MMGBSA_MMPBSA_LOG_NAME = mmpbsa.log
-MMGBSA_MMPBSA_OUT_DAT = FINAL_RESULTS_MMPBSA.dat
-MMGBSA_MMPBSA_OUT_CSV = FINAL_RESULTS_MMPBSA.csv
-MMGBSA_DEFAULT_TRAJ_NAME = mdcrd
+MMGBSA_MMPBSA_INTERVAL = 1
+
+# ---- Trajectory + MMPBSA (advanced, rarely needed) ----
+# MMGBSA_TRAJ_MODE = ONEFRAME
+# MMGBSA_MD_RUN = false
+# MMGBSA_MD_ENGINE = sander
+# MMGBSA_MD_DT_PS = 0.002
+# MMGBSA_MD_NTT = 3
+# MMGBSA_MD_GAMMA_LN = 2.0
+# MMGBSA_MD_NTC = 2
+# MMGBSA_MD_NTF = 2
+# MMGBSA_MD_TRAJ_FORMAT = nc
+# MMGBSA_MD_TRAJ_NAME = prod.nc
+# MMGBSA_MD_IGB = 5
+# MMGBSA_MD_SALTCON = 0.150
+# MMGBSA_MMPBSA_USE_TRAJ_FRAMES = true
+# MMGBSA_MD_REP_AGG = mean
+# MMGBSA_MD_COPY_BEST_REPLICATE = false
+# MMGBSA_MMPBSA_ENABLED = true
+# MMGBSA_MMPBSA_RUN = true
+# MMGBSA_MMPBSA_STARTFRAME = 1
+# MMGBSA_MMPBSA_ENDFRAME = 1
+# MMGBSA_MMPBSA_VERBOSE = 2
+# MMGBSA_MMPBSA_INPUT_NAME = mmpbsa.in
+# MMGBSA_MMPBSA_LOG_NAME = mmpbsa.log
+# MMGBSA_MMPBSA_OUT_DAT = FINAL_RESULTS_MMPBSA.dat
+# MMGBSA_MMPBSA_OUT_CSV = FINAL_RESULTS_MMPBSA.csv
+# MMGBSA_DEFAULT_TRAJ_NAME = mdcrd
+# MMGBSA_CPPTRAJ_ENABLED = true
+# MMGBSA_CPPTRAJ_RUN = true
+# MMGBSA_TRAJOUT_NAME = mdcrd
+# MMGBSA_TRAJOUT_FORMAT = mdcrd
+# MMGBSA_TRAJIN_SOURCE = INPCRD
+# MMGBSA_TRAJIN_PATH =
+# MMGBSA_TRAJIN_FORMAT = inpcrd
+# MMGBSA_TRAJ_STARTFRAME = 1
+# MMGBSA_TRAJ_ENDFRAME = 1
+# MMGBSA_TRAJ_INTERVAL = 1
+# ---- Global MMGBSA toggles & retention rules (often redundant with earlier keys) ----
 MMGBSA_ENABLED = true
+
 MMGBSA_KEEP_WATERS = true
 MMGBSA_WATER_KEEP_RADIUS = 6.0
+
 MMGBSA_KEEP_METALS = false
 MMGBSA_METAL_RETAIN_TOKENS =
 MMGBSA_WATER_RETAIN_TOKENS =
+
 MMGBSA_RECEPTOR_FORCE = false
 MMGBSA_FORCE = false
 MMGBSA_STRICT = false
+
+# ---- Ligand parameterization (antechamber/parmchk2) ----
 MMGBSA_LIGAND_AT = gaff2
 MMGBSA_LIGAND_CHARGE_METHOD = bcc
 MMGBSA_LIGAND_PRIMARY_CHARGE_METHOD = bcc
@@ -182,16 +231,26 @@ MMGBSA_LIGAND_NOMINAL_NET_CHARGE = auto
 MMGBSA_LIGAND_BCC_CHARGE_SWEEP = -1,1
 MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2 = false
 MMGBSA_LIGAND_FORCE = false
+
 MMGBSA_RDKit_VALIDATE = true
 MMGBSA_RDKit_RADICAL_LOWCONF_THRESHOLD = 1
 MMGBSA_LIGAND_NET_CHARGE = auto
 MMGBSA_LIGAND_SQM_LEVEL = 2
+
+# ---- Which ligands to run MMGBSA on ----
 MMGBSA_INPUT_STAGE_DIR = stage1
-MMGBSA_MAX_LIGANDS = 1
+MMGBSA_MAX_LIGANDS = 100
 MMGBSA_RERANKED_TOP_PCT = 5.0
+
 MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK = 6.0
+
 MMGBSA_TLEAP_ENABLED = true
 MMGBSA_TLEAP_FORCE = false
+MMGBSA_TLEAP_STRIP_NTERM_H = true
+MMGBSA_TLEAP_INSERT_TER_ON_CHAINBREAK = true
+MMGBSA_TLEAP_CHAINBREAK_CN_MAX_A = 2.2
+
+# ---- MMPBSA input block defaults (mirrors &general) ----
 MMGBSA_GENERAL_STARTFRAME = 1
 MMGBSA_GENERAL_ENDFRAME = 1
 MMGBSA_GENERAL_INTERVAL = 1
@@ -210,8 +269,8 @@ CTRL_REDOCK_NMODES =9
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
 USE_GNINA = false
-USE_LEDOCK = false
-USE_DOCK6 = false
+USE_LEDOCK = true
+USE_DOCK6 = true
 USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
@@ -409,7 +468,7 @@ TEST_LIBRARY_MAP = {
     "3M2W": "mapk2",
     "2AA2": "mcr",
     "3LQ8": "met",
-    "2OJG": "mk01",
+    "2OJG": "test_library_20", #should be mk01
     "2ZDT": "mk10",
     "2QD9": "mk14",
     "830C": "mmp13",

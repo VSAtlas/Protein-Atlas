@@ -111,6 +111,31 @@ def _cfg_first(cfg: object | None, keys: Sequence[str], default: object) -> obje
     return default
 
 
+def _cfg_has_value(cfg: object | None, key: str) -> bool:
+    if cfg is None:
+        return False
+    if isinstance(cfg, dict):
+        if key not in cfg:
+            return False
+        return str(cfg.get(key)).strip() != ""
+    try:
+        val = cfg.get(key, None)
+    except Exception:
+        val = getattr(cfg, key, None)
+    if val is None:
+        return False
+    return str(val).strip() != ""
+
+
+def _mmgbsa_effective_md_enabled(cfg: object | None) -> bool:
+    if _cfg_has_value(cfg, "MMGBSA_MD_ENABLED"):
+        return _to_bool(_cfg_get(cfg, "MMGBSA_MD_ENABLED", False), default=False)
+    traj_mode = str(_cfg_get(cfg, "MMGBSA_TRAJ_MODE", "") or "").strip().upper()
+    if traj_mode == "IMPLICIT_MD":
+        return True
+    return _to_bool(_cfg_get(cfg, "MMGBSA_MD_RUN", False), default=False)
+
+
 def _looks_like_pkgs_cache(prefix: Path) -> bool:
     return "/micromamba/pkgs" in prefix.as_posix()
 
@@ -275,6 +300,15 @@ def run_mmgbsa(
     igb = _to_int(_cfg_get(cfg, "MMGBSA_GB_IGB", 5), 5)
     saltcon = _to_float(_cfg_get(cfg, "MMGBSA_GB_SALTCON", 0.150), 0.150)
 
+    if _cfg_has_value(cfg, "MMGBSA_MMPBSA_USE_TRAJ_FRAMES"):
+        use_traj_frames = _to_bool(_cfg_get(cfg, "MMGBSA_MMPBSA_USE_TRAJ_FRAMES", True), default=True)
+    else:
+        use_traj_frames = _mmgbsa_effective_md_enabled(cfg)
+    if use_traj_frames:
+        startframe = 1
+        endframe = 999999
+        interval = 1
+
     input_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_INPUT_NAME", "mmpbsa.in") or "mmpbsa.in")
     log_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_LOG_NAME", "mmpbsa.log") or "mmpbsa.log")
     out_dat_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat") or "FINAL_RESULTS_MMPBSA.dat")
@@ -331,6 +365,8 @@ def run_mmgbsa(
             "out_dat": out_dat_path,
             "out_csv": out_csv_path,
             "traj": traj_path,
+            "frames": f"{startframe}-{endframe}:{interval}",
+            "use_traj_frames": use_traj_frames,
             "run": run_flag,
         },
         "mmpbsa_plan",
