@@ -59,3 +59,21 @@ fpocket_out/
 # large/generated
 /DeepCoy_duds/
 /fpocket/
+
+# DeepCoy_duds: track code/config, ignore generated/large artifacts
+DeepCoy_duds/data/
+DeepCoy_duds/deepcoy_work/
+DeepCoy_duds/extracted_ligands/
+DeepCoy_duds/examples/
+
+# --- DeepCoy_duds: track folder, ignore only heavy subdirs ---
+!DeepCoy_duds/
+!DeepCoy_duds/**
+DeepCoy_duds/data/
+DeepCoy_duds/deepcoy_work/
+DeepCoy_duds/extracted_ligands/
+DeepCoy_duds/examples/
+
+# ignore huge installers
+/DeepCoy_duds/Miniconda3-latest-Linux-x86_64.sh
+/DeepCoy_duds/Anaconda3-2022.05-Linux-x86_64.sh

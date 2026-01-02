@@ -1,0 +1,14 @@
+[
+  {
+    "standard_type": "Ki",
+    "standard_units": "nM",
+    "standard_value": "10",
+    "molecule_chembl_id": "CHEMBL1"
+  },
+  {
+    "standard_type": "Kd",
+    "standard_units": "nM",
+    "standard_value": "20000",
+    "molecule_chembl_id": "CHEMBL2"
+  }
+]

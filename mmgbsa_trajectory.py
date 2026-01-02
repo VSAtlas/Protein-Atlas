@@ -15,6 +15,7 @@ from installation import load_config
 
 _COMPONENT = "mmgbsa.cpptraj"
 _COMPONENT_MD = "mmgbsa.md"
+_MPI_SMOKE_CACHE: Dict[Tuple[str, str], Dict[str, object]] = {}
 
 
 def _get_logger() -> logging.Logger:
@@ -137,6 +138,34 @@ def _resolve_micromamba() -> Optional[Path]:
     return Path(found) if found else None
 
 
+def _available_cpus() -> int:
+    try:
+        return len(os.sched_getaffinity(0))
+    except Exception:
+        return os.cpu_count() or 1
+
+
+def _physical_core_count() -> int:
+    cpuinfo = Path("/proc/cpuinfo")
+    if not cpuinfo.exists():
+        return 0
+    try:
+        physical_cores = set()
+        for block in cpuinfo.read_text(encoding="utf-8", errors="ignore").split("\n\n"):
+            phys_id = None
+            core_id = None
+            for line in block.splitlines():
+                if line.startswith("physical id"):
+                    phys_id = line.split(":", 1)[1].strip()
+                elif line.startswith("core id"):
+                    core_id = line.split(":", 1)[1].strip()
+            if phys_id is not None and core_id is not None:
+                physical_cores.add((phys_id, core_id))
+        return len(physical_cores) or 0
+    except Exception:
+        return 0
+
+
 def _resolve_ambertools_prefix(cfg: object | None) -> Optional[str]:
     env_prefix = os.environ.get("AMBERTOOLS_PREFIX")
     if env_prefix:
@@ -197,7 +226,7 @@ def _select_cpptraj_runner(logger: logging.Logger, cfg: object | None) -> Tuple[
 
 def _select_sander_runner(
     logger: logging.Logger, cfg: object | None, prefer_mpi: bool = True
-) -> Tuple[Sequence[str], str, str]:
+) -> Tuple[Sequence[str], str, str, Optional[Path]]:
     prefix_value = _resolve_ambertools_prefix(cfg)
     tool_order = ("sander.MPI", "sander") if prefer_mpi else ("sander", "sander.MPI")
     if prefix_value:
@@ -216,7 +245,7 @@ def _select_sander_runner(
                     if not micromamba:
                         raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
                     runner = [str(micromamba), "run", "-p", str(prefix)]
-                    return runner, tool, f"prefix:{prefix}"
+                    return runner, str((prefix / "bin" / tool)), f"prefix:{prefix}", prefix
             _log(
                 logger,
                 "WARNING",
@@ -227,7 +256,7 @@ def _select_sander_runner(
     for tool in tool_order:
         tool_path = shutil.which(tool)
         if tool_path:
-            return [], tool_path, "PATH"
+            return [], tool_path, "PATH", None
 
     common_prefixes = [
         Path("/home/atlas/micromamba/envs/AmberTools25"),
@@ -240,13 +269,13 @@ def _select_sander_runner(
             if not micromamba:
                 raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
             runner = [str(micromamba), "run", "-p", str(prefix)]
-            return runner, tool_order[0], f"prefix:{prefix}"
+            return runner, str((prefix / "bin" / tool_order[0])), f"prefix:{prefix}", prefix
         if _prefix_has_tool(prefix, tool_order[1]) and not _looks_like_pkgs_cache(prefix):
             micromamba = _resolve_micromamba()
             if not micromamba:
                 raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
             runner = [str(micromamba), "run", "-p", str(prefix)]
-            return runner, tool_order[1], f"prefix:{prefix}"
+            return runner, str((prefix / "bin" / tool_order[1])), f"prefix:{prefix}", prefix
 
     raise FileNotFoundError("could not locate sander; set AMBERTOOLS_PREFIX or PATH")
 
@@ -280,15 +309,132 @@ def _select_mpi_launcher() -> Tuple[str, str]:
 
 
 def _resolve_mpi_ranks(cfg: object | None) -> int:
-    cpu_count = os.cpu_count() or 1
+    cpu_available = _available_cpus()
+    cpu_physical = _physical_core_count()
+    capacity = cpu_physical if cpu_physical > 0 else cpu_available
+    cpu_cfg = _to_int(_cfg_get(cfg, "CPU", 0), 0)
     raw = _cfg_get(cfg, "MMGBSA_MD_MPI_RANKS", "auto")
     if raw is None or str(raw).strip().lower() == "auto":
-        cpu_limit = _resolve_global_cpu_limit(cfg)
-        if cpu_limit and cpu_limit > 0:
-            return max(1, min(cpu_limit, cpu_count))
-        return max(1, min(8, cpu_count))
+        limit = cpu_cfg if cpu_cfg > 0 else capacity
+        return max(1, min(limit, capacity))
     ranks = _to_int(raw, 1)
-    return max(1, min(ranks, cpu_count))
+    cpu_cap = cpu_cfg if cpu_cfg > 0 else capacity
+    return max(1, min(ranks, cpu_cap))
+
+
+def _select_mpi_launcher(
+    logger: logging.Logger,
+    cfg: object | None,
+    prefer: Sequence[str] = ("mpirun", "mpiexec"),
+) -> Tuple[str, str]:
+    prefix_value = _resolve_ambertools_prefix(cfg)
+    micromamba = _resolve_micromamba()
+    prefix_path = Path(prefix_value).expanduser() if prefix_value else None
+
+    def _valid(path: Path) -> bool:
+        return path.is_file() and os.access(path, os.X_OK)
+
+    if prefix_path:
+        for name in prefer:
+            candidate = prefix_path / "bin" / name
+            if _valid(candidate):
+                return str(candidate), "prefix"
+
+    if prefix_path and micromamba:
+        for name in prefer:
+            try:
+                proc = subprocess.run(
+                    [str(micromamba), "run", "-p", str(prefix_path), "bash", "-lc", f"command -v {name}"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                found = (proc.stdout or "").strip().splitlines()
+                if not found:
+                    continue
+                path = Path(found[0]).resolve()
+                if _valid(path) and prefix_path in path.parents:
+                    return str(path), "prefix-shell"
+            except Exception:
+                continue
+
+    _log(
+        logger,
+        "WARNING",
+        {"reason": "mpi_launcher_missing", "fallback": "serial"},
+        "md_mpi_launcher_unavailable",
+        component=_COMPONENT_MD,
+    )
+    return "", "missing"
+
+
+def _run_mpi_smoke(
+    logger: logging.Logger,
+    launcher: str,
+    sander_path: str,
+    amber_prefix: Optional[Path],
+    micromamba: Optional[Path],
+    base_dir: Path,
+    ranks: int,
+) -> Dict[str, object]:
+    key = (launcher, sander_path)
+    cached = _MPI_SMOKE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    smoke_dir = base_dir / "_mpi_smoke"
+    smoke_dir.mkdir(parents=True, exist_ok=True)
+    log_path = smoke_dir / "mpi_smoke.log"
+    cmd_path = smoke_dir / "mpi_smoke.cmd.txt"
+
+    cmd: List[str] = []
+    if amber_prefix and micromamba:
+        cmd.extend([str(micromamba), "run", "-p", str(amber_prefix)])
+    cmd.extend([launcher, "-np", str(max(1, min(2, ranks))), sander_path, "-h"])
+
+    cmd_path.write_text(" ".join(cmd), encoding="utf-8")
+    with log_path.open("w", encoding="utf-8") as handle:
+        proc = subprocess.run(cmd, stdout=handle, stderr=subprocess.STDOUT, cwd=str(smoke_dir))
+
+    log_text = ""
+    try:
+        log_text = log_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        log_text = ""
+    usage_ok = "usage: sander" in log_text.lower()
+
+    result = {
+        "ok": proc.returncode == 0 or usage_ok,
+        "returncode": proc.returncode,
+        "log": str(log_path),
+        "cmd": " ".join(cmd),
+        "usage_ok": usage_ok,
+    }
+    _MPI_SMOKE_CACHE[key] = result
+    if not result["ok"]:
+        _log(
+            logger,
+            "WARNING",
+            {
+                "reason": "mpi_smoke_failed",
+                "rc": proc.returncode,
+                "log": log_path,
+                "launcher": launcher,
+                "sander": sander_path,
+            },
+            "md_mpi_smoke_failed",
+            component=_COMPONENT_MD,
+        )
+    else:
+        _log(
+            logger,
+            "INFO",
+            {"launcher": launcher, "sander": sander_path, "log": log_path},
+            "md_mpi_smoke_ok",
+            component=_COMPONENT_MD,
+        )
+    return result
 
 
 def build_sander_inputs(cfg: object | None) -> Dict[str, str]:
@@ -629,14 +775,21 @@ def run_implicit_md(
         )
         return _result({"ok": False, "run": False, "skipped": True})
 
-    cmd_prefix, sander_bin, source = _select_sander_runner(logger, cfg)
+    def _extract(selection_obj: Sequence[object]) -> Tuple[Sequence[str], str, str, Optional[Path]]:
+        if len(selection_obj) == 3:
+            return selection_obj[0], selection_obj[1], selection_obj[2], None
+        return selection_obj  # type: ignore[return-value]
+
+    cmd_prefix, sander_bin, source, amber_prefix = _extract(_select_sander_runner(logger, cfg))
+    sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+    micromamba = _resolve_micromamba()
     mpi_launcher = ""
-    use_mpi = Path(sander_bin).name == "sander.MPI"
+    launcher_source = ""
+    use_mpi = Path(sander_path).name == "sander.MPI"
     mpi_ranks = 1
     if use_mpi:
         mpi_ranks = _resolve_mpi_ranks(cfg)
-        # MMGBSA ligands run serially in the pipeline, so MPI ranks stay within the per-ligand budget.
-        mpi_launcher, _ = _select_mpi_launcher()
+        mpi_launcher, launcher_source = _select_mpi_launcher(logger, cfg)
         if not mpi_launcher:
             _log(
                 logger,
@@ -645,15 +798,63 @@ def run_implicit_md(
                 "md_mpi_disabled",
                 component=_COMPONENT_MD,
             )
-            fallback_prefix, fallback_bin, fallback_source = _select_sander_runner(logger, cfg, prefer_mpi=False)
-            if Path(fallback_bin).name != "sander":
-                raise FileNotFoundError("mpirun/mpiexec not found and serial sander unavailable")
-            cmd_prefix, sander_bin, source = fallback_prefix, fallback_bin, fallback_source
+            cmd_prefix, sander_bin, source, amber_prefix = _extract(_select_sander_runner(logger, cfg, prefer_mpi=False))
+            sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
             use_mpi = False
             mpi_ranks = 1
+        else:
+            if amber_prefix and amber_prefix not in Path(mpi_launcher).resolve().parents:
+                _log(
+                    logger,
+                    "WARNING",
+                    {
+                        "reason": "launcher_outside_prefix",
+                        "launcher": mpi_launcher,
+                        "fallback": "serial",
+                        "source": source,
+                    },
+                    "md_mpi_disabled",
+                    component=_COMPONENT_MD,
+                )
+                cmd_prefix, sander_bin, source, amber_prefix = _extract(
+                    _select_sander_runner(logger, cfg, prefer_mpi=False)
+                )
+                sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+                use_mpi = False
+                mpi_ranks = 1
+                mpi_launcher = ""
+                launcher_source = "launcher_outside_prefix"
+            else:
+                smoke = _run_mpi_smoke(
+                    logger=logger,
+                    launcher=mpi_launcher,
+                    sander_path=sander_path,
+                    amber_prefix=amber_prefix,
+                    micromamba=micromamba,
+                    base_dir=base_dir,
+                    ranks=mpi_ranks,
+                )
+                if not smoke.get("ok", False):
+                    cmd_prefix, sander_bin, source, amber_prefix = _extract(
+                        _select_sander_runner(logger, cfg, prefer_mpi=False)
+                    )
+                    sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+                    use_mpi = False
+                    mpi_ranks = 1
+                    mpi_launcher = ""
+                    launcher_source = "smoke_failed"
+
     launcher_label = Path(mpi_launcher).name if mpi_launcher else "serial"
     engine_label = "sander.MPI" if use_mpi else "sander"
-    mpi_info.update({"engine": engine_label, "mpi_ranks": mpi_ranks if use_mpi else 1, "mpi_launcher": launcher_label})
+    mpi_info.update(
+        {
+            "engine": engine_label,
+            "mpi_ranks": mpi_ranks if use_mpi else 1,
+            "mpi_launcher": launcher_label,
+            "launcher_path": mpi_launcher or "serial",
+            "sander_path": sander_path,
+        }
+    )
     _log(
         logger,
         "INFO",
@@ -662,6 +863,9 @@ def run_implicit_md(
             "ranks": mpi_info["mpi_ranks"],
             "launcher": launcher_label,
             "source": source,
+            "launcher_source": launcher_source or source,
+            "launcher_path": mpi_launcher or "serial",
+            "sander": sander_path,
             "replicate": replicate_index,
             "ligand_parallel": "serial",
         },
@@ -680,13 +884,22 @@ def run_implicit_md(
         ("prod", "equil.rst7", "prod.rst7"),
     ]
 
+    env_runner: List[str] = []
+    if use_mpi:
+        if amber_prefix and micromamba:
+            env_runner = [str(micromamba), "run", "-p", str(amber_prefix)]
+        else:
+            env_runner = list(cmd_prefix)
+    else:
+        env_runner = list(cmd_prefix)
+
     for step_name, coord_in, coord_out in steps:
         out_file = f"{step_name}.out"
-        cmd = list(cmd_prefix)
+        cmd = list(env_runner)
         if use_mpi:
-            cmd.extend([mpi_launcher, "-np", str(mpi_info["mpi_ranks"]), sander_bin])
+            cmd.extend([mpi_launcher, "-np", str(mpi_info["mpi_ranks"]), sander_path])
         else:
-            cmd.append(sander_bin)
+            cmd.append(sander_path)
         cmd.extend(
             [
                 "-O",
@@ -707,6 +920,10 @@ def run_implicit_md(
         if restrain:
             cmd.extend(["-ref", inpcrd_rel])
 
+        cmd_txt = md_dir / f"{step_name}.cmd.txt"
+        launch_log = md_dir / f"{step_name}.launch.log"
+        cmd_txt.write_text(" ".join(cmd), encoding="utf-8")
+
         _log(
             logger,
             "INFO",
@@ -723,13 +940,29 @@ def run_implicit_md(
             component=_COMPONENT_MD,
         )
 
-        proc = subprocess.run(cmd, cwd=str(md_dir), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        with launch_log.open("w", encoding="utf-8") as handle:
+            proc = subprocess.run(cmd, cwd=str(md_dir), stdout=handle, stderr=subprocess.STDOUT)
 
         if proc.returncode != 0:
+            snippet = ""
+            try:
+                lines = launch_log.read_text(encoding="utf-8", errors="ignore").splitlines()
+                head = lines[:5]
+                tail = lines[-5:] if len(lines) > 5 else []
+                snippet = " | ".join([";".join(head), ";".join(tail)]) if head or tail else ""
+            except Exception:
+                snippet = ""
             _log(
                 logger,
                 "ERROR",
-                {"step": step_name, "rc": proc.returncode, "log": md_dir / out_file},
+                {
+                    "step": step_name,
+                    "rc": proc.returncode,
+                    "log": md_dir / out_file,
+                    "launcher_log": launch_log,
+                    "cmd": cmd_txt,
+                    "snippet": snippet,
+                },
                 "md_failed",
                 component=_COMPONENT_MD,
             )

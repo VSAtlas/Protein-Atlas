@@ -2407,6 +2407,7 @@ def _mmgbsa_parse_delta_total(csv_path: Path) -> Optional[float]:
 
     in_delta = False
     header = None
+    frame_values: List[float] = []
     for line in lines:
         stripped = line.strip()
         if not stripped:
@@ -2428,20 +2429,221 @@ def _mmgbsa_parse_delta_total(csv_path: Path) -> Optional[float]:
         except ValueError:
             return None
         if idx >= len(values):
-            return None
+            continue
         try:
-            return float(values[idx])
+            frame_values.append(float(values[idx]))
         except Exception:
-            return None
+            continue
+    if not frame_values:
+        return None
+    return float(frame_values[0])
+
+
+def _mmgbsa_parse_delta_frames(csv_path: Path) -> Dict[str, object]:
+    result = {
+        "frame_values": [],
+        "n_frames": 0,
+        "frame_mean": None,
+        "frame_median": None,
+        "frame_sd": None,
+        "frame_min": None,
+        "frame_max": None,
+    }
+    if not csv_path.exists():
+        return result
+    try:
+        lines = csv_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return result
+
+    in_delta = False
+    header = None
+    frames: List[float] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("DELTA Energy Terms"):
+            in_delta = True
+            header = None
+            continue
+        if not in_delta:
+            continue
+        if header is None:
+            header = [t.strip() for t in stripped.split(",")]
+            continue
+        values = [t.strip() for t in stripped.split(",")]
+        if not header:
+            break
+        try:
+            idx = header.index("DELTA TOTAL")
+        except ValueError:
+            break
+        if idx >= len(values):
+            continue
+        try:
+            frames.append(float(values[idx]))
+        except Exception:
+            continue
+
+    if not frames:
+        return result
+
+    result["frame_values"] = frames
+    result["n_frames"] = len(frames)
+    try:
+        result["frame_mean"] = float(statistics.mean(frames))
+    except Exception:
+        result["frame_mean"] = None
+    try:
+        result["frame_median"] = float(statistics.median(frames))
+    except Exception:
+        result["frame_median"] = None
+    try:
+        result["frame_sd"] = float(statistics.pstdev(frames))
+    except Exception:
+        result["frame_sd"] = None
+    try:
+        result["frame_min"] = float(min(frames))
+        result["frame_max"] = float(max(frames))
+    except Exception:
+        pass
+    return result
+
+
+def _mmgbsa_trimmed_mean(values: List[float], trim_fraction: float = 0.1) -> float:
+    if not values:
+        raise ValueError("no values for trimmed mean")
+    if trim_fraction <= 0:
+        return float(statistics.mean(values))
+    sorted_vals = sorted(values)
+    trim_n = int(len(sorted_vals) * trim_fraction)
+    max_trim = max(0, (len(sorted_vals) - 1) // 2)
+    trim_n = max(0, min(trim_n, max_trim))
+    if trim_n > 0:
+        trimmed = sorted_vals[trim_n:-trim_n] or sorted_vals
+    else:
+        trimmed = sorted_vals
+    return float(statistics.mean(trimmed))
+
+
+def _mmgbsa_apply_agg(
+    values: List[float],
+    method: str,
+    logger: Optional[logging.Logger] = None,
+    context: str = "mmgbsa",
+) -> Optional[float]:
+    if not values:
+        return None
+    method_norm = str(method or "mean").strip().lower()
+    try:
+        if method_norm == "median":
+            return float(statistics.median(values))
+        if method_norm == "min":
+            return float(min(values))
+        if method_norm == "trimmed_mean":
+            return _mmgbsa_trimmed_mean(values, trim_fraction=0.1)
+        return float(statistics.mean(values))
+    except Exception as exc:
+        if logger:
+            logger.warning(
+                "[mmgbsa.pipeline] aggregate_failed context=%s method=%s err=%s",
+                context,
+                method_norm,
+                exc,
+            )
     return None
+
+
+def _mmgbsa_frame_aggregate(csv_path: Path, cfg: Mapping[str, Any], logger: logging.Logger) -> Dict[str, object]:
+    parsed = _mmgbsa_parse_delta_frames(csv_path)
+    frames: List[float] = list(parsed.get("frame_values") or [])
+    total_frames = len(frames)
+    try:
+        frame_limit = int(cfg.get("MMGBSA_FRAME_LIMIT", 0))
+    except Exception:
+        frame_limit = 0
+    if frame_limit > 0 and frames:
+        frames = frames[:frame_limit]
+    frames_used = len(frames)
+    frame_method = str(cfg.get("MMGBSA_FRAME_AGG", "mean") or "mean").strip().lower()
+
+    agg_delta = _mmgbsa_apply_agg(frames, frame_method, logger=logger, context="frame")
+
+    subset_mean = None
+    subset_median = None
+    subset_sd = None
+    try:
+        subset_mean = float(statistics.mean(frames))
+    except Exception:
+        subset_mean = None
+    try:
+        subset_median = float(statistics.median(frames))
+    except Exception:
+        subset_median = None
+    try:
+        subset_sd = float(statistics.pstdev(frames))
+    except Exception:
+        subset_sd = None
+
+    if frames_used:
+        logger.info(
+            "[mmgbsa.frame] csv=%s frames_total=%d frames_used=%d limit=%d method=%s delta=%s mean=%s sd=%s",
+            csv_path,
+            total_frames,
+            frames_used,
+            frame_limit,
+            frame_method,
+            f"{agg_delta:.6g}" if agg_delta is not None else "",
+            f"{subset_mean:.6g}" if subset_mean is not None else "",
+            f"{subset_sd:.6g}" if subset_sd is not None else "",
+        )
+    else:
+        logger.warning(
+            "[mmgbsa.frame] csv=%s frames_total=%d frames_used=%d limit=%d method=%s reason=missing_frames",
+            csv_path,
+            total_frames,
+            frames_used,
+            frame_limit,
+            frame_method,
+        )
+
+    return {
+        "delta_total": agg_delta,
+        "frame_agg_method": frame_method,
+        "frames_used": frames_used,
+        "frames_total": total_frames,
+        "frame_mean": subset_mean,
+        "frame_median": subset_median,
+        "frame_sd": subset_sd,
+        "frame_values": frames,
+        "frame_limit": frame_limit,
+        "notes": "" if agg_delta is not None else "missing_delta",
+    }
 
 
 def _mmgbsa_append_summary(summary_path: Path, row: Dict[str, object]) -> None:
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     exists = summary_path.exists() and summary_path.stat().st_size > 0
-    fieldnames = ["stage_dir", "ligand_stem", "delta_total", "results_csv", "ok", "notes"]
+    fieldnames = [
+        "stage_dir",
+        "ligand_stem",
+        "delta_total",
+        "results_csv",
+        "ok",
+        "notes",
+        "frame_agg_method",
+        "frames_used",
+        "frames_total",
+        "frame_mean",
+        "frame_sd",
+        "frame_median",
+        "rep_agg_method",
+        "replicates_ok",
+        "replicates_total",
+    ]
     with summary_path.open("a", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore", restval="")
         if not exists:
             writer.writeheader()
         writer.writerow(row)
@@ -2588,14 +2790,7 @@ def _mmgbsa_md_seed_list(cfg: Mapping[str, Any], n_reps: int, logger: logging.Lo
 
 
 def _mmgbsa_md_aggregate(deltas: List[float], method: str) -> Optional[float]:
-    if not deltas:
-        return None
-    method_norm = str(method or "mean").strip().lower()
-    if method_norm == "median":
-        return float(statistics.median(deltas))
-    if method_norm == "min":
-        return float(min(deltas))
-    return float(statistics.mean(deltas))
+    return _mmgbsa_apply_agg(deltas, method, logger=logging.getLogger("mmgbsa.pipeline"), context="replicate")
 
 
 _MMGBSA_DEPRECATED_MD_KEYS = ("MMGBSA_MD_RUN", "MMGBSA_TRAJ_MODE")
@@ -2683,6 +2878,8 @@ def _maybe_run_mmgbsa_for_pdb(
             "MMGBSA_MD_TRAJ_NAME",
             "MMGBSA_MD_REP_AGG",
             "MMGBSA_MD_COPY_BEST_REPLICATE",
+            "MMGBSA_FRAME_AGG",
+            "MMGBSA_FRAME_LIMIT",
         ],
     )
     if not _to_bool(cfg.get("MMGBSA_ENABLED", False)):
@@ -2735,6 +2932,13 @@ def _maybe_run_mmgbsa_for_pdb(
         md_reps = 1
     md_rep_agg = str(cfg.get("MMGBSA_MD_REP_AGG", "mean") or "mean").strip().lower()
     md_copy_best = _to_bool(cfg.get("MMGBSA_MD_COPY_BEST_REPLICATE", False))
+    frame_agg_method = str(cfg.get("MMGBSA_FRAME_AGG", "mean") or "mean").strip().lower()
+    try:
+        frame_limit = int(cfg.get("MMGBSA_FRAME_LIMIT", 0))
+    except Exception:
+        frame_limit = 0
+    if frame_limit < 0:
+        frame_limit = 0
 
     force = _to_bool(cfg.get("MMGBSA_FORCE", False))
     strict = _to_bool(cfg.get("MMGBSA_STRICT", False))
@@ -3009,6 +3213,17 @@ def _maybe_run_mmgbsa_for_pdb(
             ok = False
             results_csv = ""
             delta_total = ""
+            summary_frames: Dict[str, object] = {
+                "frame_agg_method": frame_agg_method,
+                "frames_used": "",
+                "frame_mean": "",
+                "frame_sd": "",
+                "frames_total": "",
+                "frame_median": "",
+            }
+            replicates_total = md_reps if md_enabled else 1
+            replicates_ok = 0
+            rep_agg_method_used = md_rep_agg if md_enabled else "single"
 
             try:
                 if run_tleap_flag and not topo.get("skip_tleap"):
@@ -3091,10 +3306,24 @@ def _maybe_run_mmgbsa_for_pdb(
                         notes = "mmpbsa_disabled"
                     else:
                         if results_csv and results_dat and Path(results_csv).exists() and Path(results_dat).exists():
-                            delta_val = _mmgbsa_parse_delta_total(Path(results_csv))
+                            frame_meta = _mmgbsa_frame_aggregate(Path(results_csv), cfg, logger)
+                            delta_val = frame_meta.get("delta_total")
                             if delta_val is not None:
-                                delta_total = f"{delta_val:.6g}"
-                            ok = True
+                                delta_total = f"{float(delta_val):.6g}"
+                                ok = True
+                            else:
+                                notes = frame_meta.get("notes", "missing_delta") or "missing_delta"
+                            summary_frames.update(
+                                {
+                                    "frame_agg_method": frame_meta.get("frame_agg_method", ""),
+                                    "frames_used": frame_meta.get("frames_used", ""),
+                                    "frame_mean": frame_meta.get("frame_mean", ""),
+                                    "frame_sd": frame_meta.get("frame_sd", ""),
+                                    "frames_total": frame_meta.get("frames_total", ""),
+                                    "frame_median": frame_meta.get("frame_median", ""),
+                                }
+                            )
+                            replicates_ok = 1 if ok else 0
                         else:
                             notes = "missing_outputs"
                 else:
@@ -3116,6 +3345,14 @@ def _maybe_run_mmgbsa_for_pdb(
                         rep_notes = ""
                         rep_ok = False
                         rep_delta = None
+                        rep_frames: Dict[str, object] = {
+                            "frame_agg_method": frame_agg_method,
+                            "frames_used": "",
+                            "frames_total": "",
+                            "frame_mean": "",
+                            "frame_sd": "",
+                            "frame_median": "",
+                        }
                         rep_csv = ""
                         rep_dat = ""
                         rep_log = ""
@@ -3142,12 +3379,23 @@ def _maybe_run_mmgbsa_for_pdb(
                                 if not mmpbsa_result.get("enabled", True):
                                     rep_notes = "mmpbsa_disabled"
                                 elif rep_csv and rep_dat and Path(rep_csv).exists() and Path(rep_dat).exists():
-                                    delta_val = _mmgbsa_parse_delta_total(Path(rep_csv))
+                                    frame_meta = _mmgbsa_frame_aggregate(Path(rep_csv), cfg, logger)
+                                    delta_val = frame_meta.get("delta_total")
+                                    rep_frames.update(
+                                        {
+                                            "frame_agg_method": frame_meta.get("frame_agg_method", frame_agg_method),
+                                            "frames_used": frame_meta.get("frames_used", ""),
+                                            "frames_total": frame_meta.get("frames_total", ""),
+                                            "frame_mean": frame_meta.get("frame_mean", ""),
+                                            "frame_sd": frame_meta.get("frame_sd", ""),
+                                            "frame_median": frame_meta.get("frame_median", ""),
+                                        }
+                                    )
                                     if delta_val is not None:
                                         rep_delta = float(delta_val)
                                         rep_ok = True
                                     else:
-                                        rep_notes = "missing_delta"
+                                        rep_notes = frame_meta.get("notes", "missing_delta") or "missing_delta"
                                 else:
                                     rep_notes = "missing_outputs"
                             except Exception as exc:
@@ -3177,11 +3425,18 @@ def _maybe_run_mmgbsa_for_pdb(
                                 "traj_path": str(traj_path),
                                 "work_dir": str(rep_dir),
                                 "notes": rep_notes,
+                                "frames_used": rep_frames.get("frames_used", ""),
+                                "frames_total": rep_frames.get("frames_total", ""),
+                                "frame_mean": rep_frames.get("frame_mean", ""),
+                                "frame_sd": rep_frames.get("frame_sd", ""),
+                                "frame_agg_method": rep_frames.get("frame_agg_method", frame_agg_method),
+                                "frame_median": rep_frames.get("frame_median", ""),
                             }
                         )
 
                     ok_reps = [r for r in rep_results if r.get("ok")]
                     n_ok = len(ok_reps)
+                    replicates_ok = n_ok
                     agg_delta_val = _mmgbsa_md_aggregate(
                         [float(r["delta_total"]) for r in ok_reps if r.get("delta_total") is not None],
                         md_rep_agg,
@@ -3209,7 +3464,17 @@ def _maybe_run_mmgbsa_for_pdb(
 
                     if best_rep:
                         results_csv = str(best_rep.get("results_csv", ""))
-                    notes = f"md_reps_ok={n_ok}/{len(rep_results)} agg={md_rep_agg}"
+                        summary_frames.update(
+                            {
+                                "frame_agg_method": best_rep.get("frame_agg_method", frame_agg_method),
+                                "frames_used": best_rep.get("frames_used", ""),
+                                "frame_mean": best_rep.get("frame_mean", ""),
+                                "frame_sd": best_rep.get("frame_sd", ""),
+                                "frames_total": best_rep.get("frames_total", ""),
+                                "frame_median": best_rep.get("frame_median", ""),
+                            }
+                        )
+                    notes = f"md_reps_ok={n_ok}/{len(rep_results)} rep_agg={md_rep_agg} frame_agg={frame_agg_method}"
 
                     replicate_summary = {
                         "ok": ok,
@@ -3283,6 +3548,15 @@ def _maybe_run_mmgbsa_for_pdb(
                     "results_csv": results_csv,
                     "ok": ok,
                     "notes": notes,
+                    "frame_agg_method": summary_frames.get("frame_agg_method", "") or "",
+                    "frames_used": summary_frames.get("frames_used", "") or "",
+                    "frames_total": summary_frames.get("frames_total", "") or "",
+                    "frame_mean": summary_frames.get("frame_mean", "") or "",
+                    "frame_sd": summary_frames.get("frame_sd", "") or "",
+                    "frame_median": summary_frames.get("frame_median", "") or "",
+                    "rep_agg_method": rep_agg_method_used,
+                    "replicates_ok": replicates_ok,
+                    "replicates_total": replicates_total,
                 },
             )
 

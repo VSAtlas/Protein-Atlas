@@ -1,0 +1,10 @@
+[
+  {
+    "smiles": "CCO",
+    "Affinity_nM": 50
+  },
+  {
+    "smiles": "CCC",
+    "Affinity_nM": 20000
+  }
+]
