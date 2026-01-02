@@ -256,7 +256,7 @@ def _stage_priority(stage_dir: str, pdbqt: Optional[Path] = None) -> int:
 
 def _collect_best_pose_per_base(
     ph_root: Path, stage_dirs: Sequence[str], allowed_bases: Optional[Set[str]], logger: logging.Logger
-) -> Tuple[List[Path], Dict[int, int], int]:
+) -> Tuple[List[Path], Dict[int, int], int, Set[str]]:
     best: Dict[str, Tuple[int, Path]] = {}
     total_candidates = 0
     for stage_dir in stage_dirs:
@@ -264,18 +264,22 @@ def _collect_best_pose_per_base(
         total_candidates += len(stage_pdbqts)
         for pdbqt in stage_pdbqts:
             base = _pose_base_from_path(pdbqt)
-            if allowed_bases is not None and base not in allowed_bases:
-                continue
             priority = _stage_priority(stage_dir, pdbqt)
             current = best.get(base)
             if current is None or priority > current[0]:
                 best[base] = (priority, pdbqt)
 
+    available_bases = set(best.keys())
+    if allowed_bases is not None:
+        filtered = {base: entry for base, entry in best.items() if base in allowed_bases}
+    else:
+        filtered = best
+
     stage_counts: Dict[int, int] = {}
-    for priority, _ in best.values():
+    for priority, _ in filtered.values():
         stage_counts[priority] = stage_counts.get(priority, 0) + 1
 
-    ligands = [entry[1] for entry in sorted(best.values(), key=lambda t: (-t[0], str(t[1])))]
+    ligands = [entry[1] for entry in sorted(filtered.values(), key=lambda t: (-t[0], str(t[1])))]
     logger.debug(
         "%s action=collect_best status=ok stage_dirs=%s candidates=%d selected=%d stage3=%d stage2=%d stage1=%d stage0=%d",
         COMPONENT,
@@ -287,12 +291,12 @@ def _collect_best_pose_per_base(
         stage_counts.get(1, 0),
         stage_counts.get(0, 0),
     )
-    return ligands, stage_counts, total_candidates
+    return ligands, stage_counts, total_candidates, available_bases
 
 
 def _load_consensus_top_bases(
     consensus_csv: Path, frac: float, logger: logging.Logger, control_bases: Optional[Set[str]] = None
-) -> Tuple[Set[str], int, int, int, int]:
+) -> Tuple[Set[str], int, int, int, int, int]:
     rows: List[Dict[str, str]] = []
     try:
         with consensus_csv.open() as handle:
@@ -306,7 +310,7 @@ def _load_consensus_top_bases(
                     consensus_csv,
                     ",".join(sorted(missing)),
                 )
-                return set(), 0, 0, 0, 0
+                return set(), 0, 0, 0, 0, 0
             for row in reader:
                 rows.append(row)
     except Exception as exc:
@@ -316,10 +320,10 @@ def _load_consensus_top_bases(
             consensus_csv,
             exc,
         )
-        return set(), 0, 0, 0, 0
+        return set(), 0, 0, 0, 0, 0
 
     if not rows:
-        return set(), 0, 0, 0, 0
+        return set(), 0, 0, 0, 0, 0
 
     def _score(row: Dict[str, str]) -> float:
         try:
@@ -329,6 +333,7 @@ def _load_consensus_top_bases(
 
     control_set = control_bases or set()
     scored_rows: List[Tuple[float, str, bool]] = []
+    controls_in_consensus: Set[str] = set()
     for row in rows:
         lig = str(row.get("ligand", "")).strip()
         if not lig:
@@ -336,150 +341,25 @@ def _load_consensus_top_bases(
         base = _pose_base_from_path(Path(lig))
         if not base:
             continue
-        scored_rows.append((_score(row), base, base in control_set))
+        is_ctrl = base in control_set
+        if is_ctrl:
+            controls_in_consensus.add(base)
+        scored_rows.append((_score(row), base, is_ctrl))
 
     if not scored_rows:
-        return set(), len(rows), 0, 0, 0
+        return set(control_set), len(rows), 0, 0, len(control_set), len(controls_in_consensus)
 
-    controls_in_consensus = {base for _, base, is_ctrl in scored_rows if is_ctrl}
     non_controls = [(score, base) for score, base, is_ctrl in scored_rows if not is_ctrl]
     non_controls_sorted = sorted(non_controls, key=lambda item: item[0], reverse=True)
     k = max(1, math.ceil(len(non_controls_sorted) * frac)) if non_controls_sorted else 0
 
-    allowed: Set[str] = set(controls_in_consensus)
+    allowed: Set[str] = set(control_set)
     for _, base in non_controls_sorted[:k]:
         allowed.add(base)
 
-    return allowed, len(rows), k, len(non_controls_sorted), len(controls_in_consensus)
+    return allowed, len(rows), k, len(non_controls_sorted), len(control_set), len(controls_in_consensus)
 
 
-def _load_post_engine_top_bases(
-    score_csv: Path,
-    frac: float,
-    logger: logging.Logger,
-    score_key: str,
-    control_bases: Optional[Set[str]] = None,
-) -> Tuple[Optional[Set[str]], int, int, int, int]:
-    if not score_csv.exists():
-        return None, 0, 0, 0, 0
-
-    try:
-        with score_csv.open() as handle:
-            reader = csv.DictReader(handle)
-            fieldnames = reader.fieldnames or []
-            missing = {"ligand", score_key} - set(fieldnames)
-            if missing:
-                logger.error(
-                    "%s action=select status=failed reason=missing_fields path=%s missing=%s",
-                    COMPONENT,
-                    score_csv,
-                    ",".join(sorted(missing)),
-                )
-                return None, 0, 0, 0, 0
-            rows = list(reader)
-    except Exception as exc:
-        logger.error(
-            "%s action=select status=failed reason=read_error path=%s error=%s",
-            COMPONENT,
-            score_csv,
-            exc,
-        )
-        return None, 0, 0, 0, 0
-
-    control_set = control_bases or set()
-    scores: Dict[str, float] = {}
-    controls_in_scores: Set[str] = set()
-    for row in rows:
-        lig = str(row.get("ligand", "")).strip()
-        if not lig:
-            continue
-        base = _pose_base_from_path(Path(lig))
-        if not base:
-            continue
-        if base in control_set:
-            controls_in_scores.add(base)
-            continue
-        try:
-            score = float(row.get(score_key, ""))
-        except Exception:
-            continue
-        current = scores.get(base)
-        if current is None or score < current:
-            scores[base] = score
-
-    if not scores and not controls_in_scores:
-        logger.warning(
-            "%s action=select status=warn reason=no_scores path=%s score_key=%s | no usable rows",
-            COMPONENT,
-            score_csv,
-            score_key,
-        )
-        return None, 0, 0, 0, len(rows)
-
-    noncontrol_count = len(scores)
-    k = max(1, math.ceil(noncontrol_count * frac)) if noncontrol_count else 0
-    ordered = sorted(scores.items(), key=lambda item: item[1])
-
-    allowed: Set[str] = set(controls_in_scores)
-    for base, _ in ordered[:k]:
-        allowed.add(base)
-
-    return allowed, noncontrol_count, k, len(controls_in_scores), len(rows)
-
-
-def _select_post_engine_bases(
-    combo: Tuple[str, str, str],
-    source: str,
-    score_csv: Path,
-    score_key: str,
-    frac: float,
-    logger: logging.Logger,
-    control_bases: Set[str],
-    fallback_allowed: Set[str],
-    fallback_stats: Tuple[int, int, int, int],
-    fallback_csv: Path,
-) -> Set[str]:
-    allowed, candidates, selected, controls_in_scores, rows_read = _load_post_engine_top_bases(
-        score_csv,
-        frac,
-        logger,
-        score_key,
-        control_bases,
-    )
-    pdb_id, variant, ph = combo
-    if allowed is None:
-        total_rows, selected_rows, noncontrol_rows, control_rows = fallback_stats
-        logger.warning(
-            "%s action=select status=warn source=%s pdb_id=%s variant=%s ph=%s candidates=%d selected=%d controls_in_scores=%d frac=%.2f score_csv=%s fallback=consensus | post-engine scores missing",
-            COMPONENT,
-            source,
-            pdb_id,
-            variant,
-            ph,
-            noncontrol_rows,
-            selected_rows,
-            control_rows,
-            frac,
-            fallback_csv,
-        )
-        return fallback_allowed
-
-    logger.info(
-        "%s action=select status=ok source=%s pdb_id=%s variant=%s ph=%s candidates=%d selected=%d controls_in_scores=%d controls_total=%d frac=%.2f score_csv=%s rows=%d | using post-engine scores",
-        COMPONENT,
-        source,
-        pdb_id,
-        variant,
-        ph,
-        candidates,
-        selected,
-        controls_in_scores,
-        len(control_bases),
-        frac,
-        score_csv,
-        rows_read,
-    )
-    return allowed
 
 
 def _materialize_inputs(
@@ -528,6 +408,68 @@ def _materialize_inputs(
                 return None
 
     return input_dir
+
+
+def _log_score_csv_coverage(
+    source: str, combo: Tuple[str, str, str], score_csv: Path, allowed_bases: Set[str], logger: logging.Logger
+) -> None:
+    if not score_csv.exists():
+        logger.debug(
+            "%s action=select source=%s pdb_id=%s variant=%s ph=%s status=skip reason=missing_score_csv path=%s",
+            COMPONENT,
+            source,
+            combo[0],
+            combo[1],
+            combo[2],
+            score_csv,
+        )
+        return
+    try:
+        with score_csv.open() as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames or "ligand" not in reader.fieldnames:
+                logger.debug(
+                    "%s action=select source=%s pdb_id=%s variant=%s ph=%s status=skip reason=missing_ligand_column path=%s",
+                    COMPONENT,
+                    source,
+                    combo[0],
+                    combo[1],
+                    combo[2],
+                    score_csv,
+                )
+                return
+            bases_in_csv = {
+                base
+                for row in reader
+                for base in [_pose_base_from_path(Path(str(row.get("ligand", "")).strip()))]
+                if row.get("ligand") and base
+            }
+    except Exception as exc:
+        logger.debug(
+            "%s action=select source=%s pdb_id=%s variant=%s ph=%s status=skip reason=read_error path=%s error=%s",
+            COMPONENT,
+            source,
+            combo[0],
+            combo[1],
+            combo[2],
+            score_csv,
+            exc,
+        )
+        return
+
+    covered = len(allowed_bases & bases_in_csv)
+    logger.info(
+        "%s action=select source=%s pdb_id=%s variant=%s ph=%s allowed=%d score_rows=%d covered_by_scores=%d path=%s | score CSV coverage only",
+        COMPONENT,
+        source,
+        combo[0],
+        combo[1],
+        combo[2],
+        len(allowed_bases),
+        len(bases_in_csv),
+        covered,
+        score_csv,
+    )
 
 
 def _posebusters_missing(post_root: Path, combos: Set[Tuple[str, str, str]]) -> bool:
@@ -677,7 +619,7 @@ def _score_stage(
     overwrite: bool,
     logger: logging.Logger,
     allowed_bases: Optional[Set[str]] = None,
-) -> Tuple[bool, Optional[Path]]:
+    ) -> Tuple[bool, Optional[Path]]:
     pdb_id, variant, ph = combo
     combo_post_root = post_root / pdb_id / variant / ph
     out_path = combo_post_root / spec.output_name
@@ -699,19 +641,21 @@ def _score_stage(
         stage_dirs: Sequence[str] = (spec.stage_dir,)
         if spec.stage_dir == "vina_best":
             stage_dirs = ("stage3", "stage2", "stage1")
-            ligands_available, stage_counts, before_count = _collect_best_pose_per_base(
+            ligands_available, stage_counts, total_candidates, available_bases = _collect_best_pose_per_base(
                 ph_root, stage_dirs, allowed_bases, logger
             )
         elif spec.stage_dir == "gnina_best":
             stage_dirs = ("gnina_stage3", "gnina_stage2", "gnina_stage1")
-            ligands_available, stage_counts, before_count = _collect_best_pose_per_base(
+            ligands_available, stage_counts, total_candidates, available_bases = _collect_best_pose_per_base(
                 ph_root, stage_dirs, allowed_bases, logger
             )
         else:
             ligands_available = _collect_stage_pdbqts(ph_root, spec.stage_dir)
-            before_count = len(ligands_available)
+            total_candidates = len(ligands_available)
+            available_bases = {_pose_base_from_path(p) for p in ligands_available}
             if allowed_bases is not None:
                 ligands_available = [p for p in ligands_available if _pose_base_from_path(p) in allowed_bases]
+            stage_counts = {}
         if not ligands_available:
             logger.warning(
                 "%s action=score status=skip source=%s stage=%s reason=no_pdbqt stage_dirs=%s path=%s",
@@ -728,7 +672,7 @@ def _score_stage(
                 COMPONENT,
                 spec.source,
                 spec.stage_dir,
-                before_count,
+                total_candidates,
                 len(ligands_available),
                 stage_counts.get(3, 0),
                 stage_counts.get(2, 0),
@@ -741,9 +685,22 @@ def _score_stage(
                 COMPONENT,
                 spec.source,
                 spec.stage_dir,
-                before_count,
+                total_candidates,
                 len(ligands_available),
             )
+        allowed_size = len(allowed_bases) if allowed_bases is not None else 0
+        missing_bases = sorted((allowed_bases or set()) - available_bases)[:10] if allowed_bases is not None else []
+        logger.info(
+            "%s action=select source=%s stage=%s allowed=%d candidates_bases=%d rescored=%d missing=%d missing_examples=%s",
+            COMPONENT,
+            spec.source,
+            spec.stage_dir,
+            allowed_size,
+            len(available_bases),
+            len(ligands_available),
+            len(missing_bases) if allowed_bases is not None else 0,
+            missing_bases,
+        )
         lig_path = _materialize_inputs(ph_root, combo_post_root, spec.stage_dir, ligands_available, overwrite, logger)
         if lig_path is None:
             logger.error(
@@ -754,9 +711,12 @@ def _score_stage(
             )
             return False, None
     else:
+        score_csv = run_root / pdb_id / variant / ph / f"{spec.source}_docking_score_long.csv"
+        if allowed_bases is not None:
+            _log_score_csv_coverage(spec.source, combo, score_csv, allowed_bases, logger)
         ph_root = combo_post_root
         stage_dirs = (spec.stage_dir,)
-        ligands_available, stage_counts, before_count = _collect_best_pose_per_base(
+        ligands_available, stage_counts, total_candidates, available_bases = _collect_best_pose_per_base(
             ph_root, stage_dirs, allowed_bases, logger
         )
         if not ligands_available:
@@ -774,12 +734,25 @@ def _score_stage(
             COMPONENT,
             spec.source,
             spec.stage_dir,
-            before_count,
+            total_candidates,
             len(ligands_available),
             stage_counts.get(3, 0),
             stage_counts.get(2, 0),
             stage_counts.get(1, 0),
             stage_counts.get(0, 0),
+        )
+        allowed_size = len(allowed_bases) if allowed_bases is not None else 0
+        missing_bases = sorted((allowed_bases or set()) - available_bases)[:10] if allowed_bases is not None else []
+        logger.info(
+            "%s action=select source=%s stage=%s allowed=%d candidates_bases=%d rescored=%d missing=%d missing_examples=%s",
+            COMPONENT,
+            spec.source,
+            spec.stage_dir,
+            allowed_size,
+            len(available_bases),
+            len(ligands_available),
+            len(missing_bases) if allowed_bases is not None else 0,
+            missing_bases,
         )
         lig_path = _materialize_inputs(ph_root, combo_post_root, spec.stage_dir, ligands_available, overwrite, logger)
         if lig_path is None:
@@ -1013,7 +986,14 @@ def main() -> int:
         consensus_csv = run_root / pdb_id / variant / ph / "consensus_docking_scores.csv"
         if pdb_id not in control_cache:
             control_cache[pdb_id] = _load_control_bases(processed_root, pdb_id, logger)
-        allowed_bases, total_rows, selected_rows, noncontrol_rows, control_rows = _load_consensus_top_bases(
+        (
+            allowed_bases,
+            total_rows,
+            selected_rows,
+            noncontrol_rows,
+            controls_total,
+            controls_in_consensus,
+        ) = _load_consensus_top_bases(
             consensus_csv, top_fraction, logger, control_cache[pdb_id]
         )
         if total_rows == 0:
@@ -1028,7 +1008,7 @@ def main() -> int:
             skipped_missing_consensus += 1
             continue
         logger.info(
-            "%s action=select status=ok pdb_id=%s variant=%s ph=%s consensus_rows=%d noncontrol_rows=%d selected_noncontrol=%d controls_in_consensus=%d frac=%.2f path=%s",
+            "%s action=select status=ok pdb_id=%s variant=%s ph=%s consensus_rows=%d noncontrol_rows=%d selected_noncontrol=%d controls_total=%d controls_in_consensus=%d allowed_total=%d frac=%.2f path=%s",
             COMPONENT,
             pdb_id,
             variant,
@@ -1036,43 +1016,14 @@ def main() -> int:
             total_rows,
             noncontrol_rows,
             selected_rows,
-            control_rows,
+            controls_total,
+            controls_in_consensus,
+            len(allowed_bases),
             top_fraction,
-            consensus_csv,
-        )
-        fallback_stats = (total_rows, selected_rows, noncontrol_rows, control_rows)
-        allowed_by_source: Dict[str, Set[str]] = {
-            "vina": allowed_bases,
-            "gnina": allowed_bases,
-        }
-        dock6_csv = run_root / pdb_id / variant / ph / "dock6_docking_score_long.csv"
-        ledock_csv = run_root / pdb_id / variant / ph / "ledock_docking_score_long.csv"
-        allowed_by_source["dock6"] = _select_post_engine_bases(
-            combo,
-            "dock6",
-            dock6_csv,
-            "dock6_grid_score",
-            top_fraction,
-            logger,
-            control_cache[pdb_id],
-            allowed_bases,
-            fallback_stats,
-            consensus_csv,
-        )
-        allowed_by_source["ledock"] = _select_post_engine_bases(
-            combo,
-            "ledock",
-            ledock_csv,
-            "ledock_best_score_kcal",
-            top_fraction,
-            logger,
-            control_cache[pdb_id],
-            allowed_bases,
-            fallback_stats,
             consensus_csv,
         )
         for spec in specs:
-            tasks.append((spec, combo, receptor, allowed_by_source.get(spec.source, allowed_bases)))
+            tasks.append((spec, combo, receptor, allowed_bases))
         combos_with_tasks.add(combo)
 
     total_jobs = len(tasks)

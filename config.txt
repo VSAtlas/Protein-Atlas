@@ -64,6 +64,9 @@ OPENBABEL_PATH=/home/michael/atlas/micromamba/envs/docking-env/bin/obabel
 BABEL_LIBDIR=/home/michael/atlas/micromamba/envs/docking-env/lib/openbabel/3.1.0
 BABEL_DATADIR=
 
+# DeepCoy (env-local)
+DEEPCOY_PYTHON=/home/michael/atlas/anaconda3/envs/DeepCoy-env-run/bin/python
+
 FPOCKET_EXE=/home/michael/atlas/tools/fpocket/bin/fpocket
 
 USE_PROTEIN_DRUGGABILITY = false
@@ -162,6 +165,7 @@ MMGBSA_MD_EQUIL_PS = 20
 MMGBSA_MD_PROD_PS = 100
 MMGBSA_MD_FRAME_STRIDE_PS = 2
 MMGBSA_MD_NREPLICATES = 1
+MMGBSA_MD_MPI_RANKS = auto
 MMGBSA_MD_BASE_SEED = 12345
 MMGBSA_MD_SEED_MODE = increment
 MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY = true
@@ -176,6 +180,7 @@ MMGBSA_MMPBSA_INTERVAL = 1
 # MMGBSA_TRAJ_MODE = ONEFRAME
 # MMGBSA_MD_RUN = false
 # MMGBSA_MD_ENGINE = sander
+# MMGBSA_MD_MPI_RANKS = auto
 # MMGBSA_MD_DT_PS = 0.002
 # MMGBSA_MD_NTT = 3
 # MMGBSA_MD_GAMMA_LN = 2.0

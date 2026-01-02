@@ -14,6 +14,7 @@ from installation import load_config
 
 
 _COMPONENT = "mmgbsa.cpptraj"
+_COMPONENT_MD = "mmgbsa.md"
 
 
 def _get_logger() -> logging.Logger:
@@ -30,14 +31,21 @@ def _get_logger() -> logging.Logger:
     return logger
 
 
-def _log(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
+def _log(
+    logger: logging.Logger,
+    level: str,
+    kvs: Dict[str, object],
+    msg: str | None = None,
+    component: str | None = None,
+) -> None:
     level_map = {
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
         "WARNING": logging.WARNING,
         "ERROR": logging.ERROR,
     }
-    parts = [f"[{level}]", f"[{_COMPONENT}]"]
+    comp = component or _COMPONENT
+    parts = [f"[{level}]", f"[{comp}]"]
     if kvs:
         parts.append(" ".join(f"{k}={v}" for k, v in kvs.items()))
     if msg:
@@ -108,6 +116,19 @@ def _prefix_has_tool(prefix: Path, tool: str) -> bool:
     return (prefix / "bin" / tool).is_file()
 
 
+def _resolve_global_cpu_limit(cfg: object | None) -> Optional[int]:
+    candidates = [
+        _cfg_get(cfg, "CPU", None),
+        _cfg_get(cfg, "MAX_PARALLEL_JOBS", None),
+        os.environ.get("CPU"),
+    ]
+    for candidate in candidates:
+        val = _to_int(candidate, 0)
+        if val > 0:
+            return val
+    return None
+
+
 def _resolve_micromamba() -> Optional[Path]:
     preferred = Path("/home/michael/atlas/micromamba/bin/micromamba")
     if preferred.is_file():
@@ -174,8 +195,11 @@ def _select_cpptraj_runner(logger: logging.Logger, cfg: object | None) -> Tuple[
     raise FileNotFoundError("could not locate cpptraj; set AMBERTOOLS_PREFIX or PATH")
 
 
-def _select_sander_runner(logger: logging.Logger, cfg: object | None) -> Tuple[Sequence[str], str, str]:
+def _select_sander_runner(
+    logger: logging.Logger, cfg: object | None, prefer_mpi: bool = True
+) -> Tuple[Sequence[str], str, str]:
     prefix_value = _resolve_ambertools_prefix(cfg)
+    tool_order = ("sander.MPI", "sander") if prefer_mpi else ("sander", "sander.MPI")
     if prefix_value:
         prefix = Path(prefix_value).expanduser()
         if _looks_like_pkgs_cache(prefix):
@@ -185,13 +209,14 @@ def _select_sander_runner(logger: logging.Logger, cfg: object | None) -> Tuple[S
                 {"reason": "pkgs_cache_prefix", "fallback": "PATH_or_common_prefix"},
                 "ignoring_AMBERTOOLS_PREFIX",
             )
-        elif _prefix_has_tool(prefix, "sander"):
-            micromamba = _resolve_micromamba()
-            if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
-            runner = [str(micromamba), "run", "-p", str(prefix)]
-            return runner, "sander", f"prefix:{prefix}"
         else:
+            for tool in tool_order:
+                if _prefix_has_tool(prefix, tool):
+                    micromamba = _resolve_micromamba()
+                    if not micromamba:
+                        raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
+                    runner = [str(micromamba), "run", "-p", str(prefix)]
+                    return runner, tool, f"prefix:{prefix}"
             _log(
                 logger,
                 "WARNING",
@@ -199,9 +224,10 @@ def _select_sander_runner(logger: logging.Logger, cfg: object | None) -> Tuple[S
                 "ignoring_AMBERTOOLS_PREFIX",
             )
 
-    sander_path = shutil.which("sander")
-    if sander_path:
-        return [], sander_path, "PATH"
+    for tool in tool_order:
+        tool_path = shutil.which(tool)
+        if tool_path:
+            return [], tool_path, "PATH"
 
     common_prefixes = [
         Path("/home/atlas/micromamba/envs/AmberTools25"),
@@ -209,12 +235,18 @@ def _select_sander_runner(logger: logging.Logger, cfg: object | None) -> Tuple[S
         Path("/home/michael/atlas/micromamba/envs/AmberTools25"),
     ]
     for prefix in common_prefixes:
-        if _prefix_has_tool(prefix, "sander") and not _looks_like_pkgs_cache(prefix):
+        if _prefix_has_tool(prefix, tool_order[0]) and not _looks_like_pkgs_cache(prefix):
             micromamba = _resolve_micromamba()
             if not micromamba:
                 raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
             runner = [str(micromamba), "run", "-p", str(prefix)]
-            return runner, "sander", f"prefix:{prefix}"
+            return runner, tool_order[0], f"prefix:{prefix}"
+        if _prefix_has_tool(prefix, tool_order[1]) and not _looks_like_pkgs_cache(prefix):
+            micromamba = _resolve_micromamba()
+            if not micromamba:
+                raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
+            runner = [str(micromamba), "run", "-p", str(prefix)]
+            return runner, tool_order[1], f"prefix:{prefix}"
 
     raise FileNotFoundError("could not locate sander; set AMBERTOOLS_PREFIX or PATH")
 
@@ -237,6 +269,26 @@ def _compute_steps(ps: float, dt_ps: float) -> int:
         dt_ps = 0.002
     steps = int(round(ps / dt_ps))
     return max(1, steps)
+
+
+def _select_mpi_launcher() -> Tuple[str, str]:
+    for launcher in ("mpirun", "mpiexec"):
+        path = shutil.which(launcher)
+        if path:
+            return path, "PATH"
+    return "", ""
+
+
+def _resolve_mpi_ranks(cfg: object | None) -> int:
+    cpu_count = os.cpu_count() or 1
+    raw = _cfg_get(cfg, "MMGBSA_MD_MPI_RANKS", "auto")
+    if raw is None or str(raw).strip().lower() == "auto":
+        cpu_limit = _resolve_global_cpu_limit(cfg)
+        if cpu_limit and cpu_limit > 0:
+            return max(1, min(cpu_limit, cpu_count))
+        return max(1, min(8, cpu_count))
+    ranks = _to_int(raw, 1)
+    return max(1, min(ranks, cpu_count))
 
 
 def build_sander_inputs(cfg: object | None) -> Dict[str, str]:
@@ -534,6 +586,22 @@ def run_implicit_md(
     ntwx = max(1, int(round(frame_stride_ps / dt_ps))) if frame_stride_ps > 0 else 1
     n_frames_est = max(1, int(prod_steps // ntwx))
 
+    mpi_info = {"engine": "sander", "mpi_ranks": 1, "mpi_launcher": "serial"}
+
+    def _result(update: Dict[str, object]) -> Dict[str, object]:
+        base = {
+            "traj_path": str(traj_path),
+            "traj_format": traj_format,
+            "n_frames_est": n_frames_est,
+            "replicate": replicate_index,
+            "seed": seed,
+            "md_dir": str(md_dir),
+            "replicate_dir": str(rep_dir),
+        }
+        base.update(mpi_info)
+        base.update(update)
+        return base
+
     inputs = build_sander_inputs(cfg)
     inputs["heat"] = _inject_seed(inputs["heat"], seed)
 
@@ -547,19 +615,9 @@ def run_implicit_md(
             "INFO",
             {"traj": traj_path, "replicate": replicate_index, "skipped": True},
             "md_exists",
+            component=_COMPONENT_MD,
         )
-        return {
-            "ok": True,
-            "run": False,
-            "skipped": True,
-            "traj_path": str(traj_path),
-            "traj_format": traj_format,
-            "n_frames_est": n_frames_est,
-            "replicate": replicate_index,
-            "seed": seed,
-            "md_dir": str(md_dir),
-            "replicate_dir": str(rep_dir),
-        }
+        return _result({"ok": True, "run": False, "skipped": True})
 
     if not run:
         _log(
@@ -567,21 +625,50 @@ def run_implicit_md(
             "INFO",
             {"traj": traj_path, "replicate": replicate_index, "run": False},
             "md_planned",
+            component=_COMPONENT_MD,
         )
-        return {
-            "ok": False,
-            "run": False,
-            "skipped": True,
-            "traj_path": str(traj_path),
-            "traj_format": traj_format,
-            "n_frames_est": n_frames_est,
-            "replicate": replicate_index,
-            "seed": seed,
-            "md_dir": str(md_dir),
-            "replicate_dir": str(rep_dir),
-        }
+        return _result({"ok": False, "run": False, "skipped": True})
 
     cmd_prefix, sander_bin, source = _select_sander_runner(logger, cfg)
+    mpi_launcher = ""
+    use_mpi = Path(sander_bin).name == "sander.MPI"
+    mpi_ranks = 1
+    if use_mpi:
+        mpi_ranks = _resolve_mpi_ranks(cfg)
+        # MMGBSA ligands run serially in the pipeline, so MPI ranks stay within the per-ligand budget.
+        mpi_launcher, _ = _select_mpi_launcher()
+        if not mpi_launcher:
+            _log(
+                logger,
+                "WARNING",
+                {"reason": "missing_mpi_launcher", "fallback": "sander", "source": source},
+                "md_mpi_disabled",
+                component=_COMPONENT_MD,
+            )
+            fallback_prefix, fallback_bin, fallback_source = _select_sander_runner(logger, cfg, prefer_mpi=False)
+            if Path(fallback_bin).name != "sander":
+                raise FileNotFoundError("mpirun/mpiexec not found and serial sander unavailable")
+            cmd_prefix, sander_bin, source = fallback_prefix, fallback_bin, fallback_source
+            use_mpi = False
+            mpi_ranks = 1
+    launcher_label = Path(mpi_launcher).name if mpi_launcher else "serial"
+    engine_label = "sander.MPI" if use_mpi else "sander"
+    mpi_info.update({"engine": engine_label, "mpi_ranks": mpi_ranks if use_mpi else 1, "mpi_launcher": launcher_label})
+    _log(
+        logger,
+        "INFO",
+        {
+            "engine": engine_label,
+            "ranks": mpi_info["mpi_ranks"],
+            "launcher": launcher_label,
+            "source": source,
+            "replicate": replicate_index,
+            "ligand_parallel": "serial",
+        },
+        "md_engine",
+        component=_COMPONENT_MD,
+    )
+
     restrain = _to_bool(_cfg_get(cfg, "MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY", True), default=True)
     prmtop_rel = os.path.relpath(prmtop_path, md_dir)
     inpcrd_rel = os.path.relpath(inpcrd_path, md_dir)
@@ -595,20 +682,26 @@ def run_implicit_md(
 
     for step_name, coord_in, coord_out in steps:
         out_file = f"{step_name}.out"
-        cmd = list(cmd_prefix) + [
-            sander_bin,
-            "-O",
-            "-i",
-            f"{step_name}.in",
-            "-p",
-            prmtop_rel,
-            "-c",
-            coord_in,
-            "-o",
-            out_file,
-            "-r",
-            coord_out,
-        ]
+        cmd = list(cmd_prefix)
+        if use_mpi:
+            cmd.extend([mpi_launcher, "-np", str(mpi_info["mpi_ranks"]), sander_bin])
+        else:
+            cmd.append(sander_bin)
+        cmd.extend(
+            [
+                "-O",
+                "-i",
+                f"{step_name}.in",
+                "-p",
+                prmtop_rel,
+                "-c",
+                coord_in,
+                "-o",
+                out_file,
+                "-r",
+                coord_out,
+            ]
+        )
         if step_name == "prod":
             cmd.extend(["-x", traj_name])
         if restrain:
@@ -617,8 +710,17 @@ def run_implicit_md(
         _log(
             logger,
             "INFO",
-            {"cmd": " ".join(cmd), "source": source, "step": step_name, "replicate": replicate_index},
+            {
+                "cmd": " ".join(cmd),
+                "source": source,
+                "step": step_name,
+                "replicate": replicate_index,
+                "engine": engine_label,
+                "ranks": mpi_info["mpi_ranks"],
+                "launcher": launcher_label,
+            },
             "md_run",
+            component=_COMPONENT_MD,
         )
 
         proc = subprocess.run(cmd, cwd=str(md_dir), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -629,19 +731,9 @@ def run_implicit_md(
                 "ERROR",
                 {"step": step_name, "rc": proc.returncode, "log": md_dir / out_file},
                 "md_failed",
+                component=_COMPONENT_MD,
             )
-            return {
-                "ok": False,
-                "run": True,
-                "skipped": False,
-                "traj_path": str(traj_path),
-                "traj_format": traj_format,
-                "n_frames_est": n_frames_est,
-                "replicate": replicate_index,
-                "seed": seed,
-                "md_dir": str(md_dir),
-                "replicate_dir": str(rep_dir),
-            }
+            return _result({"ok": False, "run": True, "skipped": False})
 
     if not traj_path.exists() or traj_path.stat().st_size == 0:
         _log(
@@ -649,38 +741,18 @@ def run_implicit_md(
             "ERROR",
             {"traj": traj_path, "replicate": replicate_index},
             "md_missing_trajectory",
+            component=_COMPONENT_MD,
         )
-        return {
-            "ok": False,
-            "run": True,
-            "skipped": False,
-            "traj_path": str(traj_path),
-            "traj_format": traj_format,
-            "n_frames_est": n_frames_est,
-            "replicate": replicate_index,
-            "seed": seed,
-            "md_dir": str(md_dir),
-            "replicate_dir": str(rep_dir),
-        }
+        return _result({"ok": False, "run": True, "skipped": False})
 
     _log(
         logger,
         "INFO",
         {"traj": traj_path, "replicate": replicate_index, "ok": "true"},
         "md_done",
+        component=_COMPONENT_MD,
     )
-    return {
-        "ok": True,
-        "run": True,
-        "skipped": False,
-        "traj_path": str(traj_path),
-        "traj_format": traj_format,
-        "n_frames_est": n_frames_est,
-        "replicate": replicate_index,
-        "seed": seed,
-        "md_dir": str(md_dir),
-        "replicate_dir": str(rep_dir),
-    }
+    return _result({"ok": True, "run": True, "skipped": False})
 
 
 def make_mmgbsa_trajectory(
