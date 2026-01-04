@@ -411,7 +411,7 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
-TEST_MODE_ENABLE = dud
+TEST_MODE_ENABLE = dud+fda
 TEST_LIBRARY_MAP = {
     "TEST": "test_library_10",
     "TEMP": "test_library_10",

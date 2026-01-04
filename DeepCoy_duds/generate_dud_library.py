@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import re
 import json
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -668,6 +669,15 @@ def parse_args():
         action="store_true",
         help="Enable verbose output.")
     parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Skip external queries; rely on fallback/cached actives.")
+    parser.add_argument(
+        "--force",
+        dest="force",
+        action="store_true",
+        help="Force regeneration by removing existing outputs.")
+    parser.add_argument(
         "--force-deepcoy",
         dest="force_deepcoy",
         action="store_true",
@@ -683,6 +693,8 @@ def main():
     config_txt_path = project_root / CONFIG_FILE_NAME
 
     pdb_id = args.pdb.upper()
+    offline = bool(args.offline)
+    force = bool(args.force or args.force_deepcoy)
 
     input_pdb_dir = resolve_path(args.input_pdb_dir, repo_root)
     out_root = resolve_path(args.out_root, repo_root)
@@ -747,20 +759,31 @@ def main():
     if args.verbose:
         print(f"-> Found input PDB file: {pdb_file}")
 
-    uniprot_id, ec_numbers = get_uniprot_and_ec(pdb_id)
-    if not uniprot_id:
-        print("ERROR: Failed to retrieve UniProt ID. Cannot proceed.", file=sys.stderr)
-        return 1
+    fallback_smiles_cli = args.fallback_smiles
+    if offline:
+        print("## Offline mode enabled: skipping UniProt/EC queries.")
+        uniprot_id, ec_numbers = "UNKNOWN", []
+    else:
+        uniprot_id, ec_numbers = get_uniprot_and_ec(pdb_id)
+        if not uniprot_id:
+            if fallback_smiles_cli:
+                print("WARNING: UniProt lookup failed; proceeding with fallback SMILES and UNKNOWN tag.")
+                uniprot_id, ec_numbers = "UNKNOWN", []
+            else:
+                print("ERROR: Failed to retrieve UniProt ID. Cannot proceed.", file=sys.stderr)
+                return 1
 
-    all_actives = query_external_sources(
-        uniprot_id,
-        ec_numbers,
-        pdb_id,
-        sources,
-        cache_dir,
-        source_opts,
-        max_workers=args.max_source_workers,
-    )
+    all_actives = []
+    if not offline:
+        all_actives = query_external_sources(
+            uniprot_id,
+            ec_numbers,
+            pdb_id,
+            sources,
+            cache_dir,
+            source_opts,
+            max_workers=args.max_source_workers,
+        )
     final_actives_smiles = validate_and_filter_actives(all_actives)
 
     if not final_actives_smiles:
@@ -775,8 +798,12 @@ def main():
             )
             return 3
 
-    label = f"{pdb_id}_{uniprot_id.split('-')[0]}"
+    label = f"{pdb_id}_{(uniprot_id or 'UNKNOWN').split('-')[0]}"
     output_dir = out_root / label
+    if force and output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
+    if force and artifact_dir.exists():
+        shutil.rmtree(artifact_dir, ignore_errors=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     actives_smi_path = write_actives_smiles(final_actives_smiles, output_dir, label)
@@ -818,8 +845,31 @@ def main():
         print("ERROR: DeepCoy wrapper script not found or not executable.", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as e:
-        print(f"ERROR: DeepCoy command failed with exit code {e.returncode}.", file=sys.stderr)
-        return e.returncode or 1
+        if e.returncode == 4 and args.fallback_smiles:
+            print("WARNING: DeepCoy preprocessing rejected actives; retrying with simplified fallback.")
+            simple_smiles = "CCN(CC)CCO"
+            with actives_smi_path.open("w") as f:
+                f.write(f"{simple_smiles}\tFALLBACK\n")
+            try:
+                run_deepcoy_workflow(
+                    actives_smi_path,
+                    output_dir,
+                    artifact_dir,
+                    deepcoy_run_sh,
+                    deepcoy_sdf_sh,
+                    args.decoys_per_active,
+                    deepcoy_python,
+                    config_path,
+                    args.skip_sdf,
+                    args.ensure_sdf,
+                    args.restrict_data,
+                )
+            except subprocess.CalledProcessError as e2:
+                print(f"ERROR: DeepCoy command failed after retry with exit code {e2.returncode}.", file=sys.stderr)
+                return e2.returncode or 1
+        else:
+            print(f"ERROR: DeepCoy command failed with exit code {e.returncode}.", file=sys.stderr)
+            return e.returncode or 1
 
     print(f"Decoys should be generated in: {output_dir}")
     return 0

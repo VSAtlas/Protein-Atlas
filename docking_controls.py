@@ -910,7 +910,55 @@ def select_center_via_control_redock(
     if best is None:
         return None, None
 
+    def _extract_smiles_from_ref(ref_path: _Path, obabel_bin: str) -> Optional[str]:
+        if not ref_path or not ref_path.exists():
+            return None
+        ext = ref_path.suffix.lower().lstrip(".")
+        try:
+            res = subprocess.run(
+                [obabel_bin, f"-i{ext}", str(ref_path), "-osmi"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            for ln in res.stdout.splitlines():
+                tok = ln.strip().split()
+                if tok:
+                    return tok[0]
+        except Exception:
+            pass
+        try:
+            from rdkit import Chem as _Chem
+            mol = None
+            if ext in {"sdf", "mol"}:
+                suppl = _Chem.SDMolSupplier(str(ref_path))
+                mol = next((m for m in suppl if m), None)
+            elif ext == "mol2":
+                mol = _Chem.MolFromMol2File(str(ref_path))
+            elif ext == "pdb":
+                mol = _Chem.MolFromPDBFile(str(ref_path))
+            if mol:
+                return _Chem.MolToSmiles(mol, isomericSmiles=True)
+        except Exception:
+            return None
+        return None
+
     chosen_center = best[3]
+    if _math.isfinite(best[0]):
+        ref_path = control_lookup.get(best[2])
+        fb_smiles = _extract_smiles_from_ref(ref_path, obabel)
+        if fb_smiles:
+            fb_map = cfg.setdefault("_DEEPCOY_FALLBACK_SMILES_BY_PDB", {})
+            if isinstance(fb_map, dict):
+                fb_map[paths.pdb_id.upper()] = fb_smiles
+            logger.info(
+                "[deepcoy.fallback] pdb=%s base=%s ref=%s smiles_set=%s",
+                paths.pdb_id.upper(),
+                best[2],
+                ref_path,
+                bool(fb_smiles),
+            )
+
     logger.info(f"[Control-center] chosen={best[2]} center=({chosen_center[0]:.3f},{chosen_center[1]:.3f},{chosen_center[2]:.3f})")
     #BOX SIZE SPECIFIED HERE, NEED TO EDIT THIS TO CALCULATE BOX SIZE, LARGE BOX  SIZES DECREASE VINA  ACCURACY 
     return chosen_center, (24.0,24.0,24.0)

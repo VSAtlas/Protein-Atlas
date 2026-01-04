@@ -40,6 +40,24 @@ class StageSpec:
     output_name: str
 
 
+def discover_stage3_roots(variant_root: Path) -> Dict[str, Path]:
+    roots: Dict[str, Path] = {}
+    fda = variant_root / "stage3"
+    dud = variant_root / "dud_stage3"
+    if fda.exists():
+        roots["fda"] = fda
+    if dud.exists():
+        roots["dud"] = dud
+    logger = logging.getLogger("rescoring_scorch")
+    logger.info(
+        "[scorch.discover] variant_root=%s fda=%s dud=%s",
+        str(variant_root),
+        str(fda) if fda.exists() else "None",
+        str(dud) if dud.exists() else "None",
+    )
+    return roots
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run SCORCH rescoring for a run-id")
     parser.add_argument("--run-id", required=True, help="Run identifier under docked/")
@@ -296,7 +314,7 @@ def _collect_best_pose_per_base(
 
 def _load_consensus_top_bases(
     consensus_csv: Path, frac: float, logger: logging.Logger, control_bases: Optional[Set[str]] = None
-) -> Tuple[Set[str], int, int, int, int, int]:
+) -> Tuple[Set[str], Set[str], int, int, int, int, int]:
     rows: List[Dict[str, str]] = []
     try:
         with consensus_csv.open() as handle:
@@ -310,7 +328,7 @@ def _load_consensus_top_bases(
                     consensus_csv,
                     ",".join(sorted(missing)),
                 )
-                return set(), 0, 0, 0, 0, 0
+                return set(), set(), 0, 0, 0, 0, 0
             for row in reader:
                 rows.append(row)
     except Exception as exc:
@@ -320,10 +338,10 @@ def _load_consensus_top_bases(
             consensus_csv,
             exc,
         )
-        return set(), 0, 0, 0, 0, 0
+        return set(), set(), 0, 0, 0, 0, 0
 
     if not rows:
-        return set(), 0, 0, 0, 0, 0
+        return set(), set(), 0, 0, 0, 0, 0
 
     def _score(row: Dict[str, str]) -> float:
         try:
@@ -332,8 +350,10 @@ def _load_consensus_top_bases(
             return float("-inf")
 
     control_set = control_bases or set()
-    scored_rows: List[Tuple[float, str, bool]] = []
+    scored_rows: List[Tuple[float, str, bool, str]] = []
     controls_in_consensus: Set[str] = set()
+    has_library = "library" in (rows[0].keys() if rows else [])
+    unknown_count = 0
     for row in rows:
         lig = str(row.get("ligand", "")).strip()
         if not lig:
@@ -344,20 +364,84 @@ def _load_consensus_top_bases(
         is_ctrl = base in control_set
         if is_ctrl:
             controls_in_consensus.add(base)
-        scored_rows.append((_score(row), base, is_ctrl))
+        lib = str(row.get("library", "")).strip().upper() if has_library else ""
+        if lib == "":
+            lib = "UNKNOWN"
+        scored_rows.append((_score(row), base, is_ctrl, lib))
+        if lib == "UNKNOWN" and not is_ctrl:
+            unknown_count += 1
 
     if not scored_rows:
-        return set(control_set), len(rows), 0, 0, len(control_set), len(controls_in_consensus)
+        empty = set(control_set)
+        return empty, empty, len(rows), 0, 0, len(control_set), len(controls_in_consensus)
 
-    non_controls = [(score, base) for score, base, is_ctrl in scored_rows if not is_ctrl]
-    non_controls_sorted = sorted(non_controls, key=lambda item: item[0], reverse=True)
-    k = max(1, math.ceil(len(non_controls_sorted) * frac)) if non_controls_sorted else 0
+    if not has_library:
+        non_controls = [(score, base) for score, base, is_ctrl, _ in scored_rows if not is_ctrl]
+        non_controls_sorted = sorted(non_controls, key=lambda item: item[0], reverse=True)
+        k = max(1, math.ceil(len(non_controls_sorted) * frac)) if non_controls_sorted else 0
 
-    allowed: Set[str] = set(control_set)
-    for _, base in non_controls_sorted[:k]:
-        allowed.add(base)
+        allowed: Set[str] = set(control_set)
+        for _, base in non_controls_sorted[:k]:
+            allowed.add(base)
 
-    return allowed, len(rows), k, len(non_controls_sorted), len(control_set), len(controls_in_consensus)
+        logger.info(
+            "[select.top_frac] library=absent total_rows=%d non_controls=%d k=%d controls=%d controls_in_consensus=%d frac=%.3f",
+            len(rows),
+            len(non_controls_sorted),
+            k,
+            len(control_set),
+            len(controls_in_consensus),
+            frac,
+        )
+        return allowed, allowed, len(rows), k, len(non_controls_sorted), len(control_set), len(controls_in_consensus)
+
+    buckets = {"FDA": [], "DECOY": []}
+    non_controls_total = 0
+    for score, base, is_ctrl, lib in scored_rows:
+        if is_ctrl:
+            continue
+        non_controls_total += 1
+        if lib in buckets:
+            buckets[lib].append((score, base))
+    allowed_fda: Set[str] = set(control_set)
+    allowed_decoy: Set[str] = set(control_set)
+    k_fda = 0
+    k_decoy = 0
+    for lib, bucket in buckets.items():
+        sorted_bucket = sorted(bucket, key=lambda item: item[0], reverse=True)
+        k = max(1, math.ceil(len(sorted_bucket) * frac)) if sorted_bucket else 0
+        if lib == "FDA":
+            k_fda = k
+        elif lib == "DECOY":
+            k_decoy = k
+        for _, base in sorted_bucket[:k]:
+            if lib == "FDA":
+                allowed_fda.add(base)
+            elif lib == "DECOY":
+                allowed_decoy.add(base)
+
+    logger.info(
+        "[select.top_frac] library=stratified total_rows=%d non_controls=%d non_controls_fda=%d k_fda=%d non_controls_decoy=%d k_decoy=%d controls=%d controls_in_consensus=%d unknown=%d frac=%.3f",
+        len(rows),
+        non_controls_total,
+        len(buckets["FDA"]),
+        k_fda,
+        len(buckets["DECOY"]),
+        k_decoy,
+        len(control_set),
+        len(controls_in_consensus),
+        unknown_count,
+        frac,
+    )
+    return (
+        allowed_fda,
+        allowed_decoy,
+        len(rows),
+        k_fda + k_decoy,
+        non_controls_total,
+        len(control_set),
+        len(controls_in_consensus),
+    )
 
 
 
@@ -619,10 +703,14 @@ def _score_stage(
     overwrite: bool,
     logger: logging.Logger,
     allowed_bases: Optional[Set[str]] = None,
+    *,
+    run_mode: str = "fda",
+    stage_dirs_override: Optional[Sequence[str]] = None,
     ) -> Tuple[bool, Optional[Path]]:
     pdb_id, variant, ph = combo
     combo_post_root = post_root / pdb_id / variant / ph
-    out_path = combo_post_root / spec.output_name
+    output_name = spec.output_name if run_mode == "fda" else f"dud_{spec.output_name}"
+    out_path = combo_post_root / output_name
     combo_post_root.mkdir(parents=True, exist_ok=True)
 
     if out_path.exists() and not overwrite:
@@ -638,13 +726,13 @@ def _score_stage(
     if spec.source in {"vina", "gnina"}:
         ph_root = run_root / pdb_id / variant / ph
         stage_counts: Optional[Dict[int, int]] = None
-        stage_dirs: Sequence[str] = (spec.stage_dir,)
-        if spec.stage_dir == "vina_best":
+        stage_dirs: Sequence[str] = stage_dirs_override or (spec.stage_dir,)
+        if stage_dirs_override is None and spec.stage_dir == "vina_best":
             stage_dirs = ("stage3", "stage2", "stage1")
             ligands_available, stage_counts, total_candidates, available_bases = _collect_best_pose_per_base(
                 ph_root, stage_dirs, allowed_bases, logger
             )
-        elif spec.stage_dir == "gnina_best":
+        elif stage_dirs_override is None and spec.stage_dir == "gnina_best":
             stage_dirs = ("gnina_stage3", "gnina_stage2", "gnina_stage1")
             ligands_available, stage_counts, total_candidates, available_bases = _collect_best_pose_per_base(
                 ph_root, stage_dirs, allowed_bases, logger
@@ -798,6 +886,7 @@ def _score_stage(
         "ph": ph,
         "source": spec.source,
         "stage_dir": spec.stage_dir,
+        "run_mode": run_mode,
     }
     if not _annotate_csv(out_path, metadata, logger):
         return False, None
@@ -814,7 +903,13 @@ def _score_stage(
 
 
 def _aggregate_combo(
-    post_root: Path, specs: List[StageSpec], combo: Tuple[str, str, str], logger: logging.Logger
+    post_root: Path,
+    specs: List[StageSpec],
+    combo: Tuple[str, str, str],
+    logger: logging.Logger,
+    *,
+    run_mode: str = "fda",
+    output_name: str = "scorch_scores_all.csv",
 ) -> Optional[Path]:
     pdb_id, variant, ph = combo
     combo_dir = post_root / pdb_id / variant / ph
@@ -822,7 +917,8 @@ def _aggregate_combo(
     fields: List[str] = []
 
     for spec in specs:
-        csv_path = combo_dir / spec.output_name
+        csv_name = spec.output_name if run_mode == "fda" else f"dud_{spec.output_name}"
+        csv_path = combo_dir / csv_name
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             continue
         try:
@@ -854,7 +950,7 @@ def _aggregate_combo(
         )
         return None
 
-    out_path = combo_dir / "scorch_scores_all.csv"
+    out_path = combo_dir / output_name
     try:
         with out_path.open("w", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
@@ -871,13 +967,14 @@ def _aggregate_combo(
         return None
 
     logger.info(
-        "%s action=aggregate status=ok rows=%d output=%s pdb_id=%s variant=%s ph=%s",
+        "%s action=aggregate status=ok rows=%d output=%s pdb_id=%s variant=%s ph=%s run_mode=%s",
         COMPONENT,
         len(rows),
         out_path,
         pdb_id,
         variant,
         ph,
+        run_mode,
     )
     return out_path
 
@@ -964,10 +1061,11 @@ def main() -> int:
         logger.warning("%s action=discover status=skip reason=no_combos run_id=%s", COMPONENT, args.run_id)
         return 0
 
-    tasks: List[Tuple[StageSpec, Tuple[str, str, str], Path, Set[str]]] = []
+    tasks: List[Tuple[StageSpec, Tuple[str, str, str], Path, Set[str], str, Optional[Sequence[str]]]] = []
     skipped_missing_receptor = 0
     skipped_missing_consensus = 0
     combos_with_tasks: Set[Tuple[str, str, str]] = set()
+    combo_modes: Dict[Tuple[str, str, str], Set[str]] = {}
     control_cache: Dict[str, Set[str]] = {}
     for combo in sorted(combos):
         pdb_id, variant, ph = combo
@@ -987,7 +1085,8 @@ def main() -> int:
         if pdb_id not in control_cache:
             control_cache[pdb_id] = _load_control_bases(processed_root, pdb_id, logger)
         (
-            allowed_bases,
+            allowed_fda,
+            allowed_dud,
             total_rows,
             selected_rows,
             noncontrol_rows,
@@ -1018,12 +1117,31 @@ def main() -> int:
             selected_rows,
             controls_total,
             controls_in_consensus,
-            len(allowed_bases),
+            len(allowed_fda.union(allowed_dud)),
             top_fraction,
             consensus_csv,
         )
-        for spec in specs:
-            tasks.append((spec, combo, receptor, allowed_bases))
+        variant_root = run_root / pdb_id / variant / ph
+        stage_roots = discover_stage3_roots(variant_root)
+        if "fda" in stage_roots:
+            logger.info(
+                "[scorch.run] mode=fda stage_root=%s n_allowed=%d",
+                stage_roots["fda"],
+                len(allowed_fda),
+            )
+            for spec in specs:
+                tasks.append((spec, combo, receptor, allowed_fda, "fda", None))
+            combo_modes.setdefault(combo, set()).add("fda")
+        if "dud" in stage_roots:
+            logger.info(
+                "[scorch.run] mode=dud stage_root=%s n_allowed=%d",
+                stage_roots["dud"],
+                len(allowed_dud),
+            )
+            stage_dirs_override: Sequence[str] = ("dud_stage3", "dud_stage2")
+            for spec in specs:
+                tasks.append((spec, combo, receptor, allowed_dud, "dud", stage_dirs_override))
+            combo_modes.setdefault(combo, set()).add("dud")
         combos_with_tasks.add(combo)
 
     total_jobs = len(tasks)
@@ -1032,9 +1150,19 @@ def main() -> int:
     combos_attempted = len(combos_with_tasks)
 
     if args.jobs <= 1:
-        for spec, combo, receptor, allowed_bases in tasks:
+        for spec, combo, receptor, allowed_bases, run_mode, stage_dirs_override in tasks:
             ok, _ = _score_stage(
-                spec, combo, run_root, post_run_root, receptor, args.threads, args.overwrite, logger, allowed_bases
+                spec,
+                combo,
+                run_root,
+                post_run_root,
+                receptor,
+                args.threads,
+                args.overwrite,
+                logger,
+                allowed_bases,
+                run_mode=run_mode,
+                stage_dirs_override=stage_dirs_override,
             )
             if ok:
                 completed += 1
@@ -1054,8 +1182,10 @@ def main() -> int:
                     args.overwrite,
                     logger,
                     allowed_bases,
-                ): (spec, combo)
-                for spec, combo, receptor, allowed_bases in tasks
+                    run_mode,
+                    stage_dirs_override,
+                ): (spec, combo, run_mode)
+                for spec, combo, receptor, allowed_bases, run_mode, stage_dirs_override in tasks
             }
             for future in as_completed(future_map):
                 try:
@@ -1066,19 +1196,35 @@ def main() -> int:
                         failed_jobs += 1
                 except Exception as exc:  # defensive
                     failed_jobs += 1
-                    spec, combo = future_map[future]
+                    spec, combo, run_mode = future_map[future]
                     logger.error(
-                        "%s action=score status=failed reason=worker_exception source=%s stage=%s combo=%s error=%s",
+                        "%s action=score status=failed reason=worker_exception source=%s stage=%s combo=%s run_mode=%s error=%s",
                         COMPONENT,
                         spec.source,
                         spec.stage_dir,
                         combo,
+                        run_mode,
                         exc,
                     )
 
     for combo in sorted(combos_with_tasks):
-        all_path = _aggregate_combo(post_run_root, specs, combo, logger)
-        if all_path and rerank_consensus_with_scorch and find_consensus_csv:
+        modes = combo_modes.get(combo, {"fda"})
+        fda_all = None
+        for mode in sorted(modes):
+            out_name = "scorch_scores_all.csv" if mode == "fda" else "dud_scorch_scores_all.csv"
+            agg_path = _aggregate_combo(post_run_root, specs, combo, logger, run_mode=mode, output_name=out_name)
+            if mode == "fda":
+                fda_all = agg_path
+        chosen_all = fda_all
+        if chosen_all is None:
+            # fall back to any mode we aggregated
+            for mode in sorted(modes):
+                alt = "scorch_scores_all.csv" if mode == "fda" else "dud_scorch_scores_all.csv"
+                candidate = (post_run_root / combo[0] / combo[1] / combo[2] / alt)
+                if candidate.exists():
+                    chosen_all = candidate
+                    break
+        if chosen_all and rerank_consensus_with_scorch and find_consensus_csv:
             try:
                 pdb_id, variant, ph = combo
                 dock_combo_dir = run_root / pdb_id / variant / ph
@@ -1093,8 +1239,8 @@ def main() -> int:
                         dock_combo_dir,
                     )
                 else:
-                    out_csv = all_path.parent / "consensus_reranked_scorch.csv"
-                    rerank_consensus_with_scorch(consensus_csv, all_path, out_csv, logger, overwrite=args.overwrite)
+                    out_csv = chosen_all.parent / "consensus_reranked_scorch.csv"
+                    rerank_consensus_with_scorch(consensus_csv, chosen_all, out_csv, logger, overwrite=args.overwrite)
             except Exception as exc:
                 logger.warning(
                     "%s action=rerank status=skip reason=exception combo=%s error=%s",

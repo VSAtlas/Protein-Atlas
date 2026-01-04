@@ -556,6 +556,8 @@ def write_leap_for_ligand(
         "source leaprc.gaff2",
     ]
     leap_lines.extend(_leap_water_lines(water_model=water_model, map_hoh_to_wat=map_hoh_to_wat, hoh_residue_count=hoh_residue_count))
+    receptor_comment = receptor_rel.replace(".noH.pdb", ".pdb")
+    leap_lines.append(f"# receptor_source {receptor_comment}")
     leap_lines.extend(
         [
             f"loadamberparams {frcmod_rel}",

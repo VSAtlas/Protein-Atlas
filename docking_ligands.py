@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import sys
@@ -33,6 +34,49 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
     work_root = Path(cfg.get("DEEPCOY_WORK_ROOT", deepcoy_dir / "deepcoy_work")) / pdb_up
     input_pdb_dir = Path(cfg.get("DEEPCOY_INPUT_PDB_DIR", "/home/michael/atlas/code/protein_automation/input_pdbs"))
     deepcoy_python = cfg.get("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env/bin/python")
+    fb_map = cfg.get("_DEEPCOY_FALLBACK_SMILES_BY_PDB", {})
+    fallback_smiles = None
+    if isinstance(fb_map, dict):
+        fallback_smiles = fb_map.get(pdb_up)
+    if not fallback_smiles:
+        fallback_smiles = str(cfg.get("DEEPCOY_FALLBACK_SMILES", "")).strip() or None
+    if not fallback_smiles:
+        processed_root = Path(cfg.get("PROCESSED_PDBS_DIR", "processed_pdbs"))
+        lig_raw_dir = processed_root / pdb_up / "ligands_raw"
+
+        def _smiles_from_file(p: Path) -> Optional[str]:
+            try:
+                ext = p.suffix.lower().lstrip(".")
+                if ext in {"sdf", "sd"}:
+                    suppl = Chem.SDMolSupplier(str(p))
+                    mol = next((m for m in suppl if m), None)
+                elif ext == "mol2":
+                    mol = Chem.MolFromMol2File(str(p))
+                else:
+                    mol = Chem.MolFromPDBFile(str(p))
+                if mol:
+                    return Chem.MolToSmiles(mol, isomericSmiles=True)
+            except Exception:
+                return None
+            return None
+
+        if lig_raw_dir.exists():
+            for ext in ("sdf", "mol2", "pdb"):
+                for cand in sorted(lig_raw_dir.glob(f"*.{ext}")):
+                    smi = _smiles_from_file(cand)
+                    if smi:
+                        fallback_smiles = smi
+                        if isinstance(fb_map, dict):
+                            fb_map[pdb_up] = smi
+                        logger.info(
+                            "[deepcoy.fallback] pdb=%s base=control ref=%s smiles_set=True",
+                            pdb_up,
+                            cand,
+                        )
+                        break
+                if fallback_smiles:
+                    break
+    offline = str(cfg.get("DEEPCOY_OFFLINE", os.environ.get("DEEPCOY_OFFLINE", "off"))).strip().lower() in {"on", "true", "1", "yes"}
 
     def _find_existing() -> Optional[Path]:
         pattern = f"{pdb_up}_*"
@@ -46,7 +90,18 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
         return None
 
     existing = _find_existing()
-    if existing and not force:
+    if force:
+        # Remove any prior outputs for this PDB to avoid mixing tags (e.g., UNKNOWN vs UniProt)
+        for cand in out_root.glob(f"{pdb_up}_*"):
+            try:
+                shutil.rmtree(cand, ignore_errors=True)
+            except Exception:
+                pass
+        try:
+            shutil.rmtree(work_root, ignore_errors=True)
+        except Exception:
+            pass
+    elif existing:
         return existing
 
     cmd = [
@@ -66,12 +121,15 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
     ]
     if force:
         cmd.append("--force-deepcoy")
-    fallback = str(cfg.get("DEEPCOY_FALLBACK_SMILES", "")).strip()
-    if fallback:
-        cmd.extend(["--fallback-smiles", fallback])
+    if fallback_smiles:
+        cmd.extend(["--fallback-smiles", fallback_smiles])
     restrict = int(cfg.get("DEEPCOY_RESTRICT_DATA", 0) or 0)
     if restrict > 0:
         cmd.extend(["--restrict-data", str(restrict)])
+    if offline:
+        cmd.append("--offline")
+    if force:
+        cmd.append("--force")
 
     logger.info(
         "[deepcoy.autogen] pdb=%s enabled=true out_root=%s work_dir=%s",
@@ -102,7 +160,9 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
     return produced
 
 
-def ensure_deepcoy_decoy_pdbqts(cfg: Dict, pdb_id: str, logger: logging.Logger) -> Optional[Path]:
+def ensure_deepcoy_decoy_pdbqts(
+    cfg: Dict, pdb_id: str, logger: logging.Logger, *, run_mode: Optional[str] = None
+) -> Optional[Path]:
     enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
     if enabled not in {"on", "true", "1", "yes"}:
         return None
@@ -110,16 +170,44 @@ def ensure_deepcoy_decoy_pdbqts(cfg: Dict, pdb_id: str, logger: logging.Logger) 
     if pdbqt_enabled not in {"on", "true", "1", "yes"}:
         return None
 
-    sdf_path = ensure_deepcoy_decoy_sdfs(cfg, pdb_id, logger)
-    if not sdf_path or not sdf_path.is_file():
-        return None
-
-    label = sdf_path.parent.name
+    test_map = _coerce_test_map(cfg.get("TEST_LIBRARY_MAP", {}))
+    mapped_value = (test_map or {}).get(pdb_id.upper())
     base_root = Path(
         cfg.get("OUTPUT_LIGANDS_DIR")
         or cfg.get("PREPPED_LIGANDS_ROOT")
         or "prepped_ligands"
     )
+    mapped_root = base_root / mapped_value if mapped_value else None
+    run_mode_val = (run_mode or "").lower()
+    if mapped_root and mapped_root.exists():
+        logger.info(
+            "[deepcoy.autogen.skip] pdb=%s reason=mapped_library_exists mapped=%s path=%s run_mode=%s",
+            pdb_id.upper(),
+            mapped_value,
+            mapped_root,
+            run_mode_val or "auto",
+        )
+        return None
+    if mapped_root:
+        logger.info(
+            "[deepcoy.autogen.run] pdb=%s reason=mapped_library_missing mapped=%s path=%s run_mode=%s",
+            pdb_id.upper(),
+            mapped_value,
+            mapped_root,
+            run_mode_val or "auto",
+        )
+    else:
+        logger.info(
+            "[deepcoy.autogen.run] pdb=%s reason=no_test_library_map_match run_mode=%s",
+            pdb_id.upper(),
+            run_mode_val or "auto",
+        )
+
+    sdf_path = ensure_deepcoy_decoy_sdfs(cfg, pdb_id, logger)
+    if not sdf_path or not sdf_path.is_file():
+        return None
+
+    label = sdf_path.parent.name
     prepped_root = Path(cfg.get("DEEPCOY_PREPPED_SUBDIR", "deepcoy"))
     prepped_dir = base_root / prepped_root / label
     prepped_dir.mkdir(parents=True, exist_ok=True)
@@ -247,14 +335,37 @@ def _maybe_set_deepcoy_as_dud_library(
         canonical = {}
         cfg["_TEST_LIBRARY_CANONICAL"] = canonical
 
-    if key in test_map:
-        logger.debug(
-            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
-            key,
-            effective_mode,
-            test_map.get(key),
-        )
-        return
+    force_map = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}
+    existing = test_map.get(key)
+    if existing:
+        if existing == mapped_subdir:
+            logger.debug(
+                "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
+                key,
+                effective_mode,
+                existing,
+            )
+            return
+        base_root = prepped_dir.parent.parent if prepped_dir.parent else prepped_dir
+        existing_dir = base_root / existing
+        existing_ok = existing_dir.exists() and any(p.stat().st_size > 0 for p in existing_dir.glob("*.pdbqt"))
+        if not existing_ok or force_map:
+            logger.info(
+                "[deepcoy.dud-map] pdb=%s mode=%s action=update existing=%s new=%s reason=%s",
+                key,
+                effective_mode,
+                existing,
+                mapped_subdir,
+                "force" if force_map else "missing_or_empty",
+            )
+        else:
+            logger.debug(
+                "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
+                key,
+                effective_mode,
+                existing,
+            )
+            return
 
     test_map[key] = mapped_subdir
     canonical[key] = mapped_subdir
@@ -823,7 +934,7 @@ def prepare_and_filter_ligands(
 
     deepcoy_prepped_dir: Optional[Path] = None
     try:
-        deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(cfg, paths.pdb_id, logger)
+        deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(cfg, paths.pdb_id, logger, run_mode=run_mode)
     except Exception as exc:
         logger.warning("[deepcoy.autogen] pdb=%s error=%s", paths.pdb_id, exc)
         if str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}:
