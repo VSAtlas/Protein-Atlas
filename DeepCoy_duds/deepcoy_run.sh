@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 <ACTIVES_SMI_PATH> <OUTPUT_DIR> [--artifact-dir DIR] [--decoys-per-active N] [--config BASE_CONFIG] [--deepcoy-python PY] [--train-cache PATH] [--valid-cache PATH]" >&2
+    echo "Usage: $0 <ACTIVES_SMI_PATH> <OUTPUT_DIR> [--artifact-dir DIR] [--decoys-per-active N] [--config BASE_CONFIG] [--deepcoy-python PY] [--train-cache PATH] [--valid-cache PATH] [--restrict-data N]" >&2
 }
 
 if [ $# -lt 2 ]; then
@@ -20,6 +20,7 @@ DEEPCOY_PYTHON_ARG=""
 TRAIN_CACHE_PATH=""
 VALID_CACHE_PATH=""
 ARTIFACT_DIR_ARG=""
+RESTRICT_DATA=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -69,6 +70,14 @@ while [ $# -gt 0 ]; do
                 exit 2
             fi
             VALID_CACHE_PATH="$2"
+            shift 2
+            ;;
+        --restrict-data)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --restrict-data requires a value." >&2
+                exit 2
+            fi
+            RESTRICT_DATA="$2"
             shift 2
             ;;
         -h|--help)
@@ -169,12 +178,12 @@ if [ -z "$VALID_CACHE_PATH" ] && [ -f "$DEFAULT_VALID_CACHE" ]; then
     VALID_CACHE_PATH="$DEFAULT_VALID_CACHE"
 fi
 
-RESTORE_PATH="$("${DEEPCOY_PYTHON_PATH}" - "${BASE_CONFIG}" "${ACTIVES_JSON}" "${OUTPUT_SMI}" "${DECOYS_PER_ACTIVE}" "${RUNTIME_CONFIG}" "${TRAIN_CACHE_PATH}" "${VALID_CACHE_PATH}" <<'PY'
+RESTORE_PATH="$("${DEEPCOY_PYTHON_PATH}" - "${BASE_CONFIG}" "${ACTIVES_JSON}" "${OUTPUT_SMI}" "${DECOYS_PER_ACTIVE}" "${RUNTIME_CONFIG}" "${TRAIN_CACHE_PATH}" "${VALID_CACHE_PATH}" "${RESTRICT_DATA}" <<'PY'
 import json
 import os
 import sys
 
-base_path, valid_file, output_name, decoys_per_active, out_path, train_cache, valid_cache = sys.argv[1:]
+base_path, valid_file, output_name, decoys_per_active, out_path, train_cache, valid_cache, restrict_data = sys.argv[1:]
 with open(base_path, "r") as f:
     config = json.load(f)
 
@@ -198,6 +207,17 @@ if train_cache and os.path.isfile(train_cache):
     config["train_cache"] = train_cache
 if valid_cache and os.path.isfile(valid_cache) and valid_file == base_valid_file:
     config["valid_cache"] = valid_cache
+try:
+    restrict_val = int(restrict_data)
+    if restrict_val > 0:
+        config["restrict_data"] = restrict_val
+except Exception:
+    pass
+if os.environ.get("DEEPCOY_RESTRICT_DATA"):
+    try:
+        config["restrict_data"] = int(os.environ["DEEPCOY_RESTRICT_DATA"])
+    except Exception:
+        pass
 
 with open(out_path, "w") as f:
     json.dump(config, f, indent=2)

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from rdkit import Chem
+from rdkit.Chem import AllChem
 from external_sources import (
     fetch_bindingdb_smiles,
     fetch_chembl_smiles,
@@ -424,6 +425,40 @@ def write_actives_smiles(final_actives_smiles, output_dir, label):
     return actives_smi_path
 
 
+def convert_smi_to_sdf(smi_path: Path, sdf_path: Path):
+    if not smi_path.is_file():
+        print(f"WARNING: SMILES file not found for SDF conversion: {smi_path}")
+        return
+    suppl = []
+    with smi_path.open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            parts = line.strip().split()
+            smi = parts[0]
+            name = parts[1] if len(parts) > 1 else "DECOY"
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            try:
+                AllChem.Compute2DCoords(mol)
+            except Exception:
+                pass
+            mol.SetProp("_Name", name)
+            suppl.append(mol)
+    if not suppl:
+        print(f"WARNING: No valid molecules to convert for {smi_path}")
+        return
+    sdf_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = Chem.SDWriter(str(sdf_path))
+    count = 0
+    for mol in suppl:
+        writer.write(mol)
+        count += 1
+    writer.close()
+    print(f"-> Wrote {count} decoys to SDF: {sdf_path} ({sdf_path.stat().st_size} bytes)")
+
+
 def resolve_path(path_str, base_dir):
     path = Path(path_str).expanduser()
     if path.is_absolute():
@@ -458,6 +493,8 @@ def run_deepcoy_workflow(
     deepcoy_python,
     config_path,
     skip_sdf,
+    ensure_sdf,
+    restrict_data,
 ):
     print("## 5. Executing DeepCoy workflow...")
 
@@ -474,16 +511,17 @@ def run_deepcoy_workflow(
         "--deepcoy-python",
         deepcoy_python,
     ]
+    if restrict_data and int(restrict_data) > 0:
+        deepcoy_cmd.extend(["--restrict-data", str(restrict_data)])
     print(f"Running: {' '.join(deepcoy_cmd)}")
     subprocess.run(deepcoy_cmd, check=True)
 
-    if skip_sdf:
+    smi_path = output_dir / "deepcoy_decoys.smi"
+    sdf_path = output_dir / "deepcoy_decoys.sdf"
+    if ensure_sdf or not skip_sdf:
+        convert_smi_to_sdf(smi_path, sdf_path)
+    else:
         print("-> Skipping SDF conversion (--skip-sdf).")
-        return
-
-    deepcoy_sdf_cmd = [str(deepcoy_sdf_sh), str(output_dir)]
-    print(f"Running: {' '.join(deepcoy_sdf_cmd)}")
-    subprocess.run(deepcoy_sdf_cmd, check=True)
 
 
 def parse_args():
@@ -602,6 +640,15 @@ def parse_args():
         "--deepcoy-sdf-sh",
         default="./deepcoy_smiles_to_sdf.sh",
         help="Path to deepcoy_smiles_to_sdf.sh.")
+    parser.add_argument(
+        "--ensure-sdf",
+        action="store_true",
+        help="Force SDF generation with RDKit even if --skip-sdf is set.")
+    parser.add_argument(
+        "--restrict-data",
+        type=int,
+        default=0,
+        help="Restrict DeepCoy data size for faster smoke tests (passed to DeepCoy).")
 
     parser.add_argument(
         "--skip-sdf",
@@ -620,6 +667,11 @@ def parse_args():
         "--verbose",
         action="store_true",
         help="Enable verbose output.")
+    parser.add_argument(
+        "--force-deepcoy",
+        dest="force_deepcoy",
+        action="store_true",
+        help="Force DeepCoy generation even if outputs appear to exist.")
 
     return parser.parse_args()
 
@@ -676,6 +728,7 @@ def main():
         print(f"-> Artifact dir: {artifact_dir}")
         print(f"-> Sources: {sources}")
         print(f"-> Source workers: {args.max_source_workers}")
+        print(f"-> Ensure SDF: {args.ensure_sdf}")
 
     if not input_pdb_dir.is_dir():
         print(f"ERROR: input-pdb-dir does not exist or is not a directory: {input_pdb_dir}", file=sys.stderr)
@@ -758,6 +811,8 @@ def main():
             deepcoy_python,
             config_path,
             args.skip_sdf,
+            args.ensure_sdf,
+            args.restrict_data,
         )
     except FileNotFoundError:
         print("ERROR: DeepCoy wrapper script not found or not executable.", file=sys.stderr)

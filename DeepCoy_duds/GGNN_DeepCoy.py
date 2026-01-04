@@ -71,8 +71,14 @@ class ChemModel(object):
         self.max_num_vertices = 0
         self.num_edge_types = 0
         self.annotation_size = 0
-        self.train_data = self.load_data(params['train_file'], is_training_data=True)
-        self.valid_data = self.load_data(params['valid_file'], is_training_data=False)
+        is_generation = bool(self.params.get("generation", False))
+        if is_generation:
+            print("Generation mode: skipping train data load")
+            self.train_data = None
+            self.valid_data = self.load_data(params['valid_file'], is_training_data=False)
+        else:
+            self.train_data = self.load_data(params['train_file'], is_training_data=True)
+            self.valid_data = self.load_data(params['valid_file'], is_training_data=False)
 
         # Build the actual model
         config = tf.ConfigProto()

@@ -133,6 +133,8 @@ WATER_KEEP_POLICY = "near_controls"
 #NOTE near center = center of active site, keep in mind
 # with active site recentering, this may not retain the exact waters you want if the site moves too much!!!!
 #CURRENTLY this value actually does nothing, but it will
+
+
 # -------------------------------
 # MMGBSA overview
 # -------------------------------
@@ -158,14 +160,14 @@ MMGBSA_AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 
 # ---- Trajectory + MMPBSA (minimal) ----
-MMGBSA_MD_ENABLED = true
+MMGBSA_MD_ENABLED = false
 MMGBSA_MD_TEMP0 = 300
 MMGBSA_MD_HEAT_PS = 10
 MMGBSA_MD_EQUIL_PS = 20
 MMGBSA_MD_PROD_PS = 20
 MMGBSA_MD_FRAME_STRIDE_PS = 2
 MMGBSA_MD_NREPLICATES = 1
-MMGBSA_MD_MPI_RANKS = auto
+MMGBSA_MD_MPI_RANKS = 32
 MMGBSA_FRAME_AGG = mean
 MMGBSA_FRAME_LIMIT = 10
 MMGBSA_MD_BASE_SEED = 12345
@@ -218,7 +220,7 @@ MMGBSA_MMPBSA_INTERVAL = 1
 # MMGBSA_TRAJ_ENDFRAME = 1
 # MMGBSA_TRAJ_INTERVAL = 1
 # ---- Global MMGBSA toggles & retention rules (often redundant with earlier keys) ----
-MMGBSA_ENABLED = true
+MMGBSA_ENABLED = false
 
 MMGBSA_KEEP_WATERS = true
 MMGBSA_WATER_KEEP_RADIUS = 6.0
@@ -258,6 +260,10 @@ MMGBSA_TLEAP_FORCE = false
 MMGBSA_TLEAP_STRIP_NTERM_H = true
 MMGBSA_TLEAP_INSERT_TER_ON_CHAINBREAK = true
 MMGBSA_TLEAP_CHAINBREAK_CN_MAX_A = 2.2
+MMGBSA_TLEAP_STRIP_ALL_H = true
+MMGBSA_TLEAP_WATER_MODEL = tip3p
+MMGBSA_TLEAP_MAP_HOH_TO_WAT = true
+MD_FIVE_REPLICATE = false
 
 # ---- MMPBSA input block defaults (mirrors &general) ----
 MMGBSA_GENERAL_STARTFRAME = 1
@@ -278,8 +284,8 @@ CTRL_REDOCK_NMODES =9
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
 USE_GNINA = false
-USE_LEDOCK = true
-USE_DOCK6 = true
+USE_LEDOCK = false
+USE_DOCK6 = false
 USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
@@ -393,7 +399,7 @@ MIN_PARENT_HEAVY=8
 VINA_TIMEOUT_SEC=0
 FILTER_VINA_STDOUT=false
 DISCOVERY_SELECTION_PCTS=1.0,0.1,0.01,0.001,0.001
-POLYPHARM_SELECTION_PCTS=1.0,0.1,0.05
+POLYPHARM_SELECTION_PCTS=1.0,0.15,0.10
 
 
 # --- Single-ligand (optional) ---
@@ -477,7 +483,7 @@ TEST_LIBRARY_MAP = {
     "3M2W": "mapk2",
     "2AA2": "mcr",
     "3LQ8": "met",
-    "2OJG": "test_library_20", #should be mk01
+    "2OJG": "mk01", #should be mk01
     "2ZDT": "mk10",
     "2QD9": "mk14",
     "830C": "mmp13",

@@ -415,6 +415,7 @@ def run_ledock_for_stage(
     logger: logging.Logger,
     receptor_pdb: Optional[Path] = None,
     skip_completion: bool = False,
+    output_root: Optional[Path] = None,
 ) -> Tuple[Dict[Path, float], Dict[Path, Dict[str, Any]], Dict[str, Any]]:
     stage_info = stage_info or {}
     scores: Dict[Path, float] = {}
@@ -541,8 +542,10 @@ def run_ledock_for_stage(
             fast_n_poses,
         )
 
-    dock_root = paths.docked_variant_root(variant_for_ph, ph_token)
-    if stage_key == "stage1":
+    dock_root = Path(output_root) if output_root is not None else Path(paths.docked_variant_root(variant_for_ph, ph_token))
+    if output_root is not None:
+        dok_dest = dock_root
+    elif stage_key == "stage1":
         dok_dest = dock_root / "ledock_stage1"
     elif stage_key == "stage2":
         dok_dest = dock_root / "ledock_stage2"

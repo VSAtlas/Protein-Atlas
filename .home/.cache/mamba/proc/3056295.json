@@ -1,0 +1,1 @@
+{"command":["exec","/home/atlas/micromamba/envs/AmberTools25/bin/sander","-O","-i","heat.in","-p","../../complex.prmtop","-c","min.rst7","-o","heat.out","-r","heat.rst7","-ref","../../complex.inpcrd"],"name":"stubborn_/home/atlas/micromamba/envs/AmberTools25/bin/sander","prefix":"/home/atlas/micromamba/envs/AmberTools25"}

@@ -338,6 +338,7 @@ def run_dock6_for_stage(
     logger: logging.Logger,
     receptor_pdb: Optional[Path] = None,
     skip_completion: bool = False,
+    output_root: Optional[Path] = None,
 ) -> Tuple[Dict[Path, Optional[float]], Dict[Path, Dict[str, Any]]]:
     scores: Dict[Path, Optional[float]] = {}
     metrics: Dict[Path, Dict[str, Any]] = {}
@@ -609,8 +610,10 @@ def run_dock6_for_stage(
 
     scores = {lig: rec.get("grid_score") for lig, rec in metrics.items()}
 
-    dock_root = Path(paths.docked_variant_root(variant_for_ph, ph_token))
-    if stage_key == "stage1":
+    dock_root = Path(output_root) if output_root is not None else Path(paths.docked_variant_root(variant_for_ph, ph_token))
+    if output_root is not None:
+        dock_dest = dock_root
+    elif stage_key == "stage1":
         dock_dest = dock_root / "dock6_stage1"
     elif stage_key == "stage2":
         dock_dest = dock_root / "dock6_stage2"

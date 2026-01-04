@@ -22,6 +22,7 @@ from prep_for_mmgbsa import prep_mmgbsa_from_sdf
 
 _COMPONENT_RECEPTOR = "mmgbsa.receptor"
 _COMPONENT_LEAP = "mmgbsa.leap"
+_COMPONENT_LEAP_PREP = "mmgbsa.leap.prep"
 _NTERM_H_ALLOWLIST = {"H", "H1", "H2", "H3", "HT1", "HT2", "HT3", "HN"}
 
 
@@ -79,6 +80,10 @@ def _log_receptor(logger: logging.Logger, level: str, kvs: Dict[str, object], ms
 
 def _log_leap(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
     _log_component(logger, _COMPONENT_LEAP, level, kvs, msg)
+
+
+def _log_leap_prep(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
+    _log_component(logger, _COMPONENT_LEAP_PREP, level, kvs, msg)
 
 
 def _to_bool(val: object, default: bool = False) -> bool:
@@ -281,6 +286,62 @@ def _sanitize_receptor_lines(
     }
 
 
+def _strip_receptor_h_for_leap(receptor_path: Path, strip_all_h: bool) -> Tuple[Path, Dict[str, object]]:
+    if not strip_all_h:
+        hoh_residues: set[str] = set()
+        with receptor_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                    continue
+                resn_raw = line[17:20].strip().upper()
+                if resn_raw == "HOH":
+                    hoh_residues.add(_residue_key(line))
+        return receptor_path, {
+            "strip_all_h": False,
+            "removed_h": 0,
+            "hoh_residue_count": len(hoh_residues),
+        }
+
+    out_path = receptor_path.with_name(f"{receptor_path.stem}.noH{receptor_path.suffix}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    kept_lines: List[str] = []
+    hoh_residues: set[str] = set()
+    removed_h = 0
+
+    with receptor_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if line.startswith("ATOM") or line.startswith("HETATM"):
+                resn_raw = line[17:20].strip().upper()
+                if resn_raw == "HOH":
+                    hoh_residues.add(_residue_key(line))
+
+                atom_name = line[12:16].strip().upper()
+                element = line[76:78].strip().upper()
+                if element == "H" or atom_name.startswith("H"):
+                    removed_h += 1
+                    continue
+
+            kept_lines.append(line)
+
+    _write_text_atomic(out_path, "".join(kept_lines))
+
+    return out_path, {
+        "strip_all_h": True,
+        "removed_h": removed_h,
+        "hoh_residue_count": len(hoh_residues),
+    }
+
+
+def _leap_water_lines(water_model: str, map_hoh_to_wat: bool, hoh_residue_count: int) -> List[str]:
+    lines: List[str] = []
+    if water_model:
+        lines.append(f"source leaprc.water.{water_model}")
+    if map_hoh_to_wat and hoh_residue_count > 0:
+        lines.append('addPdbResMap { { "WAT" "HOH" } }')
+    return lines
+
+
 def _looks_like_pkgs_cache(prefix: Path) -> bool:
     return "/micromamba/pkgs" in prefix.as_posix()
 
@@ -406,6 +467,9 @@ def write_leap_receptor_only(
     receptor_pdb_path: str,
     out_dir: str,
     force: bool = False,
+    water_model: str = "tip3p",
+    map_hoh_to_wat: bool = False,
+    hoh_residue_count: int = 0,
 ) -> dict:
     logger = _get_logger()
     receptor_path = Path(receptor_pdb_path)
@@ -421,15 +485,17 @@ def write_leap_receptor_only(
     inpcrd_path = out_path / "receptor.inpcrd"
 
     receptor_rel = os.path.relpath(receptor_path, out_path)
-    leap_text = "\n".join(
+    leap_lines = ["source leaprc.protein.ff14SB"]
+    leap_lines.extend(_leap_water_lines(water_model=water_model, map_hoh_to_wat=map_hoh_to_wat, hoh_residue_count=hoh_residue_count))
+    leap_lines.extend(
         [
-            "source leaprc.protein.ff14SB",
             f"REC = loadpdb {receptor_rel}",
             "saveamberparm REC receptor.prmtop receptor.inpcrd",
             "quit",
             "",
         ]
     )
+    leap_text = "\n".join(leap_lines)
     _write_text_atomic(leap_file, leap_text)
 
     outputs_ok = (
@@ -454,6 +520,9 @@ def write_leap_for_ligand(
     ligand_frcmod: str,
     out_dir: str,
     force: bool = False,
+    water_model: str = "tip3p",
+    map_hoh_to_wat: bool = False,
+    hoh_residue_count: int = 0,
 ) -> dict:
     logger = _get_logger()
     receptor_path = Path(receptor_pdb_path)
@@ -482,10 +551,13 @@ def write_leap_for_ligand(
     mol2_rel = os.path.relpath(mol2_path, out_path)
     frcmod_rel = os.path.relpath(frcmod_path, out_path)
 
-    leap_text = "\n".join(
+    leap_lines = [
+        "source leaprc.protein.ff14SB",
+        "source leaprc.gaff2",
+    ]
+    leap_lines.extend(_leap_water_lines(water_model=water_model, map_hoh_to_wat=map_hoh_to_wat, hoh_residue_count=hoh_residue_count))
+    leap_lines.extend(
         [
-            "source leaprc.protein.ff14SB",
-            "source leaprc.gaff2",
             f"loadamberparams {frcmod_rel}",
             f"LIG = loadmol2 {mol2_rel}",
             f"REC = loadpdb {receptor_rel}",
@@ -497,6 +569,7 @@ def write_leap_for_ligand(
             "",
         ]
     )
+    leap_text = "\n".join(leap_lines)
     _write_text_atomic(leap_file, leap_text)
 
     outputs_ok = complex_prmtop.exists() and complex_prmtop.stat().st_size > 0
@@ -519,6 +592,9 @@ def write_leap_for_ligands(
     ligand_mol2_frcmod_pairs: List[dict],
     out_dir_base: str,
     force: bool = False,
+    water_model: str = "tip3p",
+    map_hoh_to_wat: bool = False,
+    hoh_residue_count: int = 0,
 ) -> List[dict]:
     results: List[dict] = []
     base_dir = Path(out_dir_base)
@@ -539,6 +615,9 @@ def write_leap_for_ligands(
             ligand_frcmod=frcmod_path,
             out_dir=str(ligand_out_dir),
             force=force,
+            water_model=water_model,
+            map_hoh_to_wat=map_hoh_to_wat,
+            hoh_residue_count=hoh_residue_count,
         )
         topo.update(
             {
@@ -842,6 +921,12 @@ def prep_mmgbsa_receptor_and_topologies(
             "ligand_topologies": [],
         }
 
+    strip_all_h_for_leap = _to_bool(cfg.get("MMGBSA_TLEAP_STRIP_ALL_H", True), default=True)
+    water_model = str(cfg.get("MMGBSA_TLEAP_WATER_MODEL", "tip3p") or "tip3p").strip().lower()
+    map_hoh_to_wat = _to_bool(cfg.get("MMGBSA_TLEAP_MAP_HOH_TO_WAT", True), default=True)
+    if water_model not in {"tip3p"}:
+        raise ValueError(f"MMGBSA_TLEAP_WATER_MODEL supports tip3p only (got {water_model})")
+
     inferred_runid, pdb_id, variant, ph_label, base_dir = _resolve_post_docked_context(Path(pdb_path))
     if runid and runid != inferred_runid:
         raise ValueError(f"runid mismatch: arg={runid} path={inferred_runid}")
@@ -854,6 +939,25 @@ def prep_mmgbsa_receptor_and_topologies(
 
     receptor_result = prep_mmgbsa_receptor(pdb_path, runid, center, radius, force=force)
     receptor_pdb = receptor_result["output_path"]
+    receptor_for_leap_path, strip_info = _strip_receptor_h_for_leap(Path(receptor_pdb), strip_all_h_for_leap)
+    hoh_residue_count = strip_info.get("hoh_residue_count", 0)
+    _log_leap_prep(
+        logger,
+        "INFO",
+        {
+            "strip_all_h": strip_all_h_for_leap,
+            "input": receptor_pdb,
+            "output": str(receptor_for_leap_path),
+            "removed_H": strip_info.get("removed_h", 0),
+            "hoh_residues": hoh_residue_count,
+        },
+    )
+    _log_leap_prep(
+        logger,
+        "INFO",
+        {"map_hoh_to_wat": map_hoh_to_wat, "water_model": water_model, "hoh_residues": hoh_residue_count},
+        "water_mapping",
+    )
 
     if not _to_bool(cfg.get("MMGBSA_TLEAP_RUN", True), default=True):
         run_tleap = False
@@ -873,12 +977,23 @@ def prep_mmgbsa_receptor_and_topologies(
     )
 
     receptor_top_dir = top_root / "receptor"
-    receptor_topo = write_leap_receptor_only(receptor_pdb, str(receptor_top_dir), force=force)
+    receptor_topo = write_leap_receptor_only(
+        str(receptor_for_leap_path),
+        str(receptor_top_dir),
+        force=force,
+        water_model=water_model,
+        map_hoh_to_wat=map_hoh_to_wat,
+        hoh_residue_count=hoh_residue_count,
+    )
+    receptor_leap_log = receptor_top_dir / "tleap.log"
     _log_leap(
         logger,
         "INFO",
         {
             "output_dir": receptor_top_dir,
+            "receptor_pdb_used": receptor_for_leap_path,
+            "build_leap_path": receptor_topo["leap_file"],
+            "tleap_log_path": receptor_leap_log,
             "tleap_run": run_tleap,
             "skip": receptor_topo["skip_tleap"],
         },
@@ -922,12 +1037,16 @@ def prep_mmgbsa_receptor_and_topologies(
 
         ligand_out_dir = top_root / stage_dir / ligand_base
         ligand_topo = write_leap_for_ligand(
-            receptor_pdb_path=receptor_pdb,
+            receptor_pdb_path=str(receptor_for_leap_path),
             ligand_mol2=mol2_path,
             ligand_frcmod=frcmod_path,
             out_dir=str(ligand_out_dir),
             force=force,
+            water_model=water_model,
+            map_hoh_to_wat=map_hoh_to_wat,
+            hoh_residue_count=hoh_residue_count,
         )
+        ligand_leap_log = ligand_out_dir / "tleap.log"
 
         _log_leap(
             logger,
@@ -936,6 +1055,9 @@ def prep_mmgbsa_receptor_and_topologies(
                 "stage_dir": stage_dir,
                 "ligand": ligand_base,
                 "output_dir": ligand_out_dir,
+                "receptor_pdb_used": receptor_for_leap_path,
+                "build_leap_path": ligand_topo["leap_file"],
+                "tleap_log_path": ligand_leap_log,
                 "tleap_run": run_tleap,
                 "skip": ligand_topo["skip_tleap"],
             },

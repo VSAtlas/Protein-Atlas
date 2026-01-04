@@ -265,13 +265,14 @@ from docking import (
     process_one_protein,
 )
 from prep_for_mmgbsa import prep_mmgbsa_from_sdfs
+import protein_prep_mmgbsa as ppm
 from protein_prep_mmgbsa import (
     prep_mmgbsa_receptor,
     run_tleap,
     write_leap_for_ligands,
 )
 from mmgbsa_trajectory import make_mmgbsa_trajectory, run_implicit_md
-from run_mmgbsa import run_mmgbsa
+from run_mmgbsa import run_mmgbsa, parse_mmpbsa_delta_total, write_aggregated_mmpbsa_results
 from path_router import (
     expand_variants,
     make_paths,
@@ -679,6 +680,16 @@ def _parse_fast_flag(argv) -> bool:
     """Return True if argv includes fast/-fast/--fast (case-insensitive)."""
     try:
         return any(tok.lower().lstrip("-") == "fast" for tok in argv)
+    except Exception:
+        return False
+
+
+def _parse_force_deepcoy_flag(argv) -> bool:
+    """
+    Return True if argv includes -force-deepcoy/--force-deepcoy (case-insensitive).
+    """
+    try:
+        return any(_normalize_flag_name(tok) == "force-deepcoy" for tok in argv if tok.startswith("-"))
     except Exception:
         return False
 def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None):
@@ -1292,6 +1303,30 @@ def main() -> None:
     if "TEST_LIBRARY_MAP" not in cfg:
         cfg["TEST_LIBRARY_MAP"] = {}
 
+    # DeepCoy defaults (decoy autogen remains off unless toggled)
+    cfg.setdefault("DEEPCOY_DUDS_DIR", "/home/michael/atlas/code/protein_automation/DeepCoy_duds")
+    cfg.setdefault("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env/bin/python")
+    cfg.setdefault("DEEPCOY_INPUT_PDB_DIR", "/home/michael/atlas/code/protein_automation/input_pdbs")
+    cfg.setdefault(
+        "DEEPCOY_OUT_ROOT",
+        os.path.join(
+            cfg.get("LIGAND_EXTRACTED_DIR", "/home/michael/atlas/code/protein_automation/extracted_ligands"),
+            "deepcoy",
+        ),
+    )
+    cfg.setdefault("DEEPCOY_WORK_ROOT", os.path.join(cfg["DEEPCOY_DUDS_DIR"], "deepcoy_work"))
+    cfg.setdefault("DEEPCOY_ENABLE_AUTOGEN_SDF", "on")
+    cfg.setdefault("DEEPCOY_ENABLE_AUTOGEN_PDBQT", "on")
+    cfg.setdefault("DEEPCOY_FALLBACK_SMILES", "")
+    cfg.setdefault("DEEPCOY_RESTRICT_DATA", 0)
+    cfg.setdefault("DEEPCOY_PREPPED_SUBDIR", "deepcoy")
+    cfg.setdefault("DEEPCOY_LIGPREP_FORCE", "off")
+    cfg.setdefault("DEEPCOY_USE_AS_DUD_LIBRARY", "on")
+    cfg.setdefault("DEEPCOY_FORCE", "off")
+    env_deepcoy_toggle = os.environ.get("DEEPCOY_ENABLE_AUTOGEN_SDF")
+    if env_deepcoy_toggle is not None:
+        cfg["DEEPCOY_ENABLE_AUTOGEN_SDF"] = env_deepcoy_toggle
+
     # Small FDA test library override.
     # When called with: python main.py -test -test-fda -fast
     # we want to use a tiny FDA test library instead of the full FDA set.
@@ -1317,8 +1352,25 @@ def main() -> None:
     print(f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)")
     # --- Fast mode: force exhaustiveness=1 everywhere ---
     cfg["FAST_MODE"] = _parse_fast_flag(argv_for_parsing) or bool(cfg.get("FAST_MODE", False))
+    if _parse_force_deepcoy_flag(argv_for_parsing):
+        cfg["DEEPCOY_FORCE"] = "on"
     if cfg["FAST_MODE"]:
         print("[config] FAST_MODE effective=True (exhaustiveness=1)")
+
+    # --- Control consensus (multi-engine control docking) -------------
+    cfg.setdefault("CONTROL_CONSENSUS", False)
+    control_consensus = False
+    try:
+        control_consensus = _to_bool(cfg.get("CONTROL_CONSENSUS", False))
+    except Exception:
+        control_consensus = bool(cfg.get("CONTROL_CONSENSUS", False))
+
+    if _cli_has(argv_for_parsing, "-control-consensus") or _cli_has(argv_for_parsing, "--control-consensus"):
+        control_consensus = True
+
+    cfg["CONTROL_CONSENSUS"] = bool(control_consensus)
+    if cfg["CONTROL_CONSENSUS"]:
+        print("[config] CONTROL_CONSENSUS effective=True (multi-engine control docking enabled)")
 
     # --- No-library docking mode (controls-only + ligand planning) ------
     #
@@ -2511,6 +2563,191 @@ def _mmgbsa_parse_delta_frames(csv_path: Path) -> Dict[str, object]:
     return result
 
 
+def _mmgbsa_write_replicate_summary(summary_path: Path, rows: List[Dict[str, object]], mean: float, sd: float) -> None:
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["replicate", "seed", "score", "ok", "notes"]
+    tmp_path = summary_path.with_suffix(summary_path.suffix + ".part")
+    with tmp_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        writer.writerow({"replicate": "mean", "score": f"{mean:.6g}", "ok": ""})
+        writer.writerow({"replicate": "stddev", "score": f"{sd:.6g}", "ok": ""})
+    os.replace(tmp_path, summary_path)
+
+
+def _mmgbsa_five_replicate_runner(
+    topo: Dict[str, object],
+    out_dir: Path,
+    cfg: Mapping[str, Any],
+    force: bool,
+    md_enabled: bool,
+    stage_dir: str,
+    ligand_stem: str,
+    pdb_id: str,
+    variant_dir: str,
+    ph_label: str,
+    run_id: str,
+    logger: logging.Logger,
+) -> Dict[str, object]:
+    seeds = _mmgbsa_five_rep_seeds(run_id, pdb_id, variant_dir, ph_label, stage_dir, ligand_stem)
+    out_dat_name = str(cfg.get("MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat") or "FINAL_RESULTS_MMPBSA.dat")
+    out_csv_name = str(cfg.get("MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv") or "FINAL_RESULTS_MMPBSA.csv")
+    agg_dat = out_dir / out_dat_name
+    agg_csv = out_dir / out_csv_name
+
+    if not force and agg_dat.exists() and agg_csv.exists():
+        existing_delta = parse_mmpbsa_delta_total(agg_csv)
+        if existing_delta is not None:
+            return {
+                "ok": True,
+                "delta_total": existing_delta,
+                "results_csv": str(agg_csv),
+                "results_dat": str(agg_dat),
+                "replicates_ok": 5,
+                "replicates_total": 5,
+                "summary_path": str(out_dir / "mmgbsa_replicates_summary.csv"),
+                "notes": "cached",
+            }
+
+    rep_rows: List[Dict[str, object]] = []
+    scores: List[float] = []
+    summary_path = out_dir / "mmgbsa_replicates_summary.csv"
+
+    if not md_enabled:
+        logger.warning(
+            "[mmgbsa.replicate] MD_FIVE_REPLICATE enabled but MD disabled; running single MMGBSA and cloning results"
+        )
+        rep_dir = out_dir / "rep1"
+        traj_result = make_mmgbsa_trajectory(
+            complex_prmtop=topo["complex_prmtop"],
+            complex_inpcrd=topo["complex_inpcrd"],
+            out_dir=str(rep_dir),
+            cfg=cfg,
+            force=force,
+            run_cpptraj=_to_bool(cfg.get("MMGBSA_CPPTRAJ_RUN", True)),
+        )
+        traj_path = Path(traj_result.get("trajout_path") or "")
+        mmpbsa_dir = rep_dir / "mmpbsa"
+        mmpbsa_dir.mkdir(parents=True, exist_ok=True)
+        mm_res = run_mmgbsa(
+            complex_prmtop=topo["complex_prmtop"],
+            receptor_prmtop=topo["receptor_prmtop"],
+            ligand_prmtop=topo["ligand_prmtop"],
+            trajectory_path=str(traj_path),
+            work_dir=str(mmpbsa_dir),
+            cfg=cfg,
+            force=force,
+            run=_to_bool(cfg.get("MMGBSA_MMPBSA_RUN", True)),
+        )
+        rep_csv = Path(mm_res.get("out_csv", ""))
+        score = parse_mmpbsa_delta_total(rep_csv)
+        rep_ok = score is not None and rep_csv.exists()
+        rep_rows.append({"replicate": 1, "seed": seeds[0], "score": score if score is not None else "", "ok": rep_ok, "notes": ""})
+        if not rep_ok:
+            _mmgbsa_write_replicate_summary(summary_path, rep_rows, mean=0.0, sd=0.0)
+            return {"ok": False, "notes": "rep1_failed", "replicates_ok": 0, "replicates_total": 5}
+        scores.append(float(score))
+        # clone outputs for other reps
+        for idx in range(2, 6):
+            clone_dir = out_dir / f"rep{idx}" / "mmpbsa"
+            clone_dir.mkdir(parents=True, exist_ok=True)
+            for src in (rep_csv, Path(mm_res.get("out_dat", "")), Path(mm_res.get("log_path", "")), Path(mm_res.get("input_path", ""))):
+                if not src:
+                    continue
+                if not src.exists():
+                    continue
+                dest = clone_dir / src.name
+                if dest.exists() and not force:
+                    continue
+                shutil.copy2(src, dest)
+            rep_rows.append({"replicate": idx, "seed": seeds[idx - 1], "score": score, "ok": True, "notes": "cloned"})
+            scores.append(float(score))
+    else:
+        for rep_idx, seed in enumerate(seeds, start=1):
+            rep_dir = out_dir / f"rep{rep_idx}"
+            md_result = run_implicit_md(
+                complex_prmtop=topo["complex_prmtop"],
+                complex_inpcrd=topo["complex_inpcrd"],
+                out_dir=str(out_dir),
+                cfg=cfg,
+                replicate_index=rep_idx,
+                seed=int(seed),
+                force=force,
+                run=True,
+            )
+            traj_path = Path(md_result.get("traj_path") or "")
+            rep_ok = False
+            score = None
+            notes = ""
+            if not md_result.get("ok"):
+                notes = "md_failed"
+            elif not traj_path.exists() or traj_path.stat().st_size == 0:
+                notes = "missing_trajectory"
+            else:
+                mmpbsa_dir = rep_dir / "mmpbsa"
+                mmpbsa_dir.mkdir(parents=True, exist_ok=True)
+                mm_res = run_mmgbsa(
+                    complex_prmtop=topo["complex_prmtop"],
+                    receptor_prmtop=topo["receptor_prmtop"],
+                    ligand_prmtop=topo["ligand_prmtop"],
+                    trajectory_path=str(traj_path),
+                    work_dir=str(mmpbsa_dir),
+                    cfg=cfg,
+                    force=force,
+                    run=_to_bool(cfg.get("MMGBSA_MMPBSA_RUN", True)),
+                )
+                rep_csv = Path(mm_res.get("out_csv", ""))
+                score = parse_mmpbsa_delta_total(rep_csv)
+                if score is not None and rep_csv.exists():
+                    rep_ok = True
+                else:
+                    notes = "missing_outputs"
+            rep_rows.append({"replicate": rep_idx, "seed": seed, "score": score if score is not None else "", "ok": rep_ok, "notes": notes})
+            if rep_ok and score is not None:
+                scores.append(float(score))
+
+    if len(scores) != 5 or any(not r.get("ok") for r in rep_rows):
+        _mmgbsa_write_replicate_summary(summary_path, rep_rows, mean=0.0, sd=0.0)
+        return {
+            "ok": False,
+            "notes": "replicate_failed",
+            "replicates_ok": len(scores),
+            "replicates_total": 5,
+            "summary_path": str(summary_path),
+        }
+
+    mean_val = float(statistics.mean(scores))
+    try:
+        sd_val = float(statistics.pstdev(scores))
+    except Exception:
+        sd_val = 0.0
+
+    _mmgbsa_write_replicate_summary(summary_path, rep_rows, mean=mean_val, sd=sd_val)
+    agg_paths = write_aggregated_mmpbsa_results(work_dir=out_dir, mean_score=mean_val, std_score=sd_val, cfg=cfg, force=force)
+
+    logger.info(
+        "[mmgbsa.aggregate] n=5 mean=%.6g sd=%.6g out_csv=%s out_dat=%s",
+        mean_val,
+        sd_val,
+        agg_paths.get("out_csv"),
+        agg_paths.get("out_dat"),
+    )
+
+    return {
+        "ok": True,
+        "delta_total": mean_val,
+        "results_csv": agg_paths.get("out_csv", ""),
+        "results_dat": agg_paths.get("out_dat", ""),
+        "replicates_ok": 5,
+        "replicates_total": 5,
+        "summary_path": str(summary_path),
+        "notes": "",
+        "frame_mean": mean_val,
+        "frame_sd": sd_val,
+    }
+
+
 def _mmgbsa_trimmed_mean(values: List[float], trim_fraction: float = 0.1) -> float:
     if not values:
         raise ValueError("no values for trimmed mean")
@@ -2789,6 +3026,15 @@ def _mmgbsa_md_seed_list(cfg: Mapping[str, Any], n_reps: int, logger: logging.Lo
     return seeds
 
 
+def _mmgbsa_five_rep_seeds(run_id: str, pdb_id: str, variant: str, ph_label: str, stage_dir: str, ligand: str) -> List[int]:
+    context = f"{run_id}|{pdb_id}|{variant}|{ph_label}|{stage_dir}|{ligand}"
+    base_seed = int(hashlib.md5(context.encode("utf-8")).hexdigest()[:8], 16)
+    seeds: List[int] = []
+    for idx in range(5):
+        seeds.append(max(1, base_seed + idx * 10007))
+    return seeds
+
+
 def _mmgbsa_md_aggregate(deltas: List[float], method: str) -> Optional[float]:
     return _mmgbsa_apply_agg(deltas, method, logger=logging.getLogger("mmgbsa.pipeline"), context="replicate")
 
@@ -2924,6 +3170,7 @@ def _maybe_run_mmgbsa_for_pdb(
     md_cfg = _mmgbsa_effective_md_config(cfg, logger)
     md_enabled = _to_bool(md_cfg.get("md_enabled", False))
     effective_mode = str(md_cfg.get("effective_mode", "ONEFRAME") or "ONEFRAME")
+    five_reps = _to_bool(cfg.get("MD_FIVE_REPLICATE", False))
     try:
         md_reps = int(cfg.get("MMGBSA_MD_NREPLICATES", 1))
     except Exception:
@@ -2943,6 +3190,12 @@ def _maybe_run_mmgbsa_for_pdb(
     force = _to_bool(cfg.get("MMGBSA_FORCE", False))
     strict = _to_bool(cfg.get("MMGBSA_STRICT", False))
     stage_dir_name = str(cfg.get("MMGBSA_INPUT_STAGE_DIR", "stage1") or "stage1")
+    strip_all_h_for_leap = _to_bool(cfg.get("MMGBSA_TLEAP_STRIP_ALL_H", True))
+    map_hoh_to_wat = _to_bool(cfg.get("MMGBSA_TLEAP_MAP_HOH_TO_WAT", True))
+    water_model = str(cfg.get("MMGBSA_TLEAP_WATER_MODEL", "tip3p") or "tip3p").strip().lower()
+    if water_model not in {"tip3p"}:
+        raise ValueError(f"MMGBSA_TLEAP_WATER_MODEL supports tip3p only (got {water_model})")
+    mmgbsa_logger = ppm._get_logger()
 
     test_override: Dict[str, object] = {}
     if test_mode != "off" and top_pct_val is None:
@@ -3149,6 +3402,29 @@ def _maybe_run_mmgbsa_for_pdb(
                 raise
             continue
 
+        receptor_for_leap_path, strip_info = ppm._strip_receptor_h_for_leap(
+            Path(receptor_result["output_path"]),
+            strip_all_h_for_leap,
+        )
+        hoh_residue_count = strip_info.get("hoh_residue_count", 0)
+        ppm._log_leap_prep(
+            mmgbsa_logger,
+            "INFO",
+            {
+                "strip_all_h": strip_all_h_for_leap,
+                "input": receptor_result["output_path"],
+                "output": str(receptor_for_leap_path),
+                "removed_H": strip_info.get("removed_h", 0),
+                "hoh_residues": hoh_residue_count,
+            },
+        )
+        ppm._log_leap_prep(
+            mmgbsa_logger,
+            "INFO",
+            {"map_hoh_to_wat": map_hoh_to_wat, "water_model": water_model, "hoh_residues": hoh_residue_count},
+            "water_mapping",
+        )
+
         mmgbsa_dir = ph_dir / "mmgbsa"
         summary_path = mmgbsa_dir / "mmgbsa_results_summary.csv"
         work_root = mmgbsa_dir / "work"
@@ -3195,10 +3471,13 @@ def _maybe_run_mmgbsa_for_pdb(
             continue
 
         topo_results = write_leap_for_ligands(
-            receptor_pdb_path=receptor_result["output_path"],
+            receptor_pdb_path=str(receptor_for_leap_path),
             ligand_mol2_frcmod_pairs=ligand_entries,
             out_dir_base=str(work_root),
             force=force or _to_bool(cfg.get("MMGBSA_TLEAP_FORCE", False)),
+            water_model=water_model,
+            map_hoh_to_wat=map_hoh_to_wat,
+            hoh_residue_count=hoh_residue_count,
         )
 
         run_tleap_flag = _to_bool(cfg.get("MMGBSA_TLEAP_ENABLED", True)) and _to_bool(
@@ -3224,6 +3503,21 @@ def _maybe_run_mmgbsa_for_pdb(
             replicates_total = md_reps if md_enabled else 1
             replicates_ok = 0
             rep_agg_method_used = md_rep_agg if md_enabled else "single"
+
+            ppm._log_leap(
+                mmgbsa_logger,
+                "INFO",
+                {
+                    "stage_dir": stage_dir,
+                    "ligand": ligand_stem,
+                    "receptor_pdb_used": str(receptor_for_leap_path),
+                    "build_leap_path": topo.get("leap_file"),
+                    "tleap_log_path": out_dir / "tleap.log",
+                    "tleap_run": run_tleap_flag,
+                    "skip": topo.get("skip_tleap"),
+                },
+                "ligand_topology",
+            )
 
             try:
                 if run_tleap_flag and not topo.get("skip_tleap"):
@@ -3255,6 +3549,57 @@ def _maybe_run_mmgbsa_for_pdb(
                             "results_csv": "",
                             "ok": False,
                             "notes": notes,
+                        },
+                    )
+                    continue
+
+                if five_reps:
+                    rep_result = _mmgbsa_five_replicate_runner(
+                        topo=topo,
+                        out_dir=out_dir,
+                        cfg=cfg,
+                        force=force,
+                        md_enabled=md_enabled,
+                        stage_dir=stage_dir,
+                        ligand_stem=ligand_stem,
+                        pdb_id=pdb_id,
+                        variant_dir=variant_dir,
+                        ph_label=ph_label,
+                        run_id=run_id,
+                        logger=logger,
+                    )
+                    ok = bool(rep_result.get("ok"))
+                    delta_val = rep_result.get("delta_total")
+                    if delta_val is not None:
+                        delta_total = f"{float(delta_val):.6g}"
+                    results_csv = rep_result.get("results_csv", "")
+                    notes = rep_result.get("notes", "")
+                    summary_frames.update(
+                        {
+                            "frame_mean": rep_result.get("frame_mean", ""),
+                            "frame_sd": rep_result.get("frame_sd", ""),
+                        }
+                    )
+                    replicates_ok = int(rep_result.get("replicates_ok", 0))
+                    replicates_total = int(rep_result.get("replicates_total", 5))
+                    _mmgbsa_append_summary(
+                        summary_path,
+                        {
+                            "stage_dir": stage_dir,
+                            "ligand_stem": ligand_stem,
+                            "delta_total": delta_total,
+                            "results_csv": results_csv,
+                            "ok": ok,
+                            "notes": notes or "",
+                            "frame_agg_method": summary_frames.get("frame_agg_method", "") or "",
+                            "frames_used": summary_frames.get("frames_used", "") or "",
+                            "frames_total": summary_frames.get("frames_total", "") or "",
+                            "frame_mean": summary_frames.get("frame_mean", "") or "",
+                            "frame_sd": summary_frames.get("frame_sd", "") or "",
+                            "frame_median": summary_frames.get("frame_median", "") or "",
+                            "rep_agg_method": rep_agg_method_used,
+                            "replicates_ok": replicates_ok,
+                            "replicates_total": replicates_total,
                         },
                     )
                     continue

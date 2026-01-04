@@ -136,6 +136,87 @@ def _mmgbsa_effective_md_enabled(cfg: object | None) -> bool:
     return _to_bool(_cfg_get(cfg, "MMGBSA_MD_RUN", False), default=False)
 
 
+def parse_mmpbsa_delta_total(csv_path: Path) -> Optional[float]:
+    """
+    Lightweight parser for MMPBSA FINAL_RESULTS_MMPBSA.csv.
+    Looks for the DELTA Energy Terms block and returns the first DELTA TOTAL value.
+    """
+    if not csv_path.exists():
+        return None
+    try:
+        lines = csv_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return None
+
+    in_delta = False
+    header: Optional[List[str]] = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("DELTA Energy Terms"):
+            in_delta = True
+            header = None
+            continue
+        if not in_delta:
+            continue
+        if header is None:
+            header = [t.strip() for t in stripped.split(",")]
+            continue
+        values = [t.strip() for t in stripped.split(",")]
+        if not header:
+            break
+        try:
+            idx = header.index("DELTA TOTAL")
+        except ValueError:
+            break
+        if idx >= len(values):
+            continue
+        try:
+            return float(values[idx])
+        except Exception:
+            return None
+    return None
+
+
+def write_aggregated_mmpbsa_results(
+    work_dir: Path,
+    mean_score: float,
+    std_score: float,
+    cfg: object,
+    force: bool = False,
+) -> Dict[str, str]:
+    """
+    Write aggregate FINAL_RESULTS files in a minimal MMPBSA-compatible format so downstream
+    readers (frame aggregators) can parse DELTA TOTAL.
+    """
+    out_dat_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat") or "FINAL_RESULTS_MMPBSA.dat")
+    out_csv_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv") or "FINAL_RESULTS_MMPBSA.csv")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    out_dat_path = work_dir / out_dat_name
+    out_csv_path = work_dir / out_csv_name
+
+    if not force and out_dat_path.exists() and out_csv_path.exists():
+        return {"out_dat": str(out_dat_path), "out_csv": str(out_csv_path)}
+
+    dat_lines = [
+        "FINAL RESULTS",
+        f"DELTA TOTAL       {mean_score:.6f}   (stddev {std_score:.6f})",
+        "",
+    ]
+    _write_text_atomic(out_dat_path, "\n".join(dat_lines))
+
+    csv_lines = [
+        "DELTA Energy Terms",
+        "VDWAALS,EELEC,EGB,ESURF,EPB,ECAVITY,DELTA TOTAL,STDDEV",
+        f"0,0,0,0,0,0,{mean_score:.6f},{std_score:.6f}",
+    ]
+    _write_text_atomic(out_csv_path, "\n".join(csv_lines) + "\n")
+
+    return {"out_dat": str(out_dat_path), "out_csv": str(out_csv_path)}
+
+
 def _looks_like_pkgs_cache(prefix: Path) -> bool:
     return "/micromamba/pkgs" in prefix.as_posix()
 

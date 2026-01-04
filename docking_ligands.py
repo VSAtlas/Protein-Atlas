@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,6 +19,251 @@ from pose_validation import compute_redock_rmsd
 from library_index import LibraryIndex
 from path_router import Paths
 from prep_ligands import enumerate_ligands_for_docking, prep_ligands_from_pdb
+
+
+def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) -> Optional[Path]:
+    enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
+    if enabled not in {"on", "true", "1", "yes"}:
+        return None
+    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}
+
+    pdb_up = pdb_id.upper()
+    deepcoy_dir = Path(cfg.get("DEEPCOY_DUDS_DIR", "/home/michael/atlas/code/protein_automation/DeepCoy_duds"))
+    out_root = Path(cfg.get("DEEPCOY_OUT_ROOT", deepcoy_dir / "extracted_ligands/deepcoy"))
+    work_root = Path(cfg.get("DEEPCOY_WORK_ROOT", deepcoy_dir / "deepcoy_work")) / pdb_up
+    input_pdb_dir = Path(cfg.get("DEEPCOY_INPUT_PDB_DIR", "/home/michael/atlas/code/protein_automation/input_pdbs"))
+    deepcoy_python = cfg.get("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env/bin/python")
+
+    def _find_existing() -> Optional[Path]:
+        pattern = f"{pdb_up}_*"
+        try:
+            for cand in out_root.glob(pattern):
+                sdf = cand / "deepcoy_decoys.sdf"
+                if sdf.is_file() and sdf.stat().st_size > 0:
+                    return sdf
+        except Exception:
+            return None
+        return None
+
+    existing = _find_existing()
+    if existing and not force:
+        return existing
+
+    cmd = [
+        str(deepcoy_python),
+        str(deepcoy_dir / "generate_dud_library.py"),
+        "--pdb",
+        pdb_up,
+        "--input-pdb-dir",
+        str(input_pdb_dir),
+        "--out-root",
+        str(out_root),
+        "--artifact-dir",
+        str(work_root),
+        "--deepcoy-python",
+        str(deepcoy_python),
+        "--ensure-sdf",
+    ]
+    if force:
+        cmd.append("--force-deepcoy")
+    fallback = str(cfg.get("DEEPCOY_FALLBACK_SMILES", "")).strip()
+    if fallback:
+        cmd.extend(["--fallback-smiles", fallback])
+    restrict = int(cfg.get("DEEPCOY_RESTRICT_DATA", 0) or 0)
+    if restrict > 0:
+        cmd.extend(["--restrict-data", str(restrict)])
+
+    logger.info(
+        "[deepcoy.autogen] pdb=%s enabled=true out_root=%s work_dir=%s",
+        pdb_up,
+        out_root,
+        work_root,
+    )
+    logger.info("[deepcoy.autogen] cmd=%s", " ".join(cmd))
+
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception:
+        fallback_existing = _find_existing()
+        if fallback_existing:
+            logger.warning("[deepcoy.autogen] pdb=%s run_failed_using_cached=%s", pdb_up, fallback_existing)
+            return fallback_existing
+        raise
+
+    produced = _find_existing()
+    if not produced:
+        raise RuntimeError(f"DeepCoy decoy SDF not found after run for {pdb_up}")
+    size = produced.stat().st_size
+    logger.info(
+        "[deepcoy.autogen] produced=%s bytes=%d",
+        produced,
+        size,
+    )
+    return produced
+
+
+def ensure_deepcoy_decoy_pdbqts(cfg: Dict, pdb_id: str, logger: logging.Logger) -> Optional[Path]:
+    enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
+    if enabled not in {"on", "true", "1", "yes"}:
+        return None
+    pdbqt_enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_PDBQT", "on")).strip().lower()
+    if pdbqt_enabled not in {"on", "true", "1", "yes"}:
+        return None
+
+    sdf_path = ensure_deepcoy_decoy_sdfs(cfg, pdb_id, logger)
+    if not sdf_path or not sdf_path.is_file():
+        return None
+
+    label = sdf_path.parent.name
+    base_root = Path(
+        cfg.get("OUTPUT_LIGANDS_DIR")
+        or cfg.get("PREPPED_LIGANDS_ROOT")
+        or "prepped_ligands"
+    )
+    prepped_root = Path(cfg.get("DEEPCOY_PREPPED_SUBDIR", "deepcoy"))
+    prepped_dir = base_root / prepped_root / label
+    prepped_dir.mkdir(parents=True, exist_ok=True)
+
+    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}
+
+    existing = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
+    if existing and not force:
+        return prepped_dir
+
+    lock_path = prepped_dir / ".ligprep.lock"
+    acquired = False
+    try:
+        lock_path.touch(exist_ok=False)
+        acquired = True
+    except FileExistsError:
+        existing = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
+        if existing:
+            return prepped_dir
+        logger.warning("[deepcoy.ligprep] pdb=%s lock_exists=%s waiting skipped", pdb_id.upper(), lock_path)
+        return None
+
+    prep_script = Path(__file__).resolve().parent / "prep_ligands.py"
+    mol2_dir = prepped_dir / "mol2"
+    status_log = prepped_dir / "ligprep_status.tsv"
+    cmd = [
+        sys.executable,
+        str(prep_script),
+        "--in-sdf",
+        str(sdf_path),
+        "--mol2-dir",
+        str(mol2_dir),
+        "--out-pdbqt-dir",
+        str(prepped_dir),
+        "--status-log",
+        str(status_log),
+    ]
+    force_flag = str(cfg.get("DEEPCOY_LIGPREP_FORCE", "off")).strip().lower()
+    if force_flag in {"on", "true", "1", "yes"}:
+        cmd.append("--force")
+
+    logger.info(
+        "[deepcoy.ligprep] pdb=%s sdf=%s out=%s cmd=%s",
+        pdb_id.upper(),
+        sdf_path,
+        prepped_dir,
+        " ".join(cmd),
+    )
+    try:
+        subprocess.run(cmd, check=True)
+    finally:
+        if acquired and lock_path.exists():
+            try:
+                lock_path.unlink()
+            except Exception:
+                pass
+
+    created = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
+    # rename deepcoy_decoys_XXXX.pdbqt -> decoys_XXXX.pdbqt for clarity
+    for p in list(created):
+        name = p.name
+        if name.startswith("deepcoy_decoys_") and name.endswith(".pdbqt"):
+            suffix = name[len("deepcoy_decoys_") : -len(".pdbqt")]
+            target = p.with_name(f"decoys_{suffix}.pdbqt")
+            try:
+                if target.exists() and force:
+                    target.unlink()
+                p.rename(target)
+                created.append(target)
+            except Exception:
+                logger.warning("[deepcoy.ligprep] rename_failed src=%s dst=%s", p, target)
+    created = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
+    if not created:
+        raise RuntimeError(f"DeepCoy ligprep produced no PDBQT files in {prepped_dir}")
+
+    logger.info(
+        "[deepcoy.ligprep] pdb=%s pdbqt_count=%d status_log=%s",
+        pdb_id.upper(),
+        len(created),
+        status_log,
+    )
+    return prepped_dir
+
+
+def _maybe_set_deepcoy_as_dud_library(
+    cfg: Dict, pdb_id: str, effective_mode: str, prepped_dir: Optional[Path], logger: logging.Logger
+) -> None:
+    allowed_modes = {"dud", "fda+dud", "hmdb+dud", "fda+dud+hmdb"}
+    if effective_mode not in allowed_modes:
+        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=mode_not_dud", pdb_id.upper(), effective_mode)
+        return
+    if str(cfg.get("DEEPCOY_USE_AS_DUD_LIBRARY", "on")).strip().lower() not in {"on", "true", "1", "yes"}:
+        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=feature_disabled", pdb_id.upper(), effective_mode)
+        return
+    if prepped_dir is None:
+        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_prepped_dir", pdb_id.upper(), effective_mode)
+        return
+    if not prepped_dir.exists():
+        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=missing_dir dir=%s", pdb_id.upper(), effective_mode, prepped_dir)
+        return
+    if not any(p.stat().st_size > 0 for p in prepped_dir.glob("*.pdbqt")):
+        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_pdbqt dir=%s", pdb_id.upper(), effective_mode, prepped_dir)
+        return
+
+    tag = prepped_dir.name
+    key = pdb_id.upper()
+    mapped_subdir = f"{cfg.get('DEEPCOY_PREPPED_SUBDIR', 'deepcoy').strip('/')}/{tag}"
+
+    test_map = cfg.setdefault("TEST_LIBRARY_MAP", {})
+    canonical = cfg.setdefault("_TEST_LIBRARY_CANONICAL", {})
+    if not isinstance(test_map, dict):
+        logger.warning(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=reset reason=map_not_dict",
+            key,
+            effective_mode,
+        )
+        test_map = {}
+        cfg["TEST_LIBRARY_MAP"] = test_map
+    if not isinstance(canonical, dict):
+        logger.warning(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=reset reason=canonical_not_dict",
+            key,
+            effective_mode,
+        )
+        canonical = {}
+        cfg["_TEST_LIBRARY_CANONICAL"] = canonical
+
+    if key in test_map:
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
+            key,
+            effective_mode,
+            test_map.get(key),
+        )
+        return
+
+    test_map[key] = mapped_subdir
+    canonical[key] = mapped_subdir
+    logger.info(
+        "[deepcoy.dud-map] pdb=%s mode=%s mapped_subdir=%s",
+        key,
+        effective_mode,
+        mapped_subdir,
+    )
 
 
 def norm(p: str | Path) -> str:
@@ -574,6 +820,16 @@ def prepare_and_filter_ligands(
         effective_mode = "hmdb"
     else:
         effective_mode = overall_mode
+
+    deepcoy_prepped_dir: Optional[Path] = None
+    try:
+        deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(cfg, paths.pdb_id, logger)
+    except Exception as exc:
+        logger.warning("[deepcoy.autogen] pdb=%s error=%s", paths.pdb_id, exc)
+        if str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}:
+            raise
+
+    _maybe_set_deepcoy_as_dud_library(cfg, paths.pdb_id, effective_mode, deepcoy_prepped_dir, logger)
 
     # Keep existing prep step for extracted controls (harmless if nothing to do)
     prep_ligands_from_pdb(

@@ -255,6 +255,32 @@ class ProteinDockingContext:
 
     control_stems: List[str]
     control_lookup: Dict[str, Path]
+    center_by_ph: Optional[Dict[Optional[str], Tuple[float, float, float]]] = None
+    box_by_ph: Optional[Dict[Optional[str], Tuple[float, float, float]]] = None
+    center_source_by_ph: Optional[Dict[Optional[str], str]] = None
+
+
+def resolve_center_box_for_ph(
+    ctx: ProteinDockingContext,
+    ph_label: Optional[str],
+) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], str]:
+    ph_key = None if ph_label in (None, "base") else ph_label
+    if ctx.center_by_ph and ctx.box_by_ph and ph_key in ctx.center_by_ph and ph_key in ctx.box_by_ph:
+        center = ctx.center_by_ph[ph_key]
+        box_size = ctx.box_by_ph[ph_key]
+        source = "control_ph"
+        if ctx.center_source_by_ph and ph_key in ctx.center_source_by_ph:
+            raw_src = ctx.center_source_by_ph[ph_key]
+            if raw_src != "control":
+                source = "fallback"
+        return center, box_size, source
+
+    source = "fallback"
+    if ctx.center_by_ph:
+        source = "control_missing"
+    if ctx.center is None or ctx.box_size is None:
+        raise ValueError("Center/box unavailable for requested ph_label.")
+    return ctx.center, ctx.box_size, source
 
 
 def subruns_for_test_mode(test_mode: str) -> List[SubrunSpec]:
@@ -518,8 +544,6 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
     base_ligands = ligands[:]
     base_heavy_atoms = dict(heavy_atom_counts)
     base_pains_flags = dict(pains_flags)
-    base_center = tuple(center)
-    base_box = tuple(box_size)
 
     ph_log = logging.getLogger("ph_ensemble")
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
@@ -651,13 +675,12 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             continue
 
         try:
+            center, box_size, _center_src = resolve_center_box_for_ph(ctx, ph_label)
 
             ligands = base_ligands[:]
             controls_for_run = base_controls[:]
             heavy_atom_counts = dict(base_heavy_atoms)
             pains_flags = dict(base_pains_flags)
-            center = tuple(base_center)
-            box_size = tuple(base_box)
             receptor_pdbqt = str(rec_path)
 
             enumerated = enumerate_ligands_for_ph_context(
