@@ -25,6 +25,15 @@ MAIN_PY = REPO_ROOT / "main.py"
 CONFIG_PATH = REPO_ROOT / "config.txt"
 RUN_ID = "test_resume_mode"
 
+# Keep resume-mode integration runs lightweight by disabling MMGBSA.
+MMGBSA_DISABLE_ENV = {
+    "MMGBSA_ENABLED": "false",
+    "MMGBSA_MD_ENABLED": "false",
+    "MMGBSA_MMPBSA_ENABLED": "false",
+    "MMGBSA_MMPBSA_RUN": "false",
+    "MD_FIVE_REPLICATE": "false",
+}
+
 
 def _load_manifest(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text())
@@ -159,6 +168,7 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
             "ONLY_PDBS": "TEMP T3MP",
         }
     )
+    resume_env.update(MMGBSA_DISABLE_ENV)
     initial_cmd = [
         str(MAIN_PY),
         "--pdb",

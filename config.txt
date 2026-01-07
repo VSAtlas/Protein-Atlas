@@ -160,7 +160,7 @@ MMGBSA_AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 
 # ---- Trajectory + MMPBSA (minimal) ----
-MMGBSA_MD_ENABLED = false
+MMGBSA_MD_ENABLED = true
 MMGBSA_MD_TEMP0 = 300
 MMGBSA_MD_HEAT_PS = 10
 MMGBSA_MD_EQUIL_PS = 20
@@ -199,8 +199,8 @@ MMGBSA_MMPBSA_INTERVAL = 1
 # MMGBSA_MMPBSA_USE_TRAJ_FRAMES = true
 # MMGBSA_MD_REP_AGG = mean
 # MMGBSA_MD_COPY_BEST_REPLICATE = false
-# MMGBSA_MMPBSA_ENABLED = true
-# MMGBSA_MMPBSA_RUN = true
+MMGBSA_MMPBSA_ENABLED = true
+MMGBSA_MMPBSA_RUN = true
 # MMGBSA_MMPBSA_STARTFRAME = 1
 # MMGBSA_MMPBSA_ENDFRAME = 1
 # MMGBSA_MMPBSA_VERBOSE = 2
@@ -220,7 +220,7 @@ MMGBSA_MMPBSA_INTERVAL = 1
 # MMGBSA_TRAJ_ENDFRAME = 1
 # MMGBSA_TRAJ_INTERVAL = 1
 # ---- Global MMGBSA toggles & retention rules (often redundant with earlier keys) ----
-MMGBSA_ENABLED = false
+MMGBSA_ENABLED = true
 
 MMGBSA_KEEP_WATERS = true
 MMGBSA_WATER_KEEP_RADIUS = 6.0
@@ -263,7 +263,7 @@ MMGBSA_TLEAP_CHAINBREAK_CN_MAX_A = 2.2
 MMGBSA_TLEAP_STRIP_ALL_H = true
 MMGBSA_TLEAP_WATER_MODEL = tip3p
 MMGBSA_TLEAP_MAP_HOH_TO_WAT = true
-MD_FIVE_REPLICATE = false
+MD_FIVE_REPLICATE = true
 
 # ---- MMPBSA input block defaults (mirrors &general) ----
 MMGBSA_GENERAL_STARTFRAME = 1
@@ -283,9 +283,9 @@ CTRL_REDOCK_NMODES =9
 # GNINA follow-up docking toggle:
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
-USE_GNINA = false
-USE_LEDOCK = false
-USE_DOCK6 = false
+USE_GNINA = true
+USE_LEDOCK = true
+USE_DOCK6 = true
 USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0

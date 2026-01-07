@@ -25,6 +25,15 @@ RUN_ID = "test_run"
 # Ensure router helpers see a stable run id in this process.
 os.environ.setdefault("ATLAS_RUN_ID", RUN_ID)
 
+# Keep integration runs lightweight by disabling MMGBSA in these tests.
+MMGBSA_DISABLE_ENV = {
+    "MMGBSA_ENABLED": "false",
+    "MMGBSA_MD_ENABLED": "false",
+    "MMGBSA_MMPBSA_ENABLED": "false",
+    "MMGBSA_MMPBSA_RUN": "false",
+    "MD_FIVE_REPLICATE": "false",
+}
+
 from apo_holo_mode import resolve_apo_holo_mode  # noqa: E402
 from docking_ligands import (  # noqa: E402
     _coerce_test_map,
@@ -60,6 +69,7 @@ def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[
         # Force Vina-only runs during integration tests.
         "USE_GNINA": "false",
     }
+    base.update(MMGBSA_DISABLE_ENV)
     env.update({k: str(v) for k, v in base.items()})
     env["ATLAS_RUN_ID"] = RUN_ID
     if extra_env:
@@ -205,6 +215,7 @@ def enumerate_ph_ligands_for_test_pdb(
 ) -> set[str]:
     with patch.dict(os.environ, env, clear=False):
         cfg = load_inputs()
+        cfg["RUN_ID"] = str(env.get("RUN_ID", cfg.get("RUN_ID", ""))).strip()
         # Mirror the CLI -test-fda override used by run_main_cli so enumeration
         # matches the runtime library selection.
         cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
@@ -264,6 +275,9 @@ def _prepare_run(tmp_path: Path, extra_env: dict[str, str] | None = None) -> tup
         extracted_root, prepped_root = infer_ligand_roots(cfg)
         ensure_hmdb_test_library(extracted_root, prepped_root)
     pdb_id = _pick_test_pdb(cfg)
+    cfg["RUN_ID"] = str(env.get("RUN_ID", cfg.get("RUN_ID", ""))).strip()
+    # Refresh router roots per test so DOCKED_DIR stays aligned with tmp_path.
+    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     return env, pdb_id
 
 
@@ -407,6 +421,8 @@ def test_main_fast_no_docking_excludes_ph_and_microstate_dirs(tmp_path: Path) ->
 
     with patch.dict(os.environ, env, clear=False):
         cfg_for_roots = load_inputs()
+        cfg_for_roots["RUN_ID"] = str(env.get("RUN_ID", cfg_for_roots.get("RUN_ID", ""))).strip()
+        make_paths(cfg_for_roots, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     test_map = _coerce_test_map(cfg_for_roots.get("TEST_LIBRARY_MAP", {}))
     mapped = test_map.get(pdb_id)
     base_root = Path(cfg_for_roots["OUTPUT_LIGANDS_DIR"])

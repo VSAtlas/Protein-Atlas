@@ -19,6 +19,7 @@ Environment Constraints
 - Assume a POSIX shell (`bash`); avoid OS- or editor-specific features.
 - Do not run network calls, package installs, or system-wide changes.
 
+
 All Python or CLI commands that touch the pipeline SHOULD:
 
 - Prefer `micromamba run -n docking-env ...` for commands you suggest to me
@@ -27,6 +28,16 @@ All Python or CLI commands that touch the pipeline SHOULD:
 
 Never assume a virtualenv is already activated; be explicit in commands you
 show to me. 
+
+### DeepCoy autogen gating (test runs)
+DeepCoy dud library autogen should run ONLY when:
+1) `TEST_LIBRARY_MAP` cannot map the current PDB/target to a test library, OR
+2) the mapped library path is missing on disk.
+
+If `TEST_LIBRARY_MAP` resolves to an existing library path, DeepCoy autogen MUST be skipped
+(do not regenerate decoys for mapped+present test libraries).
+
+
 
 ### Handling micromamba lockfile errors in the Codex sandbox
 
@@ -59,10 +70,20 @@ Paths are **relative to the workspace root** (`/home/michael/atlas/code/protein_
   - `processed_pdbs/<PDB>/{APO,HOLO}/receptor/<pH_ensemble_id>/... .pdbqt`
 - Prepped ligands (generic; can be PDB- or library-named):
   - `prepped_ligands/<label>/...`
-- Docked outputs:
-  - `docked/<PDB>/{APO,HOLO}/<pH_label>/stage1/`
-  - `docked/<PDB>/{APO,HOLO}/<pH_label>/stage2/`
-  - `docked/<PDB>/{APO,HOLO}/<pH_label>/stage3/`
+- Docked outputs (run-scoped):
+  - `docked/<RUN_ID>/<PDB>/{APO,HOLO}/<pH_label>/stage1/`
+  - `docked/<RUN_ID>/<PDB>/{APO,HOLO}/<pH_label>/stage2/`
+  - `docked/<RUN_ID>/<PDB>/{APO,HOLO}/<pH_label>/stage3/`
+  - Engine-scoped stage dirs may also exist alongside Vina:
+    - `gnina_stage{1,2,3}/`, `ledock_stage{1,2,3}/`, `dock6_stage{1,2,3}/`
+- Post-docked outputs (run-scoped):
+  - `post_docked/<RUN_ID>/<PDB>/{APO,HOLO}/<pH_label>/...`
+- Tests:
+  - `chemdb/tests/` (not `tests/`)
+
+
+
+
 - Config + run-level switches: `config.txt`
 - CI helpers: `ci/`
 - Tests: `tests/`
@@ -164,6 +185,15 @@ Safe default commands (adjust flags as needed):
 - `micromamba run -n docking-env python analysis/dud_eval.py --docked-root docked/<PDB>`
 - `micromamba run -n docking-env pytest tests/test_microstates.py -q`
 - `micromamba run -n docking-env pytest tests/test_ions_acceptance.py -q` (if tests are failing and the user wants to investigate)
+### SCORCH dual-mode smoke check (FDA + DUD)
+- `micromamba run -n docking-env python rescoring_scorch.py --run-id <RUN_ID> --overwrite`
+
+Expected artifacts per combo under `post_docked/<RUN_ID>/<PDB>/<VARIANT>/<pH>/`:
+- `scorch_scores_all.csv` AND `dud_scorch_scores_all.csv` must exist and be non-empty.
+- Per-engine dud CSVs should exist for any engine with decoy inputs present.
+
+
+
 
 All of these should run from the workspace root (the current directory).
 
@@ -302,9 +332,71 @@ LeDock requires:
 
 ---
 
+
+
+---
+
+## Decoy (DUD/DeepCoy) subruns: folder naming + SCORCH expectations
+
+### Decoy directory conventions (docked/)
+When an fda+dud run is enabled, decoy poses and CSVs are emitted into decoy-scoped names
+inside the same `docked/<RUN_ID>/<PDB>/<VARIANT>/<pH>/` combo root:
+
+- Vina decoys:
+  - pose dirs: `dud_stage{1,2,3}/`
+  - CSVs: `dud_docking_score_long.csv`, `dud_docking_score_summary.csv`
+- GNINA decoys:
+  - pose dirs: `gnina_dud_stage{1,2,3}/`  (NOTE: not `dud_gnina_stage*`)
+  - CSVs: `dud_gnina_docking_score_long.csv`, `dud_gnina_docking_score_summary.csv`
+- DOCK6 decoys:
+  - pose dirs: `dock6_dud_stage{1,2,3}/`  (NOTE: not `dud_dock6_stage*`)
+  - CSVs: `dud_dock6_docking_score_long.csv`, `dud_dock6_docking_score_summary.csv`
+- LeDock decoy scores may exist as `dud_ledock_docking_score_long.csv` even if a separate
+  `ledock_dud_stage*` directory is not present; treat the CSV as the decoy membership source.
+
+### SCORCH rescoring: dual-mode outputs and isolation
+SCORCH must be able to rescore BOTH:
+- FDA poses (stage dirs like `stage*`, `gnina_stage*`, etc.)
+- Decoy poses (dirs listed above)
+
+Outputs under `post_docked/<RUN_ID>/<PDB>/<VARIANT>/<pH>/`:
+- FDA:
+  - per-engine: `scorch_scores_vina_best.csv`, `scorch_scores_gnina_best.csv`,
+    `scorch_scores_ledock.csv`, `scorch_scores_dock6.csv`
+  - aggregated: `scorch_scores_all.csv`
+- DUD (decoy):
+  - per-engine: `dud_scorch_scores_vina_best.csv`, `dud_scorch_scores_gnina_best.csv`,
+    `dud_scorch_scores_ledock.csv`, `dud_scorch_scores_dock6.csv`
+  - aggregated: `dud_scorch_scores_all.csv`
+
+SCORCH must run DUD pass BEFORE FDA pass, and input staging must be mode-isolated so
+decoy runs cannot reuse FDA ligands:
+- Inputs are materialized under `.scorch_inputs/<mode>_<stage_key>/...` (e.g., `dud_vina_best`, `fda_vina_best`).
+
+### SCORCH input sources by engine
+- Vina + GNINA: SCORCH reads poses directly from `docked/.../<stage_dir>/*.pdbqt`
+- LeDock + DOCK6: SCORCH reads from PDBQT-converted pose dirs under post_docked:
+  - FDA: `ledock_pdbqt/`, `dock6_pdbqt/`
+  - DUD: `dud_ledock_pdbqt/`, `dud_dock6_pdbqt/`
+  Prep must generate DUD folders exactly like FDA conversion, only changing output dir names.
+
+### Base-name canonicalization (critical for DUD filtering)
+When filtering to “allowed_bases” (top% selection), pose basename parsing MUST strip
+decoy suffixes so the ligand base matches consensus IDs, e.g.:
+- `LIG_A301_dud_stage3.pdbqt` -> `LIG_A301`
+- `X_gnina_dud_stage3.pdbqt` -> `X`
+- `Y_dock6_dud_stage3.pdbqt` -> `Y`
+If this is wrong, DUD rescoring will be skipped even when decoy PDBQTs exist.
+
+
+
 ## Tests (current)
 Tests live under `chemdb/tests/` (not `tests/`).
 
 Run full suite:
-- `python -m pytest chemdb/tests`
+### Default acceptance set (when a prompt says “run the suite”)
+- `python -m pytest -q chemdb/tests/test_main_full_run.py`
+- `python -m pytest -q chemdb/tests/test_ligand_run_modes.py`
+- `python -m pytest -q chemdb/tests/test_path_router.py`
+- `python -m pytest -q chemdb/tests/test_record_data_csv.py`
 You may exclude some of the longer running tests, many of these can take upwards of 15+ minutes

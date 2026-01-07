@@ -29,6 +29,15 @@ DOCKED_ROOT = REPO_ROOT / "docked" / TEST_RUN_ID / TEST_PDB_ID
 
 SUCCESS_SENTINEL = "No proteins recorded as failed."
 
+# Keep integration runs lightweight by disabling MMGBSA in these tests.
+MMGBSA_DISABLE_ENV = {
+    "MMGBSA_ENABLED": "false",
+    "MMGBSA_MD_ENABLED": "false",
+    "MMGBSA_MMPBSA_ENABLED": "false",
+    "MMGBSA_MMPBSA_RUN": "false",
+    "MD_FIVE_REPLICATE": "false",
+}
+
 # Mark the whole module as slow so it only runs when explicitly requested
 pytestmark = pytest.mark.slow
 
@@ -151,6 +160,7 @@ def test_full_run_produces_summary_without_failures(
 
     env = os.environ.copy()
     env.update(env_overrides)
+    env.update(MMGBSA_DISABLE_ENV)
     env["ATLAS_RUN_ID"] = TEST_RUN_ID
     # Force small test-mode library
     env["TEST_MODE_ENABLE"] = "dud"

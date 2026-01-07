@@ -9,8 +9,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from record_data import write_scores_csv
-from rescoring_scorch import _load_consensus_top_bases, discover_stage3_roots
-from rescore_reranker import rerank_consensus_with_scorch
+from rescoring_scorch import (
+    _load_consensus_top_bases,
+    discover_stage3_roots,
+    _pose_base_from_path,
+    annotate_scorch_t_scores,
+)
+from rescore_reranker import rerank_consensus_with_scorch, is_decoy_id
 
 RUN_ID = "test_run"
 
@@ -86,6 +91,22 @@ def test_discover_stage3_roots(tmp_path):
     assert roots["dud"] == dud_root
 
 
+def test_pose_base_strips_dud_suffixes():
+    assert _pose_base_from_path(Path("LIG_A301_dud_stage3.pdbqt")) == "LIG_A301"
+    assert _pose_base_from_path(Path("LIG_A301.sanitized_dud_stage3.pdbqt")) == "LIG_A301"
+    assert _pose_base_from_path(Path("decoys_test_library_10_2_dud_stage3.pdbqt")) == "decoys_test_library_10_2"
+    assert _pose_base_from_path(Path("LIG_X_gnina_dud_stage3.pdbqt")) == "LIG_X"
+    assert _pose_base_from_path(Path("LIG_Y_dock6_dud_stage3.pdbqt")) == "LIG_Y"
+    assert _pose_base_from_path(Path("decoys_test_library_10_2__dock6_dud_stage3.pdbqt")) == "decoys_test_library_10_2"
+    assert _pose_base_from_path(Path("decoys_test_library_10_2__ledock_stage3.pdbqt")) == "decoys_test_library_10_2"
+
+
+def test_decoy_detector():
+    assert is_decoy_id("decoy_foo.pdbqt")
+    assert is_decoy_id("decoys_bar.sdf")
+    assert not is_decoy_id("fda_foo.pdbqt")
+
+
 def test_stratified_top_fraction_includes_decoys(tmp_path):
     consensus_path = tmp_path / "consensus_docking_scores.csv"
     rows = [
@@ -138,26 +159,6 @@ def test_rerank_outputs_t_scores(tmp_path):
             "library": "FDA",
             "t_vs_decoys_consensus": "-0.2",
         },
-        {
-            "run_id": "r2",
-            "pdb_id": "P2",
-            "variant": "HOLO",
-            "ph_label": "phys",
-            "ligand": "dud_a.pdbqt",
-            "consensus_score": "0.5",
-            "library": "DECOY",
-            "t_vs_decoys_consensus": "0.0",
-        },
-        {
-            "run_id": "r2",
-            "pdb_id": "P2",
-            "variant": "HOLO",
-            "ph_label": "phys",
-            "ligand": "dud_b.pdbqt",
-            "consensus_score": "0.3",
-            "library": "DECOY",
-            "t_vs_decoys_consensus": "-0.1",
-        },
     ]
     with consensus_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(cons_rows[0].keys()))
@@ -174,8 +175,8 @@ def test_rerank_outputs_t_scores(tmp_path):
         writer.writerows(scorch_rows)
 
     dud_scorch_rows = [
-        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "dud_a_stage1", "SCORCH_score": "1.0", "SCORCH_certainty": "1.0", "run_mode": "dud"},
-        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "dud_b_stage1", "SCORCH_score": "0.5", "SCORCH_certainty": "1.0", "run_mode": "dud"},
+        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoy_a_stage1", "SCORCH_score": "1.0", "SCORCH_certainty": "1.0", "run_mode": "dud"},
+        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoys_b_stage1", "SCORCH_score": "0.5", "SCORCH_certainty": "1.0", "run_mode": "dud"},
     ]
     dud_scorch_path = scorch_path.parent / "dud_scorch_scores_all.csv"
     with dud_scorch_path.open("w", newline="", encoding="utf-8") as handle:
@@ -196,7 +197,7 @@ def test_rerank_outputs_t_scores(tmp_path):
     out_csv = scorch_path.parent / "consensus_reranked_scorch.csv"
     ok = rerank_consensus_with_scorch(
         consensus_path,
-        scorch_path,
+        [scorch_path, dud_scorch_path],
         out_csv,
         logger,
         overwrite=True,
@@ -208,8 +209,42 @@ def test_rerank_outputs_t_scores(tmp_path):
         assert "t_vs_decoys_consensus" in fieldnames
         assert "t_vs_decoys_blend" in fieldnames
         rows = list(reader)
-    assert any(r.get("t_vs_decoys_blend") not in ("", None) and r.get("library") == "FDA" for r in rows)
+    assert any("decoy_a_stage1" in str(r.get("ligand", "")) for r in rows)
+    assert any(r.get("t_vs_decoys_blend") not in ("", None) for r in rows)
     stats_path = out_csv.parent / "decoy_stats_blend.json"
     assert stats_path.exists()
     stats = json.loads(stats_path.read_text())
     assert any(entry.get("n_decoys", 0) > 0 for entry in stats.values())
+    dud_csv = out_csv.parent / "dud_consensus_reranked_scorch.csv"
+    assert dud_csv.exists()
+    with dud_csv.open("r", encoding="utf-8", newline="") as handle:
+        dud_rows = list(csv.DictReader(handle))
+    assert any(is_decoy_id(r.get("ligand", "")) or r.get("run_mode") == "dud" for r in dud_rows)
+
+
+def test_annotate_scorch_t_scores(tmp_path):
+    fda_csv = tmp_path / "scorch_scores_all.csv"
+    dud_csv = tmp_path / "dud_scorch_scores_all.csv"
+    fda_rows = [
+        {"Ligand_ID": "fda_a_stage3", "SCORCH_score": "2.0", "SCORCH_certainty": "1.0"},
+        {"Ligand_ID": "fda_b_stage3", "SCORCH_score": "1.0", "SCORCH_certainty": "1.0"},
+    ]
+    dud_rows = [
+        {"Ligand_ID": "dud_a_dud_stage3", "SCORCH_score": "0.5", "SCORCH_certainty": "1.0"},
+        {"Ligand_ID": "dud_b_dud_stage3", "SCORCH_score": "0.25", "SCORCH_certainty": "1.0"},
+    ]
+    for path, rows in ((fda_csv, fda_rows), (dud_csv, dud_rows)):
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    annotate_scorch_t_scores(fda_csv, dud_csv, logging.getLogger("test_scorch_t"))
+
+    for path in (fda_csv, dud_csv):
+        with path.open("r", newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames or []
+            assert "t_vs_decoys_scorch" in fields
+            rows = list(reader)
+            assert any(r.get("t_vs_decoys_scorch") not in ("", None) for r in rows)

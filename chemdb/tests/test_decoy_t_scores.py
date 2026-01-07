@@ -20,6 +20,15 @@ TEST_RUN_ID = "test_run"
 DOCKED_ROOT = REPO_ROOT / "docked" / TEST_RUN_ID / TEST_PDB_ID
 SUCCESS_SENTINEL = "No proteins recorded as failed."
 
+# Keep integration runs lightweight by disabling MMGBSA in this test.
+MMGBSA_DISABLE_ENV = {
+    "MMGBSA_ENABLED": "false",
+    "MMGBSA_MD_ENABLED": "false",
+    "MMGBSA_MMPBSA_ENABLED": "false",
+    "MMGBSA_MMPBSA_RUN": "false",
+    "MD_FIVE_REPLICATE": "false",
+}
+
 pytestmark = pytest.mark.slow
 
 
@@ -86,6 +95,7 @@ def test_decoy_t_scores_present_in_fast_test_mode() -> None:
     env["TEST_MODE_ENABLE"] = "fda+dud"
     env["ATLAS_RUN_ID"] = TEST_RUN_ID
     env["PYTHONUNBUFFERED"] = "1"
+    env.update(MMGBSA_DISABLE_ENV)
 
     cmd = [sys.executable, str(MAIN_PY), "-test", "-test-fda", "-fast", "--run-id", TEST_RUN_ID]
     start_time = time.time()

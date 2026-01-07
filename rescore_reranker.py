@@ -10,7 +10,7 @@ import sys
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from input_and_export_functions import load_config
 
@@ -55,8 +55,7 @@ TEXT_PRIORITY = [
     "run_mode",
 ]
 
-FDA_PREFIX_DEFAULTS = ["fda_"]
-DECOY_PREFIX_DEFAULTS = ["dud_", "deepcoy_", "decoy_", "decoys"]
+_DECOY_RE = re.compile(r"\bdecoys?_", re.IGNORECASE)
 
 
 def _as_float(x: Any) -> Optional[float]:
@@ -71,36 +70,9 @@ def _as_float(x: Any) -> Optional[float]:
         return None
 
 
-def _library_prefixes(cfg: Optional[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
-    if cfg is None:
-        return list(FDA_PREFIX_DEFAULTS), list(DECOY_PREFIX_DEFAULTS)
+def is_decoy_id(s: str) -> bool:
+    return bool(_DECOY_RE.search(s or ""))
 
-    def _extract(key: str, default: List[str]) -> List[str]:
-        raw = cfg.get(key) or cfg.get(key.lower())
-        if raw is None:
-            return list(default)
-        if isinstance(raw, str):
-            parts = [p.strip() for p in re.split(r"[;,]", raw) if p.strip()]
-            return parts or list(default)
-        try:
-            return [str(p).strip() for p in raw if str(p).strip()]
-        except Exception:
-            return list(default)
-
-    return _extract("FDA_LIGAND_PREFIXES", list(FDA_PREFIX_DEFAULTS)), _extract(
-        "DECOY_LIGAND_PREFIXES", list(DECOY_PREFIX_DEFAULTS)
-    )
-
-
-def _infer_library(ligand_display: str, fda_prefixes: List[str], decoy_prefixes: List[str]) -> str:
-    name = Path(ligand_display).name.lower()
-    for prefix in fda_prefixes:
-        if name.startswith(prefix.lower()):
-            return "FDA"
-    for prefix in decoy_prefixes:
-        if name.startswith(prefix.lower()):
-            return "DECOY"
-    return "UNKNOWN"
 
 
 def _parse_weight(cfg: Dict[str, Any], key: str, default: float, logger: logging.Logger) -> float:
@@ -164,15 +136,46 @@ def _consensus_ligand_base(lig: str) -> str:
 
 def _scorch_ligand_base(lig_id: str) -> str:
     s = str(lig_id or "").strip()
+    s = s.replace(".sanitized", "")
+    s = re.sub(r"(_dud_gnina_stage\d+)$", "", s)
+    s = re.sub(r"(_gnina_dud_stage\d+)$", "", s)
+    s = re.sub(r"(_dock6_dud_stage\d+)$", "", s)
+    s = re.sub(r"(_dud_dock6_stage\d+)$", "", s)
+    s = re.sub(r"(_dud_stage\d+)$", "", s)
+    s = re.sub(r"(__dock6_dud_stage\d+)$", "", s)
     s = re.sub(r"(__ledock_stage\d+)$", "", s)
     s = re.sub(r"(__dock6_stage\d+)$", "", s)
     s = re.sub(r"(_gnina_stage\d+)$", "", s)
     s = re.sub(r"(_stage\d+)$", "", s)
     s = re.sub(r"\.(mol2|pdbqt)$", "", s, flags=re.IGNORECASE)
-    s = s.replace(".sanitized", "")
     s = s.replace("__", "_")
     s = re.sub(r"_+$", "", s)
     return s
+
+
+def _row_identifier(row: Dict[str, Any]) -> str:
+    for key in (
+        "ligand",
+        "ligand_file",
+        "Ligand_ID",
+        "ligand_id",
+        "Ligand",
+        "name",
+        "molecule",
+        "Molecule",
+    ):
+        val = row.get(key)
+        if val:
+            return str(val).strip()
+    for key, val in row.items():
+        if "ligand" in str(key).lower() and val:
+            return str(val).strip()
+    return ""
+
+
+def _row_ligand_base(row: Dict[str, Any]) -> str:
+    ident = _row_identifier(row)
+    return _scorch_ligand_base(ident) if ident else ""
 
 
 def _cnn_ligand_base(lig_id: str) -> str:
@@ -209,6 +212,7 @@ class ScorchPick:
     variant: str
     ph: str
     source: str
+    ligand_id: str
     ligand_base: str
     stage_num: int
     scorch_score: Optional[float]
@@ -367,7 +371,7 @@ def _percentile_map(values: List[float]) -> Dict[float, float]:
 
 def rerank_consensus_with_scorch(
     consensus_csv: Path,
-    scorch_csv: Path,
+    scorch_csvs: List[Path] | Tuple[Path, ...] | Path,
     out_csv: Path,
     logger: logging.Logger,
     *,
@@ -383,58 +387,54 @@ def rerank_consensus_with_scorch(
         logger.warning("%s action=skip reason=missing_consensus path=%s", COMPONENT, str(consensus_csv))
         return False
     degraded = False
-    sc_rows: List[Dict[str, str]] = []
-    if not scorch_csv.exists() or scorch_csv.stat().st_size == 0:
-        degraded = True
-        logger.warning("%s action=rerank status=degraded reason=missing_or_empty_scorch path=%s", COMPONENT, str(scorch_csv))
+    if isinstance(scorch_csvs, Path):
+        scorch_paths = [scorch_csvs]
     else:
+        scorch_paths = list(scorch_csvs)
+
+    if len(scorch_paths) == 1 and scorch_paths[0].name == "scorch_scores_all.csv":
+        dud_candidate = scorch_paths[0].with_name("dud_scorch_scores_all.csv")
+        if dud_candidate.exists():
+            scorch_paths.append(dud_candidate)
+
+    sc_rows_all: List[Dict[str, str]] = []
+    counts: Dict[str, int] = {"fda": 0, "dud": 0}
+    for path in scorch_paths:
+        if not path.exists() or path.stat().st_size == 0:
+            degraded = True
+            logger.warning(
+                "%s action=rerank status=degraded reason=missing_or_empty_scorch path=%s",
+                COMPONENT,
+                str(path),
+            )
+            continue
         try:
-            sc_rows, _ = _read_csv(scorch_csv)
-            if not sc_rows:
-                degraded = True
-                logger.warning(
-                    "%s action=rerank status=degraded reason=missing_or_empty_scorch path=%s",
-                    COMPONENT,
-                    str(scorch_csv),
-                )
+            rows, _ = _read_csv(path)
         except Exception as exc:
             degraded = True
             logger.warning(
                 "%s action=rerank status=degraded reason=read_error_scorch path=%s error=%s",
                 COMPONENT,
-                str(scorch_csv),
+                str(path),
                 exc,
             )
-            sc_rows = []
-    dud_scorch_csv = scorch_csv.with_name("dud_scorch_scores_all.csv")
-    dud_rows: List[Dict[str, str]] = []
-    if dud_scorch_csv.exists() and dud_scorch_csv.stat().st_size > 0:
-        try:
-            dud_rows, _ = _read_csv(dud_scorch_csv)
-        except Exception as exc:
-            logger.warning(
-                "%s action=rerank status=degraded reason=read_error_dud_scorch path=%s error=%s",
-                COMPONENT,
-                str(dud_scorch_csv),
-                exc,
-            )
-            dud_rows = []
-    for row in sc_rows:
-        if not row.get("run_mode"):
-            row["run_mode"] = "fda"
-    for row in dud_rows:
-        if not row.get("run_mode"):
-            row["run_mode"] = "dud"
-    sc_rows_all = sc_rows + dud_rows
+            continue
+        mode_hint = "dud" if path.name.startswith("dud_") else "fda"
+        for row in rows:
+            if not row.get("run_mode"):
+                row["run_mode"] = mode_hint
+            counts[row.get("run_mode", mode_hint)] = counts.get(row.get("run_mode", mode_hint), 0) + 1
+            sc_rows_all.append(row)
     logger.info(
         "[rerank.load_scorch] fda_exists=%s dud_exists=%s n_fda=%d n_dud=%d",
-        str(bool(sc_rows)).lower(),
-        str(bool(dud_rows)).lower(),
-        len(sc_rows),
-        len(dud_rows),
+        str(counts.get("fda", 0) > 0).lower(),
+        str(counts.get("dud", 0) > 0).lower(),
+        counts.get("fda", 0),
+        counts.get("dud", 0),
     )
 
-    cnn_csv = scorch_csv.parent / "cnn_rescoring.csv"
+    base_dir = scorch_paths[0].parent if scorch_paths else out_csv.parent
+    cnn_csv = base_dir / "cnn_rescoring.csv"
     cnn_rows: List[Dict[str, str]] = []
     if not cnn_csv.exists() or cnn_csv.stat().st_size == 0:
         logger.warning("%s action=rerank status=degraded reason=missing_or_empty_cnn path=%s", COMPONENT, str(cnn_csv))
@@ -457,23 +457,16 @@ def rerank_consensus_with_scorch(
             cnn_rows = []
 
     cons_rows, cons_fields = _read_csv(consensus_csv)
-    cfg_prefix = None
-    repo_root = _find_repo_root(consensus_csv)
-    if repo_root and (repo_root / "config.txt").exists():
-        try:
-            cfg_prefix = load_config(config_path=str(repo_root / "config.txt"), base_dir=repo_root)
-        except Exception as exc:
-            logger.debug(
-                "%s action=prefix_load status=skip reason=config_error path=%s error=%s",
-                COMPONENT,
-                str(repo_root / "config.txt"),
-                exc,
-            )
-    fda_prefixes, decoy_prefixes = _library_prefixes(cfg_prefix)
-
     if not cons_rows:
         logger.warning("%s action=skip reason=empty_consensus path=%s", COMPONENT, str(consensus_csv))
         return False
+
+    cons_bases: Set[str] = set()
+    for row in cons_rows:
+        base = _consensus_ligand_base(str(row.get("ligand", "")).strip())
+        if base:
+            cons_bases.add(base)
+    run_id_default = str(cons_rows[0].get("run_id", "")).strip() if cons_rows else ""
 
     best_by_source: Dict[Tuple[str, str, str, str, str], ScorchPick] = {}
     best_any: Dict[Tuple[str, str, str, str], ScorchPick] = {}
@@ -491,17 +484,19 @@ def rerank_consensus_with_scorch(
         stage_num = _extract_stage_num(lig_id)
         score = _as_float(r.get("SCORCH_score"))
         certainty = _as_float(r.get("SCORCH_certainty"))
+        run_mode = str(r.get("run_mode", "")).strip() or "fda"
 
         pick = ScorchPick(
             pdb_id=pdb_id,
             variant=variant,
             ph=ph,
             source=source,
+            ligand_id=lig_id,
             ligand_base=lig_base,
             stage_num=stage_num,
             scorch_score=score,
             scorch_certainty=certainty,
-            run_mode=str(r.get("run_mode", "")).strip() or "fda",
+            run_mode=run_mode,
         )
 
         k1 = (pdb_id, variant, ph, source, lig_base)
@@ -550,14 +545,7 @@ def rerank_consensus_with_scorch(
         lig_base = _consensus_ligand_base(lig)
         rr["ligand_base"] = lig_base
         library_raw = str(r.get("library", "")).strip()
-        if not library_raw:
-            library_raw = _infer_library(lig, fda_prefixes, decoy_prefixes)
-        library_norm = library_raw.upper() if library_raw else "UNKNOWN"
-        rr["library"] = library_norm
-        run_mode_val = str(r.get("run_mode", "")).strip().lower()
-        if not run_mode_val:
-            run_mode_val = "dud" if library_norm == "DECOY" else "fda"
-        rr["run_mode"] = run_mode_val
+        rr["library"] = library_raw
         if "t_vs_decoys_consensus" not in rr:
             rr["t_vs_decoys_consensus"] = str(r.get("t_vs_decoys_consensus", "")).strip()
         else:
@@ -577,6 +565,11 @@ def rerank_consensus_with_scorch(
             pick = best_by_source.get((pdb_id, variant, ph_label, best_engine, lig_base))
         if pick is None and pdb_id and variant and ph_label:
             pick = best_any.get((pdb_id, variant, ph_label, lig_base))
+
+        run_mode_val = str(r.get("run_mode", "")).strip().lower()
+        if not run_mode_val and pick is not None:
+            run_mode_val = pick.run_mode
+        rr["run_mode"] = run_mode_val
 
         rr["scorch_source_used"] = pick.source if pick else ""
         rr["SCORCH_score_used"] = "" if (not pick or pick.scorch_score is None) else f"{pick.scorch_score:.6g}"
@@ -602,6 +595,39 @@ def rerank_consensus_with_scorch(
         else:
             rr["final_score"] = str(rr.get("consensus_score", "")).strip()
 
+        enriched.append(rr)
+
+    for pick in best_any.values():
+        if pick.ligand_base in cons_bases:
+            continue
+        rr: Dict[str, Any] = {}
+        rr["run_id"] = run_id_default
+        rr["pdb_id"] = pick.pdb_id
+        rr["variant"] = pick.variant
+        rr["ph_label"] = pick.ph
+        rr["ligand"] = pick.ligand_id
+        rr["ligand_base"] = pick.ligand_base
+        rr["library"] = ""
+        rr["run_mode"] = pick.run_mode
+        rr["t_vs_decoys_consensus"] = ""
+        rr["t_vs_decoys_blend"] = ""
+        rr["blend_mu_decoy"] = ""
+        rr["blend_sigma_decoy"] = ""
+        rr["blend_n_decoys"] = ""
+        rr["best_engine"] = pick.source
+        rr["scorch_source_used"] = pick.source
+        rr["SCORCH_score_used"] = "" if pick.scorch_score is None else f"{pick.scorch_score:.6g}"
+        rr["SCORCH_certainty_used"] = "" if pick.scorch_certainty is None else f"{pick.scorch_certainty:.6g}"
+        comp = None
+        if pick.scorch_score is not None and pick.scorch_certainty is not None:
+            comp = pick.scorch_score * pick.scorch_certainty
+        rr["scorch_composite"] = "" if comp is None else f"{comp:.6g}"
+        rr["cnn_score_used"] = ""
+        rr["cnn_affinity_used"] = ""
+        rr["cnn_vs_used"] = ""
+        rr["cnn_rescored_flag"] = "0"
+        rr["rescored_flag"] = "1" if rr["scorch_composite"] or rr["SCORCH_score_used"] else "0"
+        rr["final_score"] = rr["scorch_composite"] or rr["SCORCH_score_used"] or ""
         enriched.append(rr)
 
     def group_key(row: Dict[str, Any]) -> Tuple[str, str, str, str]:
@@ -661,23 +687,20 @@ def rerank_consensus_with_scorch(
             enriched[i]["cnn_pct"] = f"{cnn_pct:.6g}"
             enriched[i]["ml_blend_score"] = f"{ml_blend:.6g}"
 
-    def _norm_library_val(val: Any) -> str:
-        lib = str(val or "").strip().upper()
-        return lib if lib else "UNKNOWN"
-
     decoy_stats: Dict[str, Dict[str, float]] = {}
     for g_key, idxs in groups.items():
         decoy_scores: List[float] = []
         for i in idxs:
-            lib = _norm_library_val(enriched[i].get("library"))
-            run_mode_val = str(enriched[i].get("run_mode", "")).strip().lower()
             score_val = _as_float(enriched[i].get("ml_blend_score"))
-            if ((lib == "DECOY") or (run_mode_val == "dud")) and score_val is not None and math.isfinite(score_val):
+            if score_val is None or not math.isfinite(score_val):
+                continue
+            ident = _row_identifier(enriched[i])
+            if is_decoy_id(ident):
                 decoy_scores.append(score_val)
 
         if not decoy_scores:
             logger.info(
-                "[t-score.blend.skip] run_id=%s pdb=%s variant=%s ph=%s reason=no_decoys n_decoys=0 sigma=nan",
+                "[t-score.blend.skip] run_id=%s pdb=%s variant=%s ph=%s reason=no_decoy_scores_or_sigma0 n_decoys=0 sigma=nan",
                 g_key[0],
                 g_key[1],
                 g_key[2],
@@ -685,18 +708,18 @@ def rerank_consensus_with_scorch(
             )
             continue
 
-        mu_decoy = sum(decoy_scores) / len(decoy_scores)
-        variance = sum((v - mu_decoy) ** 2 for v in decoy_scores) / len(decoy_scores)
-        sigma_decoy = math.sqrt(variance)
-        if sigma_decoy <= 0 or not math.isfinite(mu_decoy) or not math.isfinite(sigma_decoy):
+        mu = sum(decoy_scores) / len(decoy_scores)
+        variance = sum((v - mu) ** 2 for v in decoy_scores) / len(decoy_scores)
+        sigma = math.sqrt(variance)
+        if sigma <= 0 or not math.isfinite(mu) or not math.isfinite(sigma):
             logger.info(
-                "[t-score.blend.skip] run_id=%s pdb=%s variant=%s ph=%s reason=no_decoys_or_sigma0 n_decoys=%d sigma=%s",
+                "[t-score.blend.skip] run_id=%s pdb=%s variant=%s ph=%s reason=no_decoy_scores_or_sigma0 n_decoys=%d sigma=%s",
                 g_key[0],
                 g_key[1],
                 g_key[2],
                 g_key[3],
                 len(decoy_scores),
-                "nan" if not math.isfinite(sigma_decoy) else f"{sigma_decoy:.6g}",
+                "nan" if not math.isfinite(sigma) else f"{sigma:.6g}",
             )
             continue
 
@@ -707,20 +730,20 @@ def rerank_consensus_with_scorch(
             g_key[2],
             g_key[3],
             len(decoy_scores),
-            mu_decoy,
-            sigma_decoy,
+            mu,
+            sigma,
         )
         stats_key = "|".join(g_key)
-        decoy_stats[stats_key] = {"n_decoys": len(decoy_scores), "mu": mu_decoy, "sigma": sigma_decoy}
+        decoy_stats[stats_key] = {"n_decoys": len(decoy_scores), "mu": mu, "sigma": sigma}
         for i in idxs:
             val = _as_float(enriched[i].get("ml_blend_score"))
-            enriched[i]["blend_mu_decoy"] = f"{mu_decoy:.6g}"
-            enriched[i]["blend_sigma_decoy"] = f"{sigma_decoy:.6g}"
+            enriched[i]["blend_mu_decoy"] = f"{mu:.6g}"
+            enriched[i]["blend_sigma_decoy"] = f"{sigma:.6g}"
             enriched[i]["blend_n_decoys"] = str(len(decoy_scores))
             if val is None or not math.isfinite(val):
                 enriched[i]["t_vs_decoys_blend"] = ""
                 continue
-            t_val = (val - mu_decoy) / sigma_decoy
+            t_val = (val - mu) / sigma
             enriched[i]["t_vs_decoys_blend"] = f"{t_val:.6g}"
 
     for _, idxs in groups.items():
@@ -768,6 +791,12 @@ def rerank_consensus_with_scorch(
     sorted_rows = _sort_rows(enriched)
 
     _write_csv(out_csv, sorted_rows, out_fields)
+    dud_rows = [
+        row
+        for row in sorted_rows
+        if is_decoy_id(_row_identifier(row)) or str(row.get("run_mode", "")).strip().lower() == "dud"
+    ]
+    _write_csv(out_csv.with_name("dud_consensus_reranked_scorch.csv"), dud_rows, out_fields)
 
     meta = [
         f"# run_id={str(cons_rows[0].get('run_id', '')).strip()}\n",
@@ -795,7 +824,7 @@ def rerank_consensus_with_scorch(
         "%s action=write status=ok consensus=%s scorch=%s out=%s rows=%d",
         COMPONENT,
         str(consensus_csv),
-        str(scorch_csv),
+        ",".join(str(p) for p in scorch_paths),
         str(out_csv),
         len(enriched),
     )
@@ -821,15 +850,16 @@ def rerank_run(
         return 1
 
     scorch_paths = list(post_root.glob("**/scorch_scores_all.csv"))
-    if not scorch_paths:
+    dud_paths = list(post_root.glob("**/dud_scorch_scores_all.csv"))
+    combo_dirs = {p.parent for p in scorch_paths + dud_paths}
+    if not combo_dirs:
         logger.warning("%s action=discover status=skip reason=no_scorch_scores path=%s", COMPONENT, str(post_root))
         return 1
 
     ok = 0
     fail = 0
-    for scorch_csv in sorted(scorch_paths):
+    for combo_dir in sorted(combo_dirs):
         try:
-            combo_dir = scorch_csv.parent
             ph = combo_dir.name
             variant = combo_dir.parent.name
             pdb_id = combo_dir.parent.parent.name
@@ -849,9 +879,27 @@ def rerank_run(
                 continue
 
             out_csv = combo_dir / "consensus_reranked_scorch.csv"
+            scorch_inputs: List[Path] = []
+            fda_csv = combo_dir / "scorch_scores_all.csv"
+            dud_csv = combo_dir / "dud_scorch_scores_all.csv"
+            if fda_csv.exists():
+                scorch_inputs.append(fda_csv)
+            if dud_csv.exists():
+                scorch_inputs.append(dud_csv)
+            if not scorch_inputs:
+                logger.warning(
+                    "%s action=skip reason=missing_scorch pdb=%s variant=%s ph=%s dir=%s",
+                    COMPONENT,
+                    pdb_id,
+                    variant,
+                    ph,
+                    combo_dir,
+                )
+                fail += 1
+                continue
             if rerank_consensus_with_scorch(
                 consensus_csv,
-                scorch_csv,
+                scorch_inputs,
                 out_csv,
                 logger,
                 overwrite=overwrite,
@@ -865,7 +913,7 @@ def rerank_run(
             logger.warning(
                 "%s action=rerank status=failed reason=exception path=%s",
                 COMPONENT,
-                str(scorch_csv),
+                str(combo_dir),
                 exc_info=True,
             )
             fail += 1

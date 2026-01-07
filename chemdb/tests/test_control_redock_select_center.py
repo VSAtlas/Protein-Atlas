@@ -15,6 +15,15 @@ PDBS_OF_INTEREST = [
     "TEST",
 ]
 
+# Keep the control-redock integration test lightweight by disabling MMGBSA.
+MMGBSA_DISABLE_ENV = {
+    "MMGBSA_ENABLED": "false",
+    "MMGBSA_MD_ENABLED": "false",
+    "MMGBSA_MMPBSA_ENABLED": "false",
+    "MMGBSA_MMPBSA_RUN": "false",
+    "MD_FIVE_REPLICATE": "false",
+}
+
 
 def _delete_run_logs(root: Path, run_id: str) -> None:
     logs_dir = root / "logs"
@@ -96,6 +105,7 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
     result = subprocess.run(
         cmd,
         cwd=root,
+        env={**os.environ, **MMGBSA_DISABLE_ENV},
         text=True,
         capture_output=True,
     )
