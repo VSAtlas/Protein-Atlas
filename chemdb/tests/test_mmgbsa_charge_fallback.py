@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import prep_for_mmgbsa as prep
+import post_docking.mmgbsa.prep_for_mmgbsa as prep
 
 
 class DummyProc:

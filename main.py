@@ -252,7 +252,7 @@ from input_and_export_functions import (
     _to_bool,
     init_config_run_dir,
 )
-from cli_utils import (
+from cli.cli_utils import (
     _normalize_flag_name,
     _cli_val,
     _cli_has,
@@ -261,7 +261,7 @@ from cli_utils import (
     _parse_specified_proteins,
     _norm_pdb_id,
 )
-from run_context import (
+from cli.run_context import (
     _resolve_run_id,
     _prepare_run_logfile,
     _apply_resume_config_from_snapshot,
@@ -272,7 +272,7 @@ from docking_stage_runner import RetryManager, run_one_stage
 from docking_ligands import select_ligands_for_next, _coerce_test_map, _resolve_test_mode
 from docking_utils import norm, final_pose_validation_and_screenshots
 from docking import process_one_protein
-from path_router import (
+from path_router.path_router import (
     expand_variants,
     make_paths,
     Paths as RouterPaths,
@@ -280,9 +280,9 @@ from path_router import (
     docked_dir,
     config_dir as router_config_dir,
 )
-from deepcoy_integration import apply_deepcoy_cli_overrides, apply_deepcoy_defaults
-import mmgbsa_pipeline
-from mmgbsa_pipeline import _maybe_run_mmgbsa_for_pdb, _mmgbsa_effective_md_config, make_mmgbsa_trajectory, run_implicit_md, run_mmgbsa
+from prep_ligands.deepcoy_integration import apply_deepcoy_cli_overrides, apply_deepcoy_defaults
+import post_docking.mmgbsa.mmgbsa_pipeline as mmgbsa_pipeline
+from post_docking.mmgbsa.mmgbsa_pipeline import _maybe_run_mmgbsa_for_pdb, _mmgbsa_effective_md_config, make_mmgbsa_trajectory, run_implicit_md, run_mmgbsa
 from fallback_recenter import RecenterParams
 from apo_holo_mode import (
     resolve_apo_holo_mode,
@@ -299,7 +299,7 @@ from single_ligand_index import (
     _resolve_single_ligand,
 )
 from debug_fs import install_debug_makedirs
-from postrun_hooks import _maybe_run_dud_eval, _maybe_run_scorch_rescore, _log_rescore_verification
+from postrun_hooks import _maybe_run_dud_eval, _maybe_run_scorch_rescore, _log_rescore_verification, _maybe_run_master_schema_export, _maybe_run_report_generation
 
 # Install debug wrappers for Path.mkdir and os.makedirs at import time,
 # preserving the previous behavior.
@@ -1482,6 +1482,16 @@ def main() -> None:
         _log_rescore_verification(run_id)
     except Exception:
         logging.warning("[post-check.invoke] action=skip reason=unexpected_exception", exc_info=True)
+
+    try:
+        _maybe_run_master_schema_export(cfg, run_id)
+    except Exception:
+        logging.warning("[master-export.invoke] action=skip reason=unexpected_exception", exc_info=True)
+
+    try:
+        _maybe_run_report_generation(cfg, run_id)
+    except Exception:
+        logging.warning("[report.invoke] action=skip reason=unexpected_exception", exc_info=True)
 
 
 def _send_run_email(status: int, start_time: str, end_time: str) -> None:

@@ -95,9 +95,13 @@ import sys
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+if str(_REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from path_router import make_paths, expand_variants
-from library_index import LibraryIndex
+import sitecustomize  # noqa: F401
+
+from path_router.path_router import make_paths, expand_variants
+from prep_ligands.library_index import LibraryIndex
 from run_manifest import get_manifest_paths, _load_manifest  # type: ignore
 
 _LIB_INDEX_CACHE: Dict[Tuple[str, str], LibraryIndex] = {}

@@ -39,7 +39,9 @@ def _ensure_writable_home() -> None:
 
 _ensure_writable_home()
 
-# Ensure the repository root is always importable for tests and scripts.
+# Ensure the repository root and src directory are always importable for tests and scripts.
 REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in os.sys.path:
     os.sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "src") not in os.sys.path:
+    os.sys.path.insert(0, str(REPO_ROOT / "src"))

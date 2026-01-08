@@ -54,7 +54,7 @@ from input_and_export_functions import load_inputs, validate_config, load_config
 import logging, sys
 cfg = load_config()
 # Library resolution helpers
-from metabolite_resolver import (
+from prep_ligands.metabolite_resolver import (
     ensure_parent_drugs_for_controls,
     load_library_index,
     resolve_corresponding_name_for_rdk,
@@ -99,7 +99,7 @@ from main import (  # noqa: E402
 # >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
 # >>> PATHS IMPORT END
-from prep_ligands import prep_ligands_from_pdb
+from prep_ligands.prep_ligands import prep_ligands_from_pdb
 # ----- Deferred render queue (global) -----
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List

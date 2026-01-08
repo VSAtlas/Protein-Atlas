@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import mmgbsa_trajectory
+import post_docking.mmgbsa.mmgbsa_trajectory as mmgbsa_trajectory
 
 
 def test_run_implicit_md_writes_inputs_and_calls_sander(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

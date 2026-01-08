@@ -9,13 +9,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from record_data import write_scores_csv
-from rescoring_scorch import (
-    _load_consensus_top_bases,
+from post_docking.rescoring.rescoring_scorch import (
+    SCORCH_TOP_FRACTION_DEFAULT,
+    SCORCH_TOP_FRACTION_KEY,
     discover_stage3_roots,
     _pose_base_from_path,
+    _load_consensus_top_bases,
     annotate_scorch_t_scores,
 )
-from rescore_reranker import rerank_consensus_with_scorch, is_decoy_id
+from post_docking.rescoring.rescore_reranker import rerank_consensus_with_scorch, is_decoy_id
 
 RUN_ID = "test_run"
 

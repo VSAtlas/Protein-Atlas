@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import protein_prep_mmgbsa
+import post_docking.mmgbsa.protein_prep_mmgbsa as protein_prep_mmgbsa
 
 
 def _pdb_line(record, serial, name, resname, chain, resseq, x, y, z, element):

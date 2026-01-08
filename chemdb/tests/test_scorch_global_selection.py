@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import rescoring_scorch
+import post_docking.rescoring.rescoring_scorch as rescoring_scorch
 
 
 def _write_consensus(path: Path, rows: list[tuple[str, float]]) -> None:
@@ -35,6 +35,7 @@ def test_global_selection_shared_across_engines(tmp_path: Path) -> None:
 
     (
         allowed_bases,
+        allowed_decoy_redundant,
         total_rows,
         selected_rows,
         noncontrol_rows,

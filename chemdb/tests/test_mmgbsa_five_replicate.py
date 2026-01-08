@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import main
-from run_mmgbsa import parse_mmpbsa_delta_total
+from post_docking.mmgbsa.run_mmgbsa import parse_mmpbsa_delta_total
 
 
 def _write_mmpbsa_outputs(work_dir: Path, score: float, cfg: dict) -> dict:

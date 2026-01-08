@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from mmgbsa_trajectory import make_mmgbsa_trajectory
+from post_docking.mmgbsa.mmgbsa_trajectory import make_mmgbsa_trajectory
 
 
 def test_mmgbsa_trajectory_input_only(tmp_path: Path) -> None:

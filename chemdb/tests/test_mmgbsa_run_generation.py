@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from run_mmgbsa import run_mmgbsa
+from post_docking.mmgbsa.run_mmgbsa import run_mmgbsa
 
 
 def test_mmgbsa_run_generation_input_only(tmp_path: Path) -> None:

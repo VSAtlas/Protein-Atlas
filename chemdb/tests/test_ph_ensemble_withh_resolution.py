@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import prep_dock6
-import prep_for_ledock
+import prep_docking.prep_dock6 as prep_dock6
+import prep_docking.prep_for_ledock as prep_for_ledock
 
 
 MINIMAL_WITHH_PDB = """\

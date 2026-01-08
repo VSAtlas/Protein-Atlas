@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-from cli_utils import _norm_pdb_id
+from cli.cli_utils import _norm_pdb_id
 
 
 def _maybe_run_dud_eval(cfg: Mapping[str, Any], run_id: str, pdb_files: list[str]) -> None:
@@ -79,7 +79,7 @@ def _maybe_run_scorch_rescore(cfg: Mapping[str, Any], run_id: str, verbose: bool
         return
 
     repo_root = Path(__file__).resolve().parent
-    script_path = repo_root / "rescoring_scorch.py"
+    script_path = repo_root / "src/post_docking/rescoring/rescoring_scorch.py"
     if not script_path.exists():
         logger.warning("[scorch-rescore.skip] reason=missing_script path=%s", script_path)
         return
@@ -172,3 +172,77 @@ def _log_rescore_verification(run_id: str) -> None:
         logger.info("[post-check.scorch] found=%d sample=%s", len(scorch_paths), scorch_paths[0])
     else:
         logger.warning("[post-check.scorch] reason=missing_files run_id=%s", run_id)
+
+
+def _maybe_run_master_schema_export(cfg: Mapping[str, Any], run_id: str) -> None:
+    """
+    Best-effort execution of the master schema export. Never raises.
+    """
+    logger = logging.getLogger("master-schema-export")
+    if not run_id:
+        logger.info("[master-export.skip] reason=missing_run_id")
+        return
+
+    repo_root = Path(__file__).resolve().parent
+    script_path = repo_root / "analysis" / "master_schema_export.py"
+    if not script_path.exists():
+        logger.warning("[master-export.skip] reason=missing_script path=%s", script_path)
+        return
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "analysis.master_schema_export",
+        "--run-id",
+        str(run_id),
+        "--repo-root",
+        str(repo_root),
+        "--overwrite"
+    ]
+
+    logger.info("[master-export.run] cmd=%s", shlex.join(cmd))
+    try:
+        result = subprocess.run(cmd, cwd=str(repo_root), check=False)
+        if result.returncode != 0:
+            logger.warning("[master-export.fail] run_id=%s returncode=%s", run_id, result.returncode)
+        else:
+            logger.info("[master-export.done] run_id=%s returncode=%s", run_id, result.returncode)
+    except Exception:
+        logger.warning("[master-export.fail] reason=unexpected_exception", exc_info=True)
+
+
+def _maybe_run_report_generation(cfg: Mapping[str, Any], run_id: str) -> None:
+    """
+    Best-effort execution of the run report generation. Never raises.
+    """
+    logger = logging.getLogger("run-report-hook")
+    if not run_id:
+        logger.info("[report.skip] reason=missing_run_id")
+        return
+
+    repo_root = Path(__file__).resolve().parent
+    script_path = repo_root / "analysis" / "run_report.py"
+    if not script_path.exists():
+        logger.warning("[report.skip] reason=missing_script path=%s", script_path)
+        return
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "analysis.run_report",
+        "--run-id",
+        str(run_id),
+        "--repo-root",
+        str(repo_root),
+        "--overwrite"
+    ]
+
+    logger.info("[report.run] cmd=%s", shlex.join(cmd))
+    try:
+        result = subprocess.run(cmd, cwd=str(repo_root), check=False)
+        if result.returncode != 0:
+            logger.warning("[report.fail] run_id=%s returncode=%s", run_id, result.returncode)
+        else:
+            logger.info("[report.done] run_id=%s returncode=%s", run_id, result.returncode)
+    except Exception:
+        logger.warning("[report.fail] reason=unexpected_exception", exc_info=True)

@@ -3755,7 +3755,7 @@ def _protonate_with_pdb2pqr_if_available(
     # Choose a pH: use context_ph if you already resolved one before calling this,
     # otherwise default to 7.0 (harmless; you can feed in your target later).
     try:
-        from context_ph import select_ph_values_for_protonation
+        from path_router.context_ph import select_ph_values_for_protonation
         phs = select_ph_values_for_protonation(nolig_pdb_path)
         target_ph = float(phs[0]) if phs else 7.0
     except Exception:

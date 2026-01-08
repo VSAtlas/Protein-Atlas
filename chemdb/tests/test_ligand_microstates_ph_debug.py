@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from prep_ligands_bulk import prep_ligands_with_mgltools, read_config
-from prep_ligands_microstates import (
+from prep_ligands.prep_ligands_bulk import prep_ligands_with_mgltools, read_config
+from prep_ligands.prep_ligands_microstates import (
     compute_microstate_id_from_pdbqt,
     enumerate_ligands_for_docking,
 )

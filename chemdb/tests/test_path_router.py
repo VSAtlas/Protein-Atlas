@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from path_router import (
+from path_router.path_router import (
     _ensure_router_roots,
     expand_variants,
     raw_dir_v,
@@ -27,7 +27,7 @@ from path_router import (
 
 # Optional helpers: not all versions of path_router export these
 try:
-    from path_router import _canon_pdb_id_from_path  # type: ignore
+    from path_router.path_router import _canon_pdb_id_from_path  # type: ignore
 except Exception:  # pragma: no cover - older versions
     _canon_pdb_id_from_path = None  # type: ignore[assignment]
 
@@ -109,7 +109,7 @@ def cfg() -> dict[str, str]:
 @pytest.fixture(autouse=True)
 def _reset_router_roots(monkeypatch):
     # Ensure each test re-evaluates roots (allows run-id tweaks).
-    import path_router as pr  # local import to avoid circulars
+    import path_router.path_router as pr
     pr._ROUTER_ROOTS = None  # type: ignore[attr-defined]
     monkeypatch.setenv("ATLAS_RUN_ID", TEST_RUN_ID)
     yield
@@ -138,6 +138,9 @@ def test_ensure_router_roots_matches_config(cfg: dict[str, str]) -> None:
     Sanity check: _ensure_router_roots should match the paths implied by
     config.txt after token expansion.
     """
+    import path_router.path_router as pr
+    pr._ROUTER_ROOTS = None
+
     roots = _ensure_router_roots()
 
     overall_expected = Path(cfg["OVERALL_DIR"]).resolve()
@@ -189,6 +192,9 @@ def test_variant_directories_follow_output_dir_layout(
 
         OUTPUT_DIR / PDB_ID / [variant?] / <subdir>
     """
+    import path_router.path_router as pr
+    pr._ROUTER_ROOTS = None
+
     output_root = Path(cfg["OUTPUT_DIR"])
     pdb_id = "TEST"
 
@@ -216,6 +222,9 @@ def test_docked_dir_layout(cfg: dict[str, str], variant) -> None:
         legacy=False, ph_tag='pH7_0':
             DOCKED_DIR / PDB / [variant?] / 'pH7_0'
     """
+    import path_router.path_router as pr
+    pr._ROUTER_ROOTS = None
+
     docked_root = Path(cfg["DOCKED_DIR"]) / TEST_RUN_ID
     pdb_id = "TEST"
     v_seg = _variant_segment(variant)
@@ -236,7 +245,7 @@ def test_docked_dir_scopes_run_id_and_legacy(monkeypatch, cfg: dict[str, str]) -
     ATLAS_RUN_ID should inject a run-level subdir under docked/, while
     clearing it should fall back to legacy docked/<PDB>.
     """
-    import path_router as pr
+    import path_router.path_router as pr
 
     # With run id
     pr._ROUTER_ROOTS = None  # type: ignore[attr-defined]

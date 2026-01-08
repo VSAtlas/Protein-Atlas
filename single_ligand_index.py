@@ -10,7 +10,7 @@ from typing import Dict, Iterable, Optional
 
 from activesite import norm
 from input_and_export_functions import _to_bool
-from library_index import LibraryIndex
+from prep_ligands.library_index import LibraryIndex
 from path_router import Paths
 
 
