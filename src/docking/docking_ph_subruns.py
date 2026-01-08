@@ -4,13 +4,13 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from docking_ligands import (
+from .docking_ligands import (
     _count_heavy_atoms_from_pdbqt,
     _lib_roots_for_pdb,
     _resolve_test_mode,
 )
 from path_router import Paths, load_ph_tags
-from ph_ensemble_docking import (
+from .ph_ensemble_docking import (
     enumerate_ligands_for_ph_context,
     init_ph_tags_and_manifest,
     prewarm_ph_ligand_microstates,

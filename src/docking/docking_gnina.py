@@ -15,16 +15,16 @@ from tqdm import tqdm
 
 from input_and_export_functions import _to_bool, extract_gnina_scores, write_score_summary_to_csv
 from chemdb.target_difficulty import TargetDifficulty
-from docking_ligands import compute_rmsd, validate_ligand
-from pose_validation import (
+from .docking_ligands import compute_rmsd, validate_ligand
+from .pose_validation import (
     compute_self_rmsd,
     extract_surface_atoms,
     filter_and_rewrite_poses_by_rmsd,
     _pose_centroid_from_pdbqt,
 )
-from fallback_recenter import BudgetGuard, validate_first_valid_pose
+from .fallback_recenter import BudgetGuard, validate_first_valid_pose
 from dataclasses import dataclass, field
-from docking_utils import run_completion_audit
+from .docking_utils import run_completion_audit
 from path_router import (
     make_paths,
     config_dir as router_config_dir,

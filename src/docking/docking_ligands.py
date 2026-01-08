@@ -16,7 +16,7 @@ from rdkit import Chem
 from rdkit.Chem import FilterCatalog, rdFMCS, rdMolAlign
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
-from pose_validation import compute_redock_rmsd
+from .pose_validation import compute_redock_rmsd
 from prep_ligands.library_index import LibraryIndex
 from path_router import Paths
 from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
