@@ -223,6 +223,10 @@ if __name__ == "__main__":
     parser.add_argument("--mol2-dir", help="Directory for MOL2 intermediates")
     parser.add_argument("--out-pdbqt-dir", help="Destination directory for final PDBQTs")
     parser.add_argument("--status-log", help="Basename or full path for the TSV status log")
+    parser.add_argument("--rename-prefix", default="", help="Force output ligand stem prefix (e.g., decoys_).")
+    parser.add_argument("--rename-pad", type=int, default=5, help="Zero-pad width for rename index.")
+    parser.add_argument("--rename-start", type=int, default=1, help="Starting index for renamed ligands.")
+    parser.add_argument("--rename-force", action="store_true", help="Always rename ligands, ignoring input names.")
 
     args = parser.parse_args()
 
@@ -236,6 +240,11 @@ if __name__ == "__main__":
     _set_env("LIGPREP_MOL2_DIR", args.mol2_dir)
     _set_env("LIGPREP_OUT_DIR", args.out_pdbqt_dir)
     _set_env("LIGPREP_STATUS_LOG", args.status_log)
+    _set_env("LIGPREP_RENAME_PREFIX", args.rename_prefix)
+    _set_env("LIGPREP_RENAME_PAD", args.rename_pad)
+    _set_env("LIGPREP_RENAME_START", args.rename_start)
+    if args.rename_force:
+        _set_env("LIGPREP_RENAME_FORCE", "1")
 
     print(
         "[paths.effective]",

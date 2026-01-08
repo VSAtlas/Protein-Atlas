@@ -15,6 +15,20 @@ OBABEL_TIMEOUT_S = 900
 LIGPREP_OBABEL_TIMEOUT_SEC = OBABEL_TIMEOUT_S
 
 
+def rename_mol2_with_prefix(mol2_path: Path, target_stem: str) -> Path:
+    """Rename a MOL2 (and optional .name sidecar) to a deterministic stem."""
+    target = mol2_path.with_name(f"{target_stem}{mol2_path.suffix}")
+    if target == mol2_path:
+        return mol2_path
+    if target.exists():
+        target.unlink()
+    mol2_path.rename(target)
+    name_path = mol2_path.with_suffix(".name")
+    if name_path.exists():
+        name_path.rename(target.with_suffix(".name"))
+    return target
+
+
 def _run_obabel(cmd: List[str], timeout_sec: int) -> bool:
     print("Running Open Babel:", " ".join(cmd))
     try:

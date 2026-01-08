@@ -36,6 +36,7 @@ from prep_ligands_bulk_sdf import (
     _sdf_to_mol2,
     convert_sdf_to_mol2_split_parallel,
     count_sdf_records,
+    rename_mol2_with_prefix,
     split_sdf_into_chunks,
 )
 from prep_ligands_microstates import (
@@ -897,6 +898,21 @@ def _bulk_init_config_and_paths(
     ctx["mol2_dir_env"] = (os.environ.get("LIGPREP_MOL2_DIR", "") or "").strip() or None
     ctx["out_dir_env"] = (os.environ.get("LIGPREP_OUT_DIR", "") or "").strip() or None
     ctx["status_log_env"] = (os.environ.get("LIGPREP_STATUS_LOG", "") or "").strip() or None
+    rename_prefix = (os.environ.get("LIGPREP_RENAME_PREFIX", "") or "").strip()
+    try:
+        rename_pad = int(os.environ.get("LIGPREP_RENAME_PAD", "5"))
+    except Exception:
+        rename_pad = 5
+    try:
+        rename_start = int(os.environ.get("LIGPREP_RENAME_START", "1"))
+    except Exception:
+        rename_start = 1
+    rename_force = (os.environ.get("LIGPREP_RENAME_FORCE", "") or "").strip().lower() in {"1", "true", "yes", "y"}
+    ctx["rename_prefix"] = rename_prefix
+    ctx["rename_pad"] = max(1, rename_pad)
+    ctx["rename_start"] = max(1, rename_start)
+    ctx["rename_force"] = rename_force
+    ctx["rename_active"] = bool(rename_prefix or rename_force)
 
     ligands_raw_dir = paths.ligand_output_dir
     prepped_lig_dir = paths.prepped_ligands_dir
@@ -1235,10 +1251,18 @@ def _bulk_select_unit_sdfs(ctx: Dict[str, Any], only_set: Optional[Set[str]]) ->
                     ",".join(cleaned[:20]),
                 )
 
+        rename_active = ctx.get("rename_active", False)
+        rename_prefix = ctx.get("rename_prefix", "")
+        rename_pad = int(ctx.get("rename_pad", 5))
+        rename_start = int(ctx.get("rename_start", 1))
+
         mol2_files: List[Path] = []
-        for sdf_in in selected_sdfs:
+        for idx, sdf_in in enumerate(selected_sdfs, start=rename_start):
             sdf_name = sdf_in.name
-            mol2_out = ligands_mol2_dir / (sdf_in.stem + ".mol2")
+            mol2_stem = sdf_in.stem
+            if rename_active:
+                mol2_stem = f"{rename_prefix}{idx:0{rename_pad}d}"
+            mol2_out = ligands_mol2_dir / f"{mol2_stem}.mol2"
             print(
                 f"[ligprep] pre-MOL2-write: per-ligand sdf={sdf_name} -> mol2={mol2_out.name}"
             )
@@ -1270,8 +1294,11 @@ def _bulk_select_unit_sdfs(ctx: Dict[str, Any], only_set: Optional[Set[str]]) ->
         ok_count = 0
         fail_count = 0
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            for mol2_file in mol2_files:
-                pdbqt_path = output_ligands_dir / f"{mol2_file.stem}.pdbqt"
+            for idx, mol2_file in enumerate(mol2_files, start=rename_start):
+                pdbqt_stem = mol2_file.stem
+                if rename_active:
+                    pdbqt_stem = f"{rename_prefix}{idx:0{rename_pad}d}"
+                pdbqt_path = output_ligands_dir / f"{pdbqt_stem}.pdbqt"
                 if pdbqt_path.exists():
                     try:
                         pdbqt_path.unlink()
@@ -1447,6 +1474,12 @@ def _bulk_prepare_pdbqts(ctx: Dict[str, Any], mol2_files: List[Path]) -> List[Pa
     force = ctx["force"]
     relative_output = lambda path: _relative_to_output(path, output_ligands_dir)
 
+    rename_active = ctx.get("rename_active", False)
+    rename_prefix = ctx.get("rename_prefix", "")
+    rename_pad = int(ctx.get("rename_pad", 5))
+    rename_start = int(ctx.get("rename_start", 1))
+    rename_force = bool(ctx.get("rename_force", False))
+
     print(
         f"Preparing {len(mol2_files)} MOL2 files with MGLTools (parallel) into {output_ligands_dir}"
     )
@@ -1457,8 +1490,9 @@ def _bulk_prepare_pdbqts(ctx: Dict[str, Any], mol2_files: List[Path]) -> List[Pa
     resume_skips = 0
     resume_examples: List[str] = []
     ligprep_debug_seen = 0
+    ordered_mol2_files = sorted(mol2_files, key=lambda p: p.name) if rename_active else mol2_files
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for mol2_file in mol2_files:
+        for seq, mol2_file in enumerate(ordered_mol2_files, start=rename_start):
             norm_mol2 = collapse_sanitized_once(Path(mol2_file))
             if norm_mol2 != mol2_file:
                 try:
@@ -1471,24 +1505,32 @@ def _bulk_prepare_pdbqts(ctx: Dict[str, Any], mol2_files: List[Path]) -> List[Pa
             mol2_input = Path(mol2_file)
             rdk_stem = mol2_input.stem
             lig_stem = rdk_stem
-            if not is_fda_library:
-                name_path = mol2_input.with_suffix(".name")
-                name_exists = name_path.exists()
-                parent_name_raw: str = ""
-                try:
-                    if name_exists:
-                        parent_name_raw = name_path.read_text(encoding="utf-8", errors="ignore").strip()
-                        if parent_name_raw:
-                            lig_stem = _sanitize_ligand_name_for_filename(parent_name_raw)
-                except Exception as e:
-                    logging.warning("[ligprep] unable to read .name for %s: %s", mol2_input.name, e)
-                if ligprep_debug_seen < 5:
-                    print(
-                        f"[ligprep-debug] mol2={mol2_input.name} is_fda={is_fda_library} "
-                        f"name_path_exists={name_exists} parent_name_raw={parent_name_raw!r} "
-                        f"lig_stem={lig_stem}"
-                    )
-                    ligprep_debug_seen += 1
+            name_path = mol2_input.with_suffix(".name")
+            name_exists = name_path.exists()
+            parent_name_raw: str = ""
+            try:
+                if name_exists:
+                    parent_name_raw = name_path.read_text(encoding="utf-8", errors="ignore").strip()
+            except Exception as e:
+                logging.warning("[ligprep] unable to read .name for %s: %s", mol2_input.name, e)
+
+            if rename_active:
+                lig_stem = f"{rename_prefix}{seq:0{rename_pad}d}"
+                if rename_force or mol2_input.stem != lig_stem:
+                    try:
+                        mol2_input = rename_mol2_with_prefix(mol2_input, lig_stem)
+                    except Exception as e:
+                        logging.warning("[ligprep] rename failed for %s: %s", mol2_input, e)
+            elif not is_fda_library and parent_name_raw:
+                lig_stem = _sanitize_ligand_name_for_filename(parent_name_raw)
+
+            if ligprep_debug_seen < 5:
+                print(
+                    f"[ligprep-debug] mol2={mol2_input.name} rename_active={rename_active} "
+                    f"name_path_exists={name_exists} parent_name_raw={parent_name_raw!r} "
+                    f"lig_stem={lig_stem}"
+                )
+                ligprep_debug_seen += 1
 
             for ph_value in eff_ph_values:
                 ph_label = _ph_label(ph_value) if use_ph_subdirs else None

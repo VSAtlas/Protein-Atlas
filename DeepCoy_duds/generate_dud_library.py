@@ -426,10 +426,12 @@ def write_actives_smiles(final_actives_smiles, output_dir, label):
     return actives_smi_path
 
 
-def convert_smi_to_sdf(smi_path: Path, sdf_path: Path):
+def convert_smi_to_sdf(smi_path: Path, sdf_path: Path, *, require_output: bool = False) -> int:
     if not smi_path.is_file():
         print(f"WARNING: SMILES file not found for SDF conversion: {smi_path}")
-        return
+        if require_output:
+            raise FileNotFoundError(f"Missing SMILES for SDF conversion: {smi_path}")
+        return 0
     suppl = []
     with smi_path.open() as f:
         for line in f:
@@ -449,7 +451,9 @@ def convert_smi_to_sdf(smi_path: Path, sdf_path: Path):
             suppl.append(mol)
     if not suppl:
         print(f"WARNING: No valid molecules to convert for {smi_path}")
-        return
+        if require_output:
+            raise ValueError(f"No valid molecules to convert for {smi_path}")
+        return 0
     sdf_path.parent.mkdir(parents=True, exist_ok=True)
     writer = Chem.SDWriter(str(sdf_path))
     count = 0
@@ -458,6 +462,7 @@ def convert_smi_to_sdf(smi_path: Path, sdf_path: Path):
         count += 1
     writer.close()
     print(f"-> Wrote {count} decoys to SDF: {sdf_path} ({sdf_path.stat().st_size} bytes)")
+    return count
 
 
 def resolve_path(path_str, base_dir):
@@ -520,7 +525,10 @@ def run_deepcoy_workflow(
     smi_path = output_dir / "deepcoy_decoys.smi"
     sdf_path = output_dir / "deepcoy_decoys.sdf"
     if ensure_sdf or not skip_sdf:
-        convert_smi_to_sdf(smi_path, sdf_path)
+        try:
+            convert_smi_to_sdf(smi_path, sdf_path, require_output=True)
+        except Exception as exc:
+            raise RuntimeError(f"Decoy SDF conversion failed: {exc}") from exc
     else:
         print("-> Skipping SDF conversion (--skip-sdf).")
 
@@ -800,26 +808,43 @@ def main():
 
     label = f"{pdb_id}_{(uniprot_id or 'UNKNOWN').split('-')[0]}"
     output_dir = out_root / label
-    if force and output_dir.exists():
-        shutil.rmtree(output_dir, ignore_errors=True)
+    staging_dir = None
+    work_output_dir = output_dir
+    if args.run_deepcoy:
+        staging_dir = output_dir.parent / f".{label}_staging"
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        work_output_dir = staging_dir
     if force and artifact_dir.exists():
         shutil.rmtree(artifact_dir, ignore_errors=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    actives_smi_path = write_actives_smiles(final_actives_smiles, output_dir, label)
+    actives_smi_path = write_actives_smiles(final_actives_smiles, work_output_dir, label)
+    actives_sdf_path = work_output_dir / "deepcoy_actives.sdf"
+    convert_smi_to_sdf(actives_smi_path, actives_sdf_path)
+    print(f"[deepcoy.actives.sdf] tag={label} out={actives_sdf_path} n={len(final_actives_smiles)}")
 
     if not args.run_deepcoy:
+        if staging_dir and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
         print("DeepCoy run skipped (--no-run-deepcoy).")
         return 0
 
+    def _cleanup_staging() -> None:
+        if staging_dir and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
     if not deepcoy_run_sh.is_file():
         print(f"ERROR: deepcoy_run.sh not found: {deepcoy_run_sh}", file=sys.stderr)
+        _cleanup_staging()
         return 2
     if not config_path.is_file():
         print(f"ERROR: deepcoy_config.json not found: {config_path}", file=sys.stderr)
+        _cleanup_staging()
         return 2
     if not args.skip_sdf and not deepcoy_sdf_sh.is_file():
         print(f"ERROR: deepcoy_smiles_to_sdf.sh not found: {deepcoy_sdf_sh}", file=sys.stderr)
+        _cleanup_staging()
         return 2
 
     if args.verbose:
@@ -830,7 +855,7 @@ def main():
     try:
         run_deepcoy_workflow(
             actives_smi_path,
-            output_dir,
+            work_output_dir,
             artifact_dir,
             deepcoy_run_sh,
             deepcoy_sdf_sh,
@@ -843,6 +868,11 @@ def main():
         )
     except FileNotFoundError:
         print("ERROR: DeepCoy wrapper script not found or not executable.", file=sys.stderr)
+        _cleanup_staging()
+        return 1
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        _cleanup_staging()
         return 1
     except subprocess.CalledProcessError as e:
         if e.returncode == 4 and args.fallback_smiles:
@@ -853,7 +883,7 @@ def main():
             try:
                 run_deepcoy_workflow(
                     actives_smi_path,
-                    output_dir,
+                    work_output_dir,
                     artifact_dir,
                     deepcoy_run_sh,
                     deepcoy_sdf_sh,
@@ -866,10 +896,17 @@ def main():
                 )
             except subprocess.CalledProcessError as e2:
                 print(f"ERROR: DeepCoy command failed after retry with exit code {e2.returncode}.", file=sys.stderr)
+                _cleanup_staging()
                 return e2.returncode or 1
         else:
             print(f"ERROR: DeepCoy command failed with exit code {e.returncode}.", file=sys.stderr)
+            _cleanup_staging()
             return e.returncode or 1
+
+    if staging_dir and staging_dir.exists():
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        staging_dir.rename(output_dir)
 
     print(f"Decoys should be generated in: {output_dir}")
     return 0

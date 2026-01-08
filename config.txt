@@ -153,14 +153,14 @@ MMGBSA_WATER_USE_ALIASES = true
 MMGBSA_METAL_USE_ALIASES = true
 
 # ---- Topology / tleap ----
-MMGBSA_TOPOLOGY_PREP_ENABLED = true
-MMGBSA_TLEAP_RUN = true
+MMGBSA_TOPOLOGY_PREP_ENABLED = false
+MMGBSA_TLEAP_RUN = false
 MMGBSA_TOPOLOGY_DIRNAME = mmgbsa_topologies
 MMGBSA_AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 
 # ---- Trajectory + MMPBSA (minimal) ----
-MMGBSA_MD_ENABLED = true
+MMGBSA_MD_ENABLED = false
 MMGBSA_MD_TEMP0 = 300
 MMGBSA_MD_HEAT_PS = 10
 MMGBSA_MD_EQUIL_PS = 20
@@ -220,7 +220,7 @@ MMGBSA_MMPBSA_RUN = true
 # MMGBSA_TRAJ_ENDFRAME = 1
 # MMGBSA_TRAJ_INTERVAL = 1
 # ---- Global MMGBSA toggles & retention rules (often redundant with earlier keys) ----
-MMGBSA_ENABLED = true
+MMGBSA_ENABLED = false
 
 MMGBSA_KEEP_WATERS = true
 MMGBSA_WATER_KEEP_RADIUS = 6.0
@@ -613,6 +613,8 @@ TEST_LIBRARY_MAP = {
 
 #specify which pdb
 SPECIFIED_PROTEINS = 
+
+CONSENSUS_INCLUDE_DECOYS = true
 
 
 #logging

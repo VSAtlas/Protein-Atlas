@@ -213,9 +213,11 @@ def ensure_deepcoy_decoy_pdbqts(
     prepped_dir.mkdir(parents=True, exist_ok=True)
 
     force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}
-
-    existing = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
-    if existing and not force:
+    actives_enabled = str(cfg.get("DEEPCOY_PREP_ACTIVES", "on")).strip().lower() in {"on", "true", "1", "yes"}
+    decoy_existing = [p for p in prepped_dir.glob("decoys_*.pdbqt") if p.stat().st_size > 0]
+    decoy_existing += [p for p in prepped_dir.glob("deepcoy_decoys_*.pdbqt") if p.stat().st_size > 0]
+    actives_existing = [p for p in prepped_dir.glob("actives_*.pdbqt") if p.stat().st_size > 0]
+    if decoy_existing and (actives_existing or not actives_enabled) and not force:
         return prepped_dir
 
     lock_path = prepped_dir / ".ligprep.lock"
@@ -232,32 +234,63 @@ def ensure_deepcoy_decoy_pdbqts(
 
     prep_script = Path(__file__).resolve().parent / "prep_ligands.py"
     mol2_dir = prepped_dir / "mol2"
-    status_log = prepped_dir / "ligprep_status.tsv"
-    cmd = [
-        sys.executable,
-        str(prep_script),
-        "--in-sdf",
-        str(sdf_path),
-        "--mol2-dir",
-        str(mol2_dir),
-        "--out-pdbqt-dir",
-        str(prepped_dir),
-        "--status-log",
-        str(status_log),
-    ]
     force_flag = str(cfg.get("DEEPCOY_LIGPREP_FORCE", "off")).strip().lower()
-    if force_flag in {"on", "true", "1", "yes"}:
-        cmd.append("--force")
+    use_force = force_flag in {"on", "true", "1", "yes"} or force
 
-    logger.info(
-        "[deepcoy.ligprep] pdb=%s sdf=%s out=%s cmd=%s",
-        pdb_id.upper(),
-        sdf_path,
-        prepped_dir,
-        " ".join(cmd),
-    )
-    try:
+    def _run_ligprep(sdf_in: Path, status_path: Path, prefix: str) -> None:
+        cmd = [
+            sys.executable,
+            str(prep_script),
+            "--in-sdf",
+            str(sdf_in),
+            "--mol2-dir",
+            str(mol2_dir),
+            "--out-pdbqt-dir",
+            str(prepped_dir),
+            "--status-log",
+            str(status_path),
+            "--rename-prefix",
+            prefix,
+            "--rename-pad",
+            "5",
+            "--rename-force",
+        ]
+        if use_force:
+            cmd.append("--force")
+        logger.info(
+            "[deepcoy.ligprep] pdb=%s sdf=%s out=%s cmd=%s",
+            pdb_id.upper(),
+            sdf_in,
+            prepped_dir,
+            " ".join(cmd),
+        )
         subprocess.run(cmd, check=True)
+
+    try:
+        if force or not decoy_existing:
+            decoy_status = prepped_dir / "ligprep_status_decoys.tsv"
+            _run_ligprep(sdf_path, decoy_status, "decoys_")
+        if actives_enabled:
+            actives_sdf = sdf_path.parent / "deepcoy_actives.sdf"
+            if actives_sdf.is_file() and actives_sdf.stat().st_size > 0:
+                if force or not actives_existing:
+                    actives_status = prepped_dir / "ligprep_status_actives.tsv"
+                    _run_ligprep(actives_sdf, actives_status, "actives_")
+                logger.info(
+                    "[deepcoy.actives.prep] tag=%s in_sdf=%s out_dir=%s n_pdbqt=%d",
+                    label,
+                    actives_sdf,
+                    prepped_dir,
+                    len([p for p in prepped_dir.glob("actives_*.pdbqt") if p.stat().st_size > 0]),
+                )
+            else:
+                logger.warning(
+                    "[deepcoy.actives.prep.skip] tag=%s reason=missing_sdf path=%s",
+                    label,
+                    actives_sdf,
+                )
+        else:
+            logger.info("[deepcoy.actives.prep.skip] reason=toggle_off")
     finally:
         if acquired and lock_path.exists():
             try:
@@ -266,28 +299,14 @@ def ensure_deepcoy_decoy_pdbqts(
                 pass
 
     created = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
-    # rename deepcoy_decoys_XXXX.pdbqt -> decoys_XXXX.pdbqt for clarity
-    for p in list(created):
-        name = p.name
-        if name.startswith("deepcoy_decoys_") and name.endswith(".pdbqt"):
-            suffix = name[len("deepcoy_decoys_") : -len(".pdbqt")]
-            target = p.with_name(f"decoys_{suffix}.pdbqt")
-            try:
-                if target.exists() and force:
-                    target.unlink()
-                p.rename(target)
-                created.append(target)
-            except Exception:
-                logger.warning("[deepcoy.ligprep] rename_failed src=%s dst=%s", p, target)
-    created = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
     if not created:
         raise RuntimeError(f"DeepCoy ligprep produced no PDBQT files in {prepped_dir}")
 
     logger.info(
-        "[deepcoy.ligprep] pdb=%s pdbqt_count=%d status_log=%s",
+        "[deepcoy.ligprep] pdb=%s pdbqt_count=%d out_dir=%s",
         pdb_id.upper(),
         len(created),
-        status_log,
+        prepped_dir,
     )
     return prepped_dir
 

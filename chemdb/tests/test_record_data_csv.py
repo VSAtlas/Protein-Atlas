@@ -248,3 +248,68 @@ def test_annotate_scorch_t_scores(tmp_path):
             assert "t_vs_decoys_scorch" in fields
             rows = list(reader)
             assert any(r.get("t_vs_decoys_scorch") not in ("", None) for r in rows)
+
+
+def test_rerank_final_score_uses_t_scores(tmp_path):
+    logger = logging.getLogger("test_final_score")
+    consensus_path = tmp_path / "consensus_docking_scores.csv"
+    scorch_path = tmp_path / "scorch_scores_all.csv"
+
+    cons_rows = [
+        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "fda_a.pdbqt", "consensus_score": "0.9", "t_vs_decoys_consensus": "0.3"},
+        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "fda_b.pdbqt", "consensus_score": "0.8", "t_vs_decoys_consensus": "0.1"},
+        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "decoy_one.pdbqt", "consensus_score": "0.1", "t_vs_decoys_consensus": "-0.5"},
+        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "decoys_two.pdbqt", "consensus_score": "0.2", "t_vs_decoys_consensus": "-0.3"},
+    ]
+    with consensus_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(cons_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(cons_rows)
+
+    scorch_rows = [
+        {"pdb_id": "P3", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "fda_a_stage1", "SCORCH_score": "2.0", "SCORCH_certainty": "1.0", "run_mode": "fda"},
+    ]
+    with scorch_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(scorch_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(scorch_rows)
+
+    dud_scorch_rows = [
+        {"pdb_id": "P3", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoy_one_stage1", "SCORCH_score": "1.0", "SCORCH_certainty": "1.0", "run_mode": "dud"},
+        {"pdb_id": "P3", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoys_two_stage1", "SCORCH_score": "0.5", "SCORCH_certainty": "1.0", "run_mode": "dud"},
+    ]
+    dud_scorch_path = scorch_path.parent / "dud_scorch_scores_all.csv"
+    with dud_scorch_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(dud_scorch_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(dud_scorch_rows)
+
+    out_csv = scorch_path.parent / "consensus_reranked_scorch.csv"
+    ok = rerank_consensus_with_scorch(
+        consensus_path,
+        [scorch_path, dud_scorch_path],
+        out_csv,
+        logger,
+        overwrite=True,
+    )
+    assert ok
+    rows = {}
+    with out_csv.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            rows[row.get("ligand")] = row
+
+    rescored = rows["fda_a.pdbqt"]
+    non_rescored = rows["fda_b.pdbqt"]
+
+    assert rescored.get("final_score") == rescored.get("t_vs_decoys_blend")
+    assert non_rescored.get("final_score") == non_rescored.get("t_vs_decoys_consensus")
+    assert non_rescored.get("ml_blend_score") in ("", None)
+    assert non_rescored.get("t_vs_decoys_blend") in ("", None)
+    assert rescored.get("consensus_score_pre") == "0.9"
+    assert rescored.get("t_vs_decoys_consensus_pre") == "0.3"
+
+    rescored_rank = int(rescored.get("final_rank", "0") or "0")
+    non_rescored_rank = int(non_rescored.get("final_rank", "0") or "0")
+    if float(rescored.get("final_score")) > float(non_rescored.get("final_score")):
+        assert rescored_rank < non_rescored_rank

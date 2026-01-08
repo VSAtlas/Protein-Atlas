@@ -341,7 +341,10 @@ def compute_consensus_for_variant_ph(
                 seen.add(lig_id)
                 ligand_ids.append(lig_id)
                 display_name_by_id[lig_id] = lig
-    include_decoys = _to_bool_flag(cfg.get("CONSENSUS_INCLUDE_DECOYS") or cfg.get("consensus_include_decoys"))
+    include_decoys_raw = cfg.get("CONSENSUS_INCLUDE_DECOYS")
+    if include_decoys_raw is None:
+        include_decoys_raw = cfg.get("consensus_include_decoys")
+    include_decoys = True if include_decoys_raw is None else _to_bool_flag(include_decoys_raw)
     fda_prefixes = _library_prefixes(cfg, "FDA_LIGAND_PREFIXES", FDA_PREFIX_DEFAULTS)
     decoy_prefixes = _library_prefixes(cfg, "DECOY_LIGAND_PREFIXES", DECOY_PREFIX_DEFAULTS)
 
