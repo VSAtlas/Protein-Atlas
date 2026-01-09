@@ -20,7 +20,7 @@ from external_sources import (
 
 DEFAULT_INPUT_PDB_DIR = "/home/michael/atlas/code/protein_automation/input_pdbs"
 DEFAULT_OUT_ROOT = "../extracted_ligands/deepcoy"
-DEFAULT_DEEPCOY_PYTHON = "/home/michael/atlas/anaconda3/envs/DeepCoy-env-run/bin/python"
+DEFAULT_DEEPCOY_PYTHON = "/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python"
 PDB_EXTENSIONS = [".pdb", ".ent", ".cif", ".pdb.gz", ".cif.gz"]
 CONFIG_FILE_NAME = "config.txt"
 EC_PATTERN = re.compile(r"^(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)$")

@@ -65,7 +65,7 @@ BABEL_LIBDIR=/home/michael/atlas/micromamba/envs/docking-env/lib/openbabel/3.1.0
 BABEL_DATADIR=
 
 # DeepCoy (env-local)
-DEEPCOY_PYTHON=/home/michael/atlas/anaconda3/envs/DeepCoy-env-run/bin/python
+DEEPCOY_PYTHON=/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python
 
 FPOCKET_EXE=/home/michael/atlas/tools/fpocket/bin/fpocket
 
@@ -153,8 +153,8 @@ MMGBSA_WATER_USE_ALIASES = true
 MMGBSA_METAL_USE_ALIASES = true
 
 # ---- Topology / tleap ----
-MMGBSA_TOPOLOGY_PREP_ENABLED = false
-MMGBSA_TLEAP_RUN = false
+MMGBSA_TOPOLOGY_PREP_ENABLED = true
+MMGBSA_TLEAP_RUN = true
 MMGBSA_TOPOLOGY_DIRNAME = mmgbsa_topologies
 MMGBSA_AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
 AMBERTOOLS_PREFIX = /home/atlas/micromamba/envs/AmberTools25
@@ -199,8 +199,8 @@ MMGBSA_MMPBSA_INTERVAL = 1
 # MMGBSA_MMPBSA_USE_TRAJ_FRAMES = true
 # MMGBSA_MD_REP_AGG = mean
 # MMGBSA_MD_COPY_BEST_REPLICATE = false
-MMGBSA_MMPBSA_ENABLED = true
-MMGBSA_MMPBSA_RUN = true
+# MMGBSA_MMPBSA_ENABLED = true
+# MMGBSA_MMPBSA_RUN = true
 # MMGBSA_MMPBSA_STARTFRAME = 1
 # MMGBSA_MMPBSA_ENDFRAME = 1
 # MMGBSA_MMPBSA_VERBOSE = 2
@@ -263,7 +263,7 @@ MMGBSA_TLEAP_CHAINBREAK_CN_MAX_A = 2.2
 MMGBSA_TLEAP_STRIP_ALL_H = true
 MMGBSA_TLEAP_WATER_MODEL = tip3p
 MMGBSA_TLEAP_MAP_HOH_TO_WAT = true
-MD_FIVE_REPLICATE = true
+MD_FIVE_REPLICATE = false
 
 # ---- MMPBSA input block defaults (mirrors &general) ----
 MMGBSA_GENERAL_STARTFRAME = 1
@@ -428,9 +428,6 @@ TEST_LIBRARY_MAP = {
     "3NY8": "adrb2",
     "3CQW": "akt1",
     "3D0E": "akt2",
-    "3IEP": "test_library_10",
-    "4IEP": "test_library_10",
-
     "2HV5": "aldr",
     "1L2S": "ampc",
     "2AM9": "andr",
@@ -616,8 +613,6 @@ TEST_LIBRARY_MAP = {
 
 #specify which pdb
 SPECIFIED_PROTEINS = 
-
-CONSENSUS_INCLUDE_DECOYS = true
 
 
 #logging

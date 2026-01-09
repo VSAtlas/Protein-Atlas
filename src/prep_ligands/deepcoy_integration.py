@@ -20,7 +20,7 @@ def _parse_force_deepcoy_flag(argv: Sequence[str]) -> bool:
 
 def apply_deepcoy_defaults(cfg: Dict[str, str]) -> None:
     cfg.setdefault("DEEPCOY_DUDS_DIR", "/home/michael/atlas/code/protein_automation/DeepCoy_duds")
-    cfg.setdefault("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env/bin/python")
+    cfg.setdefault("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python")
     cfg.setdefault("DEEPCOY_INPUT_PDB_DIR", "/home/michael/atlas/code/protein_automation/input_pdbs")
     cfg.setdefault(
         "DEEPCOY_OUT_ROOT",

@@ -34,7 +34,7 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
     out_root = Path(cfg.get("DEEPCOY_OUT_ROOT", deepcoy_dir / "extracted_ligands/deepcoy"))
     work_root = Path(cfg.get("DEEPCOY_WORK_ROOT", deepcoy_dir / "deepcoy_work")) / pdb_up
     input_pdb_dir = Path(cfg.get("DEEPCOY_INPUT_PDB_DIR", "/home/michael/atlas/code/protein_automation/input_pdbs"))
-    deepcoy_python = cfg.get("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env/bin/python")
+    deepcoy_python = cfg.get("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python")
     fb_map = cfg.get("_DEEPCOY_FALLBACK_SMILES_BY_PDB", {})
     fallback_smiles = None
     if isinstance(fb_map, dict):
@@ -265,7 +265,15 @@ def ensure_deepcoy_decoy_pdbqts(
         logger.warning("[deepcoy.ligprep] pdb=%s lock_exists=%s waiting skipped", pdb_id.upper(), lock_path)
         return None
 
-    prep_script = Path(__file__).resolve().parent / "prep_ligands.py"
+    repo_root = Path(__file__).resolve().parents[2]
+    prep_candidates = [
+        repo_root / "src" / "prep_ligands" / "prep_ligands.py",
+        repo_root / "prep_ligands.py",
+    ]
+    prep_script = next((p for p in prep_candidates if p.is_file()), None)
+    if prep_script is None:
+        tried = ", ".join(str(p) for p in prep_candidates)
+        raise FileNotFoundError(f"prep_ligands.py not found; tried: {tried}")
     mol2_dir = prepped_dir / "mol2"
     force_flag = str(cfg.get("DEEPCOY_LIGPREP_FORCE", "off")).strip().lower()
     use_force = force_flag in {"on", "true", "1", "yes"} or force

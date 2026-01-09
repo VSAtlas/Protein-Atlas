@@ -1,1 +1,0 @@
-whenever single ligand mode is active it does NOT override ph ligand mode, ph ligand mode will instead use the test libraries instead of just using the single ligand

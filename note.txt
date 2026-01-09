@@ -1,8 +1,0 @@
-currently tracking down an error where MD fails on certain proteins, prep seems to be work better when remove hydrogrens and let leap handle protonation
-
-
-Deepcoy  is wired in now so that decoys are produced in sdf
-
-MD  seems to struggle to use multiple cores, 
-its not clear to me if this is necessarily a good idea might need to shrink simulation size significantly ...
-its also possible that maybe prep needs to be parallelized not sure where the  biggest slowdoown is yet 
