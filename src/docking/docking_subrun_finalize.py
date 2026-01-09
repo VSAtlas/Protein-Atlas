@@ -7,38 +7,38 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from docking_consensus_score import compute_consensus_for_variant_ph
-from docking_dock6 import (
+from .docking_consensus_score import compute_consensus_for_variant_ph
+from .docking_dock6 import (
     run_dock6_for_stage,
     write_dock6_scores_csv,
 )
-from docking_gnina import (
+from .docking_gnina import (
     annotate_gnina_fda_long_csv_with_t_scores_vs_decoys,
     run_gnina_for_stage,
     write_gnina_scores_csv,
 )
-from docking_ledock import (
+from .docking_ledock import (
     annotate_ledock_fda_long_csv_with_t_scores_vs_decoys,
     run_ledock_for_stage,
     write_ledock_scores_csv,
 )
-from docking_ligands import (
+from .docking_ligands import (
     _resolve_test_mode,
     compute_stage_membership_from_scores,
 )
-from docking_subrun_selection import _use_dock6, _use_ledock
-from docking_utils import (
+from .docking_subrun_selection import _use_dock6, _use_ledock
+from .docking_utils import (
     _fingerprint_stage,
     _write_audit_json,
     final_pose_validation_and_screenshots,
     norm,
 )
-from docking_vina import write_scores_csv
+from .docking_vina import write_scores_csv
 from input_and_export_functions import (
     annotate_fda_long_csv_with_t_scores_vs_decoys,
     record_score,
 )
-from path_router import Paths
+from path_router.path_router import Paths
 from prep_docking.prep_dock6 import ensure_dock6_site
 from prep_docking.prep_for_ledock import ensure_mol2_for_ledock
 from record_data import compute_ligand_efficiency, record_le

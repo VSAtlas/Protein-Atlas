@@ -14,7 +14,7 @@ from typing import Any, Collection, Dict, List, Optional, Set, Union
 from path_router import make_paths, load_ph_tags
 from rdkit import Chem
 
-from ph_ensemble_docking import _parse_ph_values_from_label
+from docking.ph_ensemble_docking import _parse_ph_values_from_label
 
 logger = logging.getLogger(__name__)
 

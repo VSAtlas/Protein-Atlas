@@ -1,0 +1,86 @@
+run_id: schematest_verify
+generated_at: '2026-01-08T06:02:05.066701Z'
+sources:
+  master_rows_csv: data/schematest_verify/master_rows.csv
+  manifest_yaml: null
+summary:
+  n_target_combos: 1
+  n_rows: 18
+  n_unique_ligands: 16
+targets:
+  TEST|HOLO|pH7_0:
+    qc:
+      ef1: null
+      roc_auc: null
+      roc_auc_adj: null
+      dud_eval_status_reason: null
+      n_rows: 18
+      n_decoys: 4
+      n_controls: 4
+      decoy_stats:
+        consensus:
+          mu: 0.33666
+          sigma: 0.384574
+          n: 4
+        blend:
+          mu: 0.3375
+          sigma: 0.1625
+          n: 2
+        scorch:
+          mu: 0.00911217
+          sigma: 0.00498156
+          n: 4
+    pocket:
+      method: null
+      center: null
+      box: null
+    top5_ligands:
+    - ligand_base: decoys_test_library_10_2
+      t_selected: 1.72487
+      t_selected_source: stage1
+      is_control: false
+      is_decoy: true
+    - ligand_base: TEST
+      t_selected: 1.18842
+      t_selected_source: stage1
+      is_control: true
+      is_decoy: false
+    - ligand_base: test_library_10_4
+      t_selected: 1.06824
+      t_selected_source: stage1
+      is_control: false
+      is_decoy: false
+    - ligand_base: LIG_A301
+      t_selected: 1.00597
+      t_selected_source: stage1
+      is_control: true
+      is_decoy: false
+    - ligand_base: LIG_A301
+      t_selected: 0.951341
+      t_selected_source: stage1
+      is_control: true
+      is_decoy: false
+ligands:
+  LIG_A301:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.00597
+      t_selected_source: stage1
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.951341
+      t_selected_source: stage1
+  TEST:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.18842
+      t_selected_source: stage1
+  decoys_test_library_10_2:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.72487
+      t_selected_source: stage1
+  test_library_10_4:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.06824
+      t_selected_source: stage1

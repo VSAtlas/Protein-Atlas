@@ -63,6 +63,24 @@ When this happens:
 
 Paths are **relative to the workspace root** (`/home/michael/atlas/code/protein_automation`):
 
+## Source code layout (src/ packages)
+
+Pipeline code is now organized under `src/` and imported as packages (no top-level shims/wrappers).
+`sitecustomize.py` ensures `<repo_root>/src` is on `sys.path` when running from the workspace root.
+
+Primary packages:
+- Docking: `src/docking/` (e.g., `docking.docking`, `docking.docking_subruns`, engines, multistage, finalize)
+- Path router: `src/path_router/` (e.g., `path_router.path_router`)
+- CLI support: `src/cli/` (e.g., `cli.cli_utils`, `cli.run_context`)
+- Ligand prep: `src/prep_ligands/` (e.g., `prep_ligands.prep_ligands_common`)
+- Docking prep: `src/prep_docking/` (e.g., `prep_docking.prep_dock6`)
+- MMGBSA: `src/post_docking/mmgbsa/` (e.g., `post_docking.mmgbsa.mmgbsa_pipeline`)
+- Rescoring: `src/post_docking/rescoring/` (e.g., `post_docking.rescoring.rescoring_scorch`)
+
+Import rule:
+- Do not import moved modules by their old top-level names. Always use package paths under `src/`.
+
+
 - Input PDBs: `input_pdbs/`
 - Processed receptors (nonâ€“pH ensemble):
   - `processed_pdbs/<PDB>/{APO,HOLO}/receptor/`
@@ -86,7 +104,7 @@ Paths are **relative to the workspace root** (`/home/michael/atlas/code/protein_
 
 - Config + run-level switches: `config.txt`
 - CI helpers: `ci/`
-- Tests: `tests/`
+- Tests: `chemdb/tests/` (not `tests/`)
 
 
 Use the existing **path router** utilities whenever possible; do not re-invent path joins or variants logic in random modules.
@@ -113,6 +131,14 @@ Never:
 - Install packages (pip, conda, micromamba) without explicit user request.
 - Modify system-level config, scheduler settings, or shell profiles.
 - Run long, expensive jobs by default; favor **small smoke tests** that use test-mode or a single PDB + few ligands.
+
+## Token budget discipline (Codex)
+
+To avoid excessive input token count:
+- Do not use repo-wide dumping commands (`ls -R`, `find .`, `tree`, printing entire large files).
+- Prefer targeted searches (`rg -n "pattern" <scoped paths>`) and only show small, relevant snippets.
+- Limit edits and inspections to the modules being changed plus their direct import sites.
+
 
 ---
 
@@ -163,6 +189,7 @@ Key guidelines:
 
 - The **path router** is the canonical source of truth for where things live.
 - Always use router helpers to get paths instead of building strings manually.
+- Canonical router module: `path_router.path_router` (under `src/path_router/`).
 - Respect APO vs HOLO semantics and pH ensemble variants.
 - If APO and HOLO reduce to identical receptors, treat as ligand-free APO and follow the current dedup policy rather than duplicating work.
 
@@ -186,7 +213,7 @@ Safe default commands (adjust flags as needed):
 - `micromamba run -n docking-env pytest tests/test_microstates.py -q`
 - `micromamba run -n docking-env pytest tests/test_ions_acceptance.py -q` (if tests are failing and the user wants to investigate)
 ### SCORCH dual-mode smoke check (FDA + DUD)
-- `micromamba run -n docking-env python rescoring_scorch.py --run-id <RUN_ID> --overwrite`
+- `micromamba run -n docking-env python -m post_docking.rescoring.rescoring_scorch --run-id <RUN_ID> --overwrite`
 
 Expected artifacts per combo under `post_docked/<RUN_ID>/<PDB>/<VARIANT>/<pH>/`:
 - `scorch_scores_all.csv` AND `dud_scorch_scores_all.csv` must exist and be non-empty.
@@ -278,7 +305,7 @@ When implementing or refactoring docking logic, always keep outputs engine-scope
 
 ### Shared conventions
 - Stages: stage1 (fast) ? stage2 (medium) ? stage3 (slow).
-- Always route filesystem paths via `path_router.py` / the existing `paths` object; do not hardcode new ad-hoc directories.
+- Always route filesystem paths via `path_router.path_router` / the existing `paths` object; do not hardcode new ad-hoc directories.
 - Never mix outputs between engines. Use engine-prefixed folders and/or filenames:
   - Example: `.../stage1/` for Vina, `.../gnina_stage1/` or `.../gnina/stage1/` for GNINA, `.../ledock_stage1/` for LeDock, etc.
 - Logs: prefer structured tags like `[gnina.*]`, `[ledock.*]` for grep-ability.
@@ -288,7 +315,7 @@ When implementing or refactoring docking logic, always keep outputs engine-scope
 - Outputs: Vina per-stage outputs under `docked/<PDB>/<VARIANT>/<pH>/...` plus standard CSV summaries.
 
 ### GNINA (follow-up engine)
-- GNINA is NOT called directly by `docking.py`; it is wired through `docking_subruns.run_ligand_pipeline_subrun`.
+- GNINA is NOT called directly by `docking.docking`; it is wired through `docking.docking_subruns.run_ligand_pipeline_subrun`.
 - GNINA should remain gated by existing config + difficulty logic:
   - Config keys: `USE_GNINA` / `use_gnina` (and any existing `ENABLE_GNINA`, `GNINA_EXE` pattern already used).
   - Difficulty: only run for targets deemed “hard” or “degenerate” (per existing code).

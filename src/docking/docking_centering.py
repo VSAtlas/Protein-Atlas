@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from fallback_recenter import GlobalCenterGuard
+from .fallback_recenter import GlobalCenterGuard
 
 
 @dataclass

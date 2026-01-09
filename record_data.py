@@ -34,7 +34,7 @@ def record_le(score_history: Dict[str, Dict[str, Dict]],
 
 
 def write_gnina_scores_csv(*args, **kwargs):
-    from docking_gnina import write_gnina_scores_csv as _impl
+    from docking.docking_gnina import write_gnina_scores_csv as _impl
     return _impl(*args, **kwargs)
 
 
@@ -56,7 +56,7 @@ def write_scores_csv(cfg: Dict, pdb_id: str, score_history: Dict[str, Dict[str, 
                      csv_prefix: str = "",
                      summary_basename: str = "docking_score_summary.csv",
                      long_basename: str = "docking_score_long.csv") -> str:
-    from docking_vina import write_scores_csv as _impl
+    from docking.docking_vina import write_scores_csv as _impl
     return _impl(
         cfg,
         pdb_id,

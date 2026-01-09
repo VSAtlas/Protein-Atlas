@@ -32,7 +32,7 @@ EXCLUDE_HET_IDS = {
 
 
 # >>> PATHS IMPORT START
-from path_router import make_paths
+from path_router.path_router import make_paths
 # >>> PATHS IMPORT END
 from concurrent.futures import ProcessPoolExecutor, as_completed
 try:

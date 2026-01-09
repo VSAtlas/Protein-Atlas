@@ -428,6 +428,9 @@ TEST_LIBRARY_MAP = {
     "3NY8": "adrb2",
     "3CQW": "akt1",
     "3D0E": "akt2",
+    "3IEP": "test_library_10",
+    "4IEP": "test_library_10",
+
     "2HV5": "aldr",
     "1L2S": "ampc",
     "2AM9": "andr",

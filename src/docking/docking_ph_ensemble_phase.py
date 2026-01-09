@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple
 from path_router.context_ph import select_ph_values_for_protonation
 from ph_ensemble import build_ph_ensemble
 from protein_functions import detect_active_site
-from path_router import Paths
+from path_router.path_router import Paths
 
 
 def _phase5_ph_ensemble_global(

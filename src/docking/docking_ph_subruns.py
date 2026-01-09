@@ -9,7 +9,7 @@ from .docking_ligands import (
     _lib_roots_for_pdb,
     _resolve_test_mode,
 )
-from path_router import Paths, load_ph_tags
+from path_router.path_router import Paths, load_ph_tags
 from .ph_ensemble_docking import (
     enumerate_ligands_for_ph_context,
     init_ph_tags_and_manifest,

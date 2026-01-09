@@ -299,7 +299,7 @@ def _ensure_selected_spheres(
         logger.info("[dock6.selector.rebuild] selected_existing=%s", selected_path)
 
     try:
-        from docking import get_active_site_center_and_size
+        from docking.docking import get_active_site_center_and_size
     except Exception as exc:
         logger.error("[dock6.selector.error] reason=import_failed err=%s", exc)
         return None
@@ -456,7 +456,7 @@ def _log_site_alignment(
     logger: logging.Logger,
 ) -> None:
     try:
-        from docking import get_active_site_center_and_size
+        from docking.docking import get_active_site_center_and_size
     except Exception:
         return
 

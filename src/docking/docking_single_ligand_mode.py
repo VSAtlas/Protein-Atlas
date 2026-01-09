@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from docking_ligands import _count_heavy_atoms_from_pdbqt, _lib_roots_for_pdb
+from .docking_ligands import _count_heavy_atoms_from_pdbqt, _lib_roots_for_pdb
 from input_and_export_functions import _to_bool
 from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 from single_ligand_index import (
@@ -14,7 +14,7 @@ from single_ligand_index import (
     _load_fda_name_map,
     _resolve_single_ligand,
 )
-from path_router import Paths
+from path_router.path_router import Paths
 
 
 def resolve_single_ligand_or_prepare(

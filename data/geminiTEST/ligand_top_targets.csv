@@ -1,0 +1,17 @@
+ligand_base,rank,pdb_id,variant,ph_label,t_selected,t_stage2,pose_valid_any,library
+decoys_test_library_10_2,1,TEST,HOLO,pH7_0,,-1.0,0,
+decoys_test_library_10_8,1,TEST,HOLO,pH7_0,,1.0,0,
+LIG_A301,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+LIG_A301,2,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+TEST,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+TEST,2,TEST,HOLO,pH7_0,,-0.666668,0,UNKNOWN
+test_library_10_1,1,TEST,HOLO,pH7_0,,0.666668,0,UNKNOWN
+test_library_10_10,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_2,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_3,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_4,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_5,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_6,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_7,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_8,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN
+test_library_10_9,1,TEST,HOLO,pH7_0,,0.0,0,UNKNOWN

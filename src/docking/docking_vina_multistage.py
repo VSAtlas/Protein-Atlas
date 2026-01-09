@@ -10,22 +10,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from docking_stage_runner import RetryManager, run_one_stage
-from docking_subrun_selection import (
+from .docking_stage_runner import RetryManager, run_one_stage
+from .docking_subrun_selection import (
     _apply_force_carry_and_doping,
     _interleave_controls,
     _is_stage3,
     _use_ledock,
     _use_dock6,
 )
-from docking_centering import CenterSelector
-from docking_utils import (
+from .docking_centering import CenterSelector
+from .docking_utils import (
     _fingerprint_stage,
     early_recenter_decision,
     run_completion_audit,
     norm,
 )
-from fallback_recenter import (
+from .fallback_recenter import (
     GlobalCenterGuard,
     RecenterParams,
     fallback_recentering_if_empty,
@@ -39,8 +39,8 @@ from druggability_orchestrator import decide_engine_policy
 from run_manifest import (
     update_manifest_for_druggability_and_engine_plan,
 )
-from docking_vina import emit_vina_config
-from run_vina import run_docking_task
+from .docking_vina import emit_vina_config
+from .run_vina import run_docking_task
 from input_and_export_functions import record_score
 from record_data import record_le
 

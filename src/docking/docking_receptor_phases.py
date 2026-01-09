@@ -14,11 +14,11 @@ from apo_holo_mode import (
     delete_variant_trees,
     file_sha1,
 )
-from docking_centering import CenterSelector
-from docking_controls import _summarize_ions_file
-from docking_receptor import prepare_receptor
-from docking_utils import norm
-from path_router import Paths
+from .docking_centering import CenterSelector
+from .docking_controls import _summarize_ions_file
+from .docking_receptor import prepare_receptor
+from .docking_utils import norm
+from path_router.path_router import Paths
 from protein_functions import detect_active_site
 
 

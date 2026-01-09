@@ -991,7 +991,7 @@ if __name__ == "__main__":
         pdb_id = str(pdb_arg).upper()
 
     try:
-        from docking import get_active_site_center_and_size  # type: ignore
+        from docking.docking import get_active_site_center_and_size  # type: ignore
     except Exception as exc:  # pragma: no cover - defensive; avoids circular import issues
         print(f"Failed to import docking helpers: {exc}")
         raise SystemExit(1)

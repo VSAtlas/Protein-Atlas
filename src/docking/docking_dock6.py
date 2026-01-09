@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from input_and_export_functions import _to_bool, write_score_summary_to_csv
-from path_router import make_paths, ph_ensemble_dir
+from path_router.path_router import make_paths, ph_ensemble_dir
 from prep_docking.prep_for_ledock import ensure_mol2_for_ledock, map_pdbqt_to_mol2_path
 
 

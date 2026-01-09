@@ -14,21 +14,21 @@ from typing import Any, Dict, List, Optional, Tuple
 from tqdm import tqdm
 from rdkit.Chem import rdMolAlign
 
-from docking_vina import emit_vina_config
-from docking_ligands import _read_any_lig, validate_ligand
-from docking_utils import norm
-from fallback_recenter import (
+from .docking_vina import emit_vina_config
+from .docking_ligands import _read_any_lig, validate_ligand
+from .docking_utils import norm
+from .fallback_recenter import (
     BudgetGuard,
     attempt_fallback_recenter,
     validate_first_valid_pose,
 )
-from pose_validation import (
+from .pose_validation import (
     compute_self_rmsd,
     extract_surface_atoms,
     filter_and_rewrite_poses_by_rmsd,
 )
 from run_manifest import update_manifest_for_docking_stage
-from run_vina import run_docking_task
+from .run_vina import run_docking_task
 
 
 def _map_reason_to_category(reason: str) -> str:
@@ -132,7 +132,7 @@ def run_one_stage(
     # Yes, line 1888: paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     
     # I need to import make_paths from path_router.
-    from path_router import make_paths
+    from path_router.path_router import make_paths
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     
     run_id = str(cfg.get("RUN_ID", "") or "")

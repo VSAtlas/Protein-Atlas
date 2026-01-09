@@ -725,7 +725,7 @@ def extract_gnina_scores(docked_pdbqt_path: str) -> Dict[str, Optional[float]]:
 # -------------------------
 def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job, docked_dir=None):
     # Legacy shim: derive a minimal cfg for older callers
-    from docking_vina import emit_vina_config
+    from docking.docking_vina import emit_vina_config
 
     cfg = {
         "OVERALL_DIR": output_dir,

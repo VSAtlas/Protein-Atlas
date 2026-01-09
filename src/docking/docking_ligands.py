@@ -18,7 +18,7 @@ from rdkit.Chem.MolStandardize import rdMolStandardize
 
 from .pose_validation import compute_redock_rmsd
 from prep_ligands.library_index import LibraryIndex
-from path_router import Paths
+from path_router.path_router import Paths
 from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
 

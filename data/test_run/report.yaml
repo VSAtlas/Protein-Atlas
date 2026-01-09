@@ -1,0 +1,151 @@
+run_id: test_run
+generated_at: '2026-01-09T00:09:26.281383Z'
+sources:
+  master_rows_csv: data/test_run/master_rows.csv
+  manifest_yaml: null
+summary:
+  n_target_combos: 2
+  n_rows: 18
+  n_unique_ligands: 7
+targets:
+  TEST|APO|pH7_0:
+    qc:
+      ef1: null
+      roc_auc: null
+      roc_auc_adj: null
+      dud_eval_status_reason: null
+      n_rows: 9
+      n_decoys: 5
+      n_controls: 4
+      decoy_stats:
+        consensus:
+          mu: null
+          sigma: null
+          n: null
+        blend:
+          mu: null
+          sigma: null
+          n: null
+        scorch:
+          mu: null
+          sigma: null
+          n: null
+    pocket:
+      method: null
+      center: null
+      box: null
+    top5_ligands:
+    - ligand_base: LIG_A301
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: LIG_A301
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: TEST
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: TEST
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: decoys_test_library_10_00001_ms_5a31e6cfa451a79e
+      t_selected: null
+      t_selected_source: null
+      is_control: false
+      is_decoy: true
+  TEST|HOLO|pH7_0:
+    qc:
+      ef1: null
+      roc_auc: null
+      roc_auc_adj: null
+      dud_eval_status_reason: null
+      n_rows: 9
+      n_decoys: 5
+      n_controls: 4
+      decoy_stats:
+        consensus:
+          mu: null
+          sigma: null
+          n: null
+        blend:
+          mu: null
+          sigma: null
+          n: null
+        scorch:
+          mu: 0.00325689
+          sigma: 0.00426441
+          n: 4
+    pocket:
+      method: null
+      center: null
+      box: null
+    top5_ligands:
+    - ligand_base: LIG_A301
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: LIG_A301
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: TEST
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: TEST
+      t_selected: null
+      t_selected_source: null
+      is_control: true
+      is_decoy: false
+    - ligand_base: decoys_test_library_10_00001_ms_5a31e6cfa451a79e
+      t_selected: null
+      t_selected_source: null
+      is_control: false
+      is_decoy: true
+ligands:
+  LIG_A301:
+    targets_in_top5:
+    - target: TEST|APO|pH7_0
+      t_selected: null
+      t_selected_source: null
+    - target: TEST|APO|pH7_0
+      t_selected: null
+      t_selected_source: null
+    - target: TEST|HOLO|pH7_0
+      t_selected: null
+      t_selected_source: null
+    - target: TEST|HOLO|pH7_0
+      t_selected: null
+      t_selected_source: null
+  TEST:
+    targets_in_top5:
+    - target: TEST|APO|pH7_0
+      t_selected: null
+      t_selected_source: null
+    - target: TEST|APO|pH7_0
+      t_selected: null
+      t_selected_source: null
+    - target: TEST|HOLO|pH7_0
+      t_selected: null
+      t_selected_source: null
+    - target: TEST|HOLO|pH7_0
+      t_selected: null
+      t_selected_source: null
+  decoys_test_library_10_00001_ms_5a31e6cfa451a79e:
+    targets_in_top5:
+    - target: TEST|APO|pH7_0
+      t_selected: null
+      t_selected_source: null
+    - target: TEST|HOLO|pH7_0
+      t_selected: null
+      t_selected_source: null

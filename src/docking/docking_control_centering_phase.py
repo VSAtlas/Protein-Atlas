@@ -4,12 +4,12 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from docking_control_redock import _control_centers_by_ph
-from docking_controls import (
+from .docking_control_redock import _control_centers_by_ph
+from .docking_controls import (
     build_control_lookup,
     extract_ligands_to_nolig,
 )
-from path_router import Paths
+from path_router.path_router import Paths
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
 from protein_functions import detect_active_site
 

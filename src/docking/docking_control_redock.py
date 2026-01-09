@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from path_router import Paths, docked_dir, receptor_file, load_ph_tags
+from path_router.path_router import Paths, docked_dir, receptor_file, load_ph_tags
 from .docking_vina import emit_vina_config
 from .run_vina import run_docking_task
 from .docking_controls import select_center_via_control_redock

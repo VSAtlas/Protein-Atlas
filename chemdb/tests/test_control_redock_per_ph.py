@@ -10,12 +10,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import docking
+import docking.docking as docking
 import path_router
-import docking_controls
-import docking_control_redock
-from docking_subruns import ProteinDockingContext, resolve_center_box_for_ph
-from fallback_recenter import RecenterParams
+import docking.docking_controls as docking_controls
+import docking.docking_control_redock as docking_control_redock
+from docking.docking_subruns import ProteinDockingContext, resolve_center_box_for_ph
+from docking.fallback_recenter import RecenterParams
 
 
 class _StubPaths:

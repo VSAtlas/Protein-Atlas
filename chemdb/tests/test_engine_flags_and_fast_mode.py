@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from docking_gnina import _resolve_gnina_stage_params, should_run_gnina_for_target
-from docking_ledock import resolve_ledock_stage_params, should_run_ledock_for_target
+from docking.docking_gnina import _resolve_gnina_stage_params, should_run_gnina_for_target
+from docking.docking_ledock import resolve_ledock_stage_params, should_run_ledock_for_target
 
 
 def _hard_td():

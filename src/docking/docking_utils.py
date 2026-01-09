@@ -12,14 +12,14 @@ from datetime import datetime
 
 import numpy as np
 
-from path_router import docked_dir, make_paths
-from pose_validation import (
+from path_router.path_router import docked_dir, make_paths
+from .pose_validation import (
     attempt_fallback_recenter,
     extract_surface_atoms,
     filter_and_rewrite_poses_by_rmsd,
     validate_pose_pdbqt,
 )
-from fallback_recenter import GlobalCenterGuard, RecenterParams
+from .fallback_recenter import GlobalCenterGuard, RecenterParams
 from input_and_export_functions import extract_best_score, record_score, score_key
 
 
@@ -288,7 +288,7 @@ def final_pose_validation_and_screenshots(
             logger.warning(f"Final RMSD filtering failed: {e}")
 
         try:
-            from run_vina import validate_all_poses  # type: ignore
+            from .run_vina import validate_all_poses  # type: ignore
             best_model, best_valid_score = validate_all_poses(
                 pdbqt_path=str(out_path),
                 receptor_pdbqt=receptor_pdbqt,

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Mapping
 import numpy as np
 
 from .docking_vina import emit_vina_config
-from path_router import Paths, docked_dir, receptor_file
+from path_router.path_router import Paths, docked_dir, receptor_file
 from protein_functions import detect_active_site
 from .run_vina import run_docking_task
 
@@ -519,7 +519,7 @@ def select_center_via_control_redock(
     import numpy as _np
     import math as _math
     from pathlib import Path as _Path
-    from run_vina import run_docking_task as _run_dock
+    from .run_vina import run_docking_task as _run_dock
 
     def _find_control_pdbs(d: _Path) -> list[_Path]:
         return sorted([p for p in d.glob("*.pdb") if p.is_file()])
@@ -634,12 +634,17 @@ def select_center_via_control_redock(
 
     seen = set()
     for root in prepped_dirs:
-        if not root or not _Path(root).exists(): continue
+        if not root:
+            continue
+        root_path = _Path(root)
+        if not root_path.exists():
+            continue
+        pdbqt_files = list(root_path.glob("*.pdbqt"))
+        logger.info("[control-redock] prepped_pdbqt_count dir=%s count=%d", root_path, len(pdbqt_files))
         # Find all PDBQTs, then group by base to pick the best variant
         candidates_by_base: dict[str, list[_Path]] = {}
-        for p in _Path(root).glob("*.pdbqt"):
-            stem = p.stem.split("_stage")[0]
-            base = _canonical_ctrl_base_from_stem(stem)
+        for p in pdbqt_files:
+            base = _canonical_ctrl_base_from_stem(p.stem)
             if base in centroids and base in control_lookup:
                 candidates_by_base.setdefault(base, []).append(p)
 
@@ -649,7 +654,7 @@ def select_center_via_control_redock(
             # Prefer the one with exactly one ".sanitized" in the stem
             best_p = paths_list[0]
             for p in paths_list:
-                if p.stem.split("_stage")[0].count(".sanitized") == 1:
+                if p.stem.count(".sanitized") == 1:
                     best_p = p
                     break
             cand_pdbqts.append(best_p)

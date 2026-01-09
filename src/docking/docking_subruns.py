@@ -27,7 +27,7 @@ from .fallback_recenter import (
     GlobalCenterGuard,
     RecenterParams,
 )
-from path_router import Paths, docked_dir, receptor_file
+from path_router.path_router import Paths, docked_dir, receptor_file
 from run_manifest import (
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,

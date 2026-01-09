@@ -35,7 +35,7 @@ MMGBSA_DISABLE_ENV = {
 }
 
 from apo_holo_mode import resolve_apo_holo_mode  # noqa: E402
-from docking_ligands import (  # noqa: E402
+from docking.docking_ligands import (  # noqa: E402
     _coerce_test_map,
     _is_under_ph_subdir,
     _lib_roots_for_pdb,
@@ -43,7 +43,7 @@ from docking_ligands import (  # noqa: E402
 )
 from input_and_export_functions import load_inputs  # noqa: E402
 from path_router import docked_dir, load_ph_tags, make_paths  # noqa: E402
-from ph_ensemble_docking import enumerate_ligands_for_ph_context  # noqa: E402
+from docking.ph_ensemble_docking import enumerate_ligands_for_ph_context  # noqa: E402
 from testdata_hmdb_test_library import ensure_hmdb_test_library, infer_ligand_roots  # noqa: E402
 
 

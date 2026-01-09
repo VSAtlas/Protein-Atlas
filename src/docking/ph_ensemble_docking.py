@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from path_router import load_ph_tags, receptor_file
+from path_router.path_router import load_ph_tags, receptor_file
 
 """
 Helpers for pH-ensemble docking orchestration.

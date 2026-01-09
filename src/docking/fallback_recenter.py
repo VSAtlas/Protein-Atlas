@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
-from path_router import make_paths
-from pose_validation import validate_pose_pdbqt, attempt_fallback_recenter
+from path_router.path_router import make_paths
+from .pose_validation import validate_pose_pdbqt, attempt_fallback_recenter
 
 
 class BudgetGuard:

@@ -16,7 +16,7 @@ import pandas as pd
 from dud_eval import compute_decoy_stats_from_long_csv, guess_ligfile_col, guess_score_col
 from input_and_export_functions import _to_bool, write_score_summary_to_csv
 from .docking_utils import norm, run_completion_audit
-from path_router import make_paths, ph_ensemble_dir
+from path_router.path_router import make_paths, ph_ensemble_dir
 from prep_docking.prep_for_ledock import (
     ensure_ledock_receptor,
     ensure_mol2_for_ledock,

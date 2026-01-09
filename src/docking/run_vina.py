@@ -7,7 +7,7 @@ from typing import Tuple, Optional, List, Dict, Any, Iterable
 import logging, json
 _log = logging.getLogger("vina")
 
-from docking_utils import write_failure_marker
+from .docking_utils import write_failure_marker
 from input_and_export_functions import extract_best_score
 try:
     from input_and_export_functions import load_config, validate_config
@@ -22,7 +22,7 @@ except Exception:
 
 import io
 
-from path_router import (
+from path_router.path_router import (
     make_paths,
     config_dir as router_config_dir,
     docked_dir as router_docked_dir,

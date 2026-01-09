@@ -9,14 +9,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import docking
-import docking_receptor
-import docking_controls
+import docking.docking as docking
+import docking.docking_receptor as docking_receptor
+import docking.docking_controls as docking_controls
 import protein_functions
-import docking_control_centering_phase
+import docking.docking_control_centering_phase as docking_control_centering_phase
 import automate_protein_prep
 from prep_ligands.prep_ligands import prep_ligands_from_pdb as _prep_lig_impl
-from fallback_recenter import RecenterParams
+from docking.fallback_recenter import RecenterParams
 
 
 def test_control_redock_runs_after_ph_ensemble(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,7 +91,7 @@ def test_control_redock_runs_after_ph_ensemble(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(automate_protein_prep, "run_metal_site_audit", lambda *_a, **_k: None)
 
     import ph_ensemble
-    import docking_receptor_phases
+    import docking.docking_receptor_phases as docking_receptor_phases
     from path_router import context_ph
 
     def fake_phase2_to4(*_args, **_kwargs):

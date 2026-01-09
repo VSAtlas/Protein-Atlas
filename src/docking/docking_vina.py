@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from path_router import (
+from path_router.path_router import (
     make_paths,
     config_dir as router_config_dir,
     config_file as router_config_file,
@@ -13,7 +13,7 @@ from path_router import (
     receptor_file as router_receptor_file,
 )
 from input_and_export_functions import write_score_summary_to_csv
-from pose_validation import compute_self_rmsd
+from .pose_validation import compute_self_rmsd
 
 # Engine-specific home for Vina config emission and CSV writing.
 

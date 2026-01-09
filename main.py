@@ -267,11 +267,11 @@ from cli.run_context import (
     _apply_resume_config_from_snapshot,
     ConfigDict,
 )
-from docking_vina import emit_vina_config as _emit_vina_config_impl
-from docking_stage_runner import RetryManager, run_one_stage
-from docking_ligands import select_ligands_for_next, _coerce_test_map, _resolve_test_mode
-from docking_utils import norm, final_pose_validation_and_screenshots
-from docking import process_one_protein
+from docking.docking_vina import emit_vina_config as _emit_vina_config_impl
+from docking.docking_stage_runner import RetryManager, run_one_stage
+from docking.docking_ligands import select_ligands_for_next, _coerce_test_map, _resolve_test_mode
+from docking.docking_utils import norm, final_pose_validation_and_screenshots
+from docking.docking import process_one_protein
 from path_router.path_router import (
     expand_variants,
     make_paths,
@@ -283,7 +283,7 @@ from path_router.path_router import (
 from prep_ligands.deepcoy_integration import apply_deepcoy_cli_overrides, apply_deepcoy_defaults
 import post_docking.mmgbsa.mmgbsa_pipeline as mmgbsa_pipeline
 from post_docking.mmgbsa.mmgbsa_pipeline import _maybe_run_mmgbsa_for_pdb, _mmgbsa_effective_md_config, make_mmgbsa_trajectory, run_implicit_md, run_mmgbsa
-from fallback_recenter import RecenterParams
+from docking.fallback_recenter import RecenterParams
 from apo_holo_mode import (
     resolve_apo_holo_mode,
     _debug_normalize_mode_token,

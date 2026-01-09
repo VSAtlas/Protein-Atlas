@@ -2,7 +2,7 @@
 import os, sys
 from pathlib import Path
 from pymol import cmd
-from capture_pose import capture_pose  # expects kwargs: label_top_n_res, label_cutoff, viewport, transparent
+from docking.capture_pose import capture_pose  # expects kwargs: label_top_n_res, label_cutoff, viewport, transparent
 
 def _posargs(argv):
     """Return only non-option args (drop PyMOL flags like -c, -q, -r, -d, etc.)."""

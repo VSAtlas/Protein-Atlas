@@ -25,7 +25,7 @@ from .pose_validation import (
 from .fallback_recenter import BudgetGuard, validate_first_valid_pose
 from dataclasses import dataclass, field
 from .docking_utils import run_completion_audit
-from path_router import (
+from path_router.path_router import (
     make_paths,
     config_dir as router_config_dir,
     config_file as router_config_file,

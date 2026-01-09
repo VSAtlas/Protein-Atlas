@@ -8,9 +8,9 @@ from distutils.util import strtobool
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from path_router import Paths, docked_dir
+from path_router.path_router import Paths, docked_dir
 
-from docking_controls import (
+from .docking_controls import (
     receptor_sanity_check,
     _ph_values_from_context,
     _ph_ligand_mode,
@@ -22,7 +22,7 @@ from docking_controls import (
     extract_ligands_to_nolig,
 )
 
-from docking_ligands import _lib_roots_for_pdb
+from .docking_ligands import _lib_roots_for_pdb
 from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 
 # NOTE: `automate_protein_prep` is imported inside prepare_receptor itself.

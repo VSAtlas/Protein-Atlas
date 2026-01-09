@@ -193,7 +193,10 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
 
         logging.info(f"Processing: {pdb_file.name}")
 
-        lig_id = pdb_file.stem  # e.g., RXT_A1204
+        # Ensure the ligand ID is based on the canonical sanitized stem to keep output names stable.
+        base_stem = pdb_file.stem.split(".sanitized")[0]
+        lig_id = f"{base_stem}.sanitized"
+
         tmp_pdb = str(pdb_file)  # updated to sanitized below
         residue_name = lig_id.split("_")[0].upper()
 
@@ -363,7 +366,6 @@ def prep_ligands_from_pdb(ligand_output_dir: Path, ligands_mol2_dir: Path, prepp
 
         # Resume check
         # Force canonical output name (ensure .sanitized.pdbqt even if input was just .pdb)
-        base_stem = pdb_file.stem.split(".sanitized")[0]
         pdbqt_path = collapse_sanitized_path(prepped_ligands_dir / f"{base_stem}.sanitized.pdbqt")
 
         # Migration: if legacy non-sanitized PDBQT exists, move/copy it to canonical path

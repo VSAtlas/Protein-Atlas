@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from path_router import make_paths
-from docking_ligands import prepare_and_filter_ligands
+from docking.docking_ligands import prepare_and_filter_ligands
 
 
 def _make_fake_lig(folder: Path, stem: str) -> Path:

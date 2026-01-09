@@ -1,0 +1,75 @@
+run_id: Schema_verifcation
+generated_at: '2026-01-08T05:18:29.374141Z'
+sources:
+  master_rows_csv: data/Schema_verifcation/master_rows.csv
+  manifest_yaml: null
+summary:
+  n_target_combos: 1
+  n_rows: 18
+  n_unique_ligands: 16
+targets:
+  TEST|HOLO|pH7_0:
+    qc:
+      ef1: null
+      roc_auc: null
+      roc_auc_adj: null
+      dud_eval_status_reason: null
+      n_rows: 18
+      n_decoys: 4
+      n_controls: 4
+    pocket:
+      method: null
+      center: null
+      box: null
+    top5_ligands:
+    - ligand_base: decoys_test_library_10_2
+      t_selected: 1.72305
+      t_selected_source: stage1
+      is_control: false
+      is_decoy: true
+    - ligand_base: LIG_A301
+      t_selected: 1.21664
+      t_selected_source: stage1
+      is_control: true
+      is_decoy: false
+    - ligand_base: TEST
+      t_selected: 1.06384
+      t_selected_source: stage1
+      is_control: true
+      is_decoy: false
+    - ligand_base: test_library_10_3
+      t_selected: 0.978715
+      t_selected_source: stage1
+      is_control: false
+      is_decoy: false
+    - ligand_base: test_library_10_5
+      t_selected: 0.924145
+      t_selected_source: stage1
+      is_control: false
+      is_decoy: false
+ligands:
+  LIG_A301:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.21664
+      t_selected_source: stage1
+  TEST:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.06384
+      t_selected_source: stage1
+  decoys_test_library_10_2:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.72305
+      t_selected_source: stage1
+  test_library_10_3:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.978715
+      t_selected_source: stage1
+  test_library_10_5:
+    targets_in_top5:
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.924145
+      t_selected_source: stage1
