@@ -4,9 +4,9 @@ import sys
 from pathlib import Path
 import subprocess
 import re
-import json
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Optional
 
 import requests
 from rdkit import Chem
@@ -26,6 +26,8 @@ CONFIG_FILE_NAME = "config.txt"
 EC_PATTERN = re.compile(r"^(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)$")
 DEFAULT_SOURCES = ["chembl", "bindingdb", "iuphar", "rcsb", "rhea"]
 SOURCE_ORDER = ["chembl", "bindingdb", "iuphar", "drugbank", "rcsb", "rhea"]
+DEFAULT_DEEPCOY_ALLOWED_ATOMS = ("C", "N", "O", "S", "F", "Cl", "Br", "I")
+DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR = ",".join(DEFAULT_DEEPCOY_ALLOWED_ATOMS)
 
 
 def read_config_value(config_path, key):
@@ -47,6 +49,17 @@ def read_config_value(config_path, key):
     except Exception:
         return None
     return None
+
+
+def read_config_int(config_path, key, default=None):
+    value = read_config_value(config_path, key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except Exception:
+        print(f"WARNING: Invalid int for {key} in {config_path}: {value}. Using default.", file=sys.stderr)
+        return default
 
 # --- 1. PDB to EC Conversion (PHASE 1) ---
 
@@ -426,6 +439,119 @@ def write_actives_smiles(final_actives_smiles, output_dir, label):
     return actives_smi_path
 
 
+def _parse_allowed_atom_list(raw_value: Optional[str]):
+    tokens = []
+    seen = set()
+    raw_value = raw_value if raw_value is not None else DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR
+    for token in re.split(r"[;,\s]+", raw_value):
+        cleaned = token.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        tokens.append(cleaned)
+        seen.add(cleaned)
+    if not tokens:
+        tokens = list(DEFAULT_DEEPCOY_ALLOWED_ATOMS)
+    return tokens, set(tokens)
+
+
+def _tee_run_log(run_log_path: Optional[Path], line: str) -> None:
+    if not run_log_path:
+        return
+    try:
+        run_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with run_log_path.open("a") as handle:
+            handle.write(line.rstrip("\n") + "\n")
+    except Exception:
+        pass
+
+
+def filter_actives_for_deepcoy(
+    actives_smi_path: Path,
+    allowed_atoms: List[str],
+    *,
+    filter_enabled: bool = True,
+    run_log_path: Optional[Path] = None,
+):
+    allowed_atoms = allowed_atoms or list(DEFAULT_DEEPCOY_ALLOWED_ATOMS)
+    allowed_atoms_set = set(allowed_atoms)
+    allowed_atoms_str = ",".join(allowed_atoms)
+    rejected_path = actives_smi_path.with_name(
+        f"{actives_smi_path.stem}.rejected_by_deepcoy{actives_smi_path.suffix}"
+    )
+    raw_copy_path = actives_smi_path.with_name(f"{actives_smi_path.stem}.raw{actives_smi_path.suffix}")
+
+    if not filter_enabled:
+        total = 0
+        with actives_smi_path.open("r") as handle:
+            for raw_line in handle:
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                total += 1
+        log_line = (
+            f"[deepcoy.filter] disabled mode; input={total} kept={total} rejected=0 "
+            f"allowed_atoms={allowed_atoms_str}"
+        )
+        print(log_line)
+        _tee_run_log(run_log_path, log_line)
+        return total, total, 0
+
+    shutil.copyfile(actives_smi_path, raw_copy_path)
+
+    total = 0
+    kept = 0
+    kept_lines = []
+    rejected_entries = []
+
+    with raw_copy_path.open("r") as handle:
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            total += 1
+            parts = stripped.split(None, 1)
+            smiles = parts[0]
+            label = parts[1] if len(parts) > 1 else ""
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                rejected_entries.append((smiles, label, "parse_fail"))
+                continue
+            atom_symbols = {atom.GetSymbol() for atom in mol.GetAtoms()}
+            unsupported = sorted(sym for sym in atom_symbols if sym not in allowed_atoms_set)
+            if unsupported:
+                rejected_entries.append((smiles, label, f"unsupported_atoms:{','.join(unsupported)}"))
+                continue
+            kept += 1
+            if label:
+                kept_lines.append(f"{smiles}\t{label}\n")
+            else:
+                kept_lines.append(f"{smiles}\n")
+
+    rejected_path.parent.mkdir(parents=True, exist_ok=True)
+    if rejected_entries:
+        with rejected_path.open("w") as handle:
+            for smiles, label, reason in rejected_entries:
+                handle.write(f"{smiles}\t{label}\t{reason}\n")
+    else:
+        if rejected_path.exists():
+            rejected_path.unlink()
+
+    log_line = (
+        f"[deepcoy.filter] input={total} kept={kept} rejected={len(rejected_entries)} "
+        f"allowed_atoms={allowed_atoms_str} rejected_file={rejected_path}"
+    )
+    print(log_line)
+    _tee_run_log(run_log_path, log_line)
+
+    if not kept_lines:
+        raise ValueError(
+            f"All actives were rejected by DeepCoy compatibility filter. See {rejected_path} for details."
+        )
+
+    actives_smi_path.write_text("".join(kept_lines))
+    return total, kept, len(rejected_entries)
+
+
 def convert_smi_to_sdf(smi_path: Path, sdf_path: Path, *, require_output: bool = False) -> int:
     if not smi_path.is_file():
         print(f"WARNING: SMILES file not found for SDF conversion: {smi_path}")
@@ -489,6 +615,140 @@ def find_pdb_file(input_dir, pdb_id):
     return None
 
 
+class DeepcoyChunkPlan:
+    def __init__(
+        self,
+        index: int,
+        actives_path: Path,
+        output_dir: Path,
+        artifact_dir: Path,
+        line_count: int,
+        is_chunk: bool = True,
+    ):
+        self.index = index
+        self.actives_path = actives_path
+        self.output_dir = output_dir
+        self.artifact_dir = artifact_dir
+        self.line_count = line_count
+        self.is_chunk = is_chunk
+
+
+def build_deepcoy_env(thread_count: int) -> dict:
+    env = {}
+    if thread_count and thread_count > 0:
+        thread_val = str(thread_count)
+        for var in [
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        ]:
+            env[var] = thread_val
+        env.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+        env["DEEPCOY_TF_INTRA_THREADS"] = thread_val
+        env["DEEPCOY_TF_INTER_THREADS"] = thread_val
+    return env
+
+
+def prepare_deepcoy_chunks(
+    actives_smi_path: Path,
+    output_dir: Path,
+    artifact_dir: Path,
+    chunk_output_root: Path,
+    chunk_artifact_root: Path,
+    chunk_size: int,
+    use_chunking: bool,
+):
+    if chunk_size <= 0:
+        raise ValueError("deepcoy_chunk_size must be positive.")
+
+    with actives_smi_path.open("r") as f:
+        actives_lines = f.readlines()
+
+    if not use_chunking:
+        return actives_lines, [
+            DeepcoyChunkPlan(
+                index=0,
+                actives_path=actives_smi_path,
+                output_dir=output_dir,
+                artifact_dir=artifact_dir,
+                line_count=len(actives_lines),
+                is_chunk=False,
+            )
+        ]
+
+    shutil.rmtree(chunk_output_root, ignore_errors=True)
+    shutil.rmtree(chunk_artifact_root, ignore_errors=True)
+    chunk_output_root.mkdir(parents=True, exist_ok=True)
+    chunk_artifact_root.mkdir(parents=True, exist_ok=True)
+
+    chunk_plans = []
+    for start in range(0, len(actives_lines), chunk_size):
+        chunk_index = start // chunk_size
+        chunk_name = f"chunk_{chunk_index:03d}"
+        artifact_dir_chunk = chunk_artifact_root / chunk_name
+        output_dir_chunk = chunk_output_root / chunk_name
+        artifact_dir_chunk.mkdir(parents=True, exist_ok=True)
+        output_dir_chunk.mkdir(parents=True, exist_ok=True)
+
+        chunk_actives_path = artifact_dir_chunk / "actives.smi"
+        chunk_lines = actives_lines[start : start + chunk_size]
+        with chunk_actives_path.open("w") as f:
+            f.writelines(chunk_lines)
+
+        chunk_plans.append(
+            DeepcoyChunkPlan(
+                index=chunk_index,
+                actives_path=chunk_actives_path,
+                output_dir=output_dir_chunk,
+                artifact_dir=artifact_dir_chunk,
+                line_count=len(chunk_lines),
+            )
+        )
+
+    return actives_lines, chunk_plans
+
+
+def merge_deepcoy_outputs(
+    chunk_plans,
+    merged_smi_path: Path,
+    decoys_per_active: int,
+    total_actives: int,
+    keep_chunks: bool,
+    chunk_output_root: Optional[Path] = None,
+    chunk_artifact_root: Optional[Path] = None,
+    run_log_path: Optional[Path] = None,
+):
+    merged_lines = []
+    for plan in sorted(chunk_plans, key=lambda p: p.index):
+        smi_path = plan.output_dir / "deepcoy_decoys.smi"
+        if not smi_path.is_file():
+            raise FileNotFoundError(f"DeepCoy chunk output missing: {smi_path}")
+        with smi_path.open("r") as handle:
+            for raw in handle:
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                merged_lines.append(raw.rstrip("\n"))
+
+    merged_smi_path.parent.mkdir(parents=True, exist_ok=True)
+    merged_smi_path.write_text("\n".join(merged_lines) + ("\n" if merged_lines else ""))
+
+    produced = len(merged_lines)
+    expected = total_actives * decoys_per_active if decoys_per_active is not None else None
+    if expected is not None and produced < expected:
+        warning_line = f"[deepcoy] WARNING: DeepCoy generated {produced} decoys (expected ~{expected})."
+        print(warning_line)
+        _tee_run_log(run_log_path, warning_line)
+
+    if not keep_chunks:
+        if chunk_output_root:
+            shutil.rmtree(chunk_output_root, ignore_errors=True)
+        if chunk_artifact_root:
+            shutil.rmtree(chunk_artifact_root, ignore_errors=True)
+    return produced
+
+
 def run_deepcoy_workflow(
     actives_smi_path,
     output_dir,
@@ -501,32 +761,159 @@ def run_deepcoy_workflow(
     skip_sdf,
     ensure_sdf,
     restrict_data,
+    run_log_path: Optional[Path] = None,
+    deepcoy_workers=1,
+    deepcoy_chunk_size=1,
+    deepcoy_threads=1,
+    deepcoy_keep_chunks=False,
 ):
-    print("## 5. Executing DeepCoy workflow...")
+    start_line = "## 5. Executing DeepCoy workflow..."
+    print(start_line)
+    _tee_run_log(run_log_path, start_line)
 
-    deepcoy_cmd = [
-        str(deepcoy_run_sh),
-        str(actives_smi_path),
-        str(output_dir),
-        "--artifact-dir",
-        str(artifact_dir),
-        "--decoys-per-active",
-        str(decoys_per_active),
-        "--config",
-        str(config_path),
-        "--deepcoy-python",
-        deepcoy_python,
-    ]
-    if restrict_data and int(restrict_data) > 0:
-        deepcoy_cmd.extend(["--restrict-data", str(restrict_data)])
-    print(f"Running: {' '.join(deepcoy_cmd)}")
-    subprocess.run(deepcoy_cmd, check=True)
+    repo_root = Path(__file__).resolve().parent
+    env_overrides = build_deepcoy_env(deepcoy_threads)
+    _ = deepcoy_sdf_sh
 
-    smi_path = output_dir / "deepcoy_decoys.smi"
-    sdf_path = output_dir / "deepcoy_decoys.sdf"
+    use_chunking = deepcoy_workers > 1
+    label_name = actives_smi_path.stem
+    if label_name.endswith("_actives"):
+        label_name = label_name[: -len("_actives")]
+    chunk_output_root = output_dir.parent / ".deepcoy_chunks" / label_name
+    chunk_artifact_root = artifact_dir / "chunks"
+    actives_lines, chunk_plans = prepare_deepcoy_chunks(
+        actives_smi_path,
+        output_dir,
+        artifact_dir,
+        chunk_output_root,
+        chunk_artifact_root,
+        deepcoy_chunk_size,
+        use_chunking=use_chunking,
+    )
+
+    if not use_chunking:
+        deepcoy_cmd = [
+            str(deepcoy_run_sh),
+            str(actives_smi_path),
+            str(output_dir),
+            "--artifact-dir",
+            str(artifact_dir),
+            "--decoys-per-active",
+            str(decoys_per_active),
+            "--config",
+            str(config_path),
+            "--deepcoy-python",
+            deepcoy_python,
+        ]
+        if restrict_data and int(restrict_data) > 0:
+            deepcoy_cmd.extend(["--restrict-data", str(restrict_data)])
+        print(f"Running: {' '.join(deepcoy_cmd)}")
+        env = os.environ.copy()
+        env.update(env_overrides)
+        subprocess.run(deepcoy_cmd, check=True, env=env)
+
+        smi_path = output_dir / "deepcoy_decoys.smi"
+        sdf_path = output_dir / "deepcoy_decoys.sdf"
+        if ensure_sdf or not skip_sdf:
+            try:
+                convert_smi_to_sdf(smi_path, sdf_path, require_output=True)
+            except Exception as exc:
+                raise RuntimeError(f"Decoy SDF conversion failed: {exc}") from exc
+        else:
+            print("-> Skipping SDF conversion (--skip-sdf).")
+        return
+
+    def _caches_ready():
+        cache_dir = repo_root / "data" / "cache"
+        train_cache = cache_dir / "molecules_train_zinc.preprocessed.pkl"
+        valid_cache = cache_dir / "molecules_valid_zinc.preprocessed.pkl"
+        return train_cache.exists() and valid_cache.exists()
+
+    def _run_chunk(plan: DeepcoyChunkPlan):
+        env = os.environ.copy()
+        env.update(env_overrides)
+        deepcoy_cmd_local = [
+            str(deepcoy_run_sh),
+            str(plan.actives_path),
+            str(plan.output_dir),
+            "--artifact-dir",
+            str(plan.artifact_dir),
+            "--decoys-per-active",
+            str(decoys_per_active),
+            "--config",
+            str(config_path),
+            "--deepcoy-python",
+            deepcoy_python,
+        ]
+        if restrict_data and int(restrict_data) > 0:
+            deepcoy_cmd_local.extend(["--restrict-data", str(restrict_data)])
+        print(
+            f"[deepcoy] Starting chunk {plan.index:03d} ({plan.line_count} actives) -> {plan.output_dir}"
+        )
+        run_kwargs = {
+            "check": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "universal_newlines": True,
+            "env": env,
+        }
+        try:
+            subprocess.run(
+                deepcoy_cmd_local,
+                **run_kwargs,
+            )
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"[deepcoy] Chunk {plan.index:03d} failed with exit code {exc.returncode}",
+                file=sys.stderr,
+            )
+            if exc.stdout:
+                print(exc.stdout)
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            raise
+        print(f"[deepcoy] Finished chunk {plan.index:03d}")
+        return plan.output_dir / "deepcoy_decoys.smi"
+
+    plans_to_run = list(chunk_plans)
+    completed = []
+    if not _caches_ready() and plans_to_run:
+        print("[deepcoy] Priming DeepCoy cache with first chunk before parallel execution...")
+        completed.append(plans_to_run.pop(0))
+        _run_chunk(completed[0])
+
+    if plans_to_run:
+        concurrency = min(deepcoy_workers, len(plans_to_run))
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            future_map = {executor.submit(_run_chunk, plan): plan for plan in plans_to_run}
+            for future in as_completed(future_map):
+                plan = future_map[future]
+                try:
+                    future.result()
+                    completed.append(plan)
+                except Exception:
+                    for f in future_map:
+                        f.cancel()
+                    raise
+
+    if not completed and chunk_plans:
+        completed.append(chunk_plans[0])
+
+    final_smi_path = output_dir / "deepcoy_decoys.smi"
+    merge_deepcoy_outputs(
+        chunk_plans,
+        final_smi_path,
+        decoys_per_active,
+        total_actives=len(actives_lines),
+        keep_chunks=deepcoy_keep_chunks,
+        chunk_output_root=chunk_output_root,
+        chunk_artifact_root=chunk_artifact_root,
+        run_log_path=run_log_path,
+    )
+
     if ensure_sdf or not skip_sdf:
         try:
-            convert_smi_to_sdf(smi_path, sdf_path, require_output=True)
+            convert_smi_to_sdf(final_smi_path, output_dir / "deepcoy_decoys.sdf", require_output=True)
         except Exception as exc:
             raise RuntimeError(f"Decoy SDF conversion failed: {exc}") from exc
     else:
@@ -631,7 +1018,7 @@ def parse_args():
         action="store_false",
         help="Alias for --no-run-deepcoy.")
     parser.set_defaults(run_deepcoy=True)
-    parser.set_defaults(iuphar_approved_only=True, iuphar_primary_only=True)
+    parser.set_defaults(iuphar_approved_only=True, iuphar_primary_only=True, deepcoy_filter_actives=True)
 
     parser.add_argument(
         "--deepcoy-python",
@@ -666,8 +1053,41 @@ def parse_args():
     parser.add_argument(
         "--decoys-per-active",
         type=int,
-        default=50,
-        help="Number of decoys to generate per active.")
+        default=None,
+        help="Number of decoys to generate per active (default 50, can be set via config.txt DEEPCOY_DECOYS_PER_ACTIVE).")
+    parser.add_argument(
+        "--deepcoy-workers",
+        type=int,
+        default=10,
+        help="Parallel DeepCoy workers (default 10).")
+    parser.add_argument(
+        "--deepcoy-chunk-size",
+        type=int,
+        default=1,
+        help="Number of actives per DeepCoy chunk (default 1).")
+    parser.add_argument(
+        "--deepcoy-threads",
+        type=int,
+        default=1,
+        help="Threads per DeepCoy worker for BLAS/TF (default 1).")
+    parser.add_argument(
+        "--deepcoy-keep-chunks",
+        action="store_true",
+        help="Keep per-chunk DeepCoy outputs instead of cleaning after merge.")
+    parser.add_argument(
+        "--deepcoy-allowed-atoms",
+        default=DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR,
+        help=(
+            "Comma-separated atom symbols allowed for DeepCoy compatibility filtering "
+            f"(default: {DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR})."
+        ),
+    )
+    parser.add_argument(
+        "--no-deepcoy-filter-actives",
+        dest="deepcoy_filter_actives",
+        action="store_false",
+        help="Disable DeepCoy compatibility filtering of actives before DeepCoy.",
+    )
     parser.add_argument(
         "--fallback-smiles",
         default=None,
@@ -699,6 +1119,8 @@ def main():
     repo_root = Path(__file__).resolve().parent
     project_root = repo_root.parent
     config_txt_path = project_root / CONFIG_FILE_NAME
+    atlas_run_id = os.environ.get("ATLAS_RUN_ID")
+    run_log_path = project_root / "logs" / f"main_{atlas_run_id}.log" if atlas_run_id else None
 
     pdb_id = args.pdb.upper()
     offline = bool(args.offline)
@@ -722,6 +1144,19 @@ def main():
         or read_config_value(config_txt_path, "DEEPCOY_PYTHON")
         or DEFAULT_DEEPCOY_PYTHON
     )
+    decoys_per_active = (
+        args.decoys_per_active
+        if args.decoys_per_active is not None
+        else read_config_int(config_txt_path, "DEEPCOY_DECOYS_PER_ACTIVE", default=None)
+    )
+    if decoys_per_active is None or decoys_per_active <= 0:
+        decoys_per_active = 50
+    deepcoy_workers = max(1, args.deepcoy_workers)
+    deepcoy_chunk_size = max(1, args.deepcoy_chunk_size)
+    deepcoy_threads = max(1, args.deepcoy_threads)
+    deepcoy_keep_chunks = bool(args.deepcoy_keep_chunks)
+    allowed_atoms_list, _ = _parse_allowed_atom_list(args.deepcoy_allowed_atoms)
+    allowed_atoms_str = ",".join(allowed_atoms_list)
 
     sources = [s.strip().lower() for s in (args.sources or "").split(",") if s.strip()]
     if not sources:
@@ -745,6 +1180,13 @@ def main():
         print(f"-> Input PDB dir: {input_pdb_dir}")
         print(f"-> Output root: {out_root}")
         print(f"-> DeepCoy python: {deepcoy_python}")
+        print(f"-> Decoys per active: {decoys_per_active}")
+        print(f"-> DeepCoy workers: {deepcoy_workers}")
+        print(f"-> DeepCoy chunk size: {deepcoy_chunk_size}")
+        print(f"-> DeepCoy threads: {deepcoy_threads}")
+        print(f"-> DeepCoy keep chunks: {deepcoy_keep_chunks}")
+        print(f"-> DeepCoy allowed atoms: {allowed_atoms_str}")
+        print(f"-> DeepCoy filter actives: {args.deepcoy_filter_actives}")
         print(f"-> Artifact dir: {artifact_dir}")
         print(f"-> Sources: {sources}")
         print(f"-> Source workers: {args.max_source_workers}")
@@ -819,20 +1261,37 @@ def main():
         shutil.rmtree(artifact_dir, ignore_errors=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    def _cleanup_staging() -> None:
+        if staging_dir and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
     actives_smi_path = write_actives_smiles(final_actives_smiles, work_output_dir, label)
+    try:
+        _, filtered_kept, _ = filter_actives_for_deepcoy(
+            actives_smi_path,
+            allowed_atoms_list,
+            filter_enabled=args.deepcoy_filter_actives,
+            run_log_path=run_log_path,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        _cleanup_staging()
+        return 1
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        _cleanup_staging()
+        return 1
     actives_sdf_path = work_output_dir / "deepcoy_actives.sdf"
     convert_smi_to_sdf(actives_smi_path, actives_sdf_path)
-    print(f"[deepcoy.actives.sdf] tag={label} out={actives_sdf_path} n={len(final_actives_smiles)}")
+    actives_log_line = f"[deepcoy.actives.sdf] tag={label} out={actives_sdf_path} n={filtered_kept}"
+    print(actives_log_line)
+    _tee_run_log(run_log_path, actives_log_line)
 
     if not args.run_deepcoy:
         if staging_dir and staging_dir.exists():
             shutil.rmtree(staging_dir, ignore_errors=True)
         print("DeepCoy run skipped (--no-run-deepcoy).")
         return 0
-
-    def _cleanup_staging() -> None:
-        if staging_dir and staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
 
     if not deepcoy_run_sh.is_file():
         print(f"ERROR: deepcoy_run.sh not found: {deepcoy_run_sh}", file=sys.stderr)
@@ -859,12 +1318,17 @@ def main():
             artifact_dir,
             deepcoy_run_sh,
             deepcoy_sdf_sh,
-            args.decoys_per_active,
+            decoys_per_active,
             deepcoy_python,
             config_path,
             args.skip_sdf,
             args.ensure_sdf,
             args.restrict_data,
+            run_log_path=run_log_path,
+            deepcoy_workers=deepcoy_workers,
+            deepcoy_chunk_size=deepcoy_chunk_size,
+            deepcoy_threads=deepcoy_threads,
+            deepcoy_keep_chunks=deepcoy_keep_chunks,
         )
     except FileNotFoundError:
         print("ERROR: DeepCoy wrapper script not found or not executable.", file=sys.stderr)
@@ -876,7 +1340,7 @@ def main():
         return 1
     except subprocess.CalledProcessError as e:
         if e.returncode == 4 and args.fallback_smiles:
-            print("WARNING: DeepCoy preprocessing rejected actives; retrying with simplified fallback.")
+            print("WARNING: DeepCoy preprocessing rejected actives; retrying with fallback ligand.")
             simple_smiles = "CCN(CC)CCO"
             with actives_smi_path.open("w") as f:
                 f.write(f"{simple_smiles}\tFALLBACK\n")
@@ -887,12 +1351,17 @@ def main():
                     artifact_dir,
                     deepcoy_run_sh,
                     deepcoy_sdf_sh,
-                    args.decoys_per_active,
+                    decoys_per_active,
                     deepcoy_python,
                     config_path,
                     args.skip_sdf,
                     args.ensure_sdf,
                     args.restrict_data,
+                    run_log_path=run_log_path,
+                    deepcoy_workers=deepcoy_workers,
+                    deepcoy_chunk_size=deepcoy_chunk_size,
+                    deepcoy_threads=deepcoy_threads,
+                    deepcoy_keep_chunks=deepcoy_keep_chunks,
                 )
             except subprocess.CalledProcessError as e2:
                 print(f"ERROR: DeepCoy command failed after retry with exit code {e2.returncode}.", file=sys.stderr)
@@ -908,7 +1377,9 @@ def main():
             shutil.rmtree(output_dir, ignore_errors=True)
         staging_dir.rename(output_dir)
 
-    print(f"Decoys should be generated in: {output_dir}")
+    final_line = f"Decoys should be generated in: {output_dir}"
+    print(final_line)
+    _tee_run_log(run_log_path, final_line)
     return 0
 
 

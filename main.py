@@ -184,7 +184,7 @@ Logging and outputs:
 
   - Failed proteins:
       * Per-PDB failure logs are placed under:
-          <OVERALL_DIR>/failed/<PDB>.<variant>.log
+          <OVERALL_DIR>/failed/<RUN_ID>__<PDB>__<variant>.log
 
   - Docking and configs:
       * Receptors, docking configs, and pose/score outputs are routed
@@ -1334,21 +1334,27 @@ def main() -> None:
                     exc_msg = str(exc)
                     traceback_str = traceback.format_exc()
 
-                    fail_log_path = Path(failed_root) / f"{pdb_id}.{label}.log"
+                    fail_log_path = (
+                        Path(failed_root) / f"{run_id}__{pdb_id}__{label}.log"
+                    )
+                    tmp_fail_log_path = fail_log_path.with_suffix(
+                        fail_log_path.suffix + ".part"
+                    )
 
                     # Write a dedicated failure log for this PDB+variant
-                    with fail_log_path.open("w", encoding="utf-8") as fh:
+                    with tmp_fail_log_path.open("w", encoding="utf-8") as fh:
                         fh.write(
                             f"[FAILED PDB]\n"
                             f"  pdb_id        = {pdb_id}\n"
                             f"  variant_label = {label}\n"
                             f"  mode          = {mode}\n"
-                            f"  pdb_file      = {pdb_file}\n"
+                            f"  pdb_file      = {pdb_file} run_id={run_id}\n"
                             f"  exception     = {exc_type}: {exc_msg}\n\n"
                             f"[TRACEBACK]\n"
                             f"{traceback_str}\n"
                         )
                         traceback.print_exc(file=fh)
+                    os.replace(tmp_fail_log_path, fail_log_path)
 
                     logging.error(
                         "[apo-holo] FAILED pdb_id=%s variant_label=%s; "

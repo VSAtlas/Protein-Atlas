@@ -7,7 +7,7 @@ import math
 import sys
 import yaml
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 COMPONENT = "[run-report]"
 
@@ -18,11 +18,14 @@ def _configure_logging(verbose: bool) -> logging.Logger:
 
 def _as_float(x: Any) -> Optional[float]:
     try:
-        if x is None: return None
+        if x is None:
+            return None
         s = str(x).strip()
-        if not s: return None
+        if not s:
+            return None
         v = float(s)
-        if math.isnan(v): return None
+        if math.isnan(v):
+            return None
         return v
     except Exception:
         return None
@@ -78,10 +81,62 @@ def _load_scorch_stats(repo_root: Path, run_id: str, pdb_id: str, variant: str, 
     return stats
 
 def _as_bool(x: Any) -> bool:
-    if isinstance(x, bool): return x
-    if isinstance(x, (int, float)): return bool(x)
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, (int, float)):
+        return bool(x)
     s = str(x).strip().lower()
     return s in ("1", "true", "yes", "on")
+
+
+def _compute_fdr_stats(group_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    non_decoys = [r for r in group_rows if not _as_bool(r.get("is_decoy"))]
+    score_field = None
+    for r in non_decoys:
+        val = (r.get("fdr_score_field") or "").strip()
+        if val:
+            score_field = val
+            break
+    if not score_field:
+        return {}
+
+    n_decoys = None
+    for r in non_decoys:
+        dec = r.get("fdr_n_decoys")
+        if dec:
+            try:
+                n_decoys = int(float(str(dec)))
+                break
+            except Exception:
+                continue
+
+    n_tested = 0
+    n_hits_q05 = 0
+    n_hits_q10 = 0
+    best_q = None
+
+    for r in non_decoys:
+        q_val = _as_float(r.get("fdr_q_target"))
+        if q_val is None:
+            continue
+        n_tested += 1
+        best_q = q_val if best_q is None else min(best_q, q_val)
+        if q_val <= 0.05:
+            n_hits_q05 += 1
+        if q_val <= 0.10:
+            n_hits_q10 += 1
+
+    if n_tested == 0:
+        return {}
+
+    return {
+        "score_field": score_field,
+        "n_decoys": n_decoys,
+        "n_tested": n_tested,
+        "n_hits_q05": n_hits_q05,
+        "n_hits_q10": n_hits_q10,
+        "best_q": best_q
+    }
 
 def _find_manifest(run_id: str, repo_root: Path) -> Optional[Path]:
     candidates = [
@@ -127,8 +182,10 @@ def _load_manifest_pocket_map(manifest_path: Optional[Path]) -> Dict[Tuple[str, 
                 "box": [details.get("box_x"), details.get("box_y"), details.get("box_z")]
             }
             # Clean up Nones in lists
-            if any(x is None for x in default_info["center"]): default_info["center"] = None
-            if any(x is None for x in default_info["box"]): default_info["box"] = None
+            if any(x is None for x in default_info["center"]):
+                default_info["center"] = None
+            if any(x is None for x in default_info["box"]):
+                default_info["box"] = None
 
         # Iterate variants? If manifest structure supports it.
         # Often manifest is structured: proteins -> <PDB> -> variants -> <VARIANT> or similar?
@@ -286,6 +343,8 @@ def build_report(run_id: str, repo_root: Path, top_n: int = 5) -> Dict[str, Any]
                     "t_selected_source": t_src
                 })
 
+        fdr_stats = _compute_fdr_stats(group_rows)
+
         targets_out[key] = {
             "qc": {
                 "ef1": ef1,
@@ -307,7 +366,8 @@ def build_report(run_id: str, repo_root: Path, top_n: int = 5) -> Dict[str, Any]
                         "n": _pick_repeated_value(group_rows, "blend_n_decoys", is_int=True)
                     },
                     "scorch": _load_scorch_stats(repo_root, run_id, pdb, variant, ph)
-                }
+                },
+                "fdr": fdr_stats if fdr_stats else None
             },
             "pocket": {
                 "method": p_method,

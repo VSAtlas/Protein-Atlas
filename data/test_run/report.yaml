@@ -1,5 +1,5 @@
 run_id: test_run
-generated_at: '2026-01-09T00:37:36.353349Z'
+generated_at: '2026-01-10T01:21:20.849582Z'
 sources:
   master_rows_csv: data/test_run/master_rows.csv
   manifest_yaml: null
@@ -30,6 +30,7 @@ targets:
           mu: null
           sigma: null
           n: null
+      fdr: null
     pocket:
       method: null
       center: null
@@ -82,6 +83,7 @@ targets:
           mu: 0.00325689
           sigma: 0.00426441
           n: 4
+      fdr: null
     pocket:
       method: null
       center: null

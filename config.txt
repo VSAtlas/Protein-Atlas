@@ -66,6 +66,9 @@ BABEL_DATADIR=
 
 # DeepCoy (env-local)
 DEEPCOY_PYTHON=/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python
+DEEPCOY_DECOYS_PER_ACTIVE  =  50
+
+
 
 FPOCKET_EXE=/home/michael/atlas/tools/fpocket/bin/fpocket
 
@@ -283,9 +286,9 @@ CTRL_REDOCK_NMODES =9
 # GNINA follow-up docking toggle:
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
-USE_GNINA = true
-USE_LEDOCK = true
-USE_DOCK6 = true
+USE_GNINA = false
+USE_LEDOCK = false
+USE_DOCK6 = false
 USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
@@ -620,3 +623,5 @@ LOG_LEVEL_FILE = all
 LOG_LEVEL_CONSOLE = all
 LOG_TOPICS = all
 QUIET_CONSOLE = false
+DEEPCOY_DECOYS_PER_ACTIVE=1
+DEEPCOY_DECOYS_PER_ACTIVE=1

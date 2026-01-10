@@ -3,23 +3,58 @@ import os
 import re
 import shutil
 import sys
+import types
 from pathlib import Path
 from typing import Optional
 
-from activesite import fix_element_columns_in_file
-from prep_ligands.prep_ligands_bulk import (
-    _audit_protonation_metrics,
-    _collect_only_from_env_and_cli,
-    _log_malformed,
-    _pdbqt_from_mol2_via_obabel,
-    _prepare_one,
-    _valid_pdbqt,
-    enumerate_ligands_for_docking,
-    is_valid_ligand,
-    prep_ligands_with_mgltools,
-    read_config,
-)
-from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
+# Ensure repo root is on sys.path so top-level helpers (activesite, etc.) resolve when run as a script.
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+SRC_DIR = ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+if "prep_ligands" not in sys.modules:
+    pkg = types.ModuleType("prep_ligands")
+    pkg.__path__ = [str(SRC_DIR / "prep_ligands")]
+    sys.modules["prep_ligands"] = pkg
+
+from activesite import fix_element_columns_in_file  # noqa: E402,F401
+try:
+    from prep_ligands.prep_ligands_bulk import (  # noqa: E402,F401
+        _audit_protonation_metrics,
+        _collect_only_from_env_and_cli,
+        _log_malformed,
+        _pdbqt_from_mol2_via_obabel,
+        _prepare_one,
+        _valid_pdbqt,
+        enumerate_ligands_for_docking,
+        is_valid_ligand,
+        prep_ligands_with_mgltools,
+        read_config,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name not in {"prep_ligands", "prep_ligands.prep_ligands_bulk"}:
+        raise
+    from prep_ligands_bulk import (  # type: ignore  # noqa: E402,F401
+        _audit_protonation_metrics,
+        _collect_only_from_env_and_cli,
+        _log_malformed,
+        _pdbqt_from_mol2_via_obabel,
+        _prepare_one,
+        _valid_pdbqt,
+        enumerate_ligands_for_docking,
+        is_valid_ligand,
+        prep_ligands_with_mgltools,
+        read_config,
+    )
+
+try:
+    from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb  # noqa: E402
+except ModuleNotFoundError as exc:
+    if exc.name not in {"prep_ligands", "prep_ligands.prep_ligands_crystal"}:
+        raise
+    from prep_ligands_crystal import prep_ligands_from_pdb  # type: ignore  # noqa: E402
 
 
 logger = logging.getLogger(__name__)

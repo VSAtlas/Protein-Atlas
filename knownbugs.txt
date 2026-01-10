@@ -1,2 +1,0 @@
-1. .sanitized duplicates over and over, there is a sanitize collapse at the start of runs but that doesnt prevent a few sanitized names to slip in
-2. some config stuff just doesnt work at all, many were added as placeholers in particular water and some recentering policies

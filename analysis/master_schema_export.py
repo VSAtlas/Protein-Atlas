@@ -35,6 +35,8 @@ except ImportError:
 
 COMPONENT = "[master-export]"
 _DECOY_RE = re.compile(r"\bdecoys?_", re.IGNORECASE)
+MIN_DECOYS_FOR_FDR = 200
+MIN_UNIQUE_DECOY_SCORES = 10
 
 
 def _configure_logging(verbose: bool) -> logging.Logger:
@@ -43,8 +45,76 @@ def _configure_logging(verbose: bool) -> logging.Logger:
     return logging.getLogger("master-export")
 
 
+def _read_csv_rows(path: Path) -> List[Dict[str, str]]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            return list(reader)
+    except Exception:
+        return []
+
+
 def _is_decoy_file(filename: str) -> bool:
     return _DECOY_RE.search(filename or "") is not None
+
+
+def _row_is_decoy(row: Dict[str, Any]) -> bool:
+    library = str(row.get("library", "")).strip().upper()
+    if library == "DECOY":
+        return True
+    if str(row.get("is_decoy", "")).strip() == "1":
+        return True
+    ligand_file = row.get("ligand_file") or row.get("ligand") or row.get("Ligand_ID") or ""
+    try:
+        lig_name = Path(str(ligand_file)).name
+    except Exception:
+        lig_name = str(ligand_file)
+    return _is_decoy_file(lig_name)
+
+
+def _choose_fdr_score_field(decoy_rows: List[Dict[str, Any]], min_decoys: int = MIN_DECOYS_FOR_FDR) -> Optional[str]:
+    counts: Dict[str, int] = {}
+    for field in ("consensus_score", "consensus_score_pre"):
+        vals = []
+        for r in decoy_rows:
+            v = _as_float(r.get(field))
+            if v is None or not math.isfinite(v):
+                continue
+            vals.append(v)
+        counts[field] = len(vals)
+    if counts.get("consensus_score", 0) >= min_decoys:
+        return "consensus_score"
+    if counts.get("consensus_score_pre", 0) >= min_decoys:
+        return "consensus_score_pre"
+    return None
+
+
+def _get_decoy_scores_for_combo(combo_dir: Path, fallback_rows: List[Dict[str, Any]], min_decoys: int = MIN_DECOYS_FOR_FDR) -> Tuple[Optional[str], List[float], bool, Dict[str, List[float]]]:
+    dud_path = combo_dir / "dud_consensus_reranked_scorch.csv"
+    fallback_used = False
+    decoy_rows: List[Dict[str, Any]] = []
+    if dud_path.exists():
+        decoy_rows = _read_csv_rows(dud_path)
+    if not decoy_rows:
+        fallback_used = True
+        decoy_rows = fallback_rows
+    decoys_only = [r for r in decoy_rows if _row_is_decoy(r)]
+    if not decoys_only:
+        fallback_used = True
+        decoys_only = [r for r in fallback_rows if _row_is_decoy(r)]
+    scores_by_field: Dict[str, List[float]] = {}
+    for field_name in ("consensus_score", "consensus_score_pre"):
+        vals: List[float] = []
+        for r in decoys_only:
+            val = _as_float(r.get(field_name))
+            if val is None or not math.isfinite(val):
+                continue
+            vals.append(val)
+        scores_by_field[field_name] = vals
+
+    field = _choose_fdr_score_field(decoys_only, min_decoys)
+    scores = scores_by_field.get(field, []) if field else []
+    return field, scores, fallback_used, scores_by_field
 
 
 def _load_control_bases(processed_root: Path, pdb_id: str) -> Set[str]:
@@ -291,9 +361,11 @@ def _parse_dud_eval_summary(run_id: str, repo_root: Path) -> Dict[Tuple[str, str
 
 def _as_float(x: Any) -> Optional[float]:
     try:
-        if x is None: return None
+        if x is None:
+            return None
         s = str(x).strip()
-        if not s: return None
+        if not s:
+            return None
         return float(s)
     except Exception:
         return None
@@ -484,7 +556,161 @@ def main() -> int:
     if not master_rows:
         logger.warning("%s action=exit reason=no_rows_collected", COMPONENT)
         return 0
-        
+
+    # Initialize FDR fields
+    for r in master_rows:
+        r.setdefault("fdr_score_field", "")
+        r.setdefault("fdr_n_decoys", "")
+        r.setdefault("fdr_p_empirical", "")
+        r.setdefault("fdr_q_target", "")
+        r.setdefault("fdr_hit_q05", "")
+        r.setdefault("fdr_hit_q10", "")
+
+    combo_indices: Dict[Tuple[str, str, str], List[int]] = {}
+    for idx, row in enumerate(master_rows):
+        key = (row["pdb_id"], row["variant"], row["ph_label"])
+        combo_indices.setdefault(key, []).append(idx)
+
+    fdr_summary_rows: List[Dict[str, Any]] = []
+    for (pdb_id, variant, ph), indices in combo_indices.items():
+        combo_dir = post_root / run_id / pdb_id / variant / ph
+        dud_path = combo_dir / "dud_consensus_reranked_scorch.csv"
+        fallback_rows = [master_rows[i] for i in indices]
+        field, decoy_scores, used_fallback, decoy_scores_by_field = _get_decoy_scores_for_combo(combo_dir, fallback_rows, MIN_DECOYS_FOR_FDR)
+        n_decoys = len(decoy_scores)
+        unique_scores = len(set(decoy_scores))
+        available_decoys = max((len(v) for v in decoy_scores_by_field.values()), default=0)
+
+        if used_fallback:
+            logger.warning(
+                "%s action=fdr_decoy_fallback pdb=%s variant=%s ph=%s path=%s reason=%s",
+                COMPONENT,
+                pdb_id,
+                variant,
+                ph,
+                dud_path,
+                "missing_or_empty" if not dud_path.exists() else "no_decoys_found",
+            )
+
+        if not field:
+            logger.info(
+                "%s action=fdr_skip reason=insufficient_decoys pdb=%s variant=%s ph=%s n_decoys=%d min_decoys=%d",
+                COMPONENT,
+                pdb_id,
+                variant,
+                ph,
+                available_decoys,
+                MIN_DECOYS_FOR_FDR,
+            )
+            continue
+
+        if n_decoys < MIN_DECOYS_FOR_FDR:
+            logger.info(
+                "%s action=fdr_skip reason=insufficient_decoys field=%s n_decoys=%d min_decoys=%d pdb=%s variant=%s ph=%s",
+                COMPONENT,
+                field,
+                n_decoys,
+                MIN_DECOYS_FOR_FDR,
+                pdb_id,
+                variant,
+                ph,
+            )
+            continue
+
+        if unique_scores < MIN_UNIQUE_DECOY_SCORES:
+            logger.info(
+                "%s action=fdr_skip reason=degenerate_decoys field=%s unique_scores=%d pdb=%s variant=%s ph=%s",
+                COMPONENT,
+                field,
+                unique_scores,
+                pdb_id,
+                variant,
+                ph,
+            )
+            continue
+
+        # Populate shared fields for non-decoys in this combo
+        for idx in indices:
+            if _row_is_decoy(master_rows[idx]):
+                continue
+            master_rows[idx]["fdr_score_field"] = field
+            master_rows[idx]["fdr_n_decoys"] = str(n_decoys)
+
+        tested: List[Tuple[int, float]] = []
+        for idx in indices:
+            row = master_rows[idx]
+            if _row_is_decoy(row):
+                continue
+            score_val = _as_float(row.get(field))
+            if score_val is None or not math.isfinite(score_val):
+                continue
+            p_val = (1 + sum(1 for d in decoy_scores if d >= score_val)) / (1 + n_decoys)
+            tested.append((idx, p_val))
+            row["fdr_p_empirical"] = f"{p_val:.6g}"
+
+        if not tested:
+            logger.info(
+                "%s action=fdr_skip reason=no_testable_rows field=%s pdb=%s variant=%s ph=%s",
+                COMPONENT,
+                field,
+                pdb_id,
+                variant,
+                ph,
+            )
+            continue
+
+        tested_sorted = sorted(tested, key=lambda x: x[1])
+        m = len(tested_sorted)
+        raw_q: List[Tuple[int, float]] = []
+        for rank, (idx, p_val) in enumerate(tested_sorted, start=1):
+            raw_q.append((idx, p_val * m / rank))
+
+        q_values: Dict[int, float] = {}
+        prev = 1.0
+        for idx, q_val in reversed(raw_q):
+            adj = min(q_val, prev, 1.0)
+            prev = adj
+            q_values[idx] = adj
+
+        hits05 = 0
+        hits10 = 0
+        best_q = 1.0
+        for idx, q_val in q_values.items():
+            master_rows[idx]["fdr_q_target"] = f"{q_val:.6g}"
+            hit05 = q_val <= 0.05
+            hit10 = q_val <= 0.10
+            master_rows[idx]["fdr_hit_q05"] = "1" if hit05 else "0"
+            master_rows[idx]["fdr_hit_q10"] = "1" if hit10 else "0"
+            if hit05:
+                hits05 += 1
+            if hit10:
+                hits10 += 1
+            best_q = min(best_q, q_val)
+
+        fdr_summary_rows.append({
+            "pdb_id": pdb_id,
+            "variant": variant,
+            "ph_label": ph,
+            "fdr_score_field": field,
+            "fdr_n_decoys": str(n_decoys),
+            "n_tested": str(m),
+            "n_hits_q05": str(hits05),
+            "n_hits_q10": str(hits10),
+            "best_q": f"{best_q:.6g}" if math.isfinite(best_q) else "",
+        })
+
+        logger.info(
+            "%s action=fdr_compute pdb=%s variant=%s ph=%s field=%s n_decoys=%d n_tested=%d n_hits_q05=%d",
+            COMPONENT,
+            pdb_id,
+            variant,
+            ph,
+            field,
+            n_decoys,
+            m,
+            hits05,
+        )
+
     # Sort
     master_rows.sort(key=lambda r: (r["pdb_id"], r["variant"], r["ph_label"], r["library"], r["ligand_base"]))
     
@@ -496,6 +722,7 @@ def main() -> int:
         "pocket_method", "center_x", "center_y", "center_z", "box_x", "box_y", "box_z",
         "ef1", "roc_auc", "roc_auc_adj", "dud_eval_status_reason",
         "t_stage1", "t_stage2", "t_selected", "t_selected_source",
+        "fdr_score_field", "fdr_n_decoys", "fdr_p_empirical", "fdr_q_target", "fdr_hit_q05", "fdr_hit_q10",
         "source_csv"
     ]
     
@@ -513,6 +740,31 @@ def main() -> int:
     except Exception as e:
         logger.error("%s action=write status=failed path=%s error=%s", COMPONENT, output_csv, e)
         return 1
+
+    # Optional: Target FDR Summary
+    try:
+        if fdr_summary_rows:
+            fdr_summary_csv = data_dir / "target_fdr_summary.csv"
+            with fdr_summary_csv.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "pdb_id",
+                        "variant",
+                        "ph_label",
+                        "fdr_score_field",
+                        "fdr_n_decoys",
+                        "n_tested",
+                        "n_hits_q05",
+                        "n_hits_q10",
+                        "best_q",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerows(fdr_summary_rows)
+            logger.info("%s action=write status=ok path=%s rows=%d", COMPONENT, fdr_summary_csv, len(fdr_summary_rows))
+    except Exception as e:
+        logger.warning("%s action=write_optional status=failed path=target_fdr_summary.csv error=%s", COMPONENT, e)
 
     # Optional: Ligand Top Targets
     try:

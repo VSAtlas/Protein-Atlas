@@ -1,9 +1,13 @@
 #!/usr/bin/env/python
 
-from typing import Tuple, List, Any, Sequence
+from typing import List, Any
 try:
     import tensorflow.compat.v1 as tf
     tf.disable_v2_behavior()
+    if not hasattr(tf, "contrib"):
+        import types
+
+        tf.contrib = types.SimpleNamespace(rnn=tf.nn.rnn_cell)
 except Exception:
     import tensorflow as tf
 import time
@@ -13,7 +17,7 @@ import numpy as np
 import pickle
 import random
 import utils
-from utils import MLP, dataset_info, ThreadedIterator, graph_to_adj_mat, SMALL_NUMBER, LARGE_NUMBER, graph_to_adj_mat
+from utils import dataset_info, ThreadedIterator
 
 class ChemModel(object):
     @classmethod
@@ -82,6 +86,18 @@ class ChemModel(object):
 
         # Build the actual model
         config = tf.ConfigProto()
+        intra_threads = os.environ.get("DEEPCOY_TF_INTRA_THREADS")
+        inter_threads = os.environ.get("DEEPCOY_TF_INTER_THREADS")
+        try:
+            if intra_threads is not None:
+                config.intra_op_parallelism_threads = int(intra_threads)
+        except Exception:
+            pass
+        try:
+            if inter_threads is not None:
+                config.inter_op_parallelism_threads = int(inter_threads)
+        except Exception:
+            pass
         config.gpu_options.allow_growth = True
         self.graph = tf.Graph()
         self.sess = tf.Session(graph=self.graph, config=config)
