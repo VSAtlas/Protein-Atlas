@@ -1563,8 +1563,17 @@ def main():
         if args.decoys_per_active is not None
         else cfg.get("DEEPCOY_DECOYS_PER_ACTIVE")
     )
+    decoys_source = (
+        "cli"
+        if args.decoys_per_active is not None
+        else "config"
+        if cfg.get("DEEPCOY_DECOYS_PER_ACTIVE") is not None
+        else "default"
+    )
     if decoys_per_active is None or decoys_per_active <= 0:
         decoys_per_active = 50
+        if decoys_source != "cli":
+            decoys_source = "default"
     deepcoy_workers = max(1, args.deepcoy_workers)
     deepcoy_chunk_size = args.deepcoy_chunk_size
     if deepcoy_chunk_size is None:
@@ -1603,11 +1612,10 @@ def main():
         if args.deepcoy_num_different_starting is not None
         else cfg.get("DEEPCOY_NUM_DIFFERENT_STARTING")
     )
-    num_samples = (
-        args.deepcoy_num_samples
-        if args.deepcoy_num_samples is not None
-        else cfg.get("DEEPCOY_NUM_SAMPLES")
-    )
+    # Only pass --num-samples when explicitly requested via CLI.
+    # Config-driven num_samples has historically caused accidental overrides
+    # that collapse output to 1 decoy/active even when DEEPCOY_DECOYS_PER_ACTIVE is larger.
+    num_samples = args.deepcoy_num_samples
     allowed_atoms_list, _ = _parse_allowed_atom_list(args.deepcoy_allowed_atoms)
     allowed_atoms_str = ",".join(allowed_atoms_list)
 
@@ -1649,7 +1657,7 @@ def main():
         print(f"-> DeepCoy use_argmax_generation: {use_argmax_generation}")
         print(f"-> DeepCoy try_different_starting: {try_different_starting}")
         print(f"-> DeepCoy num_different_starting: {num_different_starting}")
-        print(f"-> DeepCoy num_samples: {num_samples}")
+        print(f"-> DeepCoy num_samples (CLI-only): {num_samples}")
         print(f"-> Artifact dir: {artifact_dir}")
         print(f"-> Sources: {sources}")
         print(f"-> Source workers: {args.max_source_workers}")
@@ -1832,6 +1840,12 @@ def main():
         print(f"-> DeepCoy python: {deepcoy_python}")
         print(f"-> DeepCoy run script: {deepcoy_run_sh}")
         print(f"-> DeepCoy config: {config_path}")
+
+    config_log = (
+        f"[deepcoy.config] decoys_per_active={decoys_per_active} source={decoys_source}"
+    )
+    print(config_log)
+    _tee_run_log(run_log_path, config_log)
 
     try:
         run_deepcoy_workflow(

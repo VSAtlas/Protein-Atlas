@@ -287,6 +287,29 @@ config["generation"] = True
 config["valid_file"] = valid_file
 config["output_name"] = output_name
 config["number_of_generation_per_valid"] = int(decoys_per_active)
+# DeepCoy implementations vary: some use number_of_generation_per_valid,
+# others use num_samples as the effective generation count.
+# Atlas expects DEEPCOY_DECOYS_PER_ACTIVE to be the single source of truth.
+requested = int(decoys_per_active)
+
+# If an explicit num_samples was provided, do NOT silently override decoys_per_active.
+# Instead, warn and force consistency with decoys_per_active.
+explicit_num_samples = None
+try:
+    explicit_num_samples = (
+        int(num_samples) if (num_samples is not None and str(num_samples).strip() != "") else None
+    )
+except Exception:
+    explicit_num_samples = None
+
+if explicit_num_samples is not None and explicit_num_samples != requested:
+    print(
+        f"WARNING: --num-samples={explicit_num_samples} conflicts with --decoys-per-active={requested}; "
+        f"forcing num_samples={requested} to honor decoys-per-active.",
+        file=sys.stderr,
+    )
+
+config["num_samples"] = requested
 config["num_epochs"] = 1
 config["epoch_to_generate"] = 1
 try:
@@ -332,8 +355,10 @@ config["try_different_starting"] = _coerce_bool(
 config["num_different_starting"] = _coerce_int(
     num_different_starting, config.get("num_different_starting", 1)
 )
-num_samples_default = config.get("number_of_generation_per_valid", config.get("num_samples", 50))
-config["num_samples"] = _coerce_int(num_samples, num_samples_default)
+num_samples_default = config.get(
+    "number_of_generation_per_valid", config.get("num_samples", 50)
+)
+config["num_samples"] = _coerce_int(config.get("num_samples"), num_samples_default)
 
 with open(out_path, "w") as f:
     json.dump(config, f, indent=2)

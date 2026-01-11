@@ -1692,9 +1692,9 @@ def _prepare_one(
                     "[re-arom] LOST all explicit H! Will re-add via obabel -h."
                 )
                 add_hydrogens_mol2(
-                    mol2_in, mol2_in, obabel_exe_short, ph=ph
+                    mol2_file, mol2_file, obabel_exe_short, ph=ph
                 )  # in-place re-add
-                post2_H = _count_explicit_H_in_mol2(mol2_in)
+                post2_H = _count_explicit_H_in_mol2(mol2_file)
                 logging.info(f"[re-arom] after re-add: H={post2_H}")
 
             try:

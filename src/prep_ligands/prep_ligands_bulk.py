@@ -3,20 +3,22 @@ from pathlib import Path
 import subprocess
 import logging
 import concurrent.futures
-
-logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Dict, Set, Any
 import re
 from datetime import datetime
 import shutil
 from collections import Counter
+
 from input_and_export_functions import load_config, validate_config
 from path_router import make_paths
+from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
 
 # --- RDKit / Standardization imports ---
 from rdkit import Chem
 from rdkit.Chem.SaltRemover import SaltRemover
+from rdkit.Chem import Crippen
+from rdkit.Chem import rdmolops as rdMolOps  # new: shared rdMolOps import
 
 from prep_ligands.prep_ligands_bulk_sdf import (
     LIGPREP_OBABEL_TIMEOUT_SEC,
@@ -65,7 +67,11 @@ from prep_ligands.prep_ligands_common import (
     is_valid_ligand,
     read_config,
     standardize_mol_with_activesite,
+    _quick_filters,
+    _standardize_then_sanitize,
 )
+
+logger = logging.getLogger(__name__)
 
 try:
     from rdkit.Chem.MolStandardize import rdMolStandardize as _std  # unified handle
@@ -137,6 +143,42 @@ def _has_explicit_Hs(m):
         return False
 
 
+def _dbg_atom_stats(m: Chem.Mol, tag: str) -> None:
+    """
+    Lightweight, fully-guarded debug helper for RDKit molecules.
+    Prints element histogram, ring count, charge sum, and explicit-H flag.
+    Never raises.
+    """
+    try:
+        if m is None:
+            print(f"[ligprep][{tag}] DEBUG_STATS: mol=None")
+            return
+        atoms = list(m.GetAtoms())
+        elems = Counter(a.GetSymbol() for a in atoms)
+        # Ring count (guarded)
+        try:
+            ri = m.GetRingInfo()
+            ring_count = ri.NumRings() if ri is not None else 0
+        except Exception:
+            ring_count = -1
+        # Formal charge sum
+        try:
+            chg_sum = sum(int(a.GetFormalCharge()) for a in atoms)
+        except Exception:
+            chg_sum = 0
+        # Explicit H presence
+        try:
+            has_exp_h = any(a.GetNumExplicitHs() > 0 for a in atoms)
+        except Exception:
+            has_exp_h = False
+        print(
+            f"[ligprep][{tag}] atoms={len(atoms)} elems={dict(elems)} "
+            f"rings={ring_count} charge_sum={chg_sum} explicitH={int(has_exp_h)}"
+        )
+    except Exception as e:
+        print(f"[ligprep][{tag}] DEBUG_STATS_ERROR: {e}")
+
+
 def collapse_sanitized_once(p: Path) -> Path:
     """Collapse repeated '.sanitized' tokens in the basename (single pass)."""
     return collapse_sanitized_path(p)
@@ -192,8 +234,7 @@ def _to_parent_mol(m: Chem.Mol) -> Optional[Chem.Mol]:
         return None
 
 
-# Intial SCAM Filter (post-cleaning)
-from rdkit.Chem import Crippen
+
 
 # Optional pKa/logD dependency: try to import, else fall back to cLogP
 try:
@@ -461,7 +502,7 @@ def rdkit_embed_sdf_to_mol2(
 
     def _embed_one(i_m):
         i, m = i_m
-        from rdkit.Chem import rdmolops as rdMolOps
+
 
         logging.info(
             "[bulkSDF] pre-standardize ligand=rdk_%07d atoms=%d charge=%+d elements=%s has_conf=%s",
@@ -692,103 +733,7 @@ def load_mol2_lenient(path, logger):
         return None
     try:
         # --- DEBUG: pre-sanitize fingerprint ---
-        def _dbg_atom_stats(mol2_path: Path, tag: str):
-            try:
-                from rdkit import Chem
 
-                m = None
-                if mol2_path.is_file():
-                    m = Chem.MolFromMol2File(
-                        str(mol2_path), sanitize=False, removeHs=False
-                    )
-                if m:
-                    try:
-                        m.UpdatePropertyCache(strict=False)
-                    except Exception:
-                        pass
-                    # Safely derive ring info without spamming errors on unsanitized mols
-                    try:
-                        _ = Chem.GetSymmSSSR(m)  # populate ring info if possible
-                        ri = m.GetRingInfo()
-                        n_rings = ri.NumRings() if ri is not None else 0
-                    except Exception:
-                        n_rings = -1
-                    try:
-                        n_atoms = m.GetNumAtoms()
-                    except Exception:
-                        n_atoms = -1
-                    try:
-                        charge = int(
-                            sum(
-                                a.GetFormalCharge() for a in (m.GetAtoms() if m else [])
-                            )
-                        )
-                    except Exception:
-                        charge = 0
-                    try:
-                        has_H = any(
-                            a.GetSymbol() == "H" for a in (m.GetAtoms() if m else [])
-                        )
-                    except Exception:
-                        has_H = False
-                    print(
-                        f"[ligprep] {tag}: atoms={n_atoms} rings={n_rings} charge_sum={charge} has_explicit_H={has_H}"
-                    )
-                else:
-                    print(f"[ligprep] {tag}: RDKit failed to parse {mol2_path.name}")
-            except Exception as e:
-                # compress noisy stack traces into a single line
-                print(f"[ligprep] {tag}: dbg_skip ({e.__class__.__name__})")
-
-                # Make valence/ring queries safe
-                try:
-                    m.UpdatePropertyCache(strict=False)
-                except Exception:
-                    pass
-
-                atoms = list(m.GetAtoms())
-                elems = Counter(a.GetSymbol() for a in atoms)
-
-                # Oxygen valence histogram (guarded)
-                o_vals = Counter()
-                for a in atoms:
-                    if a.GetSymbol() == "O":
-                        try:
-                            v = int(a.GetExplicitValence())
-                        except Exception:
-                            try:
-                                v = int(a.GetTotalValence())
-                            except Exception:
-                                v = -1
-                        o_vals[v] += 1
-
-                # Ring count (guarded)
-                try:
-                    ri = m.GetRingInfo()
-                    ring_count = ri.NumRings() if ri is not None else 0
-                except Exception as e:
-                    ring_count = -1
-                    print(
-                        f"[ligprep][{tag}] dbg: GetRingInfo failed for {src_name}: {e}"
-                    )
-
-                chg_sum = 0
-                try:
-                    chg_sum = sum(int(a.GetFormalCharge()) for a in atoms)
-                except Exception:
-                    pass
-
-                has_exp_h = any(a.GetNumExplicitHs() > 0 for a in atoms)
-
-                print(
-                    f"[ligprep][{tag}] file={src_name} atoms={len(atoms)} elems={dict(elems)} "
-                    f"O_val_hist={dict(o_vals)} rings={ring_count} charge_sum={chg_sum} explicitH={int(has_exp_h)}"
-                )
-
-            except Exception as e:
-                print(f"[ligprep][{tag}] DEBUG_STATS_ERROR: {e}")
-
-        _dbg_atom_stats(mol, "pre-sanitize")
         Chem.SanitizeMol(mol)
         _dbg_atom_stats(mol, "post-sanitize")
         ok, why = _quick_filters(mol)
@@ -1608,7 +1553,6 @@ def _bulk_prepare_pdbqts(ctx: Dict[str, Any], mol2_files: List[Path]) -> List[Pa
     ph_values = ctx.get("ph_values")
     eff_ph_values = ctx["eff_ph_values"]
     use_ph_subdirs = ctx["use_ph_subdirs"]
-    ligands_mol2_dir = ctx["ligands_mol2_dir"]
     library_out_dir = ctx["library_out_dir"]
     microstate_registry = ctx.get("microstate_registry")
     microstate_index = ctx.get("microstate_index")
@@ -1616,7 +1560,8 @@ def _bulk_prepare_pdbqts(ctx: Dict[str, Any], mol2_files: List[Path]) -> List[Pa
     microstates_dir = ctx.get("microstates_dir")
     library_name = ctx["library_name"]
     force = ctx["force"]
-    relative_output = lambda path: _relative_to_output(path, output_ligands_dir)
+    def relative_output(path: Path) -> str:
+        return _relative_to_output(path, output_ligands_dir)
 
     rename_active = ctx.get("rename_active", False)
     rename_prefix = ctx.get("rename_prefix", "")
@@ -1921,7 +1866,7 @@ def prep_ligands_with_mgltools(
         status_log=status_log,
         root_dir=root_dir,
     )
-    cfg = ctx["cfg"]
+
     unit_sdfs, only_set, test_mode_done = _bulk_select_unit_sdfs(ctx, only)
     if test_mode_done:
         return
@@ -2091,8 +2036,7 @@ def prep_ligands_with_mgltools(
 
         # Wrap/extend clean_pdb to: (1) fold legacy for this PDB, (2) expose intermediates, (3) element-fix newly extracted ligands.
         if "clean_pdb" in globals():
-            _orig_clean_pdb = clean_pdb  # type: ignore[misc]
-
+            _orig_clean_pdb = globals()["clean_pdb"]  # type: ignore[misc]
             def clean_pdb(pdb_file, output_root, logger=None):
                 pdb_file = _as_path(pdb_file)
                 pdb_id = pdb_file.stem.upper()

@@ -481,6 +481,24 @@ def run_ledock_for_stage(
         logger.info("[ledock.skip] reason=missing_receptor")
         return scores, ledock_metrics, completion_report_ledock
 
+    dock_root = (
+        Path(output_root)
+        if output_root is not None
+        else Path(paths.docked_variant_root(variant_for_ph, ph_token))
+    )
+    if output_root is not None:
+        dok_dest = dock_root
+    elif stage_key == "stage1":
+        dok_dest = dock_root / "ledock_stage1"
+    elif stage_key == "stage2":
+        dok_dest = dock_root / "ledock_stage2"
+    elif stage_key == "stage3":
+        dok_dest = dock_root / "ledock_stage3"
+    else:
+        dok_dest = dock_root / f"ledock_{stage_name}"
+    stage_dir = dok_dest
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
     ligand_paths = [Path(lig) for lig in ligands]
     if not ligand_paths:
         logger.info("[ledock.skip] reason=no_ligands")
@@ -562,31 +580,7 @@ def run_ledock_for_stage(
         fast_n_poses = int(cfg.get("LEDOCK_FAST_N_POSES", 1))
         stage_params["rmsd"] = fast_rmsd
         stage_params["n_poses"] = fast_n_poses
-        logger.info(
-            "[ledock.fast] enabled=True pdb=%s stage=%s rmsd=%.3f n_poses=%d",
-            pdb_id,
-            stage_name,
-            fast_rmsd,
-            fast_n_poses,
-        )
 
-    dock_root = (
-        Path(output_root)
-        if output_root is not None
-        else Path(paths.docked_variant_root(variant_for_ph, ph_token))
-    )
-    if output_root is not None:
-        dok_dest = dock_root
-    elif stage_key == "stage1":
-        dok_dest = dock_root / "ledock_stage1"
-    elif stage_key == "stage2":
-        dok_dest = dock_root / "ledock_stage2"
-    elif stage_key == "stage3":
-        dok_dest = dock_root / "ledock_stage3"
-    else:
-        dok_dest = dock_root / f"ledock_{stage_name}"
-    stage_dir = dok_dest
-    stage_dir.mkdir(parents=True, exist_ok=True)
 
     ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
     ledock_root = ensemble_dir / "ledock"
