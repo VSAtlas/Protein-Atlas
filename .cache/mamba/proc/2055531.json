@@ -1,1 +1,0 @@
-{"command":["exec","python","main.py","-test","-fast","--run-id","smoke_test"],"name":"tender_python","prefix":"/home/atlas/micromamba/envs/docking-env"}

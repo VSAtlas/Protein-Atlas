@@ -82,3 +82,7 @@ DeepCoy_duds/examples/
 _skeletons/
 data/
 llama.cpp/
+
+.direnv/
+.cache/
+.envrc
