@@ -16,10 +16,18 @@ from typing import Dict, List, Optional, Tuple
 
 LEDOCK_STAGE_DIRS = {"ledock_stage1", "ledock_stage2", "ledock_stage3"}
 LEDOCK_DUD_STAGE_DIRS = {"ledock_dud_stage1", "ledock_dud_stage2", "ledock_dud_stage3"}
-LEDOCK_DUD_STAGE_DIRS_LEGACY = {"dud_ledock_stage1", "dud_ledock_stage2", "dud_ledock_stage3"}
+LEDOCK_DUD_STAGE_DIRS_LEGACY = {
+    "dud_ledock_stage1",
+    "dud_ledock_stage2",
+    "dud_ledock_stage3",
+}
 DOCK6_STAGE_DIRS = {"dock6_stage1", "dock6_stage2", "dock6_stage3"}
 DOCK6_DUD_STAGE_DIRS = {"dock6_dud_stage1", "dock6_dud_stage2", "dock6_dud_stage3"}
-DOCK6_DUD_STAGE_DIRS_LEGACY = {"dud_dock6_stage1", "dud_dock6_stage2", "dud_dock6_stage3"}
+DOCK6_DUD_STAGE_DIRS_LEGACY = {
+    "dud_dock6_stage1",
+    "dud_dock6_stage2",
+    "dud_dock6_stage3",
+}
 COMPONENT = "[prep-for-scorch]"
 EXAMPLE_LIMIT = 8
 
@@ -89,22 +97,36 @@ def parse_args() -> argparse.Namespace:
 
 
 def configure_logging() -> logging.Logger:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     return logging.getLogger("prep_for_scorch")
 
 
 def resolve_roots(args: argparse.Namespace) -> Tuple[Path, Path, Path]:
-    repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parents[3]
-    docked_root = Path(args.docked_root).resolve() if args.docked_root else repo_root / "docked"
+    repo_root = (
+        Path(args.repo_root).resolve()
+        if args.repo_root
+        else Path(__file__).resolve().parents[3]
+    )
+    docked_root = (
+        Path(args.docked_root).resolve() if args.docked_root else repo_root / "docked"
+    )
     post_docked_root = (
-        Path(args.post_docked_root).resolve() if args.post_docked_root else repo_root / "post_docked"
+        Path(args.post_docked_root).resolve()
+        if args.post_docked_root
+        else repo_root / "post_docked"
     )
     return repo_root, docked_root, post_docked_root
 
 
-def _find_stage_parts(path: Path, run_root: Path, stage_dirs: set[str]) -> Optional[Tuple[str, str, str, str]]:
+def _find_stage_parts(
+    path: Path, run_root: Path, stage_dirs: set[str]
+) -> Optional[Tuple[str, str, str, str]]:
     rel_parts = path.relative_to(run_root).parts
-    stage_idx = next((idx for idx, part in enumerate(rel_parts) if part in stage_dirs), None)
+    stage_idx = next(
+        (idx for idx, part in enumerate(rel_parts) if part in stage_dirs), None
+    )
     if stage_idx is None:
         return None
     if stage_idx < 3:
@@ -190,11 +212,18 @@ def discover_tasks(
     ledock_dud_combos: set[Tuple[str, str, str]] = set()
 
     for dok_path in run_root.rglob("*.dok"):
-        stage_parts = _find_stage_parts(dok_path, run_root, LEDOCK_STAGE_DIRS | LEDOCK_DUD_STAGE_DIRS | LEDOCK_DUD_STAGE_DIRS_LEGACY)
+        stage_parts = _find_stage_parts(
+            dok_path,
+            run_root,
+            LEDOCK_STAGE_DIRS | LEDOCK_DUD_STAGE_DIRS | LEDOCK_DUD_STAGE_DIRS_LEGACY,
+        )
         if not stage_parts:
             continue
         pdb_id, variant, ph, stage_dir = stage_parts
-        if stage_dir in LEDOCK_DUD_STAGE_DIRS or stage_dir in LEDOCK_DUD_STAGE_DIRS_LEGACY:
+        if (
+            stage_dir in LEDOCK_DUD_STAGE_DIRS
+            or stage_dir in LEDOCK_DUD_STAGE_DIRS_LEGACY
+        ):
             output_dir = post_run_root / pdb_id / variant / ph / "dud_ledock_pdbqt"
             ledock_dud_tasks.append(
                 LedockTask(
@@ -222,17 +251,30 @@ def discover_tasks(
 
     for mol2_path in run_root.rglob("*.mol2"):
         stage_parts = _find_stage_parts(
-            mol2_path, run_root, DOCK6_STAGE_DIRS | DOCK6_DUD_STAGE_DIRS | DOCK6_DUD_STAGE_DIRS_LEGACY
+            mol2_path,
+            run_root,
+            DOCK6_STAGE_DIRS | DOCK6_DUD_STAGE_DIRS | DOCK6_DUD_STAGE_DIRS_LEGACY,
         )
         if not stage_parts:
             continue
         pdb_id, variant, ph, stage_dir = stage_parts
-        if stage_dir in DOCK6_DUD_STAGE_DIRS or stage_dir in DOCK6_DUD_STAGE_DIRS_LEGACY:
+        if (
+            stage_dir in DOCK6_DUD_STAGE_DIRS
+            or stage_dir in DOCK6_DUD_STAGE_DIRS_LEGACY
+        ):
             output_dir = post_run_root / pdb_id / variant / ph / "dud_dock6_pdbqt"
-            dock6_dud_tasks.append(Dock6Task(input_path=mol2_path, output_dir=output_dir, stage_dir=stage_dir))
+            dock6_dud_tasks.append(
+                Dock6Task(
+                    input_path=mol2_path, output_dir=output_dir, stage_dir=stage_dir
+                )
+            )
         else:
             output_dir = post_run_root / pdb_id / variant / ph / "dock6_pdbqt"
-            dock6_tasks.append(Dock6Task(input_path=mol2_path, output_dir=output_dir, stage_dir=stage_dir))
+            dock6_tasks.append(
+                Dock6Task(
+                    input_path=mol2_path, output_dir=output_dir, stage_dir=stage_dir
+                )
+            )
 
     dud_score_csvs = list(run_root.rglob("dud_ledock_docking_score_long.csv"))
     dud_bases_by_combo = _load_decoy_bases(dud_score_csvs, run_root, logger)
@@ -249,7 +291,11 @@ def discover_tasks(
                 ledock_dud_tasks.append(
                     LedockTask(
                         input_path=task.input_path,
-                        output_dir=post_run_root / task.pdb / task.variant / task.ph / "dud_ledock_pdbqt",
+                        output_dir=post_run_root
+                        / task.pdb
+                        / task.variant
+                        / task.ph
+                        / "dud_ledock_pdbqt",
                         stage_dir=task.stage_dir,
                         pdb=task.pdb,
                         variant=task.variant,
@@ -271,7 +317,9 @@ def discover_tasks(
 
 def _ensure_obabel(logger: logging.Logger) -> bool:
     if shutil.which("obabel") is None:
-        logger.error("%s action=preflight status=failed reason=missing_obabel", COMPONENT)
+        logger.error(
+            "%s action=preflight status=failed reason=missing_obabel", COMPONENT
+        )
         return False
     return True
 
@@ -283,7 +331,9 @@ def _validate_output(path: Path) -> bool:
         return False
 
 
-def convert_ledock(task: LedockTask, overwrite: bool, logger: logging.Logger) -> Tuple[str, Optional[str]]:
+def convert_ledock(
+    task: LedockTask, overwrite: bool, logger: logging.Logger
+) -> Tuple[str, Optional[str]]:
     output_path = task.output_dir / f"{task.input_path.stem}__{task.stage_dir}.pdbqt"
     if output_path.exists() and not overwrite:
         logger.info(
@@ -397,7 +447,9 @@ def _split_mol2_blocks(mol2_path: Path) -> List[Tuple[str, List[str]]]:
     return blocks
 
 
-def convert_dock6(task: Dock6Task, overwrite: bool, logger: logging.Logger) -> Dock6Result:
+def convert_dock6(
+    task: Dock6Task, overwrite: bool, logger: logging.Logger
+) -> Dock6Result:
     result = Dock6Result()
     task.output_dir.mkdir(parents=True, exist_ok=True)
     blocks = _split_mol2_blocks(task.input_path)
@@ -506,7 +558,9 @@ def convert_dock6(task: Dock6Task, overwrite: bool, logger: logging.Logger) -> D
 
         result.converted += 1
         if result.mappings is not None:
-            result.mappings.append(f"{task.input_path}::{out_base}.mol2 -> {output_path}")
+            result.mappings.append(
+                f"{task.input_path}::{out_base}.mol2 -> {output_path}"
+            )
         _safe_unlink(mol2_path)
 
     return result
@@ -713,7 +767,9 @@ def _run_dock6_tasks(
     return molecules, converted, skipped, failed, mappings
 
 
-def run_pose_bust_conversion(run_id: str, repo_root: Path, overwrite: bool, logger: logging.Logger) -> bool:
+def run_pose_bust_conversion(
+    run_id: str, repo_root: Path, overwrite: bool, logger: logging.Logger
+) -> bool:
     pose_bust_path = repo_root / "pose_bust.py"
     if not pose_bust_path.exists():
         logger.error(
@@ -723,7 +779,13 @@ def run_pose_bust_conversion(run_id: str, repo_root: Path, overwrite: bool, logg
         )
         return False
 
-    cmd = [sys.executable, str(pose_bust_path), "--run-id", run_id, "--skip-posebusters"]
+    cmd = [
+        sys.executable,
+        str(pose_bust_path),
+        "--run-id",
+        run_id,
+        "--skip-posebusters",
+    ]
     if overwrite:
         cmd.append("--overwrite")
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -761,7 +823,9 @@ def _cleanup_residual_mol2(post_run_root: Path, logger: logging.Logger) -> None:
     )
 
 
-def _migrate_dock6_pdbqt_names(post_run_root: Path, overwrite: bool, logger: logging.Logger) -> None:
+def _migrate_dock6_pdbqt_names(
+    post_run_root: Path, overwrite: bool, logger: logging.Logger
+) -> None:
     if not overwrite or not post_run_root.exists():
         return
 
@@ -769,10 +833,14 @@ def _migrate_dock6_pdbqt_names(post_run_root: Path, overwrite: bool, logger: log
     overwritten = 0
     skipped = 0
     failed = 0
-    for path in list(post_run_root.rglob("dock6_pdbqt/*.pdbqt")) + list(post_run_root.rglob("dud_dock6_pdbqt/*.pdbqt")):
+    for path in list(post_run_root.rglob("dock6_pdbqt/*.pdbqt")) + list(
+        post_run_root.rglob("dud_dock6_pdbqt/*.pdbqt")
+    ):
         if ".mol2__dock6_stage" not in path.name.lower():
             continue
-        new_name = re.sub(r"\.mol2(?=__dock6_stage\d+)", "", path.name, flags=re.IGNORECASE)
+        new_name = re.sub(
+            r"\.mol2(?=__dock6_stage\d+)", "", path.name, flags=re.IGNORECASE
+        )
         if new_name == path.name:
             continue
         new_path = path.with_name(new_name)
@@ -842,7 +910,9 @@ def _run_ledock_with_fallback(
     )
     if not fallback_targets:
         for task in tasks:
-            out_path = task.output_dir / f"{task.input_path.stem}__{task.stage_dir}.pdbqt"
+            out_path = (
+                task.output_dir / f"{task.input_path.stem}__{task.stage_dir}.pdbqt"
+            )
             if not _validate_output(out_path):
                 fallback_targets.append(task)
 
@@ -887,7 +957,9 @@ def _run_ledock_with_fallback(
             still_failed: List[LedockTask] = []
             converted_via_fallback = 0
             for task in fallback_targets:
-                status, mapping = convert_ledock_via_sdf(task, post_run_root, overwrite, logger)
+                status, mapping = convert_ledock_via_sdf(
+                    task, post_run_root, overwrite, logger
+                )
                 if status == "converted":
                     ledock_converted += 1
                     converted_via_fallback += 1
@@ -933,7 +1005,9 @@ def main() -> int:
 
     _migrate_dock6_pdbqt_names(post_run_root, args.overwrite, logger)
 
-    ledock_tasks, dock6_tasks, ledock_dud_tasks, dock6_dud_tasks = discover_tasks(run_root, post_run_root, logger)
+    ledock_tasks, dock6_tasks, ledock_dud_tasks, dock6_dud_tasks = discover_tasks(
+        run_root, post_run_root, logger
+    )
     if ledock_dud_tasks:
         logger.info(
             "[prep_for_scorch.dud] source=ledock found_in=%s n_in=%d out_dir=%s",
@@ -1009,7 +1083,9 @@ def main() -> int:
 
     if ledock_mappings or dock6_mappings or ledock_dud_mappings or dock6_dud_mappings:
         print("Example conversions:")
-        for mapping in ledock_mappings + dock6_mappings + ledock_dud_mappings + dock6_dud_mappings:
+        for mapping in (
+            ledock_mappings + dock6_mappings + ledock_dud_mappings + dock6_dud_mappings
+        ):
             print(f"  {mapping}")
 
     ledock_found = len(ledock_tasks)
@@ -1043,7 +1119,12 @@ def main() -> int:
         )
     )
 
-    has_failures = ledock_failed > 0 or dock6_failed > 0 or ledock_dud_failed > 0 or dock6_dud_failed > 0
+    has_failures = (
+        ledock_failed > 0
+        or dock6_failed > 0
+        or ledock_dud_failed > 0
+        or dock6_dud_failed > 0
+    )
     if has_failures:
         logger.error("%s action=summary status=failed", COMPONENT)
     else:

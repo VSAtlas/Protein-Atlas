@@ -2,16 +2,18 @@
 # path_router.py
 from __future__ import annotations
 
-import os, re, json, logging
+import json
+import logging
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
+
 # ---------------------------
 # Helpers
 # ---------------------------
-from typing import Iterable  # already imported Optional above; Iterable is harmless if unused elsewhere
-
 def _canon(val: Optional[str]) -> str:
     """
     Canonicalize a string for loose comparisons:
@@ -24,6 +26,7 @@ def _canon(val: Optional[str]) -> str:
     s = str(val).lower()
     s = s.replace(" ", "").replace("-", "").replace("_", "")
     return "".join(ch for ch in s if ch.isalnum())
+
 
 def expand_variants(mode: Optional[str]) -> list[Optional[str]]:
     """
@@ -82,10 +85,10 @@ def _norm_variant(variant: Optional[str]) -> Optional[str]:
     raise ValueError(f"variant must be APO|HOLO or None, got {variant!r}")
 
 
-
 # ---------------------------
 # pH  Helpers
 # ---------------------------
+
 
 def _ph_manifest_candidates(pdb_id: str, variant: Optional[str]) -> list[Path]:
     """
@@ -109,6 +112,7 @@ def _ph_manifest_candidates(pdb_id: str, variant: Optional[str]) -> list[Path]:
 # pH ensemble public helper
 # ---------------------------
 
+
 def ph_ensemble_dir(
     pdb_id: str,
     variant: Optional[str] = None,
@@ -125,14 +129,21 @@ def ph_ensemble_dir(
     base = roots.processed / token
     v = _norm_variant(variant)
     logger = logging.getLogger("path_router")
-    logger.info("[router.debug] ph_ensemble_dir variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
+    logger.info(
+        "[router.debug] ph_ensemble_dir variant_in=%r norm=%r legacy_flag=%s",
+        variant,
+        v,
+        legacy,
+    )
     if v and not legacy:
         base = base / v
     return base / "receptor" / "ph_ensemble"
 
+
 # ---------------------------
 # Router roots & stateless helpers
 # ---------------------------
+
 
 @dataclass(frozen=True)
 class RouterRoots:
@@ -195,19 +206,27 @@ def _expand_tokens(values: Dict[str, str]) -> Dict[str, str]:
 
 
 def _load_router_roots() -> RouterRoots:
-    cfg = _read_basic_config(_default_config_path())
-    for key in ("OVERALL_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
-        env_val = os.environ.get(key)
-        if env_val:
-            cfg[key] = env_val
+    cfg_path = _default_config_path()
+    try:
+        from input_and_export_functions import load_config
+
+        expanded = load_config(config_path=str(cfg_path), base_dir=cfg_path.parent)
+    except Exception:
+        cfg = _read_basic_config(cfg_path)
+        for key in ("OVERALL_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
+            env_val = os.environ.get(key)
+            if env_val:
+                cfg[key] = env_val
+        expanded = _expand_tokens(cfg)
     run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
     cfg_env = os.environ.get("CONFIGS_DIR")
     if cfg_env:
-        cfg["CONFIGS_DIR"] = cfg_env
-    expanded = _expand_tokens(cfg)
+        expanded["CONFIGS_DIR"] = cfg_env
 
     over_raw = expanded.get("OVERALL_DIR")
-    overall = Path(over_raw).expanduser() if over_raw else Path(__file__).resolve().parent
+    overall = (
+        Path(over_raw).expanduser() if over_raw else Path(__file__).resolve().parent
+    )
 
     out_raw = expanded.get("OUTPUT_DIR")
     processed = Path(out_raw).expanduser() if out_raw else overall / "processed_pdbs"
@@ -233,16 +252,22 @@ def _load_router_roots() -> RouterRoots:
             f" CONFIGS_DIR={cfg_raw!r}"
         )
 
-    return RouterRoots(overall=overall, processed=processed, docked=docked, configs=configs)
+    return RouterRoots(
+        overall=overall, processed=processed, docked=docked, configs=configs
+    )
 
 
-def _set_router_roots(overall: Path, processed: Path, docked: Path, configs: Optional[Path] = None) -> None:
+def _set_router_roots(
+    overall: Path, processed: Path, docked: Path, configs: Optional[Path] = None
+) -> None:
     global _ROUTER_ROOTS
     _ROUTER_ROOTS = RouterRoots(
         overall=Path(overall).expanduser(),
         processed=Path(processed).expanduser(),
         docked=Path(docked).expanduser(),
-        configs=Path(configs).expanduser() if configs else Path(overall).expanduser() / "configs",
+        configs=Path(configs).expanduser()
+        if configs
+        else Path(overall).expanduser() / "configs",
     )
 
 
@@ -263,6 +288,7 @@ def _ensure_router_roots() -> RouterRoots:
 # Public stateless path helpers
 # ---------------------------
 
+
 def receptor_dir(
     pdb_id: str,
     variant: Optional[str] = None,
@@ -274,7 +300,9 @@ def receptor_dir(
     base = roots.processed / token
     v = _norm_variant(variant)
     logger = logging.getLogger("path_router")
-    logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
+    logger.info(
+        "[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy
+    )
     if v:
         base = base / v
     dir_path = base / "receptor"
@@ -304,7 +332,9 @@ def variant_root(pdb_id: str, variant: Optional[str] = None) -> Path:
     if v:
         base = base / v
     logger = logging.getLogger("path_router")
-    logger.info("[router.debug] kind=variant_root variant=%s path=%s", v or "None", base)
+    logger.info(
+        "[router.debug] kind=variant_root variant=%s path=%s", v or "None", base
+    )
     return base
 
 
@@ -359,10 +389,14 @@ def docked_dir(
     base = roots.docked / token
     logger = logging.getLogger("path_router")
     if legacy and not ph_tag:
-        logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, None, legacy)
+        logger.info(
+            "[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, None, legacy
+        )
         return base
     v = _norm_variant(variant)
-    logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
+    logger.info(
+        "[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy
+    )
     if v:
         base = base / v
     if ph_tag:
@@ -390,7 +424,9 @@ def config_dir(
     base = roots.configs / str(run_id) / token
     v = _norm_variant(variant)
     logger = logging.getLogger("path_router")
-    logger.info("[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy)
+    logger.info(
+        "[router.debug] variant_in=%r norm=%r legacy_flag=%s", variant, v, legacy
+    )
     if v:
         base = base / v
     if ph_tag:
@@ -407,14 +443,17 @@ def config_file(
     name: str = "vina.json",
     legacy: bool = False,
 ) -> Path:
-    return config_dir(
-        run_id,
-        pdb_id,
-        stage,
-        variant=variant,
-        ph_tag=ph_tag,
-        legacy=legacy,
-    ) / name
+    return (
+        config_dir(
+            run_id,
+            pdb_id,
+            stage,
+            variant=variant,
+            ph_tag=ph_tag,
+            legacy=legacy,
+        )
+        / name
+    )
 
 
 # --- full replacement for load_ph_tags() ---
@@ -461,7 +500,7 @@ def load_ph_tags(pdb_id: str, variant: Optional[str] = None) -> list[str]:
                 if not receptor_path:
                     continue
                 stem = Path(str(receptor_path)).stem
-                label = stem[len(prefix):] if stem.startswith(prefix) else stem
+                label = stem[len(prefix) :] if stem.startswith(prefix) else stem
 
             if label in seen:
                 continue
@@ -469,11 +508,12 @@ def load_ph_tags(pdb_id: str, variant: Optional[str] = None) -> list[str]:
             tags.append(label)
 
         if tags:
-            logger.info("[router.ph] using manifest=%s tags=%s", manifest, ",".join(tags))
+            logger.info(
+                "[router.ph] using manifest=%s tags=%s", manifest, ",".join(tags)
+            )
             break
 
     return tags
-
 
 
 def print_pathmap(
@@ -499,6 +539,7 @@ def print_pathmap(
     dock_dir = docked_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=legacy)
     print(f"docked_dir={dock_dir}")
 
+
 # ---------------------------
 # Core dataclass
 # ---------------------------
@@ -513,32 +554,36 @@ class Paths:
     """
 
     # Identity
-    pdb_id: str                 # e.g., "1T46" (uppercased)
-    pdb_file: str               # e.g., "1T46.pdb" (as provided)
+    pdb_id: str  # e.g., "1T46" (uppercased)
+    pdb_file: str  # e.g., "1T46.pdb" (as provided)
 
     # Roots (from cfg)
-    over_root: Path             # OVERALL_DIR
-    input_root: Path            # INPUT_DIR  (input_pdbs/)
-    processed_root: Path        # OUTPUT_DIR (processed_pdbs/)
-    docked_root: Path           # DOCKED_DIR (docked/[RUN_ID]/)
-    prepped_root: Path          # PREPPED_LIGANDS_DIR / OUTPUT_LIGANDS_DIR / PREPPED_LIGANDS_ROOT
-    ligands_mol2_root: Path     # LIGANDS_MOL2_DIR
-    configs_root: Path          # default OVERALL_DIR/configs (unless CONFIGS_DIR supplied)
+    over_root: Path  # OVERALL_DIR
+    input_root: Path  # INPUT_DIR  (input_pdbs/)
+    processed_root: Path  # OUTPUT_DIR (processed_pdbs/)
+    docked_root: Path  # DOCKED_DIR (docked/[RUN_ID]/)
+    prepped_root: (
+        Path  # PREPPED_LIGANDS_DIR / OUTPUT_LIGANDS_DIR / PREPPED_LIGANDS_ROOT
+    )
+    ligands_mol2_root: Path  # LIGANDS_MOL2_DIR
+    configs_root: Path  # default OVERALL_DIR/configs (unless CONFIGS_DIR supplied)
 
     # Canonical per-PDB roots (variant-agnostic)
-    root_pdb_dir: Path          # processed_pdbs/<PDB>/
+    root_pdb_dir: Path  # processed_pdbs/<PDB>/
 
     # Shared subfolders under processed_pdbs/<PDB>/
-    raw_dir: Path               # processed_pdbs/<PDB>/raw/          # copies/ingest
-    ligands_raw_dir: Path       # processed_pdbs/<PDB>/ligands_raw/  # extracted crystal ligands (*.pdb)
-    nolig_dir: Path             # processed_pdbs/<PDB>/nolig/        # <PDB>_nolig.pdb intermediate
-    work_dir: Path              # processed_pdbs/<PDB>/work/         # scratch & intermediates
+    raw_dir: Path  # processed_pdbs/<PDB>/raw/          # copies/ingest
+    ligands_raw_dir: (
+        Path  # processed_pdbs/<PDB>/ligands_raw/  # extracted crystal ligands (*.pdb)
+    )
+    nolig_dir: Path  # processed_pdbs/<PDB>/nolig/        # <PDB>_nolig.pdb intermediate
+    work_dir: Path  # processed_pdbs/<PDB>/work/         # scratch & intermediates
 
     # Inputs
-    input_pdb_path: Path        # input_pdbs/<pdb_file>              # source PDB to process
+    input_pdb_path: Path  # input_pdbs/<pdb_file>              # source PDB to process
 
     # Shared expected filenames (variant-agnostic)
-    nolig_pdb_path: Path        # processed_pdbs/<PDB>/nolig/<PDB>_nolig.pdb
+    nolig_pdb_path: Path  # processed_pdbs/<PDB>/nolig/<PDB>_nolig.pdb
 
     # ---------- Variant-aware receptor paths (back-compat with variant=None) ----------
     def receptor_dir(self, variant: Optional[str]) -> Path:
@@ -562,7 +607,9 @@ class Paths:
         """
         return self.receptor_dir(variant) / f"{self.pdb_id}_cleaned.pdb"
 
-    def receptor_pdbqt(self, variant: Optional[str], ph_token: Optional[str] = None) -> Path:
+    def receptor_pdbqt(
+        self, variant: Optional[str], ph_token: Optional[str] = None
+    ) -> Path:
         """
         File (no pH):            <receptor_dir>/<PDB>.pdbqt
         File (with pH token):    <receptor_dir>/ph_ensemble/<PDB>_<ph_token>.pdbqt
@@ -663,7 +710,9 @@ class Paths:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def docked_variant_root(self, variant: Optional[str], ph_label: Optional[str] = None) -> Path:
+    def docked_variant_root(
+        self, variant: Optional[str], ph_label: Optional[str] = None
+    ) -> Path:
         """
         If variant in {APO,HOLO}:
           Dir: docked/<RUN_ID>/<PDB>/<VARIANT>/
@@ -671,7 +720,6 @@ class Paths:
         If variant is None (legacy):
           Dir: docked/<RUN_ID>/<PDB>/         (stages under top-level; back-compat)
         """
-        v = _norm_variant(variant)
         base = docked_dir(self.pdb_id, variant=variant, ph_tag=ph_label)
         base.mkdir(parents=True, exist_ok=True)
         return base
@@ -718,6 +766,7 @@ class Paths:
         d = d / stage
         d.mkdir(parents=True, exist_ok=True)
         return d
+
     def expand_variants(self, mode: Optional[str]) -> list[Optional[str]]:
         # Delegate to the module-level function to keep a single source of truth
         return expand_variants(mode)
@@ -741,13 +790,13 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
     pdb_id = str(base_id).upper()
     # Normalize here too (idempotent if already clean)
     raw_id = str(base_id)
-    pdb_id = re.sub(r'(?i)(_nolig(_cleaned)?|_cleaned)$', '', raw_id).upper()
+    pdb_id = re.sub(r"(?i)(_nolig(_cleaned)?|_cleaned)$", "", raw_id).upper()
 
     # Required roots
     over_root = Path(cfg["OVERALL_DIR"])
     input_root = Path(cfg["INPUT_DIR"])
-    processed_root = Path(cfg["OUTPUT_DIR"])      # processed_pdbs/
-    docked_root = Path(cfg["DOCKED_DIR"])         # docked/
+    processed_root = Path(cfg["OUTPUT_DIR"])  # processed_pdbs/
+    docked_root = Path(cfg["DOCKED_DIR"])  # docked/
     run_id = str(cfg.get("RUN_ID") or "").strip()
     if run_id:
         os.environ["ATLAS_RUN_ID"] = run_id
@@ -769,18 +818,20 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
 
     # Canonical per-PDB root and shared subfolders
     root_pdb_dir = processed_root / pdb_id  # processed_pdbs/<PDB>/
-    raw_dir      = root_pdb_dir / "raw"            # processed_pdbs/<PDB>/raw/
-    lig_raw_dir  = root_pdb_dir / "ligands_raw"    # processed_pdbs/<PDB>/ligands_raw/
-    nolig_dir    = root_pdb_dir / "nolig"          # processed_pdbs/<PDB>/nolig/
-    work_dir     = root_pdb_dir / "work"           # processed_pdbs/<PDB>/work/
+    raw_dir = root_pdb_dir / "raw"  # processed_pdbs/<PDB>/raw/
+    lig_raw_dir = root_pdb_dir / "ligands_raw"  # processed_pdbs/<PDB>/ligands_raw/
+    nolig_dir = root_pdb_dir / "nolig"  # processed_pdbs/<PDB>/nolig/
+    work_dir = root_pdb_dir / "work"  # processed_pdbs/<PDB>/work/
 
     # Ensure shared subfolders exist
     for d in (root_pdb_dir, raw_dir, lig_raw_dir, nolig_dir, work_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     # Inputs / shared outputs
-    input_pdb_path = input_root / pdb_file                     # input_pdbs/<pdb_file>
-    nolig_pdb_path = nolig_dir / f"{pdb_id}_nolig.pdb"         # processed_pdbs/<PDB>/nolig/<PDB>_nolig.pdb
+    input_pdb_path = input_root / pdb_file  # input_pdbs/<pdb_file>
+    nolig_pdb_path = (
+        nolig_dir / f"{pdb_id}_nolig.pdb"
+    )  # processed_pdbs/<PDB>/nolig/<PDB>_nolig.pdb
 
     _set_router_roots(over_root, processed_root, docked_root, configs_root)
 
@@ -806,9 +857,18 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
 
 if __name__ == "__main__":
     scenarios = [
-        ("pH ON, apo/HOLO OFF", dict(pdb_id="3CS9", variant=None, ph_tag="pH6_0", legacy=False)),
-        ("apo/HOLO ON, pH ON", dict(pdb_id="3CS9", variant="APO", ph_tag="pH6_0+8_0", legacy=False)),
-        ("apo/HOLO ON, pH OFF", dict(pdb_id="3CS9", variant="HOLO", ph_tag=None, legacy=False)),
+        (
+            "pH ON, apo/HOLO OFF",
+            dict(pdb_id="3CS9", variant=None, ph_tag="pH6_0", legacy=False),
+        ),
+        (
+            "apo/HOLO ON, pH ON",
+            dict(pdb_id="3CS9", variant="APO", ph_tag="pH6_0+8_0", legacy=False),
+        ),
+        (
+            "apo/HOLO ON, pH OFF",
+            dict(pdb_id="3CS9", variant="HOLO", ph_tag=None, legacy=False),
+        ),
         ("legacy", dict(pdb_id="3CS9", variant=None, ph_tag=None, legacy=True)),
     ]
     for label, params in scenarios:

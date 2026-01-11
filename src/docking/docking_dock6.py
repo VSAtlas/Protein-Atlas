@@ -185,7 +185,9 @@ def _build_multi_mol2_for_stage(
 
         blocks = text.split("@<TRIPOS>MOLECULE")
         if len(blocks) < 2:
-            logger.warning("[dock6.mol2.skip] ligand=%s reason=no_molecule_block", mol2_path)
+            logger.warning(
+                "[dock6.mol2.skip] ligand=%s reason=no_molecule_block", mol2_path
+            )
             continue
         # Drop any prefix before first molecule
         for block in blocks[1:]:
@@ -351,7 +353,9 @@ def run_dock6_for_stage(
         return scores, metrics
 
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     variant_for_ph = _variant_for_ph(variant_token, legacy_mode)
     ph_token = _normalize_ph_label(ph_label)
 
@@ -365,7 +369,13 @@ def run_dock6_for_stage(
     dock6_root = ensemble_dir / "dock6"
     rec_ms = dock6_root / "rec.ms"
     if not rec_ms.exists() or rec_ms.stat().st_size == 0:
-        logger.warning("[dock6.skip] reason=site_prep_missing pdb=%s variant=%s ph=%s dir=%s", pdb_id, variant_for_ph or "HOLO", ph_token or "base", dock6_root)
+        logger.warning(
+            "[dock6.skip] reason=site_prep_missing pdb=%s variant=%s ph=%s dir=%s",
+            pdb_id,
+            variant_for_ph or "HOLO",
+            ph_token or "base",
+            dock6_root,
+        )
         return scores, metrics
 
     ligand_pairs: List[Tuple[Path, Path]] = []
@@ -395,7 +405,12 @@ def run_dock6_for_stage(
     grid_prefix = stage_preset["grid_prefix"]
     grid_nrg = dock6_root / f"{grid_prefix}.nrg"
     if not grid_nrg.exists() or grid_nrg.stat().st_size == 0:
-        logger.warning("[dock6.skip] reason=missing_grid pdb=%s prefix=%s dir=%s", pdb_id, grid_prefix, dock6_root)
+        logger.warning(
+            "[dock6.skip] reason=missing_grid pdb=%s prefix=%s dir=%s",
+            pdb_id,
+            grid_prefix,
+            dock6_root,
+        )
         return scores, metrics
     prefix = f"dock6_{stage_key}"
     ligand_items = list(ligand_pairs)
@@ -610,7 +625,11 @@ def run_dock6_for_stage(
 
     scores = {lig: rec.get("grid_score") for lig, rec in metrics.items()}
 
-    dock_root = Path(output_root) if output_root is not None else Path(paths.docked_variant_root(variant_for_ph, ph_token))
+    dock_root = (
+        Path(output_root)
+        if output_root is not None
+        else Path(paths.docked_variant_root(variant_for_ph, ph_token))
+    )
     if output_root is not None:
         dock_dest = dock_root
     elif stage_key == "stage1":
@@ -696,7 +715,9 @@ def write_dock6_scores_csv(
                     [
                         stage_name,
                         rec.get("mol2_name") or Path(lig).name,
-                        f"{rec.get('grid_score'):.2f}" if isinstance(rec.get("grid_score"), (int, float)) else "",
+                        f"{rec.get('grid_score'):.2f}"
+                        if isinstance(rec.get("grid_score"), (int, float))
+                        else "",
                         rec.get("n_poses", ""),
                     ]
                 )

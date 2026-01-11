@@ -20,6 +20,7 @@ if "prep_ligands" not in sys.modules:
     sys.modules["prep_ligands"] = pkg
 
 from activesite import fix_element_columns_in_file  # noqa: E402,F401
+
 try:
     from prep_ligands.prep_ligands_bulk import (  # noqa: E402,F401
         _audit_protonation_metrics,
@@ -70,17 +71,13 @@ def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str
     if v:
         return v
     try:
-        # Move up from src/prep_ligands/ to repo root
+        from input_and_export_functions import load_config
+
         root = Path(__file__).resolve().parents[2]
-        cfg = root / "config.txt"
-        if cfg.is_file():
-            for line in cfg.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, val = line.split("=", 1)
-                if k.strip() == key:
-                    return val.strip()
+        cfg = load_config(config_path=str(root / "config.txt"), base_dir=root)
+        val = cfg.get(key)
+        if val not in (None, ""):
+            return str(val)
     except Exception:
         pass
     return default
@@ -148,8 +145,14 @@ def fold_legacy_layout(pdb_id: str, output_root) -> None:
                 _merge_dir(src, dst)
 
         candidates_files = [
-            (root / f"{pdb_id}_nolig.pdb", base / "nolig" / f"{pdb_idU}_nolig_phenix_clean.pdb"),
-            (root / f"{pdb_id.lower()}_nolig.pdb", base / "nolig" / f"{pdb_idU}_nolig_phenix_clean.pdb"),
+            (
+                root / f"{pdb_id}_nolig.pdb",
+                base / "nolig" / f"{pdb_idU}_nolig_phenix_clean.pdb",
+            ),
+            (
+                root / f"{pdb_id.lower()}_nolig.pdb",
+                base / "nolig" / f"{pdb_idU}_nolig_phenix_clean.pdb",
+            ),
         ]
         for src, dst in candidates_files:
             if src.exists() and not dst.exists():
@@ -215,7 +218,9 @@ __all__ = [
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Bulk ligand preparation (SDF→MOL2→PDBQT)")
+    parser = argparse.ArgumentParser(
+        description="Bulk ligand preparation (SDF→MOL2→PDBQT)"
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -253,16 +258,42 @@ if __name__ == "__main__":
         action="store_true",
         help="Verbose test mode for extracted ligands (mirrors EXTRACT_TEST=1).",
     )
-    parser.add_argument("--in-sdf", help="Path to a single SDF file (process only this file)")
-    parser.add_argument("--in-sdf-dir", help="Directory of bulk SDFs (replaces default extracted-SDF root)")
-    parser.add_argument("--in-pdb-dir", help="Directory of extracted ligand PDBs (crystal-safe path)")
+    parser.add_argument(
+        "--in-sdf", help="Path to a single SDF file (process only this file)"
+    )
+    parser.add_argument(
+        "--in-sdf-dir",
+        help="Directory of bulk SDFs (replaces default extracted-SDF root)",
+    )
+    parser.add_argument(
+        "--in-pdb-dir", help="Directory of extracted ligand PDBs (crystal-safe path)"
+    )
     parser.add_argument("--mol2-dir", help="Directory for MOL2 intermediates")
-    parser.add_argument("--out-pdbqt-dir", help="Destination directory for final PDBQTs")
-    parser.add_argument("--status-log", help="Basename or full path for the TSV status log")
-    parser.add_argument("--rename-prefix", default="", help="Force output ligand stem prefix (e.g., decoys_).")
-    parser.add_argument("--rename-pad", type=int, default=5, help="Zero-pad width for rename index.")
-    parser.add_argument("--rename-start", type=int, default=1, help="Starting index for renamed ligands.")
-    parser.add_argument("--rename-force", action="store_true", help="Always rename ligands, ignoring input names.")
+    parser.add_argument(
+        "--out-pdbqt-dir", help="Destination directory for final PDBQTs"
+    )
+    parser.add_argument(
+        "--status-log", help="Basename or full path for the TSV status log"
+    )
+    parser.add_argument(
+        "--rename-prefix",
+        default="",
+        help="Force output ligand stem prefix (e.g., decoys_).",
+    )
+    parser.add_argument(
+        "--rename-pad", type=int, default=5, help="Zero-pad width for rename index."
+    )
+    parser.add_argument(
+        "--rename-start",
+        type=int,
+        default=1,
+        help="Starting index for renamed ligands.",
+    )
+    parser.add_argument(
+        "--rename-force",
+        action="store_true",
+        help="Always rename ligands, ignoring input names.",
+    )
 
     args = parser.parse_args()
 
@@ -292,7 +323,9 @@ if __name__ == "__main__":
         f"status_log={os.environ.get('LIGPREP_STATUS_LOG', 'None')}",
     )
 
-    only_set = _collect_only_from_env_and_cli(args.only if hasattr(args, "only") else None)
+    only_set = _collect_only_from_env_and_cli(
+        args.only if hasattr(args, "only") else None
+    )
 
     if getattr(args, "extracted", False):
         if getattr(args, "only_extracted", None):
@@ -305,7 +338,9 @@ if __name__ == "__main__":
         ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]).resolve()
         output_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]).resolve()
 
-        prep_ligands_from_pdb(ligand_extracted_dir, ligands_mol2_dir, output_ligands_dir)
+        prep_ligands_from_pdb(
+            ligand_extracted_dir, ligands_mol2_dir, output_ligands_dir
+        )
         sys.exit(0)
 
     if args.migrate_legacy:

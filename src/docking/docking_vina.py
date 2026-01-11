@@ -36,7 +36,9 @@ def emit_vina_config(
 ):
     make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
 
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
     legacy_mode = bool(legacy)
 
@@ -262,7 +264,9 @@ def _pose_path_for(
     """Build the expected pose path for a ligand at a given stage."""
     paths = make_paths(csv_cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     ph_token = (ph_label or "").strip() or None
-    variant_token = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+    variant_token = (
+        variant or os.environ.get("APO_HOLO_VARIANT", "") or ""
+    ).strip().upper() or None
     stage_dir = paths.docked_stage_dir(variant_token, stage_name, ph_token)
     return str(stage_dir / f"{Path(lig_path).stem}_{stage_name}.pdbqt")
 
@@ -283,7 +287,9 @@ def write_scores_csv(
 
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     ph_token = (ph_label or "").strip() or None
-    variant_env = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_env = (
+        (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    )
     variant_token = variant_env or None
     dock_dir = paths.docked_variant_root(variant_token, ph_token)
     dock_dir.mkdir(parents=True, exist_ok=True)
@@ -304,7 +310,9 @@ def write_scores_csv(
             if rec.get("valid", False):
                 flat[stage_name][lig_key] = s if s is not None else ""
             else:
-                flat[stage_name][lig_key] = f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)"
+                flat[stage_name][lig_key] = (
+                    f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)"
+                )
     write_score_summary_to_csv(
         flat,
         output_path=csv_out_wide,
@@ -318,7 +326,19 @@ def write_scores_csv(
         header = ["run_id"]
         if include_variant:
             header.append("variant")
-        header.extend(["stage", "ligand", "score", "valid", "reason", "heavy_atoms", "le", "self_rmsd", "pains_flag"])
+        header.extend(
+            [
+                "stage",
+                "ligand",
+                "score",
+                "valid",
+                "reason",
+                "heavy_atoms",
+                "le",
+                "self_rmsd",
+                "pains_flag",
+            ]
+        )
         writer.writerow(header)
 
         for stage_name, stage_map in score_history.items():
@@ -343,7 +363,11 @@ def write_scores_csv(
                 if os.path.exists(pose_path):
                     try:
                         sr = compute_self_rmsd(pose_path)
-                        sr_str = f"{sr:.2f}" if isinstance(sr, (int, float)) and _math.isfinite(sr) else ""
+                        sr_str = (
+                            f"{sr:.2f}"
+                            if isinstance(sr, (int, float)) and _math.isfinite(sr)
+                            else ""
+                        )
                     except Exception:
                         sr_str = ""
                 else:
@@ -357,7 +381,19 @@ def write_scores_csv(
                 row = [run_id_value]
                 if include_variant:
                     row.append(variant_value)
-                row.extend([stage_name, lig_key, score_str, int(valid), reason_str, ha_str, le_str, sr_str, int(pains_hit)])
+                row.extend(
+                    [
+                        stage_name,
+                        lig_key,
+                        score_str,
+                        int(valid),
+                        reason_str,
+                        ha_str,
+                        le_str,
+                        sr_str,
+                        int(pains_hit),
+                    ]
+                )
                 writer.writerow(row)
 
     return csv_out_wide

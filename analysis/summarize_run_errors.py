@@ -2,6 +2,7 @@
 """
 Summarize run-scoped errors for a specific run_id.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -374,9 +375,7 @@ def summarize_files(
             raw_hits += 1
             category = categorize_snippet(snippet)
             signature = normalize_signature(snippet)
-            entry = signatures.setdefault(
-                signature, {"count": 0, "examples": []}
-            )
+            entry = signatures.setdefault(signature, {"count": 0, "examples": []})
             entry["count"] = int(entry["count"]) + 1
             if len(entry["examples"]) < max_examples:
                 entry["examples"].append(

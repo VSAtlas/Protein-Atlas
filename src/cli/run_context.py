@@ -5,7 +5,7 @@ import datetime
 import json
 import logging
 import os
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Mapping
 
 from run_manifest import load_run_manifest
 from .cli_utils import _cli_val
@@ -29,13 +29,16 @@ def _prepare_run_logfile(run_id: str) -> str:
 
 class ConfigDict(dict):
     __slots__ = ()
+
     def __getattr__(self, key):
         try:
             return self[key]
         except KeyError as exc:
             raise AttributeError(key) from exc
+
     def __setattr__(self, key, value):
         self[key] = value
+
     def copy(self):
         return ConfigDict(super().copy())
 

@@ -82,7 +82,11 @@ def test_merge_deepcoy_outputs_deduplicates_and_orders(tmp_path):
     )
 
     assert produced == 3
-    assert merged_path.read_text().splitlines() == ["D1\tchunk0", "D2\tchunk0", "D3\tchunk1"]
+    assert merged_path.read_text().splitlines() == [
+        "D1\tchunk0",
+        "D2\tchunk0",
+        "D3\tchunk1",
+    ]
     assert not chunk_output_root.exists()
     assert not chunk_artifact_root.exists()
 

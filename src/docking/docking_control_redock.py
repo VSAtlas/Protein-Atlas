@@ -13,13 +13,19 @@ from .docking_controls import select_center_via_control_redock
 from run_manifest import emit_pocket_detection_event, PocketDetectionEvent
 from druggability_orchestrator import decide_engine_policy
 from .docking_gnina import should_run_gnina_for_target, run_gnina_for_stage
-from .docking_ledock import should_run_ledock_for_target, ensure_ledock_receptor, run_ledock_for_stage
+from .docking_ledock import (
+    should_run_ledock_for_target,
+    ensure_ledock_receptor,
+    run_ledock_for_stage,
+)
 from .docking_dock6 import should_run_dock6_for_target, run_dock6_for_stage
 from prep_docking.prep_for_ledock import ensure_mol2_for_ledock
 import prep_docking.prep_dock6 as prep_dock6
 
 
-def _collect_control_pdbqts(paths: Paths, control_stems: List[str], cfg: Dict) -> List[Path]:
+def _collect_control_pdbqts(
+    paths: Paths, control_stems: List[str], cfg: Dict
+) -> List[Path]:
     stems_lower = {s.lower() for s in control_stems if s}
     if not stems_lower:
         return []
@@ -62,7 +68,10 @@ def _control_centers_by_ph(
 
     ph_tags: List[Optional[str]]
     if bool(cfg.get("PH_ENSEMBLE", False)):
-        ph_tags = [str(tag).strip() for tag in (load_ph_tags(paths.pdb_id, variant=variant_token) or [])]
+        ph_tags = [
+            str(tag).strip()
+            for tag in (load_ph_tags(paths.pdb_id, variant=variant_token) or [])
+        ]
         ph_tags = [tag for tag in ph_tags if tag]
         if not ph_tags:
             ph_tags = [None]
@@ -155,7 +164,7 @@ def _control_centers_by_ph(
 
         try:
             # Note: _cache_active_site is internal to docking.py and not extracted here.
-            # If we need to call it, we should probably pass a callback or accept that 
+            # If we need to call it, we should probably pass a callback or accept that
             # this side-effect (caching active site for DOCK6 reuse later) is handled elsewhere.
             # However, docking.py's version of _control_centers_by_ph called _cache_active_site.
             # Since _cache_active_site is not in the list of moved definitions, and it modifies 'cfg',
@@ -163,7 +172,7 @@ def _control_centers_by_ph(
             # The original code:
             # _cache_active_site(cfg, paths.pdb_id, variant_token, ph_label, center, box_size, logger)
             # This function just updates cfg["_ACTIVE_SITE_CACHE"]. We can replicate the logic here safely.
-            
+
             cache = cfg.setdefault("_ACTIVE_SITE_CACHE", {})
             cache_key = (
                 str(paths.pdb_id).upper(),
@@ -175,12 +184,19 @@ def _control_centers_by_ph(
                 tuple(float(x) for x in box_size),
             )
         except Exception:
-            logger.debug("[active-site.cache.store.skip] pdb=%s variant=%s ph=%s", paths.pdb_id, variant_token, ph_print)
+            logger.debug(
+                "[active-site.cache.store.skip] pdb=%s variant=%s ph=%s",
+                paths.pdb_id,
+                variant_token,
+                ph_print,
+            )
 
         try:
             c_print = tuple(round(float(x), 3) for x in center)
             b_print = tuple(round(float(x), 1) for x in box_size)
-            print(f"[CENTER] ph={ph_print} source={source} center={c_print} box={b_print}")
+            print(
+                f"[CENTER] ph={ph_print} source={source} center={c_print} box={b_print}"
+            )
         except Exception:
             pass
 
@@ -260,7 +276,9 @@ def run_control_docking_multi_engine(
 ) -> None:
     control_paths = [Path(p) for p in control_ligands]
     if not control_paths:
-        logger.warning("[control-multi] no_control_ligands_found; skipping multi-engine control docking")
+        logger.warning(
+            "[control-multi] no_control_ligands_found; skipping multi-engine control docking"
+        )
         return
 
     stage_info = {
@@ -281,11 +299,20 @@ def run_control_docking_multi_engine(
             box_size = box_by_ph.get(None) if box_by_ph else None
         ph_print = ph_label or "base"
         if center is None or box_size is None:
-            logger.warning("[control-multi] skip ph=%s reason=missing_center_or_box", ph_print)
+            logger.warning(
+                "[control-multi] skip ph=%s reason=missing_center_or_box", ph_print
+            )
             continue
 
-        rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
-        ctrl_root = docked_dir(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode) / "ctrl_redock"
+        rec_path = receptor_file(
+            paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode
+        )
+        ctrl_root = (
+            docked_dir(
+                paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode
+            )
+            / "ctrl_redock"
+        )
         ctrl_root.mkdir(parents=True, exist_ok=True)
         results: List[Dict[str, object]] = []
 
@@ -331,14 +358,18 @@ def run_control_docking_multi_engine(
         if any(engine in ("ledock", "dock6") for engine in engines):
             try:
                 ensure_mol2_for_ledock(cfg, [str(p) for p in control_paths], logger)
-                logger.info("[control-multi.prep] ledock_mol2_prep n=%d", len(control_paths))
+                logger.info(
+                    "[control-multi.prep] ledock_mol2_prep n=%d", len(control_paths)
+                )
             except Exception as exc:
                 logger.warning("[control-multi.prep] ledock_mol2_failed reason=%s", exc)
 
         ledock_receptor: Optional[Path] = None
         if "ledock" in engines:
             try:
-                ledock_receptor = ensure_ledock_receptor(cfg, paths.pdb_id, variant_token, ph_label, logger)
+                ledock_receptor = ensure_ledock_receptor(
+                    cfg, paths.pdb_id, variant_token, ph_label, logger
+                )
             except Exception as exc:
                 logger.warning(
                     "[control-ledock] prep_failed pdb=%s variant=%s ph=%s reason=%s",
@@ -400,7 +431,9 @@ def run_control_docking_multi_engine(
                     ph_token=ph_label,
                     legacy=legacy_mode,
                 )
-                _, score_val = run_docking_task(vina_exe, str(conf_path), str(lig_path), str(out_path))
+                _, score_val = run_docking_task(
+                    vina_exe, str(conf_path), str(lig_path), str(out_path)
+                )
                 score = score_val if isinstance(score_val, (int, float)) else None
                 src_pose = Path(out_path)
                 if src_pose.exists():
@@ -408,11 +441,17 @@ def run_control_docking_multi_engine(
                         shutil.copy2(src_pose, pose_path)
                     except Exception:
                         pose_path = src_pose
-                status = "ok" if score is not None else ("missing_inputs" if not rec_exists else "no_score")
+                status = (
+                    "ok"
+                    if score is not None
+                    else ("missing_inputs" if not rec_exists else "no_score")
+                )
             except Exception as exc:
                 status = "missing_inputs" if not rec_exists else "failed"
                 try:
-                    pose_path.write_text(f"vina control redock failed: {exc}\n", encoding="utf-8")
+                    pose_path.write_text(
+                        f"vina control redock failed: {exc}\n", encoding="utf-8"
+                    )
                 except Exception:
                     pass
                 logger.warning(
@@ -476,10 +515,14 @@ def run_control_docking_multi_engine(
                         exc,
                     )
 
-            gn_stage_dir = paths.docked_stage_dir(variant_token, f"gnina_{gn_stage_name}", ph_label)
+            gn_stage_dir = paths.docked_stage_dir(
+                variant_token, f"gnina_{gn_stage_name}", ph_label
+            )
             for lig_path in control_paths:
                 lig_base = Path(lig_path).stem.split("_stage")[0]
-                pose_path = gn_stage_dir / f"{Path(lig_path).stem}_gnina_{gn_stage_name}.pdbqt"
+                pose_path = (
+                    gn_stage_dir / f"{Path(lig_path).stem}_gnina_{gn_stage_name}.pdbqt"
+                )
                 if pose_path.exists():
                     dest = engine_root / pose_path.name
                     try:
@@ -488,14 +531,30 @@ def run_control_docking_multi_engine(
                     except Exception:
                         pass
                 score = None
-                metrics_rec = gnina_metrics.get(str(lig_path)) or gnina_metrics.get(Path(lig_path).as_posix()) or {}
+                metrics_rec = (
+                    gnina_metrics.get(str(lig_path))
+                    or gnina_metrics.get(Path(lig_path).as_posix())
+                    or {}
+                )
                 if isinstance(metrics_rec, dict):
-                    score = metrics_rec.get("gnina_primary_score") or metrics_rec.get("cnn_affinity_pK") or metrics_rec.get("minimized_affinity_kcal")
+                    score = (
+                        metrics_rec.get("gnina_primary_score")
+                        or metrics_rec.get("cnn_affinity_pK")
+                        or metrics_rec.get("minimized_affinity_kcal")
+                    )
                 if score is None:
-                    sc_raw = gnina_scores.get(str(lig_path)) or gnina_scores.get(lig_path)
+                    sc_raw = gnina_scores.get(str(lig_path)) or gnina_scores.get(
+                        lig_path
+                    )
                     if isinstance(sc_raw, (int, float)):
                         score = sc_raw
-                status = "missing_inputs" if not rec_exists else ("ok" if pose_path.exists() and score is not None else "failed")
+                status = (
+                    "missing_inputs"
+                    if not rec_exists
+                    else (
+                        "ok" if pose_path.exists() and score is not None else "failed"
+                    )
+                )
                 results.append(
                     {
                         "engine": "gnina",
@@ -567,7 +626,11 @@ def run_control_docking_multi_engine(
                     metrics_rec = metrics_map.get(str(lig_path), {})
                     if score is None and isinstance(metrics_rec, dict):
                         score = metrics_rec.get("best_score_kcal")
-                    status = "ok" if pose_path.exists() and isinstance(score, (int, float)) else "failed"
+                    status = (
+                        "ok"
+                        if pose_path.exists() and isinstance(score, (int, float))
+                        else "failed"
+                    )
                     results.append(
                         {
                             "engine": "ledock",
@@ -621,7 +684,11 @@ def run_control_docking_multi_engine(
                     rec = metrics_map_d6.get(str(lig_path)) or {}
                     score = rec.get("grid_score")
                 pose_path = ranked_path if ranked_path.exists() else engine_root
-                status = "ok" if isinstance(score, (int, float)) and pose_path.exists() else ("missing_inputs" if not dock6_ready else "failed")
+                status = (
+                    "ok"
+                    if isinstance(score, (int, float)) and pose_path.exists()
+                    else ("missing_inputs" if not dock6_ready else "failed")
+                )
                 results.append(
                     {
                         "engine": "dock6",

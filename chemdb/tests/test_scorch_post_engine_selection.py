@@ -32,10 +32,17 @@ def test_post_engine_stage_preference_prefers_stage3(tmp_path: Path) -> None:
     stage_root = ph_root / "dock6_pdbqt"
     stage_root.mkdir(parents=True, exist_ok=True)
     for stage in (1, 2, 3):
-        (stage_root / f"lig_a__dock6_stage{stage}.pdbqt").write_text("", encoding="utf-8")
+        (stage_root / f"lig_a__dock6_stage{stage}.pdbqt").write_text(
+            "", encoding="utf-8"
+        )
 
     logger = logging.getLogger("test")
-    ligands, stage_counts, total, available_bases = rescoring_scorch._collect_best_pose_per_base(
+    (
+        ligands,
+        stage_counts,
+        total,
+        available_bases,
+    ) = rescoring_scorch._collect_best_pose_per_base(
         ph_root, ("dock6_pdbqt",), None, logger
     )
 

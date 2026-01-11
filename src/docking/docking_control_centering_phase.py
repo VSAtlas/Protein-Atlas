@@ -100,4 +100,12 @@ def _phase5b_controls_and_control_redock(
         fallback_box=fallback_box,
     )
 
-    return fallback_center, fallback_box, center_by_ph, box_by_ph, source_by_ph, control_stems, control_lookup
+    return (
+        fallback_center,
+        fallback_box,
+        center_by_ph,
+        box_by_ph,
+        source_by_ph,
+        control_stems,
+        control_lookup,
+    )

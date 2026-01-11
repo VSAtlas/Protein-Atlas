@@ -10,14 +10,15 @@ if str(ROOT) not in sys.path:
 
 from record_data import write_scores_csv
 from post_docking.rescoring.rescoring_scorch import (
-    SCORCH_TOP_FRACTION_DEFAULT,
-    SCORCH_TOP_FRACTION_KEY,
     discover_stage3_roots,
     _pose_base_from_path,
     _load_consensus_top_bases,
     annotate_scorch_t_scores,
 )
-from post_docking.rescoring.rescore_reranker import rerank_consensus_with_scorch, is_decoy_id
+from post_docking.rescoring.rescore_reranker import (
+    rerank_consensus_with_scorch,
+    is_decoy_id,
+)
 
 RUN_ID = "test_run"
 
@@ -95,12 +96,23 @@ def test_discover_stage3_roots(tmp_path):
 
 def test_pose_base_strips_dud_suffixes():
     assert _pose_base_from_path(Path("LIG_A301_dud_stage3.pdbqt")) == "LIG_A301"
-    assert _pose_base_from_path(Path("LIG_A301.sanitized_dud_stage3.pdbqt")) == "LIG_A301"
-    assert _pose_base_from_path(Path("decoys_test_library_10_2_dud_stage3.pdbqt")) == "decoys_test_library_10_2"
+    assert (
+        _pose_base_from_path(Path("LIG_A301.sanitized_dud_stage3.pdbqt")) == "LIG_A301"
+    )
+    assert (
+        _pose_base_from_path(Path("decoys_test_library_10_2_dud_stage3.pdbqt"))
+        == "decoys_test_library_10_2"
+    )
     assert _pose_base_from_path(Path("LIG_X_gnina_dud_stage3.pdbqt")) == "LIG_X"
     assert _pose_base_from_path(Path("LIG_Y_dock6_dud_stage3.pdbqt")) == "LIG_Y"
-    assert _pose_base_from_path(Path("decoys_test_library_10_2__dock6_dud_stage3.pdbqt")) == "decoys_test_library_10_2"
-    assert _pose_base_from_path(Path("decoys_test_library_10_2__ledock_stage3.pdbqt")) == "decoys_test_library_10_2"
+    assert (
+        _pose_base_from_path(Path("decoys_test_library_10_2__dock6_dud_stage3.pdbqt"))
+        == "decoys_test_library_10_2"
+    )
+    assert (
+        _pose_base_from_path(Path("decoys_test_library_10_2__ledock_stage3.pdbqt"))
+        == "decoys_test_library_10_2"
+    )
 
 
 def test_decoy_detector():
@@ -112,19 +124,75 @@ def test_decoy_detector():
 def test_stratified_top_fraction_includes_decoys(tmp_path):
     consensus_path = tmp_path / "consensus_docking_scores.csv"
     rows = [
-        {"run_id": "r1", "pdb_id": "P1", "variant": "APO", "ph_label": "", "ligand": "fda_a_stage1.pdbqt", "consensus_score": "0.9", "library": "FDA"},
-        {"run_id": "r1", "pdb_id": "P1", "variant": "APO", "ph_label": "", "ligand": "fda_b_stage1.pdbqt", "consensus_score": "0.8", "library": "FDA"},
-        {"run_id": "r1", "pdb_id": "P1", "variant": "APO", "ph_label": "", "ligand": "fda_c_stage1.pdbqt", "consensus_score": "0.7", "library": "FDA"},
-        {"run_id": "r1", "pdb_id": "P1", "variant": "APO", "ph_label": "", "ligand": "dud_a_stage1.pdbqt", "consensus_score": "0.6", "library": "DECOY"},
-        {"run_id": "r1", "pdb_id": "P1", "variant": "APO", "ph_label": "", "ligand": "dud_b_stage1.pdbqt", "consensus_score": "0.5", "library": "DECOY"},
-        {"run_id": "r1", "pdb_id": "P1", "variant": "APO", "ph_label": "", "ligand": "dud_c_stage1.pdbqt", "consensus_score": "0.4", "library": "DECOY"},
+        {
+            "run_id": "r1",
+            "pdb_id": "P1",
+            "variant": "APO",
+            "ph_label": "",
+            "ligand": "fda_a_stage1.pdbqt",
+            "consensus_score": "0.9",
+            "library": "FDA",
+        },
+        {
+            "run_id": "r1",
+            "pdb_id": "P1",
+            "variant": "APO",
+            "ph_label": "",
+            "ligand": "fda_b_stage1.pdbqt",
+            "consensus_score": "0.8",
+            "library": "FDA",
+        },
+        {
+            "run_id": "r1",
+            "pdb_id": "P1",
+            "variant": "APO",
+            "ph_label": "",
+            "ligand": "fda_c_stage1.pdbqt",
+            "consensus_score": "0.7",
+            "library": "FDA",
+        },
+        {
+            "run_id": "r1",
+            "pdb_id": "P1",
+            "variant": "APO",
+            "ph_label": "",
+            "ligand": "dud_a_stage1.pdbqt",
+            "consensus_score": "0.6",
+            "library": "DECOY",
+        },
+        {
+            "run_id": "r1",
+            "pdb_id": "P1",
+            "variant": "APO",
+            "ph_label": "",
+            "ligand": "dud_b_stage1.pdbqt",
+            "consensus_score": "0.5",
+            "library": "DECOY",
+        },
+        {
+            "run_id": "r1",
+            "pdb_id": "P1",
+            "variant": "APO",
+            "ph_label": "",
+            "ligand": "dud_c_stage1.pdbqt",
+            "consensus_score": "0.4",
+            "library": "DECOY",
+        },
     ]
     with consensus_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
 
-    allowed_fda, allowed_dud, total_rows, k_selected, non_controls, _, _ = _load_consensus_top_bases(
+    (
+        allowed_fda,
+        allowed_dud,
+        total_rows,
+        k_selected,
+        non_controls,
+        _,
+        _,
+    ) = _load_consensus_top_bases(
         consensus_path, 0.5, logging.getLogger("test_top_frac")
     )
     assert total_rows == len(rows)
@@ -168,8 +236,26 @@ def test_rerank_outputs_t_scores(tmp_path):
         writer.writerows(cons_rows)
 
     scorch_rows = [
-        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "fda_a_stage1", "SCORCH_score": "2.0", "SCORCH_certainty": "1.0", "run_mode": "fda"},
-        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "fda_b_stage1", "SCORCH_score": "1.5", "SCORCH_certainty": "1.0", "run_mode": "fda"},
+        {
+            "pdb_id": "P2",
+            "variant": "HOLO",
+            "ph": "phys",
+            "source": "vina",
+            "Ligand_ID": "fda_a_stage1",
+            "SCORCH_score": "2.0",
+            "SCORCH_certainty": "1.0",
+            "run_mode": "fda",
+        },
+        {
+            "pdb_id": "P2",
+            "variant": "HOLO",
+            "ph": "phys",
+            "source": "vina",
+            "Ligand_ID": "fda_b_stage1",
+            "SCORCH_score": "1.5",
+            "SCORCH_certainty": "1.0",
+            "run_mode": "fda",
+        },
     ]
     with scorch_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(scorch_rows[0].keys()))
@@ -177,8 +263,26 @@ def test_rerank_outputs_t_scores(tmp_path):
         writer.writerows(scorch_rows)
 
     dud_scorch_rows = [
-        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoy_a_stage1", "SCORCH_score": "1.0", "SCORCH_certainty": "1.0", "run_mode": "dud"},
-        {"pdb_id": "P2", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoys_b_stage1", "SCORCH_score": "0.5", "SCORCH_certainty": "1.0", "run_mode": "dud"},
+        {
+            "pdb_id": "P2",
+            "variant": "HOLO",
+            "ph": "phys",
+            "source": "vina",
+            "Ligand_ID": "decoy_a_stage1",
+            "SCORCH_score": "1.0",
+            "SCORCH_certainty": "1.0",
+            "run_mode": "dud",
+        },
+        {
+            "pdb_id": "P2",
+            "variant": "HOLO",
+            "ph": "phys",
+            "source": "vina",
+            "Ligand_ID": "decoys_b_stage1",
+            "SCORCH_score": "0.5",
+            "SCORCH_certainty": "1.0",
+            "run_mode": "dud",
+        },
     ]
     dud_scorch_path = scorch_path.parent / "dud_scorch_scores_all.csv"
     with dud_scorch_path.open("w", newline="", encoding="utf-8") as handle:
@@ -187,8 +291,18 @@ def test_rerank_outputs_t_scores(tmp_path):
         writer.writerows(dud_scorch_rows)
 
     cnn_rows = [
-        {"ligand": "fda_a_stage1", "cnn_score": "1.0", "cnn_affinity": "1.0", "stage_priority": "stage1"},
-        {"ligand": "dud_a_stage1", "cnn_score": "0.8", "cnn_affinity": "1.0", "stage_priority": "stage1"},
+        {
+            "ligand": "fda_a_stage1",
+            "cnn_score": "1.0",
+            "cnn_affinity": "1.0",
+            "stage_priority": "stage1",
+        },
+        {
+            "ligand": "dud_a_stage1",
+            "cnn_score": "0.8",
+            "cnn_affinity": "1.0",
+            "stage_priority": "stage1",
+        },
     ]
     cnn_path.parent.mkdir(parents=True, exist_ok=True)
     with cnn_path.open("w", newline="", encoding="utf-8") as handle:
@@ -221,7 +335,9 @@ def test_rerank_outputs_t_scores(tmp_path):
     assert dud_csv.exists()
     with dud_csv.open("r", encoding="utf-8", newline="") as handle:
         dud_rows = list(csv.DictReader(handle))
-    assert any(is_decoy_id(r.get("ligand", "")) or r.get("run_mode") == "dud" for r in dud_rows)
+    assert any(
+        is_decoy_id(r.get("ligand", "")) or r.get("run_mode") == "dud" for r in dud_rows
+    )
 
 
 def test_annotate_scorch_t_scores(tmp_path):
@@ -232,8 +348,16 @@ def test_annotate_scorch_t_scores(tmp_path):
         {"Ligand_ID": "fda_b_stage3", "SCORCH_score": "1.0", "SCORCH_certainty": "1.0"},
     ]
     dud_rows = [
-        {"Ligand_ID": "dud_a_dud_stage3", "SCORCH_score": "0.5", "SCORCH_certainty": "1.0"},
-        {"Ligand_ID": "dud_b_dud_stage3", "SCORCH_score": "0.25", "SCORCH_certainty": "1.0"},
+        {
+            "Ligand_ID": "dud_a_dud_stage3",
+            "SCORCH_score": "0.5",
+            "SCORCH_certainty": "1.0",
+        },
+        {
+            "Ligand_ID": "dud_b_dud_stage3",
+            "SCORCH_score": "0.25",
+            "SCORCH_certainty": "1.0",
+        },
     ]
     for path, rows in ((fda_csv, fda_rows), (dud_csv, dud_rows)):
         with path.open("w", newline="", encoding="utf-8") as handle:
@@ -258,10 +382,42 @@ def test_rerank_final_score_uses_t_scores(tmp_path):
     scorch_path = tmp_path / "scorch_scores_all.csv"
 
     cons_rows = [
-        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "fda_a.pdbqt", "consensus_score": "0.9", "t_vs_decoys_consensus": "0.3"},
-        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "fda_b.pdbqt", "consensus_score": "0.8", "t_vs_decoys_consensus": "0.1"},
-        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "decoy_one.pdbqt", "consensus_score": "0.1", "t_vs_decoys_consensus": "-0.5"},
-        {"run_id": "r3", "pdb_id": "P3", "variant": "HOLO", "ph_label": "phys", "ligand": "decoys_two.pdbqt", "consensus_score": "0.2", "t_vs_decoys_consensus": "-0.3"},
+        {
+            "run_id": "r3",
+            "pdb_id": "P3",
+            "variant": "HOLO",
+            "ph_label": "phys",
+            "ligand": "fda_a.pdbqt",
+            "consensus_score": "0.9",
+            "t_vs_decoys_consensus": "0.3",
+        },
+        {
+            "run_id": "r3",
+            "pdb_id": "P3",
+            "variant": "HOLO",
+            "ph_label": "phys",
+            "ligand": "fda_b.pdbqt",
+            "consensus_score": "0.8",
+            "t_vs_decoys_consensus": "0.1",
+        },
+        {
+            "run_id": "r3",
+            "pdb_id": "P3",
+            "variant": "HOLO",
+            "ph_label": "phys",
+            "ligand": "decoy_one.pdbqt",
+            "consensus_score": "0.1",
+            "t_vs_decoys_consensus": "-0.5",
+        },
+        {
+            "run_id": "r3",
+            "pdb_id": "P3",
+            "variant": "HOLO",
+            "ph_label": "phys",
+            "ligand": "decoys_two.pdbqt",
+            "consensus_score": "0.2",
+            "t_vs_decoys_consensus": "-0.3",
+        },
     ]
     with consensus_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(cons_rows[0].keys()))
@@ -269,7 +425,16 @@ def test_rerank_final_score_uses_t_scores(tmp_path):
         writer.writerows(cons_rows)
 
     scorch_rows = [
-        {"pdb_id": "P3", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "fda_a_stage1", "SCORCH_score": "2.0", "SCORCH_certainty": "1.0", "run_mode": "fda"},
+        {
+            "pdb_id": "P3",
+            "variant": "HOLO",
+            "ph": "phys",
+            "source": "vina",
+            "Ligand_ID": "fda_a_stage1",
+            "SCORCH_score": "2.0",
+            "SCORCH_certainty": "1.0",
+            "run_mode": "fda",
+        },
     ]
     with scorch_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(scorch_rows[0].keys()))
@@ -277,8 +442,26 @@ def test_rerank_final_score_uses_t_scores(tmp_path):
         writer.writerows(scorch_rows)
 
     dud_scorch_rows = [
-        {"pdb_id": "P3", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoy_one_stage1", "SCORCH_score": "1.0", "SCORCH_certainty": "1.0", "run_mode": "dud"},
-        {"pdb_id": "P3", "variant": "HOLO", "ph": "phys", "source": "vina", "Ligand_ID": "decoys_two_stage1", "SCORCH_score": "0.5", "SCORCH_certainty": "1.0", "run_mode": "dud"},
+        {
+            "pdb_id": "P3",
+            "variant": "HOLO",
+            "ph": "phys",
+            "source": "vina",
+            "Ligand_ID": "decoy_one_stage1",
+            "SCORCH_score": "1.0",
+            "SCORCH_certainty": "1.0",
+            "run_mode": "dud",
+        },
+        {
+            "pdb_id": "P3",
+            "variant": "HOLO",
+            "ph": "phys",
+            "source": "vina",
+            "Ligand_ID": "decoys_two_stage1",
+            "SCORCH_score": "0.5",
+            "SCORCH_certainty": "1.0",
+            "run_mode": "dud",
+        },
     ]
     dud_scorch_path = scorch_path.parent / "dud_scorch_scores_all.csv"
     with dud_scorch_path.open("w", newline="", encoding="utf-8") as handle:

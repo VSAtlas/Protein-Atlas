@@ -21,17 +21,15 @@ from input_and_export_functions import _to_bool
 #     topics (plus untagged messages, unless restricted elsewhere).
 DEFAULT_MUTED_TAGS: set[str] = {
     # Very noisy internal debug topics
-    #"vina.call",
+    # "vina.call",
     "cfg.emit",
     "emit.debug",
     "propka.choice",
     "read_any",
     "elemfix",
-
     # Element-repair noise from activesite/elem-fix
     "element",
     "elements",
-
     # Now also mute these by default (opt-in via LOG_TOPICS)
     "ligprep",
     "bulksdf",
@@ -40,11 +38,9 @@ DEFAULT_MUTED_TAGS: set[str] = {
     "arom-rescue",
     "router.debug",
     "RDKit",
-
     # Pseudo-topic for altLoc-style messages (handled specially)
     "altloc",
 }
-
 
 
 def coerce_log_level(name: str | None, default: int) -> int:
@@ -66,7 +62,9 @@ def parse_log_topics(cfg: dict) -> set[str]:
     Return a lowercase set of tokens from LOG_TOPICS (env or cfg),
     splitting on commas and whitespace.
     """
-    raw_topics = (os.environ.get("LOG_TOPICS") or str(cfg.get("LOG_TOPICS", ""))).replace(",", " ")
+    raw_topics = (
+        os.environ.get("LOG_TOPICS") or str(cfg.get("LOG_TOPICS", ""))
+    ).replace(",", " ")
     return {token.strip().lower() for token in raw_topics.split() if token.strip()}
 
 
@@ -80,10 +78,14 @@ class TopicFilter(logging.Filter):
             return True
         message = record.getMessage()
         if message.startswith("[") and ("]" in message):
-            tag = message[1:message.find("]")].strip().lower()
+            tag = message[1 : message.find("]")].strip().lower()
             allowed = self.allowed
             if not allowed or "all" in allowed:
-                if (tag in DEFAULT_MUTED_TAGS) and ("all" not in allowed) and (tag not in allowed):
+                if (
+                    (tag in DEFAULT_MUTED_TAGS)
+                    and ("all" not in allowed)
+                    and (tag not in allowed)
+                ):
                     return False
                 return True
             return tag in allowed
@@ -92,7 +94,12 @@ class TopicFilter(logging.Filter):
         if "altloc" in lowered:
             tag = "altloc"
             allowed = self.allowed or set()
-            if (not allowed or "all" in allowed) and (tag in DEFAULT_MUTED_TAGS) and ("all" not in allowed) and (tag not in allowed):
+            if (
+                (not allowed or "all" in allowed)
+                and (tag in DEFAULT_MUTED_TAGS)
+                and ("all" not in allowed)
+                and (tag not in allowed)
+            ):
                 return False
             if allowed and ("all" not in allowed):
                 return tag in allowed
@@ -196,13 +203,26 @@ def make_protein_logger(docked_dir: str, pdb_id: str, cfg: Dict) -> logging.Logg
 
     ch = logging.StreamHandler(stream=sys.stdout)  # stdout, not stderr
     env_override = os.environ.get("QUIET_CONSOLE_OVERRIDE", "").strip()
-    quiet = (env_override.lower() in {"1", "true", "yes"}) if env_override else _to_bool(cfg.get("QUIET_CONSOLE", False))
+    quiet = (
+        (env_override.lower() in {"1", "true", "yes"})
+        if env_override
+        else _to_bool(cfg.get("QUIET_CONSOLE", False))
+    )
     ch.setLevel(logging.WARNING if quiet else logging.INFO)
     ch.setFormatter(formatter)
 
     # Optional level overrides
-    fh.setLevel(coerce_log_level(os.environ.get("LOG_LEVEL_FILE") or cfg.get("LOG_LEVEL_FILE"), fh.level))
-    ch.setLevel(coerce_log_level(os.environ.get("LOG_LEVEL_CONSOLE") or cfg.get("LOG_LEVEL_CONSOLE"), ch.level))
+    fh.setLevel(
+        coerce_log_level(
+            os.environ.get("LOG_LEVEL_FILE") or cfg.get("LOG_LEVEL_FILE"), fh.level
+        )
+    )
+    ch.setLevel(
+        coerce_log_level(
+            os.environ.get("LOG_LEVEL_CONSOLE") or cfg.get("LOG_LEVEL_CONSOLE"),
+            ch.level,
+        )
+    )
 
     # NOTE: logging_topics.TopicFilter mutes noisy topics (vina.call, ligprep, altloc, etc.)
     #       by default; use LOG_TOPICS=all or a list (e.g. LOG_TOPICS=ligprep,altloc) to opt back in.
@@ -234,16 +254,16 @@ def bootstrap_root_logging(cfg: Dict, run_log_path: str) -> logging.Logger:
 
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     configured_level = (
-        os.environ.get("LOG_LEVEL_CONSOLE")
-        or cfg.get("LOG_LEVEL_CONSOLE")
-        or "INFO"
+        os.environ.get("LOG_LEVEL_CONSOLE") or cfg.get("LOG_LEVEL_CONSOLE") or "INFO"
     )
     level_value = coerce_log_level(configured_level, logging.INFO)
     if level_value < logging.INFO:
         level_value = logging.INFO
     stream_handler.setLevel(level_value)
 
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+    )
     stream_handler.setFormatter(formatter)
 
     # NOTE: logging_topics.TopicFilter mutes noisy topics (vina.call, ligprep, altloc, etc.)

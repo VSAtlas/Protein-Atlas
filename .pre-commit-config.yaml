@@ -1,0 +1,21 @@
+repos:
+  # 1. Ruff: Fast Linting & Formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.11
+    hooks:
+      - id: ruff
+        args: [ --fix ]  # Auto-fix simple bugs
+      - id: ruff-format  # Auto-format code style
+
+  # 2. MyPy: Type Checking (Logic Police)
+  # We use 'repo: local' to force it to use your docking-env.
+  # This prevents "Module 'numpy' not found" errors.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: micromamba run -n docking-env mypy
+        language: system
+        types: [python]
+        args: ["--ignore-missing-imports"]
+        require_serial: true

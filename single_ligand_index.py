@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Optional
 
 from activesite import norm
 from input_and_export_functions import _to_bool
@@ -33,20 +33,26 @@ def _dedupe_manifest_roots(seq) -> list[Path]:
 
 
 # [single-index] Prime the manifest-backed index before single-ligand lookups.
-def _ensure_single_ligand_index(cfg: Dict, paths: Paths, logger: logging.Logger) -> None:
+def _ensure_single_ligand_index(
+    cfg: Dict, paths: Paths, logger: logging.Logger
+) -> None:
     cfg.setdefault(
         "OUTPUT_LIGANDS_DIR",
         cfg.get("PREPPED_LIGANDS_DIR") or cfg.get("PREPPED_LIGANDS_ROOT"),
     )
 
-    per_roots = _dedupe_manifest_roots([
-        getattr(paths, "prepped_ligands_dir", None),
-    ])
-    library_roots = _dedupe_manifest_roots([
-        cfg.get("OUTPUT_LIGANDS_DIR"),
-        cfg.get("PREPPED_LIGANDS_ROOT"),
-        cfg.get("PREPPED_LIGANDS_DIR"),
-    ])
+    per_roots = _dedupe_manifest_roots(
+        [
+            getattr(paths, "prepped_ligands_dir", None),
+        ]
+    )
+    library_roots = _dedupe_manifest_roots(
+        [
+            cfg.get("OUTPUT_LIGANDS_DIR"),
+            cfg.get("PREPPED_LIGANDS_ROOT"),
+            cfg.get("PREPPED_LIGANDS_DIR"),
+        ]
+    )
 
     cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_roots]
     cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in library_roots]
@@ -92,13 +98,17 @@ def _ensure_single_ligand_index(cfg: Dict, paths: Paths, logger: logging.Logger)
         )
 
 
-def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger) -> Optional[Path]:
+def _resolve_single_ligand(
+    selector: str, pdb_id: str, cfg: Dict, logger: logging.Logger
+) -> Optional[Path]:
     """Resolve SINGLE_LIGAND selector using manifest-backed lookups (if enabled)."""
     if not selector:
         return None
 
     allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
-    raw_order = str(cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global"))
+    raw_order = str(
+        cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global")
+    )
     order = ["fda_library", "per_protein", "global"]
     skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
     if skip_global:
@@ -113,13 +123,17 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
     has_index = isinstance(lib_index, LibraryIndex)
 
     output_ligands_dir = cfg.get("OUTPUT_LIGANDS_DIR")
-    fda_root = Path(output_ligands_dir).joinpath("fda_library") if output_ligands_dir else None
+    fda_root = (
+        Path(output_ligands_dir).joinpath("fda_library") if output_ligands_dir else None
+    )
     name_map: Optional[dict[str, set[str]]] = None
     fda_logged = False
     key = _norm_name_key(selector)
 
     effective_order = order
-    use_manifest = has_index and (bool(per_roots) or (not skip_global and bool(library_roots)))
+    use_manifest = has_index and (
+        bool(per_roots) or (not skip_global and bool(library_roots))
+    )
 
     logger.info(
         "[single.debug] selector=%s raw_order=%s order=%s skip_global=%s manifest_only=%s has_index=%s use_manifest=%s per_roots=%s lib_roots=%s allow_prefix=%s",
@@ -157,7 +171,12 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
         basenames = list(dict.fromkeys(basenames))
         probe_target: Path = fda_root if not basenames else fda_root / basenames[0]
         if not fda_logged:
-            logger.info("[single.name] key=%s basenames=%s probe=%s", key, basenames, norm(probe_target))
+            logger.info(
+                "[single.name] key=%s basenames=%s probe=%s",
+                key,
+                basenames,
+                norm(probe_target),
+            )
             fda_logged = True
         for basename in basenames:
             candidate = fda_root / basename
@@ -168,7 +187,11 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
                     basename,
                     norm(candidate),
                 )
-                logger.info("[single.lookup.hit] source=fda selector=%s path=%s", selector, norm(candidate))
+                logger.info(
+                    "[single.lookup.hit] source=fda selector=%s path=%s",
+                    selector,
+                    norm(candidate),
+                )
                 return candidate
         return None
 
@@ -213,29 +236,44 @@ def _resolve_single_ligand(selector: str, pdb_id: str, cfg: Dict, logger: loggin
     if per_roots:
         hit = lib_index.lookup(selector, per_roots, allow_prefix=allow_prefix)
         if hit:
-            logger.info("[single.lookup.hit] source=manifest scope=per_protein selector=%s path=%s", selector, norm(hit))
+            logger.info(
+                "[single.lookup.hit] source=manifest scope=per_protein selector=%s path=%s",
+                selector,
+                norm(hit),
+            )
             return hit
 
     if not skip_global and library_roots:
         hit = lib_index.lookup(selector, library_roots, allow_prefix=allow_prefix)
         if hit:
-            logger.info("[single.lookup.hit] source=manifest scope=global selector=%s path=%s", selector, norm(hit))
+            logger.info(
+                "[single.lookup.hit] source=manifest scope=global selector=%s path=%s",
+                selector,
+                norm(hit),
+            )
             return hit
 
     _log_miss(_suggest_from_index())
     return None
+
+
 # --- FDA name mapping (CSV) ---------------------------------------------------
 # Lets SINGLE_LIGAND resolve by generic/brand/synonym (e.g., "imatinib", "Gleevec").
 _FDA_NAME_MAP_CACHE = None
 
+
 def _norm_name_key(s: str) -> str:
     import re
+
     return re.sub(r"[^a-z0-9]+", "", str(s).lower())
+
 
 def _split_multi_names(v: str) -> list[str]:
     import re
+
     parts = re.split(r"[|;,/]", v or "")
     return [p.strip() for p in parts if p and p.strip()]
+
 
 def _load_fda_name_map(cfg: Dict, logger: logging.Logger) -> dict[str, set[str]]:
     """
@@ -249,7 +287,10 @@ def _load_fda_name_map(cfg: Dict, logger: logging.Logger) -> dict[str, set[str]]
     import csv
     from pathlib import Path
 
-    csv_path = os.environ.get("FDA_MAPPING_CSV", "").strip() or str(cfg.get("FDA_MAPPING_CSV", "")).strip()
+    csv_path = (
+        os.environ.get("FDA_MAPPING_CSV", "").strip()
+        or str(cfg.get("FDA_MAPPING_CSV", "")).strip()
+    )
     mapping: dict[str, set[str]] = {}
     if not csv_path:
         _FDA_NAME_MAP_CACHE = {}
@@ -257,7 +298,9 @@ def _load_fda_name_map(cfg: Dict, logger: logging.Logger) -> dict[str, set[str]]
 
     p = Path(csv_path)
     if not p.exists():
-        logger.info(f"[single:name] FDA_MAPPING_CSV not found at {csv_path} (name lookup disabled).")
+        logger.info(
+            f"[single:name] FDA_MAPPING_CSV not found at {csv_path} (name lookup disabled)."
+        )
         _FDA_NAME_MAP_CACHE = {}
         return _FDA_NAME_MAP_CACHE
 
@@ -281,7 +324,12 @@ def _load_fda_name_map(cfg: Dict, logger: logging.Logger) -> dict[str, set[str]]
                 ]
                 # multi-value fields (split)
                 multis = []
-                for col in ("brand_names", "rxnorm_brand_names", "drugcentral_brand_names", "pubchem_synonyms"):
+                for col in (
+                    "brand_names",
+                    "rxnorm_brand_names",
+                    "drugcentral_brand_names",
+                    "pubchem_synonyms",
+                ):
                     v = row.get(col, "")
                     if v:
                         multis.extend(_split_multi_names(v))

@@ -28,9 +28,13 @@ def test_mmgbsa_receptor_prep_alias_waters_metals(tmp_path, monkeypatch):
     sys.modules.pop("activesite", None)
     sys.modules.pop("protein_prep_mmgbsa", None)
 
-    protein_prep_mmgbsa = importlib.import_module("post_docking.mmgbsa.protein_prep_mmgbsa")
+    protein_prep_mmgbsa = importlib.import_module(
+        "post_docking.mmgbsa.protein_prep_mmgbsa"
+    )
 
-    base_dir = tmp_path / "post_docked" / "RUNTEST" / "TESTP" / "HOLO" / "pH7_0" / "stage1"
+    base_dir = (
+        tmp_path / "post_docked" / "RUNTEST" / "TESTP" / "HOLO" / "pH7_0" / "stage1"
+    )
     base_dir.mkdir(parents=True, exist_ok=True)
     pdb_path = base_dir / "receptor.pdb"
 
@@ -70,5 +74,6 @@ def test_mmgbsa_receptor_prep_alias_waters_metals(tmp_path, monkeypatch):
         for line in out_lines
     )
     assert not any(
-        line.startswith(("ATOM", "HETATM")) and line[17:20].strip() == "ZN" for line in out_lines
+        line.startswith(("ATOM", "HETATM")) and line[17:20].strip() == "ZN"
+        for line in out_lines
     )

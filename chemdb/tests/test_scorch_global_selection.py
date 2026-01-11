@@ -41,7 +41,9 @@ def test_global_selection_shared_across_engines(tmp_path: Path) -> None:
         noncontrol_rows,
         controls_total,
         controls_in_consensus,
-    ) = rescoring_scorch._load_consensus_top_bases(consensus_csv, 0.10, logger, control_bases)
+    ) = rescoring_scorch._load_consensus_top_bases(
+        consensus_csv, 0.10, logger, control_bases
+    )
 
     assert total_rows == 22
     assert noncontrol_rows == 20
@@ -79,10 +81,14 @@ def test_global_selection_shared_across_engines(tmp_path: Path) -> None:
         ligs, _, _, available = rescoring_scorch._collect_best_pose_per_base(
             ph_root, stage_dirs, allowed_bases, logger
         )
-        return {rescoring_scorch._pose_base_from_path(p): p.name for p in ligs}, available
+        return {
+            rescoring_scorch._pose_base_from_path(p): p.name for p in ligs
+        }, available
 
     vina_map, vina_available = _collect(("stage3", "stage2", "stage1"))
-    gnina_map, gnina_available = _collect(("gnina_stage3", "gnina_stage2", "gnina_stage1"))
+    gnina_map, gnina_available = _collect(
+        ("gnina_stage3", "gnina_stage2", "gnina_stage1")
+    )
     dock6_map, dock6_available = _collect(("dock6_pdbqt",))
     ledock_map, ledock_available = _collect(("ledock_pdbqt",))
 
@@ -94,5 +100,10 @@ def test_global_selection_shared_across_engines(tmp_path: Path) -> None:
     assert "dock6_stage3" in dock6_map[target_base]
     assert "ledock_stage3" in ledock_map[target_base]
 
-    for available in (vina_available, gnina_available, dock6_available, ledock_available):
+    for available in (
+        vina_available,
+        gnina_available,
+        dock6_available,
+        ledock_available,
+    ):
         assert allowed_bases.issubset(available)

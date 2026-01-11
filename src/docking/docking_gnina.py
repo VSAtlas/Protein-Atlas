@@ -13,9 +13,13 @@ from typing import Any, Dict, List, Mapping, Optional
 import pandas as pd
 from tqdm import tqdm
 
-from input_and_export_functions import _to_bool, extract_gnina_scores, write_score_summary_to_csv
+from input_and_export_functions import (
+    _to_bool,
+    extract_gnina_scores,
+    write_score_summary_to_csv,
+)
 from chemdb.target_difficulty import TargetDifficulty
-from .docking_ligands import compute_rmsd, validate_ligand
+from .docking_ligands import validate_ligand
 from .pose_validation import (
     compute_self_rmsd,
     extract_surface_atoms,
@@ -56,7 +60,11 @@ def _compute_gnina_decoy_stats_from_long_csv(
         return float("nan"), float("nan"), 0
 
     lig_col = guess_ligfile_col(df, lig_col_override)
-    score_col = score_col_override if score_col_override in df.columns else guess_score_col(df, score_col_override)
+    score_col = (
+        score_col_override
+        if score_col_override in df.columns
+        else guess_score_col(df, score_col_override)
+    )
     df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
 
     parsed = df[lig_col].astype(str).apply(parse_name_and_label)
@@ -133,7 +141,11 @@ def annotate_gnina_fda_long_csv_with_t_scores_vs_decoys(
         return None
 
     lig_col = guess_ligfile_col(df, None)
-    score_col = "gnina_primary_score" if "gnina_primary_score" in df.columns else guess_score_col(df, None)
+    score_col = (
+        "gnina_primary_score"
+        if "gnina_primary_score" in df.columns
+        else guess_score_col(df, None)
+    )
     df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
 
     best = df.groupby(lig_col, as_index=False).agg(best_score=(score_col, "max"))
@@ -182,7 +194,9 @@ def emit_gnina_config(
     """
     make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
 
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
     legacy_mode = bool(legacy)
 
@@ -409,23 +423,44 @@ def _map_reason_to_category(reason: str) -> str:
 @dataclass
 class RetryManager:
     max_retries: int = 2
-    recipes: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
-        "too_far_from_pocket": [
-            {"recenter": True, "box_pad_delta": +1.0, "num_modes": 4},
-            {"recenter": True, "box_pad_delta": +2.0, "exhaustiveness": 6, "num_modes": 4},
-        ],
-        "no_valid_pose": [
-            {"exhaustiveness": 6, "num_modes": 5, "seed_jitter": True, "energy_range": 6},
-            {"recenter": True, "box_pad_delta": +1.0, "exhaustiveness": 6, "num_modes": 5, "seed_jitter": True, "energy_range": 6},
-        ],
-        "timeout": [
-            {"exhaustiveness": 3, "num_modes": 3, "seed_jitter": True},
-            {"exhaustiveness": 2, "num_modes": 2},
-        ],
-        "malformed": [],
-    })
+    recipes: Dict[str, List[Dict[str, Any]]] = field(
+        default_factory=lambda: {
+            "too_far_from_pocket": [
+                {"recenter": True, "box_pad_delta": +1.0, "num_modes": 4},
+                {
+                    "recenter": True,
+                    "box_pad_delta": +2.0,
+                    "exhaustiveness": 6,
+                    "num_modes": 4,
+                },
+            ],
+            "no_valid_pose": [
+                {
+                    "exhaustiveness": 6,
+                    "num_modes": 5,
+                    "seed_jitter": True,
+                    "energy_range": 6,
+                },
+                {
+                    "recenter": True,
+                    "box_pad_delta": +1.0,
+                    "exhaustiveness": 6,
+                    "num_modes": 5,
+                    "seed_jitter": True,
+                    "energy_range": 6,
+                },
+            ],
+            "timeout": [
+                {"exhaustiveness": 3, "num_modes": 3, "seed_jitter": True},
+                {"exhaustiveness": 2, "num_modes": 2},
+            ],
+            "malformed": [],
+        }
+    )
 
-    def apply(self, base_params: Dict[str, Any], err_type: str, attempt: int) -> Optional[Dict[str, Any]]:
+    def apply(
+        self, base_params: Dict[str, Any], err_type: str, attempt: int
+    ) -> Optional[Dict[str, Any]]:
         if err_type not in self.recipes or attempt >= len(self.recipes[err_type]):
             return None
         p = base_params.copy()
@@ -438,7 +473,9 @@ class RetryManager:
         return p
 
 
-def should_run_gnina_for_target(td: Optional[TargetDifficulty], cfg: Mapping[str, Any]) -> bool:
+def should_run_gnina_for_target(
+    td: Optional[TargetDifficulty], cfg: Mapping[str, Any]
+) -> bool:
     """
     Decide whether to run GNINA based on difficulty and config.
 
@@ -497,7 +534,9 @@ def write_gnina_scores_csv(
 
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     ph_token = (ph_label or "").strip() or None
-    variant_env = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_env = (
+        (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    )
     variant_token = variant_env or None
     dock_dir = paths.docked_variant_root(variant_token, ph_token)
     dock_dir.mkdir(parents=True, exist_ok=True)
@@ -517,7 +556,9 @@ def write_gnina_scores_csv(
             lig_key = os.path.basename(lig)
             primary = rec.get("gnina_primary_score")
             if rec.get("valid"):
-                flat[stage_name][lig_key] = f"{primary:.2f}" if isinstance(primary, (int, float)) else ""
+                flat[stage_name][lig_key] = (
+                    f"{primary:.2f}" if isinstance(primary, (int, float)) else ""
+                )
             else:
                 if isinstance(primary, (int, float)):
                     flat[stage_name][lig_key] = f"{primary:.2f} (invalid)"
@@ -571,7 +612,11 @@ def write_gnina_scores_csv(
 
                 ha_str = str(int(ha)) if isinstance(ha, (int, float)) else ""
                 le_str = f"{le:.4f}" if isinstance(le, (int, float)) else ""
-                sr_str = f"{sr:.2f}" if isinstance(sr, (int, float)) and _math.isfinite(sr) else ""
+                sr_str = (
+                    f"{sr:.2f}"
+                    if isinstance(sr, (int, float)) and _math.isfinite(sr)
+                    else ""
+                )
                 reason_str = str(reason) if reason is not None else ""
 
                 def _fmt(val: Any, places: int = 2) -> str:
@@ -745,7 +790,9 @@ def run_gnina_for_stage(
     logger: logging.Logger,
     receptor_pdbqt: Optional[str] = None,
     control_lookup: Optional[Dict[str, Path]] = None,
-) -> tuple[Dict[str, Optional[float]], Dict[str, Dict[str, Optional[float]]], Dict[str, Any]]:
+) -> tuple[
+    Dict[str, Optional[float]], Dict[str, Dict[str, Optional[float]]], Dict[str, Any]
+]:
     """
     Run GNINA for the given stage and ligand list.
 
@@ -769,7 +816,9 @@ def run_gnina_for_stage(
         max_workers = 1
 
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
 
     base_stage_name = stage_name
     gnina_stage_name = f"gnina_{base_stage_name}"
@@ -783,13 +832,19 @@ def run_gnina_for_stage(
         len(ligands),
     )
 
-    receptor_pdbqt_path = receptor_pdbqt or str(paths.receptor_pdbqt(variant_token, ph_label))
+    receptor_pdbqt_path = receptor_pdbqt or str(
+        paths.receptor_pdbqt(variant_token, ph_label)
+    )
     try:
-        surface_coords = extract_surface_atoms(pdbqt_path=receptor_pdbqt_path, center=center)
+        surface_coords = extract_surface_atoms(
+            pdbqt_path=receptor_pdbqt_path, center=center
+        )
     except Exception:
         surface_coords = None
 
-    def _best_pose_pdb_from_pdbqt(pdbqt_path: str, obabel_path: Optional[str] = None) -> Optional[str]:
+    def _best_pose_pdb_from_pdbqt(
+        pdbqt_path: str, obabel_path: Optional[str] = None
+    ) -> Optional[str]:
         """Convert first model of PDBQT -> PDB (no hydrogens) using OpenBabel."""
         try:
             from shutil import which
@@ -799,8 +854,23 @@ def run_gnina_for_stage(
                 return None
 
             out_pdb = Path(pdbqt_path).with_suffix(".best.pdb")
-            cmd = [obabel, "-ipdbqt", pdbqt_path, "-opdb", "-O", str(out_pdb), "-d", "--first"]
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            cmd = [
+                obabel,
+                "-ipdbqt",
+                pdbqt_path,
+                "-opdb",
+                "-O",
+                str(out_pdb),
+                "-d",
+                "--first",
+            ]
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
             return str(out_pdb)
         except Exception:
             return None
@@ -809,7 +879,9 @@ def run_gnina_for_stage(
     gnina_metrics: Dict[str, Dict[str, Optional[float]]] = {}
     gnina_futures: Dict[Any, str] = {}
 
-    default_budget_seconds = float(cfg.get("MAX_RETRY_SECONDS_PER_LIGAND", cfg.get("BENCH_MAX_SECONDS", 300.0)))
+    default_budget_seconds = float(
+        cfg.get("MAX_RETRY_SECONDS_PER_LIGAND", cfg.get("BENCH_MAX_SECONDS", 300.0))
+    )
     guards_for_ligand: Dict[str, BudgetGuard] = {}
     retry_mgr = RetryManager()
 
@@ -819,7 +891,9 @@ def run_gnina_for_stage(
         center_use: tuple[float, float, float],
         box_use: tuple[float, float, float],
         stage_label: str,
-    ) -> tuple[Optional[float], Dict[str, Optional[float]], Dict[str, Any], Optional[str]]:
+    ) -> tuple[
+        Optional[float], Dict[str, Optional[float]], Dict[str, Any], Optional[str]
+    ]:
         """
         Run GNINA once, parse scores, and perform pose validation/self-RMSD/control gate.
         Returns (primary_score, metrics, validation_result, out_path).
@@ -896,9 +970,13 @@ def run_gnina_for_stage(
                 max_models=int(cfg.get("RMSD_MAX_MODELS", 3)),
             )
             if removed > 0:
-                logger.info(f"{os.path.basename(out_path)}: RMSD filter kept {kept}, removed {removed}")
+                logger.info(
+                    f"{os.path.basename(out_path)}: RMSD filter kept {kept}, removed {removed}"
+                )
         except Exception as e:
-            logger.warning(f"RMSD filtering failed for {os.path.basename(out_path)}: {e}")
+            logger.warning(
+                f"RMSD filtering failed for {os.path.basename(out_path)}: {e}"
+            )
 
         try:
             validation_result = validate_first_valid_pose(
@@ -922,16 +1000,22 @@ def run_gnina_for_stage(
         if bool(cfg.get("LOG_SELF_RMSD", True)):
             try:
                 self_rmsd_val = compute_self_rmsd(out_path)
-                logger.info(f"[gnina.self-rmsd] lig={os.path.basename(lig)} rmsd={self_rmsd_val}")
+                logger.info(
+                    f"[gnina.self-rmsd] lig={os.path.basename(lig)} rmsd={self_rmsd_val}"
+                )
             except Exception as _e:
-                logger.warning(f"[gnina.self-rmsd] failed for {os.path.basename(lig)}: {_e}")
+                logger.warning(
+                    f"[gnina.self-rmsd] failed for {os.path.basename(lig)}: {_e}"
+                )
 
         ctrl_ref = None
         if control_lookup:
             base = Path(lig).stem.split("_stage")[0]
             ctrl_ref = control_lookup.get(base)
         if ctrl_ref:
-            best_pdb = _best_pose_pdb_from_pdbqt(out_path, obabel_path=cfg.get("OPENBABEL_PATH"))
+            best_pdb = _best_pose_pdb_from_pdbqt(
+                out_path, obabel_path=cfg.get("OPENBABEL_PATH")
+            )
             if not best_pdb:
                 valid_pose = False
                 reason_str = "no_best_pose_for_rmsd"
@@ -964,9 +1048,11 @@ def run_gnina_for_stage(
             return None
 
         reason = result.get("reason", "") or ""
-        near_miss = ("clash" in reason) or (result.get("distance_to_surface") or 0.0) < 6.5 or (
-            result.get("distance_to_centroid") or 0.0
-        ) < 4.0
+        near_miss = (
+            ("clash" in reason)
+            or (result.get("distance_to_surface") or 0.0) < 6.5
+            or (result.get("distance_to_centroid") or 0.0) < 4.0
+        )
         if not near_miss:
             return None
 
@@ -981,8 +1067,12 @@ def run_gnina_for_stage(
         except Exception:
             base_seed = 0
         stage_retry["seed"] = base_seed + 137
-        stage_retry["num_modes"] = int(cfg.get("NEAR_MISS_NUM_MODES", stage_retry.get("num_modes", 4)))
-        stage_retry["energy_range"] = float(cfg.get("NEAR_MISS_ENERGY_RANGE", stage_retry.get("energy_range", 4.0)))
+        stage_retry["num_modes"] = int(
+            cfg.get("NEAR_MISS_NUM_MODES", stage_retry.get("num_modes", 4))
+        )
+        stage_retry["energy_range"] = float(
+            cfg.get("NEAR_MISS_ENERGY_RANGE", stage_retry.get("energy_range", 4.0))
+        )
 
         center_nm = center
         box_nm = box_size
@@ -990,7 +1080,9 @@ def run_gnina_for_stage(
             try:
                 cent = _pose_centroid_from_pdbqt(str(last_out))
             except Exception as _e:
-                logger.warning(f"[near-miss] failed to compute centroid for {os.path.basename(lig)}: {_e}")
+                logger.warning(
+                    f"[near-miss] failed to compute centroid for {os.path.basename(lig)}: {_e}"
+                )
                 cent = None
             if cent and isinstance(cent, (list, tuple)) and len(cent) == 3:
                 try:
@@ -1024,7 +1116,9 @@ def run_gnina_for_stage(
                 "%s | %s score: %s (gnina near-miss rescued)",
                 os.path.basename(lig),
                 stage_retry["name"],
-                f"{primary_retry:.2f}" if isinstance(primary_retry, (int, float)) else "None",
+                f"{primary_retry:.2f}"
+                if isinstance(primary_retry, (int, float))
+                else "None",
             )
         return metrics_retry
 
@@ -1058,7 +1152,9 @@ def run_gnina_for_stage(
                 break
 
             stage_retry2 = dict(base_stage)
-            stage_retry2["name"] = f"{base_stage.get('name', base_stage_name)}_r{attempt + 1}"
+            stage_retry2[
+                "name"
+            ] = f"{base_stage.get('name', base_stage_name)}_r{attempt + 1}"
             stage_retry2["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
 
             if "exhaustiveness" in recipe:
@@ -1071,7 +1167,11 @@ def run_gnina_for_stage(
                 stage_retry2["exhaustiveness"] = 1
             if recipe.get("seed_jitter", False):
                 try:
-                    base_seed = int(stage_retry2.get("seed", 0)) if "seed" in stage_retry2 else 0
+                    base_seed = (
+                        int(stage_retry2.get("seed", 0))
+                        if "seed" in stage_retry2
+                        else 0
+                    )
                 except Exception:
                     base_seed = 0
                 stage_retry2["seed"] = base_seed + (attempt + 1) * 137
@@ -1083,7 +1183,9 @@ def run_gnina_for_stage(
                     cent = _pose_centroid_from_pdbqt(str(last_out_path))
                     if cent and isinstance(cent, (list, tuple)) and len(cent) == 3:
                         retry_center = tuple(float(x) for x in cent)
-                if "box_pad_delta" in recipe and isinstance(recipe["box_pad_delta"], (int, float)):
+                if "box_pad_delta" in recipe and isinstance(
+                    recipe["box_pad_delta"], (int, float)
+                ):
                     dx = float(recipe["box_pad_delta"])
                     box_cap = float(cfg.get("BOX_SIZE_MAX_A", 28.0))
                     retry_box = tuple(min(box_cap, s + dx) for s in box_size)
@@ -1104,7 +1206,9 @@ def run_gnina_for_stage(
                     "%s | %s score: %s (gnina structured retry rescued)",
                     os.path.basename(lig),
                     stage_retry2["name"],
-                    f"{primary_retry:.2f}" if isinstance(primary_retry, (int, float)) else "None",
+                    f"{primary_retry:.2f}"
+                    if isinstance(primary_retry, (int, float))
+                    else "None",
                 )
                 break
             result = result_retry
@@ -1114,7 +1218,9 @@ def run_gnina_for_stage(
 
     submit_ligands: List[str] = []
     for lig in ligands:
-        guard = guards_for_ligand.get(lig) or BudgetGuard(default_budget_seconds, log=logger)
+        guard = guards_for_ligand.get(lig) or BudgetGuard(
+            default_budget_seconds, log=logger
+        )
         guards_for_ligand[lig] = guard
         if guard.expired():
             scores[lig] = None
@@ -1127,7 +1233,12 @@ def run_gnina_for_stage(
                 "reason": "budget_exceeded",
                 "self_rmsd": None,
             }
-            logger.info("[gnina.budget] pdb=%s lig=%s stage=%s reason=budget_exceeded", pdb_id, lig, gnina_stage_name)
+            logger.info(
+                "[gnina.budget] pdb=%s lig=%s stage=%s reason=budget_exceeded",
+                pdb_id,
+                lig,
+                gnina_stage_name,
+            )
             continue
         submit_ligands.append(lig)
 
@@ -1167,17 +1278,24 @@ def run_gnina_for_stage(
                         gnina_stage_name,
                         e,
                     )
-                    primary, metrics, result, out_gnina = None, {
-                        "minimized_affinity_kcal": None,
-                        "cnn_score": None,
-                        "cnn_affinity_pK": None,
-                        "gnina_primary_score": None,
-                        "valid": False,
-                        "reason": "gnina_failed",
-                        "self_rmsd": None,
-                    }, {"valid": False, "reason": "gnina_failed"}, None
+                    primary, metrics, result, out_gnina = (
+                        None,
+                        {
+                            "minimized_affinity_kcal": None,
+                            "cnn_score": None,
+                            "cnn_affinity_pK": None,
+                            "gnina_primary_score": None,
+                            "valid": False,
+                            "reason": "gnina_failed",
+                            "self_rmsd": None,
+                        },
+                        {"valid": False, "reason": "gnina_failed"},
+                        None,
+                    )
 
-                guard = guards_for_ligand.get(lig) or BudgetGuard(default_budget_seconds, log=logger)
+                guard = guards_for_ligand.get(lig) or BudgetGuard(
+                    default_budget_seconds, log=logger
+                )
                 guards_for_ligand[lig] = guard
 
                 final_metrics = metrics
@@ -1186,12 +1304,18 @@ def run_gnina_for_stage(
                         final_metrics = dict(metrics)
                         final_metrics["reason"] = "budget_exceeded"
                     else:
-                        near_miss_metrics = _near_miss_retry(lig, dict(stage_info), result, guard, out_gnina)
+                        near_miss_metrics = _near_miss_retry(
+                            lig, dict(stage_info), result, guard, out_gnina
+                        )
                         if near_miss_metrics and near_miss_metrics.get("valid", False):
                             final_metrics = near_miss_metrics
                         else:
-                            structured_metrics = _structured_retries(lig, dict(stage_info), result, guard, out_gnina)
-                            if structured_metrics and structured_metrics.get("valid", False):
+                            structured_metrics = _structured_retries(
+                                lig, dict(stage_info), result, guard, out_gnina
+                            )
+                            if structured_metrics and structured_metrics.get(
+                                "valid", False
+                            ):
                                 final_metrics = structured_metrics
                             elif structured_metrics:
                                 final_metrics = structured_metrics

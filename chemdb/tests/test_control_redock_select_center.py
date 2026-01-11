@@ -94,12 +94,13 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
         sys.executable,
         os.fspath(root / "main.py"),
         "-fast",
-        "-pdbs", pdbs_arg,
+        "-pdbs",
+        pdbs_arg,
         "--no-docking",
-        "-run-id", run_id,
+        "-run-id",
+        run_id,
         "--single",
         "dexamethasone",
-
     ]
 
     result = subprocess.run(
@@ -148,10 +149,7 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
         )
     if invalid_rmsd_lines:
         preview = "\n".join(invalid_rmsd_lines[:10])
-        pytest.fail(
-            "Invalid control-redock RMSD values detected:\n"
-            f"{preview}"
-        )
+        pytest.fail(f"Invalid control-redock RMSD values detected:\n{preview}")
 
     run_id = _run_id_from_stdout(result.stdout)
     if not run_id:
@@ -187,7 +185,5 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
     assert not missing, (
         "Expected control redocking to be used for pocket_detection "
         "for all DUD targets, but these PDBs had no completed entry "
-        "with method='control': "
-        + ", ".join(sorted(missing))
-        + f"\nRun ID: {run_id}"
+        "with method='control': " + ", ".join(sorted(missing)) + f"\nRun ID: {run_id}"
     )

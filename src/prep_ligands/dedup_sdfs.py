@@ -1,10 +1,13 @@
 # dedup_sdfs.py
 from __future__ import annotations
-import csv, sys, re
+import csv
+import sys
+import re
 from pathlib import Path
 from typing import Iterable, List, Dict, Tuple, Any
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
+
 # --- robust imports for standardization ---
 Standardize = None
 try:
@@ -16,6 +19,7 @@ except Exception:
         Standardize = None
 from rdkit.Chem.SaltRemover import SaltRemover
 from input_and_export_functions import load_config, validate_config
+
 _cfg = load_config("config.txt") or {}
 try:
     validate_config(_cfg)
@@ -23,10 +27,8 @@ except Exception:
     pass
 
 _ID_PREFIX = str(_cfg.get("DEDUP_ID_PREFIX", "fda_"))
-_ID_WIDTH  = int(_cfg.get("DEDUP_ID_WIDTH", 4))
+_ID_WIDTH = int(_cfg.get("DEDUP_ID_WIDTH", 4))
 _FDA_RE = re.compile(rf"^{re.escape(_ID_PREFIX)}\d{{{_ID_WIDTH}}}$", re.IGNORECASE)
-
-
 
 
 def _iter_mols(paths: Iterable[Path]):
@@ -79,6 +81,7 @@ def _make_keys(m_parent: Chem.Mol) -> Tuple[str, str]:
 
 def _choose_rep(existing: Chem.Mol, candidate: Chem.Mol) -> Chem.Mol:
     """Prefer higher heavy-atom count; then 3D conformer."""
+
     def score(m: Chem.Mol):
         ha = m.GetNumHeavyAtoms()
         has3d = False
@@ -97,7 +100,6 @@ def _pick_rep_name(members: List[str], fallback_name: str) -> str:
         if _FDA_RE.match(nm):
             return nm
     return fallback_name
-
 
 
 def dedup_sdfs(
@@ -119,8 +121,8 @@ def dedup_sdfs(
     map_file = Path(map_file)
     dups_file = Path(dups_file)
 
-    reps: Dict[str, Chem.Mol] = {}          # key_full -> representative RDKit Mol
-    groups: Dict[str, List[Dict[str, str]]] = {}   # key_full -> list of member metadata
+    reps: Dict[str, Chem.Mol] = {}  # key_full -> representative RDKit Mol
+    groups: Dict[str, List[Dict[str, str]]] = {}  # key_full -> list of member metadata
     names_by_key: Dict[str, List[str]] = {}  # key_full -> original names
 
     # Build groups and choose representatives
@@ -133,7 +135,12 @@ def dedup_sdfs(
         key_full, key_parent14 = _make_keys(parent)
 
         groups.setdefault(key_full, []).append(
-            {"orig_name": orig_name, "source_file": src, "source_idx": idx, "parent14": key_parent14}
+            {
+                "orig_name": orig_name,
+                "source_file": src,
+                "source_idx": idx,
+                "parent14": key_parent14,
+            }
         )
         names_by_key.setdefault(key_full, []).append(orig_name)
 
@@ -185,12 +192,28 @@ def dedup_sdfs(
     with map_file.open("w", newline="") as f:
         wcsv = csv.writer(f)
         wcsv.writerow(
-            ["dedupe_key_full", "parent14", "rep_fda_id", "member_name", "member_source_file", "member_source_idx"]
+            [
+                "dedupe_key_full",
+                "parent14",
+                "rep_fda_id",
+                "member_name",
+                "member_source_file",
+                "member_source_idx",
+            ]
         )
         for key, members in groups.items():
             rep_fda = key_to_repname[key]
             for m in members:
-                wcsv.writerow([key, m["parent14"], rep_fda, m["orig_name"], m["source_file"], m["source_idx"]])
+                wcsv.writerow(
+                    [
+                        key,
+                        m["parent14"],
+                        rep_fda,
+                        m["orig_name"],
+                        m["source_file"],
+                        m["source_idx"],
+                    ]
+                )
 
     # Parent-level variant report
     parent_groups: Dict[str, set] = {}
@@ -214,7 +237,9 @@ def dedup_sdfs(
     return {
         "n_unique_exact": len(reps),
         "n_parent_groups": len(parent_groups),
-        "last_id_used": max(int(x.split("_")[1]) for x in used_ids if _FDA_RE.match(x)) if used_ids else None,
+        "last_id_used": max(int(x.split("_")[1]) for x in used_ids if _FDA_RE.match(x))
+        if used_ids
+        else None,
         "out_file": str(out_file),
         "map_file": str(map_file),
         "dups_file": str(dups_file),
@@ -224,11 +249,12 @@ def dedup_sdfs(
 # Optional CLI wrapper so this file also works as a script if you ever need it.
 def _main_cli():
     import argparse
+
     ap = argparse.ArgumentParser(description="De-duplicate SDFs and mint/keep IDs.")
-    ap.add_argument("--in",  dest="inputs",   nargs="+", required=True)
+    ap.add_argument("--in", dest="inputs", nargs="+", required=True)
     ap.add_argument("--out", dest="out_file", required=True)
     ap.add_argument("--map", dest="map_file", required=True)
-    ap.add_argument("--dups",dest="dups_file",required=True)
+    ap.add_argument("--dups", dest="dups_file", required=True)
     # [ANCHOR CLI default from cfg; user-provided still wins]
     ap.add_argument("--id-seed", type=int, default=int(_cfg.get("DEDUP_ID_SEED", 1)))
     args = ap.parse_args()
@@ -240,6 +266,7 @@ def _main_cli():
         id_seed=args.id_seed,
     )
     print(f"Done. Summary: {summary}")
+
 
 if __name__ == "__main__":
     _main_cli()

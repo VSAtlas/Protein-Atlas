@@ -20,17 +20,26 @@ def _pdb_line(record, serial, name, resname, chain, resseq, x, y, z, element):
 
 
 def _tleap_available():
-    env_prefix = Path(os.environ.get("AMBERTOOLS_PREFIX", "")).expanduser() if os.environ.get("AMBERTOOLS_PREFIX") else None
+    env_prefix = (
+        Path(os.environ.get("AMBERTOOLS_PREFIX", "")).expanduser()
+        if os.environ.get("AMBERTOOLS_PREFIX")
+        else None
+    )
     if env_prefix:
         if "/micromamba/pkgs" in env_prefix.as_posix():
             return False
         if (env_prefix / "bin" / "tleap").is_file():
-            return shutil.which("micromamba") is not None or Path("/home/michael/atlas/micromamba/bin/micromamba").is_file()
+            return (
+                shutil.which("micromamba") is not None
+                or Path("/home/michael/atlas/micromamba/bin/micromamba").is_file()
+            )
     return shutil.which("tleap") is not None
 
 
 def test_mmgbsa_leap_generation_no_tleap(tmp_path):
-    base_dir = tmp_path / "post_docked" / "RUNTEST" / "TESTP" / "HOLO" / "pH7_0" / "stage1"
+    base_dir = (
+        tmp_path / "post_docked" / "RUNTEST" / "TESTP" / "HOLO" / "pH7_0" / "stage1"
+    )
     base_dir.mkdir(parents=True, exist_ok=True)
 
     receptor_pdb = base_dir / "receptor.pdb"
@@ -89,7 +98,9 @@ def test_mmgbsa_leap_generation_with_tleap(tmp_path):
     if not _tleap_available():
         pytest.skip("tleap not available")
 
-    base_dir = tmp_path / "post_docked" / "RUNTEST" / "TESTP" / "HOLO" / "pH7_0" / "stage1"
+    base_dir = (
+        tmp_path / "post_docked" / "RUNTEST" / "TESTP" / "HOLO" / "pH7_0" / "stage1"
+    )
     base_dir.mkdir(parents=True, exist_ok=True)
 
     receptor_pdb = base_dir / "receptor.pdb"

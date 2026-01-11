@@ -32,7 +32,9 @@ def _normalize_bool(raw: Any, default: bool = False) -> bool:
 
 
 def _use_protein_druggability(cfg: Dict[str, Any]) -> bool:
-    raw = cfg.get("USE_PROTEIN_DRUGGABILITY", cfg.get("use_protein_druggability", False))
+    raw = cfg.get(
+        "USE_PROTEIN_DRUGGABILITY", cfg.get("use_protein_druggability", False)
+    )
     return _normalize_bool(raw, default=False)
 
 
@@ -40,8 +42,11 @@ def _use_gnina_flag(cfg: Dict[str, Any]) -> bool:
     raw = cfg.get("USE_GNINA", cfg.get("use_gnina", False))
     return _normalize_bool(raw, default=False)
 
+
 def _use_family_prior(cfg: Dict[str, Any]) -> bool:
-    raw = cfg.get("USE_PROTEIN_FAMILY_PRIOR", cfg.get("use_protein_family_prior", False))
+    raw = cfg.get(
+        "USE_PROTEIN_FAMILY_PRIOR", cfg.get("use_protein_family_prior", False)
+    )
     return _normalize_bool(raw, default=False)
 
 
@@ -75,8 +80,10 @@ def _load_druggability_metrics(
         return None
 
     preferred = getattr(paths, "input_pdb_path", None)
-    receptor_pdb = Path(preferred) if preferred and Path(preferred).exists() else Path(
-        paths.receptor_cleaned_pdb(variant)
+    receptor_pdb = (
+        Path(preferred)
+        if preferred and Path(preferred).exists()
+        else Path(paths.receptor_cleaned_pdb(variant))
     )
     stem = receptor_pdb.stem
 

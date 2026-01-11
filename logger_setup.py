@@ -1,6 +1,7 @@
-import logging, os
+import logging
 from pathlib import Path
 from input_and_export_functions import load_inputs, validate_config
+
 
 def setup_logger(pdb_id: str, cfg: dict | None = None):
     """
@@ -9,7 +10,8 @@ def setup_logger(pdb_id: str, cfg: dict | None = None):
     Console level honors QUIET_CONSOLE (WARNING if true else INFO).
     """
     if cfg is None:
-        cfg = load_inputs(); validate_config(cfg)
+        cfg = load_inputs()
+        validate_config(cfg)
 
     logs_root = Path(cfg.get("LOGS_DIR", cfg["DOCKED_DIR"]))
     log_dir = logs_root / pdb_id
@@ -26,7 +28,9 @@ def setup_logger(pdb_id: str, cfg: dict | None = None):
     fh.setFormatter(fmt)
 
     ch = logging.StreamHandler()
-    ch.setLevel(logging.WARNING if bool(cfg.get("QUIET_CONSOLE", False)) else logging.INFO)
+    ch.setLevel(
+        logging.WARNING if bool(cfg.get("QUIET_CONSOLE", False)) else logging.INFO
+    )
     ch.setFormatter(fmt)
 
     logger.addHandler(fh)

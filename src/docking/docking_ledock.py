@@ -13,7 +13,11 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import pandas as pd
 
-from dud_eval import compute_decoy_stats_from_long_csv, guess_ligfile_col, guess_score_col
+from dud_eval import (
+    compute_decoy_stats_from_long_csv,
+    guess_ligfile_col,
+    guess_score_col,
+)
 from input_and_export_functions import _to_bool, write_score_summary_to_csv
 from .docking_utils import norm, run_completion_audit
 from path_router.path_router import make_paths, ph_ensemble_dir
@@ -65,7 +69,12 @@ def annotate_ledock_fda_long_csv_with_t_scores_vs_decoys(
         return None
 
     mu, sigma, n_decoys = compute_decoy_stats_from_long_csv(dud_csv)
-    if (not n_decoys) or (not math.isfinite(mu)) or (not math.isfinite(sigma)) or sigma == 0.0:
+    if (
+        (not n_decoys)
+        or (not math.isfinite(mu))
+        or (not math.isfinite(sigma))
+        or sigma == 0.0
+    ):
         if logger:
             logger.info(
                 "[ledock.t-score.skip] pdb_id=%s ph=%s reason=degenerate_stats n=%s mu=%s sigma=%s",
@@ -161,7 +170,7 @@ def _label_from_manifest_entry(entry: Dict[str, Any], pdb_id: str) -> Optional[s
     if tag:
         tag_str = str(tag)
         prefix = f"{pdb_id}_"
-        return tag_str[len(prefix):] if tag_str.startswith(prefix) else tag_str
+        return tag_str[len(prefix) :] if tag_str.startswith(prefix) else tag_str
 
     for key in ("withH", "pdbqt", "receptor_pdbqt", "output_pdbqt", "path", "receptor"):
         raw = entry.get(key)
@@ -171,7 +180,7 @@ def _label_from_manifest_entry(entry: Dict[str, Any], pdb_id: str) -> Optional[s
         if stem.endswith(".withH"):
             stem = stem[: -len(".withH")]
         prefix = f"{pdb_id}_"
-        return stem[len(prefix):] if stem.startswith(prefix) else stem
+        return stem[len(prefix) :] if stem.startswith(prefix) else stem
     return None
 
 
@@ -187,14 +196,18 @@ def _resolve_ledock_receptor(
         return None
 
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     variant_for_ph = _variant_for_ph(variant_token, legacy_mode)
     ensemble_dir = ph_ensemble_dir(pdb_id, variant=variant_for_ph, legacy=legacy_mode)
     manifest_path = ensemble_dir / "ensemble.json"
 
     if manifest_path.exists():
         try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8", errors="ignore"))
+            payload = json.loads(
+                manifest_path.read_text(encoding="utf-8", errors="ignore")
+            )
         except Exception as exc:
             logger.warning(
                 "[ledock.manifest.error] path=%s reason=%s",
@@ -210,11 +223,15 @@ def _resolve_ledock_receptor(
                         continue
                     if entry_label.strip().lower() != label.lower():
                         continue
-                    withh = entry.get("withH") or entry.get("withH_pdb") or entry.get("withH_path")
+                    withh = (
+                        entry.get("withH")
+                        or entry.get("withH_pdb")
+                        or entry.get("withH_path")
+                    )
                     if withh:
                         path = Path(str(withh))
                         if not path.is_absolute():
-                            path = (manifest_path.parent / path)
+                            path = manifest_path.parent / path
                         return path
             logger.info(
                 "[ledock.manifest.miss] pdb=%s variant=%s ph=%s path=%s",
@@ -374,7 +391,9 @@ def _parse_ledock_dok(dok_path: Path) -> Dict[str, Any]:
     }
 
 
-def _resolve_stage_params(stage_name: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+def _resolve_stage_params(
+    stage_name: str,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     if stage_name in LEDOCK_STAGE_PARAMS:
         return stage_name, dict(LEDOCK_STAGE_PARAMS[stage_name])
     for key in LEDOCK_STAGE_PARAMS:
@@ -420,7 +439,10 @@ def run_ledock_for_stage(
     stage_info = stage_info or {}
     scores: Dict[Path, float] = {}
     ledock_metrics: Dict[Path, Dict[str, Any]] = {}
-    completion_report_ledock: Dict[str, Any] = {"success": False, "missing_ligands_after": []}
+    completion_report_ledock: Dict[str, Any] = {
+        "success": False,
+        "missing_ligands_after": [],
+    }
 
     stage_key, stage_params = resolve_ledock_stage_params(cfg, stage_name)
     if not stage_params:
@@ -435,13 +457,17 @@ def run_ledock_for_stage(
         return scores, ledock_metrics, completion_report_ledock
 
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     variant_for_ph = _variant_for_ph(variant_token, legacy_mode)
     ph_token = _normalize_ph_label(ph_label)
 
     receptor_path = Path(receptor_pdb) if receptor_pdb else None
     if receptor_path is None:
-        receptor_path = ensure_ledock_receptor(cfg, pdb_id, variant_token, ph_label, logger)
+        receptor_path = ensure_ledock_receptor(
+            cfg, pdb_id, variant_token, ph_label, logger
+        )
 
     if receptor_path:
         logger.info(
@@ -488,7 +514,9 @@ def run_ledock_for_stage(
         try:
             ensure_mol2_for_ledock(cfg, missing_mol2, logger)
         except Exception as exc:
-            logger.warning("[ledock.mol2.retry.warn] n=%d reason=%s", len(missing_mol2), exc)
+            logger.warning(
+                "[ledock.mol2.retry.warn] n=%d reason=%s", len(missing_mol2), exc
+            )
 
         recovered: List[Path] = []
         for lig_path in list(missing_mol2):
@@ -542,7 +570,11 @@ def run_ledock_for_stage(
             fast_n_poses,
         )
 
-    dock_root = Path(output_root) if output_root is not None else Path(paths.docked_variant_root(variant_for_ph, ph_token))
+    dock_root = (
+        Path(output_root)
+        if output_root is not None
+        else Path(paths.docked_variant_root(variant_for_ph, ph_token))
+    )
     if output_root is not None:
         dok_dest = dock_root
     elif stage_key == "stage1":
@@ -762,7 +794,9 @@ def run_ledock_for_stage(
             name = f"{alias.stem}.dok" if alias else f"{Path(lig).stem}.dok"
             return stage_dir / name
 
-        def _rerun_ledock_missing(lig: str) -> tuple[bool, Optional[str], Optional[Path]]:
+        def _rerun_ledock_missing(
+            lig: str,
+        ) -> tuple[bool, Optional[str], Optional[Path]]:
             lig_path = Path(lig)
             try:
                 sub_scores, sub_metrics, _ = run_ledock_for_stage(
@@ -855,7 +889,9 @@ def write_ledock_scores_csv(
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     ph_token = (ph_label or "").strip() or None
 
-    variant_env = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    variant_env = (
+        (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
+    )
     variant_token = variant_env or None
 
     dock_dir = Path(paths.docked_variant_root(variant_token, ph_token))

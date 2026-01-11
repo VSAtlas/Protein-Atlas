@@ -44,7 +44,6 @@ from prep_docking.prep_for_ledock import ensure_mol2_for_ledock
 from record_data import compute_ligand_efficiency, record_le
 from run_manifest import (
     update_manifest_for_docking_stage,
-    update_manifest_for_protein_failure,
     update_manifest_for_protein_success,
 )
 from checkpoints import checkpoint_mark_done, checkpoint_should_skip
@@ -114,7 +113,9 @@ def finalize_ph_subrun(
             gnina_fp = None
             if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                 try:
-                    gnina_fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, job["stage_info"])
+                    gnina_fp = _fingerprint_stage(
+                        cfg, receptor_pdbqt, center, box_size, job["stage_info"]
+                    )
                     if checkpoint_should_skip(
                         cfg,
                         paths.pdb_id,
@@ -124,7 +125,9 @@ def finalize_ph_subrun(
                         variant=variant_env or None,
                         engine="gnina",
                     ):
-                        logger.info(f"[Checkpoint] Skipping {gnina_stage_name} (fingerprint matched).")
+                        logger.info(
+                            f"[Checkpoint] Skipping {gnina_stage_name} (fingerprint matched)."
+                        )
                         if manifest_run_id:
                             try:
                                 update_manifest_for_docking_stage(
@@ -271,7 +274,9 @@ def finalize_ph_subrun(
                 cnn_score = metrics_entry.get("cnn_score")
                 cnn_affinity = metrics_entry.get("cnn_affinity_pK")
                 valid_flag = bool(metrics_entry.get("valid", False))
-                reason_str = metrics_entry.get("reason", "") or ("gnina_failed" if not valid_flag else "")
+                reason_str = metrics_entry.get("reason", "") or (
+                    "gnina_failed" if not valid_flag else ""
+                )
                 self_rmsd_val = metrics_entry.get("self_rmsd", None)
 
                 ha_val = heavy_atom_counts.get(lig)
@@ -285,7 +290,9 @@ def finalize_ph_subrun(
                     "gnina_primary_score": primary_score,
                     "valid": bool(valid_flag),
                     "reason": reason_str,
-                    "heavy_atoms": int(ha_val) if isinstance(ha_val, (int, float)) else None,
+                    "heavy_atoms": int(ha_val)
+                    if isinstance(ha_val, (int, float))
+                    else None,
                     "le": le_val,
                     "self_rmsd": self_rmsd_val,
                     "pains_flag": bool(pains_val) if pains_val is not None else False,
@@ -301,10 +308,14 @@ def finalize_ph_subrun(
                         "cnn_affinity_pK": cnn_affinity,
                         "valid": bool(valid_flag),
                         "reason": reason_str or "",
-                        "heavy_atoms": int(ha_val) if isinstance(ha_val, (int, float)) else None,
+                        "heavy_atoms": int(ha_val)
+                        if isinstance(ha_val, (int, float))
+                        else None,
                         "le": le_val,
                         "self_rmsd": self_rmsd_val,
-                        "pains_flag": bool(pains_val) if pains_val is not None else False,
+                        "pains_flag": bool(pains_val)
+                        if pains_val is not None
+                        else False,
                     }
                 )
     else:
@@ -338,7 +349,9 @@ def finalize_ph_subrun(
                     n_stages=len(stages_for_run),
                 )
             except Exception as e:
-                logger.warning("[gnina.staging] failed to compute stage membership: %s", e)
+                logger.warning(
+                    "[gnina.staging] failed to compute stage membership: %s", e
+                )
                 gnina_stage_membership = {}
 
         for stage_idx, lig_list in (gnina_stage_membership or {}).items():
@@ -357,7 +370,11 @@ def finalize_ph_subrun(
             if (
                 isinstance(sc, (int, float))
                 and math.isfinite(sc)
-                and (not isinstance(prev_sc, (int, float)) or not math.isfinite(prev_sc) or sc > prev_sc)
+                and (
+                    not isinstance(prev_sc, (int, float))
+                    or not math.isfinite(prev_sc)
+                    or sc > prev_sc
+                )
             ):
                 best_rec_for_lig[lig] = rec
 
@@ -376,7 +393,13 @@ def finalize_ph_subrun(
                 rec["valid"],
                 reason=rec["reason"] or None,
             )
-            record_le(score_history_gnina, gnina_stage_name, lig, rec["primary_score"], heavy_atom_counts)
+            record_le(
+                score_history_gnina,
+                gnina_stage_name,
+                lig,
+                rec["primary_score"],
+                heavy_atom_counts,
+            )
 
             gnina_metrics_by_stage_best[gnina_stage_name][lig] = {
                 "minimized_affinity_kcal": rec["minimized_affinity_kcal"],
@@ -477,7 +500,9 @@ def finalize_ph_subrun(
                     logger=logger,
                 )
                 dock6_metrics_by_stage[stage_name] = dock6_metrics
-                valid_count = sum(1 for rec in dock6_metrics.values() if rec.get("valid"))
+                valid_count = sum(
+                    1 for rec in dock6_metrics.values() if rec.get("valid")
+                )
                 invalid_count = max(len(dock6_metrics) - valid_count, 0)
                 dock6_elapsed = time.time() - dock6_start_ts
                 if manifest_run_id:
@@ -569,7 +594,9 @@ def finalize_ph_subrun(
 
             if bool(cfg.get("CHECKPOINT_ENABLE", True)):
                 try:
-                    ledock_fp = _fingerprint_stage(cfg, receptor_pdbqt, center, box_size, job["stage_info"])
+                    ledock_fp = _fingerprint_stage(
+                        cfg, receptor_pdbqt, center, box_size, job["stage_info"]
+                    )
                     if checkpoint_should_skip(
                         cfg,
                         paths.pdb_id,
@@ -579,7 +606,9 @@ def finalize_ph_subrun(
                         variant=variant_env or None,
                         engine="ledock",
                     ):
-                        logger.info(f"[Checkpoint] Skipping {ledock_stage_name} (fingerprint matched).")
+                        logger.info(
+                            f"[Checkpoint] Skipping {ledock_stage_name} (fingerprint matched)."
+                        )
                         if manifest_run_id:
                             try:
                                 update_manifest_for_docking_stage(
@@ -642,7 +671,9 @@ def finalize_ph_subrun(
                     logger=logger,
                 )
                 ledock_metrics_by_stage[stage_name] = ledock_metrics
-                valid_count = sum(1 for rec in ledock_metrics.values() if rec.get("valid"))
+                valid_count = sum(
+                    1 for rec in ledock_metrics.values() if rec.get("valid")
+                )
                 invalid_count = max(len(ledock_metrics) - valid_count, 0)
                 ledock_elapsed = time.time() - ledock_start_ts
                 if manifest_run_id:
@@ -759,8 +790,17 @@ def finalize_ph_subrun(
 
     # --- Pose Validation & Screenshots ---
     final_pose_validation_and_screenshots(
-        cfg, paths.pdb_id, stages_for_run, receptor_pdbqt, center, validated_ligands_last,
-        score_history, paths.receptor_cleaned_pdb(variant_token), docking_mode, logger, ph_label
+        cfg,
+        paths.pdb_id,
+        stages_for_run,
+        receptor_pdbqt,
+        center,
+        validated_ligands_last,
+        score_history,
+        paths.receptor_cleaned_pdb(variant_token),
+        docking_mode,
+        logger,
+        ph_label,
     )
 
     csv_path = write_scores_csv(
@@ -855,6 +895,7 @@ def finalize_ph_subrun(
                 variant_label,
                 ph_label if ph_label else "base",
             )
+
             # dedupe list
             def _norm_dedupe(seq):
                 seen = set()
@@ -922,7 +963,9 @@ def finalize_ph_subrun(
             summary["roc_auc"] = difficulty_info.roc_auc
             summary["difficulty_N"] = difficulty_info.N
             summary["difficulty_n_actives"] = difficulty_info.n_actives
-        _write_audit_json(cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None)
+        _write_audit_json(
+            cfg, paths.pdb_id, summary, ph_label=ph_label, variant=variant_env or None
+        )
     except Exception as _e:
         logger.warning(f"Audit JSON write failed: {_e}")
 

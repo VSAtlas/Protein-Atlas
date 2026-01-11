@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
-from distutils.util import strtobool
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from path_router.path_router import Paths, docked_dir
 
@@ -15,11 +13,6 @@ from .docking_controls import (
     _ph_values_from_context,
     _ph_ligand_mode,
     _resolve_ph_scope,
-    select_center_via_control_redock,
-    detect_pocket,
-    _summarize_ions_file,
-    build_control_lookup,
-    extract_ligands_to_nolig,
 )
 
 from .docking_ligands import _lib_roots_for_pdb
@@ -70,28 +63,48 @@ def prepare_receptor(
         log.info("[ph_ensemble.anchor] cleaned_receptor_pdb=%s", cleaned_path)
         log.info("[ph_ensemble.begin] pdb_id=%s path=%s", paths.pdb_id, cleaned_path)
 
-        def _collect_dock_targets(manifest_path: str) -> Optional[list[tuple[str, str]]]:
+        def _collect_dock_targets(
+            manifest_path: str,
+        ) -> Optional[list[tuple[str, str]]]:
             manifest_file = Path(manifest_path)
             try:
                 payload = json.loads(manifest_file.read_text())
             except Exception as exc:
-                log.error("[ph_ensemble.manifest.read.error] path=%s err=%s", manifest_path, exc)
+                log.error(
+                    "[ph_ensemble.manifest.read.error] path=%s err=%s",
+                    manifest_path,
+                    exc,
+                )
                 return None
 
             members = payload.get("members") or []
             # Diagnostics: enumerate keys and canonical counts.
             try:
-                key_universe = sorted({k for m in members for k in (m.keys() if isinstance(m, dict) else [])})
+                key_universe = sorted(
+                    {
+                        k
+                        for m in members
+                        for k in (m.keys() if isinstance(m, dict) else [])
+                    }
+                )
             except Exception:
                 key_universe = []
             log.info(
                 "[ph_ensemble.manifest.stats] members=%d canonical=%d keys=%s",
                 len(members),
-                sum(1 for m in members if isinstance(m, dict) and bool(m.get("canonical", False))),
+                sum(
+                    1
+                    for m in members
+                    if isinstance(m, dict) and bool(m.get("canonical", False))
+                ),
                 ",".join(key_universe),
             )
 
-            canonical = [m for m in members if isinstance(m, dict) and bool(m.get("canonical", False))]
+            canonical = [
+                m
+                for m in members
+                if isinstance(m, dict) and bool(m.get("canonical", False))
+            ]
             if canonical:
                 members = canonical
 
@@ -108,18 +121,25 @@ def prepare_receptor(
                     or entry.get("receptor")
                 )
                 if not receptor_path:
-                    log.warning("[ph_ensemble.manifest.entry.missing_pdbqt] keys=%s", list(entry.keys()))
+                    log.warning(
+                        "[ph_ensemble.manifest.entry.missing_pdbqt] keys=%s",
+                        list(entry.keys()),
+                    )
                     continue
 
                 ph_label = entry.get("label") or entry.get("ph_label")
                 if not ph_label:
                     stem = Path(receptor_path).stem
-                    ph_label = stem[len(prefix):] if stem.startswith(prefix) else stem
+                    ph_label = stem[len(prefix) :] if stem.startswith(prefix) else stem
 
                 targets.append((str(ph_label), str(receptor_path)))
 
             if not targets:
-                log.error("[ph_ensemble.manifest.no_targets] path=%s members=%d", manifest_path, len(members))
+                log.error(
+                    "[ph_ensemble.manifest.no_targets] path=%s members=%d",
+                    manifest_path,
+                    len(members),
+                )
             return targets
 
         def _bridge_manifest_targets(manifest_path: str) -> None:
@@ -131,7 +151,9 @@ def prepare_receptor(
             log.info(
                 "[ph_ensemble.map] pdb_id=%s canonical=%s",
                 paths.pdb_id,
-                ";".join(f"{lbl}:{Path(p).name}" for lbl, p in targets) if targets else ""
+                ";".join(f"{lbl}:{Path(p).name}" for lbl, p in targets)
+                if targets
+                else "",
             )
             variant_label = variant or "legacy"
             log.info(
@@ -151,7 +173,9 @@ def prepare_receptor(
                 return
             legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
             for ph_label, _ in targets:
-                ph_root = docked_dir(paths.pdb_id, variant=variant, ph_tag=ph_label, legacy=legacy_mode)
+                ph_root = docked_dir(
+                    paths.pdb_id, variant=variant, ph_tag=ph_label, legacy=legacy_mode
+                )
                 log.info(
                     "[ph_ensemble.dock.root] pdb_id=%s variant=%s ph=%s dock_root=%s",
                     paths.pdb_id,
@@ -170,13 +194,18 @@ def prepare_receptor(
 
         try:
             from path_router.context_ph import select_ph_from_pdb
+
             ctx_result = select_ph_from_pdb(cleaned_path)
         except Exception as exc:
             log.warning("[ph_ensemble.ctx.error] %s", exc)
             ctx_result = {"target_pH": 7.0, "ensemble": None}
         target_pH = float(ctx_result.get("target_pH", 7.0) or 7.0)
         ensemble_from_context = ctx_result.get("ensemble")
-        log.info("[ph_ensemble.ctx] target_pH=%.2f raw_ensemble=%s", target_pH, repr(ensemble_from_context))
+        log.info(
+            "[ph_ensemble.ctx] target_pH=%.2f raw_ensemble=%s",
+            target_pH,
+            repr(ensemble_from_context),
+        )
         raw_values = list(ensemble_from_context or [target_pH])
         ph_values: list[float] = []
         for value in raw_values:
@@ -198,17 +227,27 @@ def prepare_receptor(
                 fallback = 10.5
             ph_values = [fallback]
         ph_values = sorted({round(p, 1) for p in ph_values})
-        log.info("[ph_ensemble.list] canonical=%s", ",".join(f"{p:.1f}" for p in ph_values))
+        log.info(
+            "[ph_ensemble.list] canonical=%s", ",".join(f"{p:.1f}" for p in ph_values)
+        )
         radius_nominal = getattr(cfg, "PH_RADIUS", 10.0)
         try:
             radius_nominal = float(radius_nominal)
         except Exception:
             radius_nominal = 10.0
         scope_cfg = getattr(cfg, "PH_SCOPE", "")
-        scope, center, eff_radius = _resolve_ph_scope(scope_cfg, radius_nominal, paths, cleaned_path, log)
+        scope, center, eff_radius = _resolve_ph_scope(
+            scope_cfg, radius_nominal, paths, cleaned_path, log
+        )
         log.info("[ph_ensemble.pick.scope] scope=%s", scope)
         if scope == "pocket":
-            log.info("[ph_ensemble.pick.center] center=(%.3f,%.3f,%.3f) radius=%.1f", center[0], center[1], center[2], radius_nominal)
+            log.info(
+                "[ph_ensemble.pick.center] center=(%.3f,%.3f,%.3f) radius=%.1f",
+                center[0],
+                center[1],
+                center[2],
+                radius_nominal,
+            )
         else:
             log.info("[ph_ensemble.pick.center] center=GLOBAL radius=ALL")
         log.info("[ph_ensemble.call] building pH ensemble for %s", paths.pdb_id)
@@ -219,6 +258,7 @@ def prepare_receptor(
             prev_cfg = None
         try:
             import ph_ensemble
+
             manifest_path = ph_ensemble.build_ph_ensemble(
                 pdb_id=paths.pdb_id,
                 cleaned_receptor_pdb=cleaned_path,
@@ -235,26 +275,31 @@ def prepare_receptor(
 
             # --- DEBUG: measure map size before/after bridge ---
             try:
-                _pre = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, []))
+                _pre = len(
+                    (cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, [])
+                )
             except Exception:
                 _pre = -1
-            log.info("[ph_ensemble.debug] before-bridge map_len[%s]=%d", paths.pdb_id, _pre)
+            log.info(
+                "[ph_ensemble.debug] before-bridge map_len[%s]=%d", paths.pdb_id, _pre
+            )
 
             if manifest_path:
                 _bridge_manifest_targets(str(manifest_path))
 
             try:
-                _post = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, []))
+                _post = len(
+                    (cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(paths.pdb_id, [])
+                )
             except Exception:
                 _post = -1
-            log.info("[ph_ensemble.debug] after-bridge map_len[%s]=%d", paths.pdb_id, _post)
+            log.info(
+                "[ph_ensemble.debug] after-bridge map_len[%s]=%d", paths.pdb_id, _post
+            )
             # ---------------------------------------------------
 
             log.info("[ph_ensemble.done] ok=True")
             return manifest_path
-
-
-
 
         except Exception as exc:
             log.error("[ph_ensemble.error] %s", exc)
@@ -264,10 +309,16 @@ def prepare_receptor(
             if prev_cfg is not None:
                 automate_protein_prep.config = prev_cfg
 
-    if cleaned_pdb_path.exists() and receptor_pdbqt_path.exists() and not force_reprocess:
+    if (
+        cleaned_pdb_path.exists()
+        and receptor_pdbqt_path.exists()
+        and not force_reprocess
+    ):
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
         try:
-            if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)) and not receptor_sanity_check(str(receptor_pdbqt_path)):
+            if bool(
+                cfg.get("RECEPTOR_SANITY_CHECK", True)
+            ) and not receptor_sanity_check(str(receptor_pdbqt_path)):
                 logger.warning("Receptor sanity check failed (cached receptor).")
                 prepare_receptor.last_provenance = "cache_reuse_failed"
                 return None, None
@@ -282,7 +333,10 @@ def prepare_receptor(
                 try:
                     context_ph_values = _ph_values_from_context(cleaned_pdb_path)
                 except Exception as e:
-                    logger.warning("[ph_ligand] failed to load context pH values; skipping ligand enumeration: %s", e)
+                    logger.warning(
+                        "[ph_ligand] failed to load context pH values; skipping ligand enumeration: %s",
+                        e,
+                    )
                     context_ph_values = []
 
                 if context_ph_values:
@@ -311,7 +365,9 @@ def prepare_receptor(
                         _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(
                             cfg, paths.pdb_id.upper(), paths, logger
                         )
-                        ph_ligand_root = noncontrol_roots[0] if noncontrol_roots else None
+                        ph_ligand_root = (
+                            noncontrol_roots[0] if noncontrol_roots else None
+                        )
                         logger.info(
                             "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
                             paths.pdb_id,
@@ -340,18 +396,27 @@ def prepare_receptor(
                                     pdb_id=paths.pdb_id,
                                 )
                             except Exception as e:
-                                logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                                logger.warning(
+                                    "[ph_ligand] ligand enumeration failed (non-fatal): %s",
+                                    e,
+                                )
                     else:
-                        logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
+                        logger.info(
+                            "[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration"
+                        )
                 else:
-                    logger.info("[ph_ligand] no context pH values available; ligand enumeration skipped")
+                    logger.info(
+                        "[ph_ligand] no context pH values available; ligand enumeration skipped"
+                    )
         prepare_receptor.last_provenance = "cache_reuse"
         return cleaned_norm, receptor_norm
-    
+
     # --- PH_ENSEMBLE gating of legacy protonation ---
     if bool(cfg.get("PH_ENSEMBLE", False)):
         os.environ["A2_SKIP_PDB2PQR"] = "1"
-        logger.info("[ph_ensemble] enabling ensemble mode: A2_SKIP_PDB2PQR=1 for cleaning stage")
+        logger.info(
+            "[ph_ensemble] enabling ensemble mode: A2_SKIP_PDB2PQR=1 for cleaning stage"
+        )
     else:
         os.environ.pop("A2_SKIP_PDB2PQR", None)
         logger.info("[ph_ensemble] disabled; legacy cleaning path unchanged")
@@ -360,7 +425,9 @@ def prepare_receptor(
     try:
         cleaned_pdb = automate_protein_prep.clean_pdb(
             pdb_file=str(paths.input_pdb_path),
-            output_root=str(Path(cfg["OUTPUT_DIR"])),  # processed_pdbs root; module lays out subdirs
+            output_root=str(
+                Path(cfg["OUTPUT_DIR"])
+            ),  # processed_pdbs root; module lays out subdirs
             logger=logger,
         )
     except Exception as e:
@@ -378,6 +445,7 @@ def prepare_receptor(
         if Path(cleaned_pdb).resolve() != cleaned_pdb_path.resolve():
             cleaned_pdb_path.parent.mkdir(parents=True, exist_ok=True)
             from shutil import copy2
+
             copy2(str(cleaned_pdb), str(cleaned_pdb_path))
             cleaned_pdb = str(cleaned_pdb_path)
         else:
@@ -398,7 +466,10 @@ def prepare_receptor(
             # used to build the ensemble, instead of parsing any filenames.
             context_ph_values = _ph_values_from_context(cleaned_pdb_path)
         except Exception as e:
-            logger.warning("[ph_ligand] failed to load context pH values; skipping ligand enumeration: %s", e)
+            logger.warning(
+                "[ph_ligand] failed to load context pH values; skipping ligand enumeration: %s",
+                e,
+            )
             context_ph_values = []
 
         if context_ph_values:
@@ -426,10 +497,16 @@ def prepare_receptor(
                     ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                     ",".join(f"{p:.1f}" for p in ligand_ph_values),
                 )
-                _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(cfg, paths.pdb_id.upper(), paths, logger)
+                _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(
+                    cfg, paths.pdb_id.upper(), paths, logger
+                )
                 ph_ligand_root = noncontrol_roots[0] if noncontrol_roots else None
 
-                if ligand_ph_values and ph_ligand_root is not None and ph_ligand_root.exists():
+                if (
+                    ligand_ph_values
+                    and ph_ligand_root is not None
+                    and ph_ligand_root.exists()
+                ):
                     logger.info(
                         "[ph_ligand.context.bridge] pdb=%s root_dir=%s requested_ph=%s",
                         paths.pdb_id,
@@ -451,18 +528,26 @@ def prepare_receptor(
                             force=False,
                         )
                     except Exception as e:
-                        logger.warning("[ph_ligand] ligand enumeration failed (non-fatal): %s", e)
+                        logger.warning(
+                            "[ph_ligand] ligand enumeration failed (non-fatal): %s", e
+                        )
                 else:
                     logger.info(
                         "[ph_ligand.context.bridge.skip] no valid ligand root or empty window; skipping microstate priming"
                     )
             else:
-                logger.info("[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration")
+                logger.info(
+                    "[ph_ligand] context pH values present but window is empty after clamping; skipping ligand enumeration"
+                )
         else:
-            logger.info("[ph_ligand] no context pH values available; ligand enumeration skipped")
+            logger.info(
+                "[ph_ligand] no context pH values available; ligand enumeration skipped"
+            )
 
     try:
-        provenance = getattr(automate_protein_prep, "get_clean_provenance", lambda: "clean_pdb")()
+        provenance = getattr(
+            automate_protein_prep, "get_clean_provenance", lambda: "clean_pdb"
+        )()
     except Exception:
         provenance = "clean_pdb"
     prepare_receptor.last_provenance = provenance
@@ -470,9 +555,7 @@ def prepare_receptor(
     # Generate receptor PDBQT directly at the variant-aware path
     try:
         ok = automate_protein_prep.run_prepare_receptor(
-            input_pdb=cleaned_pdb,
-            output_pdbqt=str(receptor_pdbqt_path),
-            cfg=cfg
+            input_pdb=cleaned_pdb, output_pdbqt=str(receptor_pdbqt_path), cfg=cfg
         )
         receptor_pdbqt = str(receptor_pdbqt_path) if ok else None
     except Exception as e:
@@ -487,6 +570,7 @@ def prepare_receptor(
     try:
         if Path(receptor_pdbqt).resolve() != receptor_pdbqt_path.resolve():
             from shutil import copy2
+
             receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
             copy2(receptor_pdbqt, receptor_pdbqt_path)
             receptor_pdbqt = str(receptor_pdbqt_path)
@@ -497,11 +581,12 @@ def prepare_receptor(
         if bool(cfg.get("RECEPTOR_SANITY_CHECK", True)):
             ok = receptor_sanity_check(receptor_pdbqt)
             if not ok:
-                logger.warning("Receptor sanity check failed (too few atoms or zero coords).")
+                logger.warning(
+                    "Receptor sanity check failed (too few atoms or zero coords)."
+                )
                 prepare_receptor.last_provenance = "clean_failed"
                 return None, None
     except Exception as _e:
         logger.warning(f"Receptor sanity check skipped due to error: {_e}")
-
 
     return norm(cleaned_pdb), norm(receptor_pdbqt)

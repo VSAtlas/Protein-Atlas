@@ -13,13 +13,13 @@ import docking.docking as docking
 import docking.docking_receptor as docking_receptor
 import docking.docking_controls as docking_controls
 import protein_functions
-import docking.docking_control_centering_phase as docking_control_centering_phase
 import automate_protein_prep
-from prep_ligands.prep_ligands import prep_ligands_from_pdb as _prep_lig_impl
 from docking.fallback_recenter import RecenterParams
 
 
-def test_control_redock_runs_after_ph_ensemble(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_control_redock_runs_after_ph_ensemble(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     call_order: list[str] = []
 
     monkeypatch.delenv("APO_HOLO_VARIANT", raising=False)
@@ -77,27 +77,50 @@ def test_control_redock_runs_after_ph_ensemble(tmp_path: Path, monkeypatch: pyte
         lambda _pdb: ((0.0, 0.0, 0.0), (20.0, 20.0, 20.0), "test"),
     )
     import prep_ligands.prep_ligands_crystal
-    monkeypatch.setattr(prep_ligands.prep_ligands_crystal, "prep_ligands_from_pdb", lambda **_kwargs: None)
-    monkeypatch.setattr(docking_controls, "extract_ligands_to_nolig", lambda *_a, **_k: (0, []))
+
+    monkeypatch.setattr(
+        prep_ligands.prep_ligands_crystal,
+        "prep_ligands_from_pdb",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        docking_controls, "extract_ligands_to_nolig", lambda *_a, **_k: (0, [])
+    )
     monkeypatch.setattr(docking_controls, "build_control_lookup", lambda *_a, **_k: {})
-    monkeypatch.setattr(docking_controls, "select_center_via_control_redock", fake_select_center)
-    monkeypatch.setattr(docking, "_phase6_to8_ligands_and_docking", lambda *_a, **_k: None)
-    monkeypatch.setattr(automate_protein_prep, "get_ion_probe_map", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        docking_controls, "select_center_via_control_redock", fake_select_center
+    )
+    monkeypatch.setattr(
+        docking, "_phase6_to8_ligands_and_docking", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        automate_protein_prep, "get_ion_probe_map", lambda *_a, **_k: {}
+    )
     monkeypatch.setattr(
         automate_protein_prep,
         "_holo_restore_from_input_if_needed",
         lambda *_a, **_k: (0, 0, False),
     )
-    monkeypatch.setattr(automate_protein_prep, "run_metal_site_audit", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        automate_protein_prep, "run_metal_site_audit", lambda *_a, **_k: None
+    )
 
-    import ph_ensemble
-    import docking.docking_receptor_phases as docking_receptor_phases
     from path_router import context_ph
 
     def fake_phase2_to4(*_args, **_kwargs):
         # (cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup)
         cleaned, receptor = fake_prepare_receptor(_args[0], _args[1], _args[2])
-        return cleaned, receptor, {}, {}, (0.0, 0.0, 0.0), (20.0, 20.0, 20.0), "mock", [], {}
+        return (
+            cleaned,
+            receptor,
+            {},
+            {},
+            (0.0, 0.0, 0.0),
+            (20.0, 20.0, 20.0),
+            "mock",
+            [],
+            {},
+        )
 
     def fake_phase5(*_args, **_kwargs):
         call_order.append("ph_ensemble")
@@ -107,13 +130,25 @@ def test_control_redock_runs_after_ph_ensemble(tmp_path: Path, monkeypatch: pyte
     def fake_phase5b(*_args, **_kwargs):
         call_order.append("control_redock")
         # center, box_size, center_by_ph, box_by_ph, center_source_by_ph, control_stems, control_lookup
-        return (0,0,0), (20,20,20), {"pH7_0": (0,0,0)}, {"pH7_0": (20,20,20)}, {"pH7_0": "mock"}, [], {}
+        return (
+            (0, 0, 0),
+            (20, 20, 20),
+            {"pH7_0": (0, 0, 0)},
+            {"pH7_0": (20, 20, 20)},
+            {"pH7_0": "mock"},
+            [],
+            {},
+        )
 
     monkeypatch.setattr(docking, "_phase5_ph_ensemble_global", fake_phase5)
     monkeypatch.setattr(docking, "_phase5b_controls_and_control_redock", fake_phase5b)
     monkeypatch.setattr(docking, "_phase2_to4_receptor_and_center", fake_phase2_to4)
-    monkeypatch.setattr(context_ph, "select_ph_values_for_protonation", lambda *_a, **_k: [7.0])
+    monkeypatch.setattr(
+        context_ph, "select_ph_values_for_protonation", lambda *_a, **_k: [7.0]
+    )
 
-    docking.process_one_protein(cfg, f"{pdb_id}.pdb", stages=[], params=RecenterParams())
+    docking.process_one_protein(
+        cfg, f"{pdb_id}.pdb", stages=[], params=RecenterParams()
+    )
 
     assert call_order == ["ph_ensemble", "control_redock"]

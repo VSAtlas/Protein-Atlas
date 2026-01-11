@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -49,31 +47,52 @@ def _map_reason_to_category(reason: str) -> str:
 @dataclass
 class RetryManager:
     max_retries: int = 2
-    recipes: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
-        # Near-miss rescue: small geometry tweak with a jittered seed.
-        "near_miss": [
-            {"recenter": True, "box_pad_delta": +1.0, "seed_jitter": True},
-        ],
-        # If we docked far from the pocket, try small geometry tweaks   not more modes
-        "too_far_from_pocket": [
-            {"recenter": True, "box_pad_delta": +1.0, "num_modes": 4},
-            {"recenter": True, "box_pad_delta": +2.0, "exhaustiveness": 6, "num_modes": 4},
-        ],
-        # If we didn't get a valid pose, explore new seeds and a slightly wider energy window,
-        # but keep returned modes low so validation stays fast.
-        "no_valid_pose": [
-            {"exhaustiveness": 6, "num_modes": 5, "seed_jitter": True, "energy_range": 6},
-            {"recenter": True, "box_pad_delta": +1.0, "exhaustiveness": 6, "num_modes": 5, "seed_jitter": True, "energy_range": 6},
-        ],
-        # If we timed out, go cheaper, not deeper.
-        "timeout": [
-            {"exhaustiveness": 3, "num_modes": 3, "seed_jitter": True},
-            {"exhaustiveness": 2, "num_modes": 2},
-        ],
-        "malformed": []  # do not retry
-    })
+    recipes: Dict[str, List[Dict[str, Any]]] = field(
+        default_factory=lambda: {
+            # Near-miss rescue: small geometry tweak with a jittered seed.
+            "near_miss": [
+                {"recenter": True, "box_pad_delta": +1.0, "seed_jitter": True},
+            ],
+            # If we docked far from the pocket, try small geometry tweaks   not more modes
+            "too_far_from_pocket": [
+                {"recenter": True, "box_pad_delta": +1.0, "num_modes": 4},
+                {
+                    "recenter": True,
+                    "box_pad_delta": +2.0,
+                    "exhaustiveness": 6,
+                    "num_modes": 4,
+                },
+            ],
+            # If we didn't get a valid pose, explore new seeds and a slightly wider energy window,
+            # but keep returned modes low so validation stays fast.
+            "no_valid_pose": [
+                {
+                    "exhaustiveness": 6,
+                    "num_modes": 5,
+                    "seed_jitter": True,
+                    "energy_range": 6,
+                },
+                {
+                    "recenter": True,
+                    "box_pad_delta": +1.0,
+                    "exhaustiveness": 6,
+                    "num_modes": 5,
+                    "seed_jitter": True,
+                    "energy_range": 6,
+                },
+            ],
+            # If we timed out, go cheaper, not deeper.
+            "timeout": [
+                {"exhaustiveness": 3, "num_modes": 3, "seed_jitter": True},
+                {"exhaustiveness": 2, "num_modes": 2},
+            ],
+            "malformed": [],  # do not retry
+        }
+    )
 
-    def apply(self, base_params: Dict[str, Any], err_type: str, attempt: int) -> Optional[Dict[str, Any]]:
+    def apply(
+        self, base_params: Dict[str, Any], err_type: str, attempt: int
+    ) -> Optional[Dict[str, Any]]:
         if err_type not in self.recipes or attempt >= len(self.recipes[err_type]):
             return None
         p = base_params.copy()
@@ -96,17 +115,18 @@ def run_one_stage(
     ligands: List[str],
     logger: logging.Logger,
     retry_mgr: RetryManager,
-    control_lookup: Dict[str, Path],        # maps ligand basename -> crystal ref PDB
-    budget_guards: Optional[Dict[str, BudgetGuard]] = None,  # external per-ligand guards
+    control_lookup: Dict[str, Path],  # maps ligand basename -> crystal ref PDB
+    budget_guards: Optional[
+        Dict[str, BudgetGuard]
+    ] = None,  # external per-ligand guards
     ph_label: Optional[str] = None,
 ) -> Tuple[
     Dict[str, float],
     List[str],
     List[float],
     Dict[str, str],
-    Dict[str, Tuple[Optional[float], str]]
+    Dict[str, Tuple[Optional[float], str]],
 ]:
-    from sys import stdout as _stdout  # for tqdm
     import shutil
     import subprocess
 
@@ -130,11 +150,12 @@ def run_one_stage(
     # It constructs paths via make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb") inside the function?
     # Let me check the original code I read.
     # Yes, line 1888: paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    
+
     # I need to import make_paths from path_router.
     from path_router.path_router import make_paths
+
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    
+
     run_id = str(cfg.get("RUN_ID", "") or "")
     variant_label = variant_env or "legacy"
     raw_stage_name = (
@@ -182,7 +203,9 @@ def run_one_stage(
     processed = 0
 
     # ---- helpers (nested) ----
-    def _best_pose_pdb_from_pdbqt(pdbqt_path: str, obabel_path: Optional[str] = None) -> Optional[str]:
+    def _best_pose_pdb_from_pdbqt(
+        pdbqt_path: str, obabel_path: Optional[str] = None
+    ) -> Optional[str]:
         """Convert first model of PDBQT -> PDB (no hydrogens) using OpenBabel."""
         try:
             out_pdb = Path(pdbqt_path).with_suffix(".best.pdb")
@@ -193,11 +216,31 @@ def run_one_stage(
                 or shutil.which("obabel")
                 or "obabel"
             )
-            cmd = [obabel, "-ipdbqt", str(pdbqt_path), "-opdb", "-O", str(out_pdb), "-f", "1", "-l", "1", "-d"]
-            subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return str(out_pdb) if out_pdb.exists() and out_pdb.stat().st_size > 0 else None
+            cmd = [
+                obabel,
+                "-ipdbqt",
+                str(pdbqt_path),
+                "-opdb",
+                "-O",
+                str(out_pdb),
+                "-f",
+                "1",
+                "-l",
+                "1",
+                "-d",
+            ]
+            subprocess.check_call(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            return (
+                str(out_pdb)
+                if out_pdb.exists() and out_pdb.stat().st_size > 0
+                else None
+            )
         except Exception as e:
-            logger.warning(f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}")
+            logger.warning(
+                f"[RMSD] OpenBabel conversion failed for {os.path.basename(pdbqt_path)}: {e}"
+            )
             return None
 
     # NOTE:
@@ -216,18 +259,27 @@ def run_one_stage(
         # ──  quick identical-file sanity trap ───────────────────────────────────
         try:
             import os
-            if os.path.exists(ref_path) and os.path.exists(docked_path) and os.path.samefile(ref_path, docked_path):
+
+            if (
+                os.path.exists(ref_path)
+                and os.path.exists(docked_path)
+                and os.path.samefile(ref_path, docked_path)
+            ):
                 if _rlog:
-                    _rlog.warning(f"[rmsd.core] ref and dock resolve to the SAME file "
-                                  f"(ref='{ref_path}', dock='{docked_path}')")
+                    _rlog.warning(
+                        f"[rmsd.core] ref and dock resolve to the SAME file "
+                        f"(ref='{ref_path}', dock='{docked_path}')"
+                    )
         except Exception:
             pass
         # ───────────────────────────────────────────────────────────────────────────
 
         if not ref or not dock:
             if _rlog:
-                _rlog.warning(f"[rmsd.core] load-fail ref_ok={bool(ref)} dock_ok={bool(dock)} "
-                              f"ref='{ref_path}' dock='{docked_path}'")
+                _rlog.warning(
+                    f"[rmsd.core] load-fail ref_ok={bool(ref)} dock_ok={bool(dock)} "
+                    f"ref='{ref_path}' dock='{docked_path}'"
+                )
             return float("inf")
 
         try:
@@ -236,8 +288,8 @@ def run_one_stage(
         except Exception:
             n_ref = n_dock = -1
 
-        has_conf_ref = (ref.GetNumConformers() > 0)
-        has_conf_dock = (dock.GetNumConformers() > 0)
+        has_conf_ref = ref.GetNumConformers() > 0
+        has_conf_dock = dock.GetNumConformers() > 0
 
         # ── heavy-atom counts (useful when you get inf) ──────────────────
         try:
@@ -246,9 +298,11 @@ def run_one_stage(
         except Exception:
             ha_ref = ha_dock = -1
         if _rlog:
-            _rlog.info(f"[rmsd.core] inputs ref='{ref_path}' dock='{docked_path}' "
-                       f"n_ref={n_ref} n_dock={n_dock} heavy_ref={ha_ref} heavy_dock={ha_dock} "
-                       f"conf_ref={has_conf_ref} conf_dock={has_conf_dock}")
+            _rlog.info(
+                f"[rmsd.core] inputs ref='{ref_path}' dock='{docked_path}' "
+                f"n_ref={n_ref} n_dock={n_dock} heavy_ref={ha_ref} heavy_dock={ha_dock} "
+                f"conf_ref={has_conf_ref} conf_dock={has_conf_dock}"
+            )
         # ───────────────────────────────────────────────────────────────────────────
 
         if not has_conf_ref or not has_conf_dock:
@@ -258,8 +312,10 @@ def run_one_stage(
 
         if n_ref != n_dock:
             if _rlog:
-                _rlog.info(f"[rmsd.core] atom_count_mismatch ({n_ref} vs {n_dock}); "
-                           f"bestRMS will not be used; returning inf (no MCS fallback)")
+                _rlog.info(
+                    f"[rmsd.core] atom_count_mismatch ({n_ref} vs {n_dock}); "
+                    f"bestRMS will not be used; returning inf (no MCS fallback)"
+                )
             return float("inf")
 
         try:
@@ -269,14 +325,13 @@ def run_one_stage(
             return val
         except Exception as e:
             if _rlog:
-                _rlog.info(f"[rmsd.core] method=bestRMS failed: {e}; returning inf (no MCS fallback)")
+                _rlog.info(
+                    f"[rmsd.core] method=bestRMS failed: {e}; returning inf (no MCS fallback)"
+                )
             return float("inf")
 
     def _validate_with_rmsd_gate(
-        lig_path: str,
-        lig_name: str,
-        out_pdbqt_path: str,
-        score_val: float
+        lig_path: str, lig_name: str, out_pdbqt_path: str, score_val: float
     ) -> Tuple[bool, Optional[str]]:
         """
         Controls: crystal redock RMSD is a hard gate.
@@ -286,9 +341,13 @@ def run_one_stage(
         crystal_ref = control_lookup.get(base)
 
         if crystal_ref:
-            best_pdb = _best_pose_pdb_from_pdbqt(out_pdbqt_path, obabel_path=cfg.get("OPENBABEL_PATH"))
+            best_pdb = _best_pose_pdb_from_pdbqt(
+                out_pdbqt_path, obabel_path=cfg.get("OPENBABEL_PATH")
+            )
             if not best_pdb:
-                logger.warning(f"{lig_name} | unable to extract best pose PDB for redock RMSD.")
+                logger.warning(
+                    f"{lig_name} | unable to extract best pose PDB for redock RMSD."
+                )
                 return False, "no_best_pose_for_rmsd"
 
             # --- AUDIT: control redock (compute RMSD just for logging) ---
@@ -300,18 +359,23 @@ def run_one_stage(
                 crystal_path=str(crystal_ref),
                 rmsd_thresh=float(cfg.get("CONTROL_RMSD_MAX_ANG", 2.0)),
                 self_rmsd=None,
-                logger=logger
+                logger=logger,
             )
 
-            logger.info("[control-redock] lig=%s rmsd=%.2f A score=%.2f",
-                        lig_name, (rmsd_val if rmsd_val is not None else float('nan')), float(score_val))
+            logger.info(
+                "[control-redock] lig=%s rmsd=%.2f A score=%.2f",
+                lig_name,
+                (rmsd_val if rmsd_val is not None else float("nan")),
+                float(score_val),
+            )
 
             if ok:
-                logger.info(f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (redock-RMSD PASS)")
+                logger.info(
+                    f"{lig_name} | {stage['name']} score: {score_val:.2f} kcal/mol (redock-RMSD PASS)"
+                )
                 return True, None
             else:
                 return False, "rmsd_fail"
-
 
         # Non-controls: redock gate not applicable here (geometry checks already passed).
         return True, None
@@ -324,18 +388,28 @@ def run_one_stage(
         guard: BudgetGuard,
         pbar: "tqdm",
     ) -> None:
-        nonlocal scores, validated_ligands, all_distances, raw_docked_ligands, invalids, processed
+        nonlocal \
+            scores, \
+            validated_ligands, \
+            all_distances, \
+            raw_docked_ligands, \
+            invalids, \
+            processed
 
         try:
             kept, removed = filter_and_rewrite_poses_by_rmsd(
                 out_path,
                 rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
-                max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
+                max_models=int(cfg.get("RMSD_MAX_MODELS", 3)),
             )
             if removed > 0:
-                logger.info(f"{os.path.basename(out_path)}: RMSD filter kept {kept}, removed {removed}")
+                logger.info(
+                    f"{os.path.basename(out_path)}: RMSD filter kept {kept}, removed {removed}"
+                )
         except Exception as e:
-            logger.warning(f"RMSD filtering failed for {os.path.basename(out_path)}: {e}")
+            logger.warning(
+                f"RMSD filtering failed for {os.path.basename(out_path)}: {e}"
+            )
 
         result = validate_first_valid_pose(
             receptor_pdbqt=receptor_pdbqt,
@@ -404,10 +478,11 @@ def run_one_stage(
         pbar: "tqdm",
     ) -> bool:
         nonlocal processed
+
         def _is_near_miss_failure(res: Dict[str, Any]) -> bool:
             if not bool(cfg.get("RETRY_NEAR_MISS", True)):
                 return False
-            reason_val = (res.get("reason", "") or "")
+            reason_val = res.get("reason", "") or ""
             reason_lower = str(reason_val).lower()
             try:
                 dist_surface = float(res.get("distance_to_surface", float("inf")))
@@ -417,7 +492,9 @@ def run_one_stage(
                 dist_centroid = float(res.get("distance_to_centroid", float("inf")))
             except Exception:
                 dist_centroid = float("inf")
-            return ("clash" in reason_lower) or dist_surface < 6.5 or dist_centroid < 4.0
+            return (
+                ("clash" in reason_lower) or dist_surface < 6.5 or dist_centroid < 4.0
+            )
 
         near_miss_hit = _is_near_miss_failure(result)
         if near_miss_hit and bool(cfg.get("LOG_SELF_RMSD", True)):
@@ -427,7 +504,11 @@ def run_one_stage(
             except Exception as _e:
                 logger.warning(f"self-RMSD failed for {lig_name}: {_e}")
 
-        err_cat = "near_miss" if near_miss_hit else _map_reason_to_category(result.get("reason", ""))
+        err_cat = (
+            "near_miss"
+            if near_miss_hit
+            else _map_reason_to_category(result.get("reason", ""))
+        )
         attempt = 0
         retained_invalid = True
 
@@ -443,7 +524,9 @@ def run_one_stage(
 
             stage_retry2 = dict(retry_params)
             stage_retry2["name"] = (
-                f"{stage['name']}_retry" if attempt == 0 else f"{stage['name']}_retry{attempt + 1}"
+                f"{stage['name']}_retry"
+                if attempt == 0
+                else f"{stage['name']}_retry{attempt + 1}"
             )
             stage_retry2["verbosity"] = int(cfg.get("VINA_VERBOSITY", 0))
 
@@ -451,10 +534,18 @@ def run_one_stage(
                 if not bool(cfg.get("NEAR_MISS_RECENTER", True)):
                     stage_retry2.pop("recenter", None)
                 stage_retry2["num_modes"] = int(
-                    cfg.get("NEAR_MISS_NUM_MODES", stage_retry2.get("num_modes", stage.get("num_modes", 4)))
+                    cfg.get(
+                        "NEAR_MISS_NUM_MODES",
+                        stage_retry2.get("num_modes", stage.get("num_modes", 4)),
+                    )
                 )
                 stage_retry2["energy_range"] = float(
-                    cfg.get("NEAR_MISS_ENERGY_RANGE", stage_retry2.get("energy_range", stage.get("energy_range", 4.0)))
+                    cfg.get(
+                        "NEAR_MISS_ENERGY_RANGE",
+                        stage_retry2.get(
+                            "energy_range", stage.get("energy_range", 4.0)
+                        ),
+                    )
                 )
 
             if cfg.get("FAST_MODE"):
@@ -464,7 +555,11 @@ def run_one_stage(
             seed_jitter = bool(stage_retry2.pop("seed_jitter", False))
             if seed_jitter:
                 try:
-                    base_seed = int(stage_retry2.get("seed", 0)) if "seed" in stage_retry2 else 0
+                    base_seed = (
+                        int(stage_retry2.get("seed", 0))
+                        if "seed" in stage_retry2
+                        else 0
+                    )
                 except Exception:
                     base_seed = 0
                 stage_retry2["seed"] = base_seed + (attempt + 1) * 137
@@ -520,10 +615,13 @@ def run_one_stage(
             )
             logger.info("[cfg.emit] %s -> %s", os.path.basename(lig), conf_path3)
             try:
-                Path(conf_path3).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
+                Path(conf_path3).resolve().relative_to(
+                    Path(cfg["CONFIG_RUN_DIR"]).resolve()
+                )
             except Exception:
                 raise RuntimeError(
-                    f"Refusing to launch Vina with config outside current RUN_DIR: {conf_path3}")
+                    f"Refusing to launch Vina with config outside current RUN_DIR: {conf_path3}"
+                )
             logger.info(f"[vina.call] config={conf_path3}")
 
             try:
@@ -543,7 +641,7 @@ def run_one_stage(
                 filter_and_rewrite_poses_by_rmsd(
                     out_path3,
                     rmsd_tol=float(cfg.get("RMSD_FILTER_ANG", 2.0)),
-                    max_models=int(cfg.get("RMSD_MAX_MODELS", 3))
+                    max_models=int(cfg.get("RMSD_MAX_MODELS", 3)),
                 )
             except Exception:
                 pass
@@ -560,14 +658,20 @@ def run_one_stage(
                 dist_centroid=4.5,
             )
 
-            logger.info(f"{lig_name} retry#{attempt + 1} ({stage_retry2_name}|{err_cat}) -> {result_r}")
+            logger.info(
+                f"{lig_name} retry#{attempt + 1} ({stage_retry2_name}|{err_cat}) -> {result_r}"
+            )
             if result_r.get("valid", False) and score_r is not None:
-                ok_r, reason_r = _validate_with_rmsd_gate(lig, lig_name, out_path3, float(score_r))
+                ok_r, reason_r = _validate_with_rmsd_gate(
+                    lig, lig_name, out_path3, float(score_r)
+                )
                 if ok_r:
                     scores[lig] = float(score_r)
                     validated_ligands.append(lig)
                     raw_docked_ligands[lig] = norm(out_path3)
-                    logger.info(f"{lig_name} | {stage_retry2['name']} score: {score_r:.2f} kcal/mol (retry rescued)")
+                    logger.info(
+                        f"{lig_name} | {stage_retry2['name']} score: {score_r:.2f} kcal/mol (retry rescued)"
+                    )
                     retained_invalid = False
                     break
                 else:
@@ -596,7 +700,7 @@ def run_one_stage(
     guards_for_ligand: Dict[str, BudgetGuard] = {}
 
     for lig in ligands:
-        guard = (budget_guards.get(lig) if budget_guards else None)
+        guard = budget_guards.get(lig) if budget_guards else None
         if guard is None:
             guard = BudgetGuard(default_budget_seconds)
         guards_for_ligand[lig] = guard
@@ -645,9 +749,13 @@ def run_one_stage(
 
                 # Guard: config must live under current RUN_DIR
                 try:
-                    Path(conf_path).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
+                    Path(conf_path).resolve().relative_to(
+                        Path(cfg["CONFIG_RUN_DIR"]).resolve()
+                    )
                 except Exception:
-                    raise RuntimeError(f"Refusing to launch Vina with config outside current RUN_DIR: {conf_path}")
+                    raise RuntimeError(
+                        f"Refusing to launch Vina with config outside current RUN_DIR: {conf_path}"
+                    )
 
                 logger.info(f"[vina.call] config={conf_path}")
 
@@ -678,7 +786,9 @@ def run_one_stage(
                 for fut in as_completed(futures):
                     lig, out_path = futures[fut]
                     lig_name = os.path.basename(lig)
-                    guard = guards_for_ligand.get(lig) or BudgetGuard(default_budget_seconds)
+                    guard = guards_for_ligand.get(lig) or BudgetGuard(
+                        default_budget_seconds
+                    )
 
                     try:
                         _, score = fut.result()

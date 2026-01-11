@@ -99,7 +99,9 @@ def test_consensus_summary_files_written(tmp_path: Path) -> None:
         ]
     )
 
-    dud_eval.emit_consensus_summary(df, analysis_root, run_label="demo_run", pretty_enabled=True)
+    dud_eval.emit_consensus_summary(
+        df, analysis_root, run_label="demo_run", pretty_enabled=True
+    )
 
     summary_path = analysis_root / "consensus_summary_demo_run.tsv"
     pretty_path = analysis_root / "consensus_summary_demo_run_pretty.txt"

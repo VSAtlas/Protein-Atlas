@@ -86,7 +86,6 @@ def run_multistage_vina(
     recenter_params: RecenterParams,
     control_stems: List[str],
 ) -> MultistageVinaResult:
-    
     forced_extracted_for_stage3 = set(controls_for_run)
     logger.info(
         "[Force-carry] Stage3 control pool size=%d noncontrols_stage1=%d",
@@ -108,22 +107,26 @@ def run_multistage_vina(
     dock6_enabled = _use_dock6(cfg)
 
     ligands = list(stage1_original)
-    
+
     ctrl_stems_lower = {s.lower() for s in control_stems}
-    ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
+    ctrl_blacklist = {
+        t.strip().upper()
+        for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",")
+        if t.strip()
+    }
     min_ha = int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10))
 
     selector = CenterSelector(cfg, logger, control_stems, heavy_atom_counts, center)
     guard = GlobalCenterGuard(
         max_global_switches=int(cfg.get("MAX_GLOBAL_CENTER_SWITCHES", 2))
     )
-    
+
     scores: Dict[str, float] = {}
     validated: List[str] = []
     distances: List[float] = []
     raw_docked: Dict[str, str] = {}
     invalids: Dict[str, Tuple[Optional[float], str]] = {}
-    
+
     variant_label = variant_env or "legacy"
 
     i = 0
@@ -131,7 +134,11 @@ def run_multistage_vina(
         guard.reset_stage()
         stage = stages_for_run[i]
         stage_is_stage3 = _is_stage3(stage["name"])
-        stage_controls = sorted(controls_for_run, key=lambda p: Path(p).name) if stage_is_stage3 else []
+        stage_controls = (
+            sorted(controls_for_run, key=lambda p: Path(p).name)
+            if stage_is_stage3
+            else []
+        )
         stage_noncontrols = [
             l
             for l in ligands
@@ -155,12 +162,16 @@ def run_multistage_vina(
                 variant=variant_env or None,
                 engine="vina",
             ):
-                logger.info(f"[Checkpoint] Skipping {stage['name']} (fingerprint matched).")
+                logger.info(
+                    f"[Checkpoint] Skipping {stage['name']} (fingerprint matched)."
+                )
                 i += 1
                 continue
 
         if not stage_ligands:
-            logger.warning(f"No ligands to dock at {stage['name']}; skipping this stage.")
+            logger.warning(
+                f"No ligands to dock at {stage['name']}; skipping this stage."
+            )
             i += 1
             continue
 
@@ -175,7 +186,7 @@ def run_multistage_vina(
             len(stage_noncontrols),
             len(stage_ligands),
         )
-        
+
         ph_log = logging.getLogger("ph_ensemble")
         if ph_label:
             ph_log.info(
@@ -189,8 +200,17 @@ def run_multistage_vina(
             )
 
         scores, validated, distances, raw_docked, invalids = run_one_stage(
-            cfg, paths.pdb_id, receptor_pdbqt, center, box_size, stage,
-            stage_ligands, logger, retry_mgr, control_lookup, ph_label=ph_label
+            cfg,
+            paths.pdb_id,
+            receptor_pdbqt,
+            center,
+            box_size,
+            stage,
+            stage_ligands,
+            logger,
+            retry_mgr,
+            control_lookup,
+            ph_label=ph_label,
         )
 
         validated_ligands_last = validated
@@ -267,16 +287,22 @@ def run_multistage_vina(
             logger.warning(f"Invariant check failed: {_e}")
 
         for lig, sc in scores.items():
-            record_score(score_history, stage['name'], lig, sc, True)
-            record_le(score_history, stage['name'], lig, sc, heavy_atom_counts)
+            record_score(score_history, stage["name"], lig, sc, True)
+            record_le(score_history, stage["name"], lig, sc, heavy_atom_counts)
         for lig, (sc, reason) in invalids.items():
-            record_score(score_history, stage['name'], lig, sc, False, reason=reason)
-            record_le(score_history, stage['name'], lig, sc, heavy_atom_counts)
+            record_score(score_history, stage["name"], lig, sc, False, reason=reason)
+            record_le(score_history, stage["name"], lig, sc, heavy_atom_counts)
 
         promoted_this_stage = False
         try:
             decision = selector.consider_switch(
-                stage['name'], scores, validated, raw_docked, receptor_pdbqt, center, guard
+                stage["name"],
+                scores,
+                validated,
+                raw_docked,
+                receptor_pdbqt,
+                center,
+                guard,
             )
             if decision.promoted and decision.new_center is not None:
                 old = center
@@ -311,9 +337,28 @@ def run_multistage_vina(
             )
 
         if not promoted_this_stage:
-            restart, center, box_size, redo_ligands, recenter_attempts = early_recenter_decision(
-                i, scores, distances, box_size, center, stage1_original, recenter_attempts, recenter_params,
-                cfg, paths.pdb_id, receptor_pdbqt, logger, raw_docked, guard, control_anchor_hit
+            (
+                restart,
+                center,
+                box_size,
+                redo_ligands,
+                recenter_attempts,
+            ) = early_recenter_decision(
+                i,
+                scores,
+                distances,
+                box_size,
+                center,
+                stage1_original,
+                recenter_attempts,
+                recenter_params,
+                cfg,
+                paths.pdb_id,
+                receptor_pdbqt,
+                logger,
+                raw_docked,
+                guard,
+                control_anchor_hit,
             )
             if restart:
                 ligands = redo_ligands
@@ -333,11 +378,15 @@ def run_multistage_vina(
         try:
             if cfg.get("ADAPTIVE_SHRINK_ENABLE", True) and validated:
                 med = (
-                    float(np.median([d for d in distances if isinstance(d, (int, float))]))
+                    float(
+                        np.median([d for d in distances if isinstance(d, (int, float))])
+                    )
                     if distances
                     else None
                 )
-                if (med is not None) and (med < float(cfg.get("ADAPTIVE_SHRINK_MEDIAN_MAX", 4.0))):
+                if (med is not None) and (
+                    med < float(cfg.get("ADAPTIVE_SHRINK_MEDIAN_MAX", 4.0))
+                ):
                     dec = float(cfg.get("ADAPTIVE_SHRINK_DEC", 4.0))
                     min_box = float(cfg.get("ADAPTIVE_SHRINK_MIN_BOX", 14.0))
                     new_box = tuple(max(min_box, s - dec) for s in box_size)
@@ -352,8 +401,18 @@ def run_multistage_vina(
         if i < len(stages_for_run) - 1:
             if not scores:
                 restart, center, box_size, redo_ligands = fallback_recentering_if_empty(
-                    cfg, paths.pdb_id, stage['name'], scores, raw_docked,
-                    receptor_pdbqt, center, box_size, stage1_original, logger, guard, control_anchor_hit
+                    cfg,
+                    paths.pdb_id,
+                    stage["name"],
+                    scores,
+                    raw_docked,
+                    receptor_pdbqt,
+                    center,
+                    box_size,
+                    stage1_original,
+                    logger,
+                    guard,
+                    control_anchor_hit,
                 )
                 if restart:
                     ligands = redo_ligands
@@ -374,10 +433,14 @@ def run_multistage_vina(
 
             next_stage_is_stage3 = _is_stage3(stages_for_run[i + 1]["name"])
             scores_for_selection = {
-                lig: sc for lig, sc in scores.items() if norm(lig) not in control_norms_for_run
+                lig: sc
+                for lig, sc in scores.items()
+                if norm(lig) not in control_norms_for_run
             }
             invalids_for_selection = {
-                lig: val for lig, val in invalids.items() if norm(lig) not in control_norms_for_run
+                lig: val
+                for lig, val in invalids.items()
+                if norm(lig) not in control_norms_for_run
             }
             ligands = _apply_force_carry_and_doping(
                 cfg,
@@ -503,7 +566,9 @@ def run_multistage_vina(
                 legacy=legacy_mode,
             )
             try:
-                Path(conf_path).resolve().relative_to(Path(cfg["CONFIG_RUN_DIR"]).resolve())
+                Path(conf_path).resolve().relative_to(
+                    Path(cfg["CONFIG_RUN_DIR"]).resolve()
+                )
             except Exception:
                 return False, "rerun_config_outside_run_dir", None
             try:
@@ -546,7 +611,9 @@ def run_multistage_vina(
                         False,
                         reason="completion_missing",
                     )
-                    record_le(score_history, stage["name"], lig_miss, None, heavy_atom_counts)
+                    record_le(
+                        score_history, stage["name"], lig_miss, None, heavy_atom_counts
+                    )
 
         if bool(cfg.get("CHECKPOINT_ENABLE", True)):
             try:

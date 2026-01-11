@@ -15,13 +15,25 @@ import utils
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Preprocess DeepCoy JSON datasets into cached pickle files.")
+        description="Preprocess DeepCoy JSON datasets into cached pickle files."
+    )
     parser.add_argument("--in-json", required=True, help="Input JSON dataset file.")
     parser.add_argument("--out-cache", required=True, help="Output cache pickle file.")
-    parser.add_argument("--dataset", default="zinc", help="Dataset name (default: zinc).")
-    parser.add_argument("--is-training", action="store_true", help="Mark data as training data.")
-    parser.add_argument("--restrict", type=int, default=None, help="Only preprocess first N molecules.")
-    parser.add_argument("--workers", type=int, default=1, help="Number of worker processes (default: 1).")
+    parser.add_argument(
+        "--dataset", default="zinc", help="Dataset name (default: zinc)."
+    )
+    parser.add_argument(
+        "--is-training", action="store_true", help="Mark data as training data."
+    )
+    parser.add_argument(
+        "--restrict", type=int, default=None, help="Only preprocess first N molecules."
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of worker processes (default: 1).",
+    )
     return parser.parse_args()
 
 
@@ -61,13 +73,16 @@ def _process_single_entry(args):
     else:
         node_length = len(d["node_features_" + out_direc])
         if params["multi_bfs_path"]:
-            list_of_starting_idx = np.random.choice(node_length, params["bfs_path_count"], replace=True)
+            list_of_starting_idx = np.random.choice(
+                node_length, params["bfs_path_count"], replace=True
+            )
         else:
             list_of_starting_idx = [random.choice(list(range(node_length)))]
 
     for list_idx, starting_idx in enumerate(list_of_starting_idx):
         chosen_bucket_idx = np.argmax(
-            bucket_sizes > max(
+            bucket_sizes
+            > max(
                 max([v for e in d["graph_out"] for v in [e[0], e[2]]]),
                 max([v for e in d["graph_in"] for v in [e[0], e[2]]]),
             )
@@ -149,23 +164,38 @@ class PreprocessModel(DenseGGNNChemModel):
         self.freq_dict = freq_dict
         self.workers = workers
 
-    def calculate_incremental_results(self, raw_data, bucket_sizes, file_name, is_training_data):
+    def calculate_incremental_results(
+        self, raw_data, bucket_sizes, file_name, is_training_data
+    ):
         if self.workers <= 1:
-            return super().calculate_incremental_results(raw_data, bucket_sizes, file_name, is_training_data)
+            return super().calculate_incremental_results(
+                raw_data, bucket_sizes, file_name, is_training_data
+            )
 
         if self.params.get("path_random_order"):
-            print("Warning: path_random_order enabled; falling back to single-worker preprocessing.")
-            return super().calculate_incremental_results(raw_data, bucket_sizes, file_name, is_training_data)
+            print(
+                "Warning: path_random_order enabled; falling back to single-worker preprocessing."
+            )
+            return super().calculate_incremental_results(
+                raw_data, bucket_sizes, file_name, is_training_data
+            )
 
         incremental_results = [[], []]
         new_raw_data = []
-        tasks = [(d, bucket_sizes, self.params, is_training_data, self.freq_dict) for d in raw_data]
+        tasks = [
+            (d, bucket_sizes, self.params, is_training_data, self.freq_dict)
+            for d in raw_data
+        ]
         with mp.Pool(processes=self.workers) as pool:
-            for idx, (incremental_list, raw_list) in enumerate(pool.imap(_process_single_entry, tasks)):
+            for idx, (incremental_list, raw_list) in enumerate(
+                pool.imap(_process_single_entry, tasks)
+            ):
                 incremental_results[1].extend(incremental_list)
                 new_raw_data.extend(raw_list)
                 if idx % 50 == 0:
-                    print("Finished calculating %d incremental matrices" % idx, end="\r")
+                    print(
+                        "Finished calculating %d incremental matrices" % idx, end="\r"
+                    )
         return incremental_results, new_raw_data
 
 

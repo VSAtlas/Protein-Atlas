@@ -66,7 +66,15 @@ BABEL_DATADIR=
 
 # DeepCoy (env-local)
 DEEPCOY_PYTHON=/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python
-DEEPCOY_DECOYS_PER_ACTIVE  =  50
+DEEPCOY_DECOYS_PER_ACTIVE  =  50 #sets how many actives go into each DeepCoy chunk
+DEEPCOY_CHUNK_SIZE=1 # sets size of chunks that deepcoy parallelizes against
+DEEPCOY_BASE_SEED=0 #default seed used for deepcoy
+DEEPCOY_SEED_PER_CHUNK=true #on true a random seed is used for each chunk
+DEEPCOY_USE_ARGMAX_GENERATION=false 
+DEEPCOY_TRY_DIFFERENT_STARTING=true #on true the starting seed starts at a different number, increases decoy diversity on true
+DEEPCOY_NUM_DIFFERENT_STARTING=5 #higher is more diverse
+DEEPCOY_KEEP_CHUNKS=true
+
 
 
 
@@ -623,5 +631,7 @@ LOG_LEVEL_FILE = all
 LOG_LEVEL_CONSOLE = all
 LOG_TOPICS = all
 QUIET_CONSOLE = false
+DEEPCOY_DECOYS_PER_ACTIVE=1
+DEEPCOY_DECOYS_PER_ACTIVE=1
 DEEPCOY_DECOYS_PER_ACTIVE=1
 DEEPCOY_DECOYS_PER_ACTIVE=1

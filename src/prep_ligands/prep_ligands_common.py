@@ -1,4 +1,5 @@
 """Common ligand prep helpers shared between bulk and crystal workflows."""
+
 import ctypes
 import logging
 import os
@@ -12,8 +13,15 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from collections import defaultdict
 
-from activesite import assert_no_helium_in_pdbqt, get_atom_rules, rules_version, scan_helium_counts
+from activesite import (
+    assert_no_helium_in_pdbqt,
+    get_atom_rules,
+    rules_version,
+    scan_helium_counts,
+)
 from rdkit import Chem
+from input_and_export_functions import load_config
+
 try:
     from rdkit.Chem.MolStandardize import rdMolStandardize as _std  # unified handle
 
@@ -44,11 +52,35 @@ def collapse_sanitized_path(path: Path) -> Path:
     new_name = collapse_sanitized_tokens(path.name)
     return path.with_name(new_name)
 
+
 # Shared constants and global state
 STANDARD_AMINO_ACIDS = {
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-    "HID", "HIE", "HIP", "SEC", "PYL", "MSE"
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "HIS",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "VAL",
+    "HID",
+    "HIE",
+    "HIP",
+    "SEC",
+    "PYL",
+    "MSE",
 }
 
 try:
@@ -59,10 +91,55 @@ except Exception as e:
         "Falling back to built-in default set of crystallization additives."
     )
     EXCLUDE_CRYSTAL_ADDITIVES = {
-        "HOH", "CIT", "TAR", "SO4", "PO4", "CA", "NA", "K", "MG", "MN", "ZN", "GOL", "EDO", "PEG",
-        "MPD", "TRS", "MES", "HEPES", "ACET", "ACT", "FMT", "MAL", "DMS", "IPA", "CLU", "NAG", "BOG",
-        "TOS", "BES", "PTS", "OTF", "TRF", "TFA", "BF4", "PF6", "CL", "BR", "I", "HEM", "HEC", "HEA",
-        "HEB", "HEO", "HEG", "HEF", "HEH", "PTR", "TPO", "SEP"
+        "HOH",
+        "CIT",
+        "TAR",
+        "SO4",
+        "PO4",
+        "CA",
+        "NA",
+        "K",
+        "MG",
+        "MN",
+        "ZN",
+        "GOL",
+        "EDO",
+        "PEG",
+        "MPD",
+        "TRS",
+        "MES",
+        "HEPES",
+        "ACET",
+        "ACT",
+        "FMT",
+        "MAL",
+        "DMS",
+        "IPA",
+        "CLU",
+        "NAG",
+        "BOG",
+        "TOS",
+        "BES",
+        "PTS",
+        "OTF",
+        "TRF",
+        "TFA",
+        "BF4",
+        "PF6",
+        "CL",
+        "BR",
+        "I",
+        "HEM",
+        "HEC",
+        "HEA",
+        "HEB",
+        "HEO",
+        "HEG",
+        "HEF",
+        "HEH",
+        "PTR",
+        "TPO",
+        "SEP",
     }
 MAX_HEAVY_ATOMS = 1200
 MIN_ATOMS_FOR_DOCKING = 3
@@ -99,11 +176,13 @@ def allowed_elements_from_aliases(rules) -> Set[str]:
     Build RDKit-style element symbols from YAML-driven one- and two-letter sets.
     """
     out: Set[str] = set()
-    for e in (rules.one_letter or []):
-        if e: out.add(e.strip().upper())
-    for e2 in (rules.two_letter or []):
+    for e in rules.one_letter or []:
+        if e:
+            out.add(e.strip().upper())
+    for e2 in rules.two_letter or []:
         sym = _alias_token_to_element_symbol(e2)
-        if sym: out.add(sym)
+        if sym:
+            out.add(sym)
     return out
 
 
@@ -113,12 +192,14 @@ def free_ion_elements_from_aliases(rules) -> Set[str]:
     'one-atom free ion' filtering during ligand prep.
     """
     out: Set[str] = set()
-    for tok in (getattr(rules, "meeko_drop_free_ions", []) or []):
+    for tok in getattr(rules, "meeko_drop_free_ions", []) or []:
         sym = _alias_token_to_element_symbol(tok)
-        if sym: out.add(sym)
-    for hal in (getattr(rules, "halide_resnames", []) or []):
+        if sym:
+            out.add(sym)
+    for hal in getattr(rules, "halide_resnames", []) or []:
         sym = _alias_token_to_element_symbol(hal)
-        if sym: out.add(sym)
+        if sym:
+            out.add(sym)
     return out
 
 
@@ -134,7 +215,9 @@ def _init_alias_rules_cache() -> None:
     try:
         RULES = get_atom_rules()
     except Exception as e:
-        logging.warning("[ligprep] get_atom_rules() failed; using built-ins only (%s)", e)
+        logging.warning(
+            "[ligprep] get_atom_rules() failed; using built-ins only (%s)", e
+        )
         RULES = None
 
     if RULES is not None:
@@ -156,13 +239,24 @@ def _init_alias_rules_cache() -> None:
 
             if os.environ.get("LIGPREP_DEBUG", "") == "1":
                 logging.debug("[ligprep] aliases version=%s", rules_version())
-                logging.debug("[ligprep] ALLOWED_ELEMENTS=%s", ", ".join(sorted(ALLOWED_ELEMENTS)))
+                logging.debug(
+                    "[ligprep] ALLOWED_ELEMENTS=%s", ", ".join(sorted(ALLOWED_ELEMENTS))
+                )
                 if AD4_TYPES:
-                    logging.debug("[ligprep] AD4_TYPES(sample)=%s", ", ".join(sorted(list(AD4_TYPES))[:12]))
+                    logging.debug(
+                        "[ligprep] AD4_TYPES(sample)=%s",
+                        ", ".join(sorted(list(AD4_TYPES))[:12]),
+                    )
                 if MONOATOMIC_IONS:
-                    logging.debug("[ligprep] MONOATOMIC_IONS=%s", ", ".join(sorted(MONOATOMIC_IONS)))
+                    logging.debug(
+                        "[ligprep] MONOATOMIC_IONS=%s",
+                        ", ".join(sorted(MONOATOMIC_IONS)),
+                    )
         except Exception as e:
-            logging.warning("[ligprep] alias init error; falling back to local lists (%s)", e)
+            logging.warning(
+                "[ligprep] alias init error; falling back to local lists (%s)", e
+            )
+
 
 _init_alias_rules_cache()
 
@@ -178,10 +272,16 @@ _COUNTERION_SMARTS = {
     "acetate": Chem.MolFromSmarts("CC(=O)[O-]"),
     "lactate": Chem.MolFromSmarts("CC(O)C(=O)[O-]"),
 }
-_COUNTERION_SMARTS.update({
-    "citrate_like": Chem.MolFromSmarts("[CX4](-[CH2]-C(=O)[O-])(-[CH2]-C(=O)[O-])(-C(=O)[O-])O"),
-    "tartrate_like": Chem.MolFromSmarts("IC([CH](O)C(=O)[O-])C(=O)[O-]".replace("I", "O")),
-})
+_COUNTERION_SMARTS.update(
+    {
+        "citrate_like": Chem.MolFromSmarts(
+            "[CX4](-[CH2]-C(=O)[O-])(-[CH2]-C(=O)[O-])(-C(=O)[O-])O"
+        ),
+        "tartrate_like": Chem.MolFromSmarts(
+            "IC([CH](O)C(=O)[O-])C(=O)[O-]".replace("I", "O")
+        ),
+    }
+)
 
 _CARBOXYLATE = Chem.MolFromSmarts("[CX3](=O)[O-]")
 _CARBOXYLIC = Chem.MolFromSmarts("[CX3](=O)O")
@@ -203,7 +303,11 @@ def _log_malformed(p: Path, reason: str, log_dir: Path | None = None) -> None:
     """
     try:
         line = f"{p.name}\t{reason}\n"
-        base = Path(log_dir) if log_dir else (Path(MALFORMED_DIR) if MALFORMED_DIR else Path.cwd())
+        base = (
+            Path(log_dir)
+            if log_dir
+            else (Path(MALFORMED_DIR) if MALFORMED_DIR else Path.cwd())
+        )
         dest = base / MALFORMED_LOG.name  # preserve original filename/timestamp pattern
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "a", encoding="utf-8") as out:
@@ -211,25 +315,26 @@ def _log_malformed(p: Path, reason: str, log_dir: Path | None = None) -> None:
     except Exception:
         pass
 
+
 def _append_prep_status(
-        status_log_path: Path,
-        ligand_name: str,
-        status: str,
-        reason: str = "",
-        relpath: str = "",
-        *,
-        stage: str = "",
-        failure_code: str = "",
-        failure_detail: str = "",
-        fixes_count: int = 0,
-        rules_ver: str = "",
-        writer_final: str = "",
-        rescue_used: str = "",
-        torsion_root_rule: str = "",
-        polarH: str = "",
-        ad4_types_ok: str = "",
-        charges_ok: str = "",
-        torsdof: str = "",
+    status_log_path: Path,
+    ligand_name: str,
+    status: str,
+    reason: str = "",
+    relpath: str = "",
+    *,
+    stage: str = "",
+    failure_code: str = "",
+    failure_detail: str = "",
+    fixes_count: int = 0,
+    rules_ver: str = "",
+    writer_final: str = "",
+    rescue_used: str = "",
+    torsion_root_rule: str = "",
+    polarH: str = "",
+    ad4_types_ok: str = "",
+    charges_ok: str = "",
+    torsdof: str = "",
 ):
     """
     Backward-compatible TSV: old columns + appended provenance/metrics.
@@ -243,14 +348,29 @@ def _append_prep_status(
         status_log_path.write_text(header, encoding="utf-8")
     with status_log_path.open("a", encoding="utf-8") as fh:
         row = [
-            ligand_name, status, reason, relpath,
-            stage, failure_code, failure_detail, str(fixes_count), rules_ver,
-            writer_final, rescue_used, torsion_root_rule, polarH, ad4_types_ok, charges_ok, str(torsdof or "")
+            ligand_name,
+            status,
+            reason,
+            relpath,
+            stage,
+            failure_code,
+            failure_detail,
+            str(fixes_count),
+            rules_ver,
+            writer_final,
+            rescue_used,
+            torsion_root_rule,
+            polarH,
+            ad4_types_ok,
+            charges_ok,
+            str(torsdof or ""),
         ]
         fh.write("\t".join(row) + "\n")
 
 
-def _log_elem_fix_summary(file_path: Path, stage: str, before_text: str = None, after_text: str = None):
+def _log_elem_fix_summary(
+    file_path: Path, stage: str, before_text: str = None, after_text: str = None
+):
     """
     Emit a single compact line showing how many He->H (ADT/element) conversions were performed
     by comparing counts before/after. If before_text is None, read file.
@@ -268,24 +388,34 @@ def _log_elem_fix_summary(file_path: Path, stage: str, before_text: str = None, 
         logging.warning(f"[elem-fix] summary failed for {file_path}: {e}")
 
 
-def _helium_postwrite_guard(pdbqt_path: Path, ligand_name: str, prepped_ligands_dir: Path) -> Tuple[bool, int, str]:
+def _helium_postwrite_guard(
+    pdbqt_path: Path, ligand_name: str, prepped_ligands_dir: Path
+) -> Tuple[bool, int, str]:
     try:
         with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
             lines = fh.readlines()
         new_lines, fixes, q_reason = assert_no_helium_in_pdbqt(lines, ligand_name)
-        logging.info("[helium] ligand=%s fixes=%d quarantine=%s rules=%s",
-                     ligand_name, fixes, str(bool(q_reason)), rules_version())
+        logging.info(
+            "[helium] ligand=%s fixes=%d quarantine=%s rules=%s",
+            ligand_name,
+            fixes,
+            str(bool(q_reason)),
+            rules_version(),
+        )
 
         if fixes > 0:
             with open(pdbqt_path, "w", encoding="utf-8") as out:
                 out.writelines(new_lines)
 
-        ok = (q_reason == "")
-        print(f"[helium] ligand={ligand_name} fixes={fixes} quarantine={not ok} rules={rules_version()}")
+        ok = q_reason == ""
+        print(
+            f"[helium] ligand={ligand_name} fixes={fixes} quarantine={not ok} rules={rules_version()}"
+        )
         return ok, fixes, q_reason
     except Exception as e:
         print(
-            f"[helium] ligand={ligand_name} fixes=0 quarantine=True rules={rules_version()} note=postwrite_exception:{e}")
+            f"[helium] ligand={ligand_name} fixes=0 quarantine=True rules={rules_version()} note=postwrite_exception:{e}"
+        )
         return False, 0, f"postwrite_exception:{e}"
 
 
@@ -311,7 +441,9 @@ def standardize_mol_with_activesite(mol: Chem.Mol) -> Chem.Mol:
 
     # Guardrail: strip clearly invalid/dummy atoms if any slipped through
     try:
-        bad = [a for a in m.GetAtoms() if (a.GetAtomicNum() == 0 or a.GetSymbol() == "*")]
+        bad = [
+            a for a in m.GetAtoms() if (a.GetAtomicNum() == 0 or a.GetSymbol() == "*")
+        ]
         if bad:
             emsg = f"dummy_atoms({len(bad)})"
             m.SetProp("_ligprep_filter_hint", emsg)
@@ -407,12 +539,13 @@ def _standardize_then_sanitize(mol: Chem.Mol) -> Tuple[Optional[Chem.Mol], str]:
 
 def _looks_like_buffer_salt(m: Chem.Mol) -> bool:
     from rdkit.Chem import rdMolDescriptors as rdmd
+
     hac = m.GetNumHeavyAtoms()
-    o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'O')
-    n = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'N')
+    o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "O")
+    n = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "N")
     rings = rdmd.CalcNumRings(m)
     arom = rdmd.CalcNumAromaticRings(m)
-    return (hac <= 15 and o >= 6 and n == 0 and rings == 0 and arom == 0)
+    return hac <= 15 and o >= 6 and n == 0 and rings == 0 and arom == 0
 
 
 def _matches_counterion(m: Chem.Mol) -> Optional[str]:
@@ -433,11 +566,23 @@ def _matches_counterion(m: Chem.Mol) -> Optional[str]:
             if patt and m.HasSubstructMatch(patt):
                 if hac <= 14:
                     return name
-        if hac <= 4 and _COUNTERION_SMARTS["formate"] and m.HasSubstructMatch(_COUNTERION_SMARTS["formate"]):
+        if (
+            hac <= 4
+            and _COUNTERION_SMARTS["formate"]
+            and m.HasSubstructMatch(_COUNTERION_SMARTS["formate"])
+        ):
             return "formate"
-        if hac <= 5 and _COUNTERION_SMARTS["acetate"] and m.HasSubstructMatch(_COUNTERION_SMARTS["acetate"]):
+        if (
+            hac <= 5
+            and _COUNTERION_SMARTS["acetate"]
+            and m.HasSubstructMatch(_COUNTERION_SMARTS["acetate"])
+        ):
             return "acetate"
-        if hac <= 6 and _COUNTERION_SMARTS["lactate"] and m.HasSubstructMatch(_COUNTERION_SMARTS["lactate"]):
+        if (
+            hac <= 6
+            and _COUNTERION_SMARTS["lactate"]
+            and m.HasSubstructMatch(_COUNTERION_SMARTS["lactate"])
+        ):
             return "lactate"
         s = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "S")
         o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "O")
@@ -452,6 +597,7 @@ def _matches_counterion(m: Chem.Mol) -> Optional[str]:
 def _is_polyacidic_buffer_like(m: Chem.Mol) -> bool:
     try:
         from rdkit.Chem import rdMolDescriptors as rdmd
+
         hac = m.GetNumHeavyAtoms()
         if hac == 0:
             return False
@@ -462,12 +608,25 @@ def _is_polyacidic_buffer_like(m: Chem.Mol) -> bool:
         o_ratio = (o / float(hac)) if hac else 0.0
 
         na = 0
-        if _CARBOXYLATE: na += len(m.GetSubstructMatches(_CARBOXYLATE))
-        if _CARBOXYLIC:  na += len(m.GetSubstructMatches(_CARBOXYLIC))
-        has_sulfate = bool(_COUNTERION_SMARTS["sulfate"] and m.HasSubstructMatch(_COUNTERION_SMARTS["sulfate"]))
-        has_phosphate = bool(_COUNTERION_SMARTS["phosphate"] and m.HasSubstructMatch(_COUNTERION_SMARTS["phosphate"]))
+        if _CARBOXYLATE:
+            na += len(m.GetSubstructMatches(_CARBOXYLATE))
+        if _CARBOXYLIC:
+            na += len(m.GetSubstructMatches(_CARBOXYLIC))
+        has_sulfate = bool(
+            _COUNTERION_SMARTS["sulfate"]
+            and m.HasSubstructMatch(_COUNTERION_SMARTS["sulfate"])
+        )
+        has_phosphate = bool(
+            _COUNTERION_SMARTS["phosphate"]
+            and m.HasSubstructMatch(_COUNTERION_SMARTS["phosphate"])
+        )
 
-        if rings == 0 and arom == 0 and o_ratio >= 0.35 and (na >= 3 or has_sulfate or has_phosphate):
+        if (
+            rings == 0
+            and arom == 0
+            and o_ratio >= 0.35
+            and (na >= 3 or has_sulfate or has_phosphate)
+        ):
             if n <= 1:
                 return True
         return False
@@ -481,16 +640,33 @@ def _element_from_adt(adt: str) -> str:
         return "C"
     u = t.upper()
     MAP = {
-        "C": "C", "A": "C",
-        "N": "N", "NA": "N",
-        "O": "O", "OA": "O",
-        "S": "S", "SA": "S",
-        "H": "H", "HD": "H",
-        "F": "F", "CL": "Cl", "BR": "Br", "I": "I",
+        "C": "C",
+        "A": "C",
+        "N": "N",
+        "NA": "N",
+        "O": "O",
+        "OA": "O",
+        "S": "S",
+        "SA": "S",
+        "H": "H",
+        "HD": "H",
+        "F": "F",
+        "CL": "Cl",
+        "BR": "Br",
+        "I": "I",
         "P": "P",
-        "B": "B", "SI": "Si", "SE": "Se",
-        "ZN": "Zn", "MG": "Mg", "CA": "Ca", "MN": "Mn", "FE": "Fe",
-        "K": "K", "NA+": "Na", "NA_": "Na", "NA ": "Na"
+        "B": "B",
+        "SI": "Si",
+        "SE": "Se",
+        "ZN": "Zn",
+        "MG": "Mg",
+        "CA": "Ca",
+        "MN": "Mn",
+        "FE": "Fe",
+        "K": "K",
+        "NA+": "Na",
+        "NA_": "Na",
+        "NA ": "Na",
     }
     if u in MAP:
         return MAP[u]
@@ -506,23 +682,46 @@ def _get_ad4_types_from_aliases() -> set[str]:
     # Includes aromatic and hetero variants and standard polar hydrogens.
     return {
         # organics
-        "C", "A",
-        "N", "NA",
-        "O", "OA",
-        "S", "SA",
-        "H", "HD",
-        "P", "B",
-
+        "C",
+        "A",
+        "N",
+        "NA",
+        "O",
+        "OA",
+        "S",
+        "SA",
+        "H",
+        "HD",
+        "P",
+        "B",
         # halogens
-        "F", "CL", "BR", "I",
-
+        "F",
+        "CL",
+        "BR",
+        "I",
         # metalloids / chalcogens
-        "SI", "SE",
-
+        "SI",
+        "SE",
         # metals (commonly seen in PDBQTs)
-        "ZN", "MG", "CA", "MN", "FE",
-        "K", "NA", "CU", "CO", "NI", "AL", "AG", "AU", "PT",
-        "LI", "BA", "SR", "CS", "RB",
+        "ZN",
+        "MG",
+        "CA",
+        "MN",
+        "FE",
+        "K",
+        "NA",
+        "CU",
+        "CO",
+        "NI",
+        "AL",
+        "AG",
+        "AU",
+        "PT",
+        "LI",
+        "BA",
+        "SR",
+        "CS",
+        "RB",
     }
 
 
@@ -530,9 +729,45 @@ try:
     AD4_TYPES: set[str] = _get_ad4_types_from_aliases()
 except Exception:
     AD4_TYPES = {
-        "C","A","N","NA","O","OA","S","SA","H","HD","F","CL","BR","I","P","B","SI","SE",
-        "ZN","MG","CA","MN","FE","K","NA","CU","CO","NI","AL","AG","AU","PT","LI","BA","SR","CS","RB"
+        "C",
+        "A",
+        "N",
+        "NA",
+        "O",
+        "OA",
+        "S",
+        "SA",
+        "H",
+        "HD",
+        "F",
+        "CL",
+        "BR",
+        "I",
+        "P",
+        "B",
+        "SI",
+        "SE",
+        "ZN",
+        "MG",
+        "CA",
+        "MN",
+        "FE",
+        "K",
+        "NA",
+        "CU",
+        "CO",
+        "NI",
+        "AL",
+        "AG",
+        "AU",
+        "PT",
+        "LI",
+        "BA",
+        "SR",
+        "CS",
+        "RB",
     }
+
 
 def _parse_pdbqt_metrics(pdbqt_path: Path) -> dict:
     """
@@ -594,15 +829,22 @@ def _parse_pdbqt_metrics(pdbqt_path: Path) -> dict:
                 except Exception:
                     pass
 
-        has_ad4_types = (n_atoms > 0 and typed == n_atoms)
-        has_charges = (n_atoms > 0 and charges_present == n_atoms)
+        has_ad4_types = n_atoms > 0 and typed == n_atoms
+        has_charges = n_atoms > 0 and charges_present == n_atoms
         polar_expected = (n_NA + n_OA) > 0
         has_polar_H = (n_HD > 0) or (not polar_expected)
 
         # Debug/audit when types are missing
-        if (not has_ad4_types) and bad_samples and os.environ.get("LIGPREP_DEBUG", "").strip().lower() in {"1","true","yes","y"}:
+        if (
+            (not has_ad4_types)
+            and bad_samples
+            and os.environ.get("LIGPREP_DEBUG", "").strip().lower()
+            in {"1", "true", "yes", "y"}
+        ):
             sample_str = "; ".join([f"{tkn}:{ln}" for tkn, ln in bad_samples[:10]])
-            logging.warning("[ad4.audit] %s bad_types sample=%s", pdbqt_path.stem, sample_str)
+            logging.warning(
+                "[ad4.audit] %s bad_types sample=%s", pdbqt_path.stem, sample_str
+            )
 
         return {
             "has_polar_H": has_polar_H,
@@ -611,7 +853,12 @@ def _parse_pdbqt_metrics(pdbqt_path: Path) -> dict:
             "has_charges": has_charges,
             "torsdof": torsdof,
             # expose counts when debugging downstream
-            "n_atoms": n_atoms, "n_HD": n_HD, "n_NA": n_NA, "n_OA": n_OA, "typed": typed, "charges_present": charges_present,
+            "n_atoms": n_atoms,
+            "n_HD": n_HD,
+            "n_NA": n_NA,
+            "n_OA": n_OA,
+            "typed": typed,
+            "charges_present": charges_present,
         }
     except Exception as e:
         # Try to include a tiny context without risking new exceptions
@@ -620,7 +867,7 @@ def _parse_pdbqt_metrics(pdbqt_path: Path) -> dict:
             lines = []
             with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
                 for ln in fh:
-                    if ln.startswith(("ATOM","HETATM")):
+                    if ln.startswith(("ATOM", "HETATM")):
                         lines.append(ln.strip())
                         if len(lines) >= 3:
                             break
@@ -628,7 +875,9 @@ def _parse_pdbqt_metrics(pdbqt_path: Path) -> dict:
                 ctx = " | ctx=" + " | ".join(lines)
         except Exception:
             pass
-        logging.warning("[ligprep] metrics parse failed for %s: %s%s", pdbqt_path.name, e, ctx)
+        logging.warning(
+            "[ligprep] metrics parse failed for %s: %s%s", pdbqt_path.name, e, ctx
+        )
         return {
             "has_polar_H": False,
             "polarH_expected": False,
@@ -656,23 +905,29 @@ def validate_pdbqt_invariants(pdbqt_path: Path) -> tuple[bool, dict, list[str]]:
     if not (isinstance(td, int) and td >= 0):
         failures.append("torsdof_missing_or_negative")
 
-    if os.environ.get("LIGPREP_DEBUG", "").strip() in {"1","true","yes","y"}:
+    if os.environ.get("LIGPREP_DEBUG", "").strip() in {"1", "true", "yes", "y"}:
         logging.info(
             "[invariants] lig=%s has_HD=%s donors_seen=%s has_polar_H=%s has_ad4_types=%s has_charges=%s "
             "torsdof=%s fail=%s",
-            pdbqt_path.stem, m.get("n_HD","NA"), m.get("n_NA","NA"), m.get("has_polar_H"),
-            m.get("has_ad4_types"), m.get("has_charges"), m.get("torsdof"), failures
+            pdbqt_path.stem,
+            m.get("n_HD", "NA"),
+            m.get("n_NA", "NA"),
+            m.get("has_polar_H"),
+            m.get("has_ad4_types"),
+            m.get("has_charges"),
+            m.get("torsdof"),
+            failures,
         )
     return (len(failures) == 0), m, failures
 
 
 def _adt_retype_and_normalize(
-        mgltools_python_short: str,
-        prepare_script_short: str,
-        mol2_for_mgl: Path,
-        out_pdbqt: Path,
-        *,
-        torsion_rule_label: str = "adt_normalized"
+    mgltools_python_short: str,
+    prepare_script_short: str,
+    mol2_for_mgl: Path,
+    out_pdbqt: Path,
+    *,
+    torsion_rule_label: str = "adt_normalized",
 ) -> tuple[bool, str]:
     """
     Re-run prepare_ligand4 to enforce AD4 types and ADT torsion ROOT/BRANCH, then replace out_pdbqt on success.
@@ -680,13 +935,25 @@ def _adt_retype_and_normalize(
     try:
         tmp = out_pdbqt.with_suffix(".adt_norm.pdbqt")
         cmd = [
-            mgltools_python_short, prepare_script_short,
-            "-l", get_short_path_name(str(mol2_for_mgl.resolve())),
-            "-o", get_short_path_name(str(tmp.resolve())),
-            "-U", "nphs_lps",
-            "-A", "hydrogens",
+            mgltools_python_short,
+            prepare_script_short,
+            "-l",
+            get_short_path_name(str(mol2_for_mgl.resolve())),
+            "-o",
+            get_short_path_name(str(tmp.resolve())),
+            "-U",
+            "nphs_lps",
+            "-A",
+            "hydrogens",
         ]
-        res = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=str(mol2_for_mgl.parent), timeout=600)
+        res = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=str(mol2_for_mgl.parent),
+            timeout=600,
+        )
         if res.stderr:
             logging.warning("[mgltools retype stderr] %s", res.stderr.strip()[:300])
 
@@ -700,12 +967,20 @@ def _adt_retype_and_normalize(
 
             m = _parse_pdbqt_metrics(out_pdbqt)
             typed, n_atoms = m.get("typed", 0), m.get("n_atoms", 0)
-            logging.info("[retype.ok] replaced=True n_atoms=%d typed_ratio=%d/%d ad4_ok=%s torsdof=%s",
-                         n_atoms, typed, n_atoms, m.get("has_ad4_types"), m.get("torsdof"))
+            logging.info(
+                "[retype.ok] replaced=True n_atoms=%d typed_ratio=%d/%d ad4_ok=%s torsdof=%s",
+                n_atoms,
+                typed,
+                n_atoms,
+                m.get("has_ad4_types"),
+                m.get("torsdof"),
+            )
             return True, torsion_rule_label
 
     except subprocess.CalledProcessError as e:
-        logging.warning("[torsion-normalize] ADT retype failed: %s", (e.stderr or "")[-180:])
+        logging.warning(
+            "[torsion-normalize] ADT retype failed: %s", (e.stderr or "")[-180:]
+        )
     except Exception as e:
         logging.warning("[torsion-normalize] exception: %s", e)
 
@@ -721,9 +996,19 @@ def _reprep_via_meeko_path(mol2_path: Path, out_pdbqt: Path) -> bool:
         cmd = [exe, "-i", str(mol2_path), "-o", str(out_pdbqt)]
     else:
         # last-resort: try the active interpreter with module form
-        cmd = [sys.executable, "-m", "meeko", "-i", str(mol2_path), "-o", str(out_pdbqt)]
+        cmd = [
+            sys.executable,
+            "-m",
+            "meeko",
+            "-i",
+            str(mol2_path),
+            "-o",
+            str(out_pdbqt),
+        ]
     try:
-        res = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+        res = subprocess.run(
+            cmd, check=True, capture_output=True, text=True, timeout=600
+        )
         if res.stderr:
             logging.warning("[meeko stderr] %s", res.stderr.strip()[:300])
         return out_pdbqt.exists() and out_pdbqt.stat().st_size > 100
@@ -754,9 +1039,9 @@ def _buffer_like_by_counts_from_mol(m: Chem.Mol) -> bool:
     hac = m.GetNumHeavyAtoms()
     if hac == 0:
         return False
-    o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'O')
-    n = sum(1 for a in m.GetAtoms() if a.GetSymbol() == 'N')
-    return (hac >= 10 and (o / float(hac)) >= 0.40 and n <= 1)
+    o = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "O")
+    n = sum(1 for a in m.GetAtoms() if a.GetSymbol() == "N")
+    return hac >= 10 and (o / float(hac)) >= 0.40 and n <= 1
 
 
 def _buffer_like_by_counts_from_pdbfile(pdb_path: Path) -> bool:
@@ -764,7 +1049,7 @@ def _buffer_like_by_counts_from_pdbfile(pdb_path: Path) -> bool:
     hac = sum(v for k, v in counts.items() if k != "H")
     o = counts.get("O", 0)
     n = counts.get("N", 0)
-    return (hac >= 10 and hac > 0 and (o / float(hac)) >= 0.40 and n <= 1)
+    return hac >= 10 and hac > 0 and (o / float(hac)) >= 0.40 and n <= 1
 
 
 def _polyacidic_by_counts_from_pdbfile(pdb_path: Path) -> bool:
@@ -772,7 +1057,7 @@ def _polyacidic_by_counts_from_pdbfile(pdb_path: Path) -> bool:
     hac = sum(v for k, v in counts.items() if k != "H")
     o = counts.get("O", 0)
     n = counts.get("N", 0)
-    return (hac >= 10 and hac > 0 and (o / float(hac)) >= 0.35 and n <= 1)
+    return hac >= 10 and hac > 0 and (o / float(hac)) >= 0.35 and n <= 1
 
 
 def _write_aromatic_sdf(mol: Chem.Mol, out_path: Path) -> bool:
@@ -810,10 +1095,16 @@ def _re_aromatize_mol2_in_place(mol2_path: Path, obabel_exe_short: str) -> bool:
     try:
         m = Chem.MolFromMol2File(str(mol2_path), sanitize=False, removeHs=False)
     except Exception as e:
-        logging.warning("[ligprep] RDKit failed to read MOL2 (sanitize=False) %s: %s", mol2_path.name, e)
+        logging.warning(
+            "[ligprep] RDKit failed to read MOL2 (sanitize=False) %s: %s",
+            mol2_path.name,
+            e,
+        )
 
     if m is None:
-        logging.info("[ligprep] re_arom skip (RDKit load failed) mol2=%s", mol2_path.name)
+        logging.info(
+            "[ligprep] re_arom skip (RDKit load failed) mol2=%s", mol2_path.name
+        )
         return False
 
     # Count aromatic atoms BEFORE rescue
@@ -840,9 +1131,14 @@ def _re_aromatize_mol2_in_place(mol2_path: Path, obabel_exe_short: str) -> bool:
         return False
 
     tmp_mol2 = mol2_path.with_suffix(".arom.mol2")
-    ok_ob = _run_obabel([obabel_exe_short, "-isdf", str(tmp_sdf), "-omol2", "-O", str(tmp_mol2)], timeout_sec=600)
+    ok_ob = _run_obabel(
+        [obabel_exe_short, "-isdf", str(tmp_sdf), "-omol2", "-O", str(tmp_mol2)],
+        timeout_sec=600,
+    )
     if not ok_ob:
-        logging.info("[ligprep] re_arom OBabel round-trip failed for %s", mol2_path.name)
+        logging.info(
+            "[ligprep] re_arom OBabel round-trip failed for %s", mol2_path.name
+        )
         return False
 
     if tmp_mol2.exists() and tmp_mol2.stat().st_size > 100:
@@ -851,12 +1147,21 @@ def _re_aromatize_mol2_in_place(mol2_path: Path, obabel_exe_short: str) -> bool:
             tmp_mol2.replace(mol2_path)
             # post-replace: recount aromatics
             after_arom = _count_aromatic_atoms_in_mol2(mol2_path)
-            used = bool(after_arom >= 0 and before_arom >= 0 and after_arom != before_arom)
-            logging.info("[arom-rescue] file=%s before=%d after=%d used=%s",
-                         mol2_path.name, before_arom, after_arom, used)
+            used = bool(
+                after_arom >= 0 and before_arom >= 0 and after_arom != before_arom
+            )
+            logging.info(
+                "[arom-rescue] file=%s before=%d after=%d used=%s",
+                mol2_path.name,
+                before_arom,
+                after_arom,
+                used,
+            )
             return True
         except Exception as e:
-            logging.info("[ligprep] re_arom replace failed for %s: %s", mol2_path.name, e)
+            logging.info(
+                "[ligprep] re_arom replace failed for %s: %s", mol2_path.name, e
+            )
             return False
 
     logging.info("[ligprep] re_arom produced empty MOL2 for %s", mol2_path.name)
@@ -937,7 +1242,9 @@ def _apply_ph_charge_perturbation(pdbqt_path: Path, ph: float) -> None:
         )
 
 
-def _log_std_diff(log_dir: Path, lig_name: str, branch: str, old_smiles: str, new_smiles: str) -> None:
+def _log_std_diff(
+    log_dir: Path, lig_name: str, branch: str, old_smiles: str, new_smiles: str
+) -> None:
     """Append SMILES diffs caused by standardization so we can spot chemistry changes."""
     try:
         path = Path(log_dir) / "standardization_diffs.tsv"
@@ -973,15 +1280,8 @@ def quick_pdbqt_validate(path: Path) -> tuple[bool, int, str]:
     return True, atoms, ""
 
 
-def read_config(path="config.txt") -> Dict[str, str]:
-    config: Dict[str, str] = {}
-    with open(path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                config[key.strip()] = value.strip()
-    return config
+def read_config(path="config.txt") -> Dict[str, Any]:
+    return load_config(path)
 
 
 def _resolve_obabel_exe(obabel_cfg: str) -> str:
@@ -1003,8 +1303,17 @@ def _resolve_prepare_ligand4(mgltools_path: str, cfg: Dict[str, str]) -> Path:
         if pp.exists():
             return pp
     mp = Path(mgltools_path)
-    win_probe = mp / "Lib" / "site-packages" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py"
-    lin_probe = mp / "MGLToolsPckgs" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py"
+    win_probe = (
+        mp
+        / "Lib"
+        / "site-packages"
+        / "AutoDockTools"
+        / "Utilities24"
+        / "prepare_ligand4.py"
+    )
+    lin_probe = (
+        mp / "MGLToolsPckgs" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py"
+    )
     print("using prepare_ligand4.py at ", lin_probe)
     if win_probe.exists():
         return win_probe
@@ -1012,7 +1321,7 @@ def _resolve_prepare_ligand4(mgltools_path: str, cfg: Dict[str, str]) -> Path:
 
 
 def get_short_path_name(long_name):
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         return long_name
     _GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
     _GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
@@ -1038,19 +1347,23 @@ def _is_probable_water_from_pdbqt_lines(lines: List[str]) -> bool:
         if not parts:
             continue
         elem = _element_from_adt(parts[-1])
-        if elem == 'O':
+        if elem == "O":
             has_O = True
-        if elem != 'H':
+        if elem != "H":
             heavy += 1
     return has_O and heavy <= 1
 
 
 def is_valid_ligand(path: Path, log_dir: Path) -> bool:
     try:
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
 
-        atom_lines = [line for line in lines if line.startswith("ATOM") or line.startswith("HETATM")]
+        atom_lines = [
+            line
+            for line in lines
+            if line.startswith("ATOM") or line.startswith("HETATM")
+        ]
         torsion_lines = [line for line in lines if line.startswith("TORSDOF")]
 
         if not atom_lines:
@@ -1066,7 +1379,7 @@ def is_valid_ligand(path: Path, log_dir: Path) -> bool:
             parts = ln.split()
             if not parts:
                 continue
-            if _element_from_adt(parts[-1]) != 'H':
+            if _element_from_adt(parts[-1]) != "H":
                 heavy += 1
         if heavy < 3:
             raise ValueError(f"too_few_heavy_atoms_in_pdbqt({heavy})")
@@ -1079,9 +1392,9 @@ def is_valid_ligand(path: Path, log_dir: Path) -> bool:
         return False
 
 
-def _audit_protonation_metrics(tag: str,
-                               mol_or_path: Union["Chem.Mol", str, Path],
-                               context: str = "pre") -> Dict[str, Any]:
+def _audit_protonation_metrics(
+    tag: str, mol_or_path: Union["Chem.Mol", str, Path], context: str = "pre"
+) -> Dict[str, Any]:
     """
     Returns {'ok': bool, 'h_count': int, 'formal_charge': int, 'has_partial_charges': bool,
              'aromatic_atoms': int, 'ad4_types_ok': Optional[bool], 'notes': List[str]}
@@ -1097,6 +1410,7 @@ def _audit_protonation_metrics(tag: str,
     mol = None
     try:
         from rdkit import Chem
+
         if hasattr(mol_or_path, "GetNumAtoms"):
             mol = mol_or_path
         else:
@@ -1119,7 +1433,9 @@ def _audit_protonation_metrics(tag: str,
             except Exception:
                 notes.append("formal_charge_calc_warn")
             try:
-                h_count = sum(a.GetNumExplicitHs() + a.GetTotalNumHs() for a in mol.GetAtoms())
+                h_count = sum(
+                    a.GetNumExplicitHs() + a.GetTotalNumHs() for a in mol.GetAtoms()
+                )
             except Exception:
                 notes.append("h_count_warn")
             try:
@@ -1146,7 +1462,8 @@ def _audit_protonation_metrics(tag: str,
                     toks = ln.split()
                     if len(toks) >= 9:
                         try:
-                            float(toks[8]); has_q = True
+                            float(toks[8])
+                            has_q = True
                         except Exception:
                             pass
                     if "A" in ln[-6:]:
@@ -1212,7 +1529,9 @@ def _count_aromatic_ad_types_in_pdbqt(pdbqt_path: Path) -> int:
     return n
 
 
-def _pdbqt_from_mol2_via_obabel(mol2_file: Path, out_pdbqt: Path, obabel_exe_short: str) -> bool:
+def _pdbqt_from_mol2_via_obabel(
+    mol2_file: Path, out_pdbqt: Path, obabel_exe_short: str
+) -> bool:
     """
     OBabel path with explicit polar hydrogens and Gasteiger partial charges.
     """
@@ -1220,11 +1539,14 @@ def _pdbqt_from_mol2_via_obabel(mol2_file: Path, out_pdbqt: Path, obabel_exe_sho
         tmp = out_pdbqt.with_suffix(".obabel_tmp.pdbqt")
         cmd = [
             obabel_exe_short,
-            "-imol2", str(mol2_file),
+            "-imol2",
+            str(mol2_file),
             "-opdbqt",
-            "-O", str(tmp),
+            "-O",
+            str(tmp),
             "-h",
-            "--partialcharge", "gasteiger",
+            "--partialcharge",
+            "gasteiger",
         ]
         ok = _run_obabel(cmd, timeout_sec=600)
         if ok and tmp.exists():
@@ -1244,7 +1566,9 @@ def _pdbqt_has_H(pdbqt_path: Path) -> bool:
     try:
         with open(pdbqt_path, "r", errors="ignore") as f:
             for line in f:
-                if (line.startswith("ATOM") or line.startswith("HETATM")) and line[76:78].strip() == "H":
+                if (line.startswith("ATOM") or line.startswith("HETATM")) and line[
+                    76:78
+                ].strip() == "H":
                     return True
     except Exception:
         pass
@@ -1254,6 +1578,7 @@ def _pdbqt_has_H(pdbqt_path: Path) -> bool:
 def _count_explicit_H_in_mol2(path: Path) -> int:
     try:
         from rdkit import Chem
+
         m = Chem.MolFromMol2File(str(path), sanitize=False, removeHs=False)
         if not m:
             return -1
@@ -1263,15 +1588,15 @@ def _count_explicit_H_in_mol2(path: Path) -> int:
 
 
 def _prepare_one(
-        mgltools_python_short: str,
-        prepare_script_short: str,
-        mol2_file: Path,
-        pdbqt_path: Path,
-        obabel_exe_short: Optional[str] = None,
-        *,
-        status_log_dir: Path,
-        ph: Optional[float] = None,
-        copy_targets: Optional[List[Path]] = None,
+    mgltools_python_short: str,
+    prepare_script_short: str,
+    mol2_file: Path,
+    pdbqt_path: Path,
+    obabel_exe_short: Optional[str] = None,
+    *,
+    status_log_dir: Path,
+    ph: Optional[float] = None,
+    copy_targets: Optional[List[Path]] = None,
 ) -> Tuple[str, str]:
     # use the H-enriched input
 
@@ -1324,37 +1649,74 @@ def _prepare_one(
         len(copy_targets),
     )
 
-    logging.info("[debug] _prepare_one lig=%s mol2=%s out=%s obabel=%s",
-                 lig_id, mol2_file.name, pdbqt_path.name, bool(obabel_exe_short))
+    logging.info(
+        "[debug] _prepare_one lig=%s mol2=%s out=%s obabel=%s",
+        lig_id,
+        mol2_file.name,
+        pdbqt_path.name,
+        bool(obabel_exe_short),
+    )
 
     try:
         if obabel_exe_short:
             try:
                 _pre_arom = _count_aromatic_atoms_in_mol2(mol2_file)
-                _m_pre = Chem.MolFromMol2File(str(mol2_file), sanitize=False, removeHs=False)
-                _preH = sum(1 for a in (_m_pre.GetAtoms() if _m_pre else []) if a.GetSymbol() == "H")
-                logging.info("[ligprep] re_arom pre  arom=%d H=%d file=%s", _pre_arom, _preH, mol2_file.name)
+                _m_pre = Chem.MolFromMol2File(
+                    str(mol2_file), sanitize=False, removeHs=False
+                )
+                _preH = sum(
+                    1
+                    for a in (_m_pre.GetAtoms() if _m_pre else [])
+                    if a.GetSymbol() == "H"
+                )
+                logging.info(
+                    "[ligprep] re_arom pre  arom=%d H=%d file=%s",
+                    _pre_arom,
+                    _preH,
+                    mol2_file.name,
+                )
             except Exception:
-                logging.info("[ligprep] re_arom pre  arom=? H=? file=%s", mol2_file.name)
+                logging.info(
+                    "[ligprep] re_arom pre  arom=? H=? file=%s", mol2_file.name
+                )
 
             pre_H = _count_explicit_H_in_mol2(mol2_file)
             _re_aromatize_mol2_in_place(mol2_file, obabel_exe_short)
             post_H = _count_explicit_H_in_mol2(mol2_file)
-            logging.info(f"[re-arom] lig={lig_id} H_pre={pre_H} H_post={post_H} file={mol2_file.name}")
+            logging.info(
+                f"[re-arom] lig={lig_id} H_pre={pre_H} H_post={post_H} file={mol2_file.name}"
+            )
 
             if pre_H > 0 and post_H == 0:
-                logging.warning(f"[re-arom] LOST all explicit H! Will re-add via obabel -h.")
-                add_hydrogens_mol2(mol2_in, mol2_in, obabel_exe_short, ph=ph)  # in-place re-add
+                logging.warning(
+                    "[re-arom] LOST all explicit H! Will re-add via obabel -h."
+                )
+                add_hydrogens_mol2(
+                    mol2_in, mol2_in, obabel_exe_short, ph=ph
+                )  # in-place re-add
                 post2_H = _count_explicit_H_in_mol2(mol2_in)
                 logging.info(f"[re-arom] after re-add: H={post2_H}")
 
             try:
                 _post_arom = _count_aromatic_atoms_in_mol2(mol2_file)
-                _m_post = Chem.MolFromMol2File(str(mol2_file), sanitize=False, removeHs=False)
-                _postH = sum(1 for a in (_m_post.GetAtoms() if _m_post else []) if a.GetSymbol() == "H")
-                logging.info("[ligprep] re_arom post arom=%d H=%d file=%s", _post_arom, _postH, mol2_file.name)
+                _m_post = Chem.MolFromMol2File(
+                    str(mol2_file), sanitize=False, removeHs=False
+                )
+                _postH = sum(
+                    1
+                    for a in (_m_post.GetAtoms() if _m_post else [])
+                    if a.GetSymbol() == "H"
+                )
+                logging.info(
+                    "[ligprep] re_arom post arom=%d H=%d file=%s",
+                    _post_arom,
+                    _postH,
+                    mol2_file.name,
+                )
             except Exception:
-                logging.info("[ligprep] re_arom post arom=? H=? file=%s", mol2_file.name)
+                logging.info(
+                    "[ligprep] re_arom post arom=? H=? file=%s", mol2_file.name
+                )
     except Exception as e:
         logging.info("[ligprep] re_arom skipped for %s: %s", mol2_file.name, e)
 
@@ -1371,15 +1733,22 @@ def _prepare_one(
     okH, hstderr = add_hydrogens_mol2(mol2_in, mol2_h, obabel_exe_short, ph=ph)
     postH0 = _count_explicit_H_in_mol2(mol2_h) if mol2_h.exists() else -1
 
-    logging.info("[ligprep] addHs stage=primary in=%s ok=%s preH=%s postH=%s",
-                 mol2_in.name, okH, preH0, postH0)
+    logging.info(
+        "[ligprep] addHs stage=primary in=%s ok=%s preH=%s postH=%s",
+        mol2_in.name,
+        okH,
+        preH0,
+        postH0,
+    )
     if (hstderr or "").strip():
-        logging.warning("[ligprep] addHs stderr (primary) %s", hstderr.splitlines()[-1][:200])
+        logging.warning(
+            "[ligprep] addHs stderr (primary) %s", hstderr.splitlines()[-1][:200]
+        )
 
     # Treat 'success but zero H' as failure so we fall back. For pH-ensembles,
     # OBabel may adjust protonation/charges without changing explicit H count,
     # so only require an H-count gain when ph is None.
-    no_gain = (preH0 >= 0 and postH0 <= preH0)
+    no_gain = preH0 >= 0 and postH0 <= preH0
     if not okH or postH0 <= 0 or (ph is None and no_gain):
         logging.warning(
             "[ligprep] obabel_h_charge: H not added (pre=%s post=%s ph=%s); forcing RDKit AddHs fallback: %s",
@@ -1394,7 +1763,10 @@ def _prepare_one(
 
     # If still H-free, attempt an RDKit-based AddHs roundtrip
     if mol2_for_mgl is mol2_in:
-        logging.warning("[ligprep] OBabel -h failed (or no H added); attempting RDKit AddHs fallback: %s", mol2_in.name)
+        logging.warning(
+            "[ligprep] OBabel -h failed (or no H added); attempting RDKit AddHs fallback: %s",
+            mol2_in.name,
+        )
         try:
             _m = Chem.MolFromMol2File(str(mol2_in), sanitize=True, removeHs=False)
             if _m is not None:
@@ -1403,11 +1775,23 @@ def _prepare_one(
                 _tmp_mol2 = mol2_in.with_suffix(".rdkH.mol2")
                 with Chem.SDWriter(str(_tmp_sdf)) as w:
                     w.write(_mh)
-                ok2 = _run_obabel([obabel_exe_short, "-isdf", str(_tmp_sdf), "-omol2", "-O", str(_tmp_mol2)],
-                                  timeout_sec=600)
+                ok2 = _run_obabel(
+                    [
+                        obabel_exe_short,
+                        "-isdf",
+                        str(_tmp_sdf),
+                        "-omol2",
+                        "-O",
+                        str(_tmp_mol2),
+                    ],
+                    timeout_sec=600,
+                )
                 if ok2 and _tmp_mol2.exists():
                     mol2_for_mgl = _tmp_mol2
-                    logging.info("[ligprep] RDKit AddHs fallback produced MOL2: %s", _tmp_mol2.name)
+                    logging.info(
+                        "[ligprep] RDKit AddHs fallback produced MOL2: %s",
+                        _tmp_mol2.name,
+                    )
         except Exception as e:
             logging.warning("[ligprep] RDKit AddHs fallback failed: %s", e)
 
@@ -1427,16 +1811,19 @@ def _prepare_one(
     if curH > 0:
         logging.info("[ligprep] ADT input Hs=%d path=%s", curH, mol2_for_mgl)
     else:
-        logging.warning("[ligprep] ADT will add hydrogens internally (input has 0 explicit H): %s", mol2_for_mgl)
+        logging.warning(
+            "[ligprep] ADT will add hydrogens internally (input has 0 explicit H): %s",
+            mol2_for_mgl,
+        )
 
     try:
         _chk = Chem.MolFromMol2File(str(mol2_for_mgl), sanitize=False, removeHs=False)
-        logging.info("[bulkSDF] post-AddHs ligand=%s atoms=%d explicit_H=%s",
-                     lig_id,
-                     (_chk.GetNumAtoms() if _chk else -1),
-                     (any(a.GetAtomicNum() == 1 for a in _chk.GetAtoms()) if _chk else False))
-
-
+        logging.info(
+            "[bulkSDF] post-AddHs ligand=%s atoms=%d explicit_H=%s",
+            lig_id,
+            (_chk.GetNumAtoms() if _chk else -1),
+            (any(a.GetAtomicNum() == 1 for a in _chk.GetAtoms()) if _chk else False),
+        )
 
     except Exception:
         pass
@@ -1448,6 +1835,7 @@ def _prepare_one(
         """
         try:
             from rdkit import Chem
+
             m = None
             if mol2_path.is_file():
                 m = Chem.MolFromMol2File(str(mol2_path), sanitize=False, removeHs=False)
@@ -1479,8 +1867,10 @@ def _prepare_one(
                 except Exception:
                     has_explicit_H = False
 
-                print(f"[rdkit-guarded] {tag}: atoms={n_atoms} rings={n_rings} "
-                      f"charge_sum={charge_sum} has_explicit_H={has_explicit_H}")
+                print(
+                    f"[rdkit-guarded] {tag}: atoms={n_atoms} rings={n_rings} "
+                    f"charge_sum={charge_sum} has_explicit_H={has_explicit_H}"
+                )
             else:
                 print(f"[ligprep] {tag}: RDKit failed to parse {mol2_path.name}")
         except Exception as e:
@@ -1490,7 +1880,9 @@ def _prepare_one(
     # Compact pre-ADT banner (greppable)
     try:
         _m_pre = Chem.MolFromMol2File(str(mol2_for_mgl), sanitize=False, removeHs=False)
-        _Hc = sum(1 for a in (_m_pre.GetAtoms() if _m_pre else []) if a.GetSymbol() == "H")
+        _Hc = sum(
+            1 for a in (_m_pre.GetAtoms() if _m_pre else []) if a.GetSymbol() == "H"
+        )
         # Optional: count aromatic atoms if you have a helper; else report -1
         try:
             _arom_atoms = _count_aromatic_atoms_in_mol2(mol2_for_mgl)
@@ -1518,7 +1910,11 @@ def _prepare_one(
     pdbqt_short = get_short_path_name(str(pdbqt_path.resolve()))
 
     # Environment toggle: KEEP_NONPOLAR_H=1 keeps nphs; default True for extracted runs
-    _keep_nphs = str(os.environ.get("KEEP_NONPOLAR_H", "1")).lower() not in {"0", "false", "no"}
+    _keep_nphs = str(os.environ.get("KEEP_NONPOLAR_H", "1")).lower() not in {
+        "0",
+        "false",
+        "no",
+    }
     _u_flag = ["-U", "lps"] if _keep_nphs else ["-U", "nphs_lps"]
     # Guard: ensure the ADT input MOL2 actually has explicit H
     H_in = _count_explicit_H_in_mol2(mol2_for_mgl)
@@ -1529,15 +1925,25 @@ def _prepare_one(
         add_hydrogens_mol2(mol2_for_mgl, mol2_for_mgl, obabel_exe_short, ph=ph)
 
     cmd = [
-        mgltools_python_short, prepare_script_short,
-        "-l", get_short_path_name(str(mol2_for_mgl.resolve())),
-        "-o", pdbqt_short,  
+        mgltools_python_short,
+        prepare_script_short,
+        "-l",
+        get_short_path_name(str(mol2_for_mgl.resolve())),
+        "-o",
+        pdbqt_short,
         *_u_flag,
-        "-A", "hydrogens",
+        "-A",
+        "hydrogens",
     ]
 
-    print(f"[ligprep] Calling prepare_ligand4 on {mol2_file.name} -> {Path(pdbqt_path).name}")
-    logging.info("[paths] pdbqt_out=%s (from mol2=%s)", str(pdbqt_path.resolve()), str(mol2_file.resolve()))
+    print(
+        f"[ligprep] Calling prepare_ligand4 on {mol2_file.name} -> {Path(pdbqt_path).name}"
+    )
+    logging.info(
+        "[paths] pdbqt_out=%s (from mol2=%s)",
+        str(pdbqt_path.resolve()),
+        str(mol2_file.resolve()),
+    )
 
     try:
         _ = subprocess.run(
@@ -1546,11 +1952,15 @@ def _prepare_one(
             capture_output=True,
             text=True,
             cwd=str(mol2_file.parent),
-            timeout=600
+            timeout=600,
         )
         try:
             size = pdbqt_path.stat().st_size if pdbqt_path.exists() else 0
-            logging.info("[bulkSDF] write.pdbqt.done ligand=%s rc=0 size=%d via=mgltools", lig_id, size)
+            logging.info(
+                "[bulkSDF] write.pdbqt.done ligand=%s rc=0 size=%d via=mgltools",
+                lig_id,
+                size,
+            )
         except Exception:
             pass
 
@@ -1561,7 +1971,9 @@ def _prepare_one(
             print(f"[fallback-obabel] lig={lig_id} out_atoms={n_atoms} stderr_last=''")
 
             # Initialize candidate list for deterministic writer selection
-            candidates: list[tuple[str, Path, dict, int]] = []  # (label, path, metrics, arom_count)
+            candidates: list[
+                tuple[str, Path, dict, int]
+            ] = []  # (label, path, metrics, arom_count)
             try:
                 m0 = _parse_pdbqt_metrics(pdbqt_path)
                 a0 = _count_aromatic_ad_types_in_pdbqt(pdbqt_path)
@@ -1575,41 +1987,60 @@ def _prepare_one(
         # Record atom counts for fallback comparisons (needed before the ADT→OBabel decision)
         _in_atoms = -1
         try:
-            _in_atoms = _m_chk.GetNumAtoms() if _m_chk else -1  # or a MOL2 atom counter if _m_chk isn't set
+            _in_atoms = (
+                _m_chk.GetNumAtoms() if _m_chk else -1
+            )  # or a MOL2 atom counter if _m_chk isn't set
         except Exception:
             pass
         _out_atoms = n_atoms
         # If ADT wrote noticeably fewer atoms than the MOL2 input, rescue via OBabel MOL2->PDBQT
         try:
+
             def _count_mol2_atoms(mol2_path: Path) -> int:
                 n, in_atoms = 0, False
                 with open(mol2_path, "r", encoding="utf-8", errors="ignore") as fh:
                     for ln in fh:
-                        if ln.startswith("@<TRIPOS>ATOM"): in_atoms = True; continue
-                        if ln.startswith("@<TRIPOS>BOND"): break
-                        if in_atoms: n += 1
+                        if ln.startswith("@<TRIPOS>ATOM"):
+                            in_atoms = True
+                            continue
+                        if ln.startswith("@<TRIPOS>BOND"):
+                            break
+                        if in_atoms:
+                            n += 1
                 return n
 
-            _in_atoms = _m_chk.GetNumAtoms() if _m_chk else _count_mol2_atoms(mol2_for_mgl)
+            _in_atoms = (
+                _m_chk.GetNumAtoms() if _m_chk else _count_mol2_atoms(mol2_for_mgl)
+            )
         except Exception:
             _in_atoms = _count_mol2_atoms(mol2_for_mgl)
         print(
-            f"[ligprep] writer={writer_final} lig={lig_id} in_atoms={_in_atoms} out_atoms={n_atoms} ok={ok} reason={reason}")
+            f"[ligprep] writer={writer_final} lig={lig_id} in_atoms={_in_atoms} out_atoms={n_atoms} ok={ok} reason={reason}"
+        )
 
         if _out_atoms > 0 and _in_atoms > 0 and _out_atoms < int(0.9 * _in_atoms):
             # One light retry: keep hydrogens; do not strip lone pairs
             try:
                 alt_pdbqt = pdbqt_path.with_suffix(".loss_retry.pdbqt")
                 alt_cmd = [
-                    mgltools_python_short, prepare_script_short,
-                    "-l", mol2_short,
-                    "-o", get_short_path_name(str(alt_pdbqt.resolve())),
-                    "-U", "lps",
-                    "-A", "hydrogens",
+                    mgltools_python_short,
+                    prepare_script_short,
+                    "-l",
+                    mol2_short,
+                    "-o",
+                    get_short_path_name(str(alt_pdbqt.resolve())),
+                    "-U",
+                    "lps",
+                    "-A",
+                    "hydrogens",
                 ]
                 _ = subprocess.run(
-                    alt_cmd, check=True, capture_output=True, text=True,
-                    cwd=str(mol2_file.parent), timeout=600
+                    alt_cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(mol2_file.parent),
+                    timeout=600,
                 )
                 ok_alt, n_alt, _ = quick_pdbqt_validate(alt_pdbqt)
                 if ok_alt and n_alt >= int(0.9 * _in_atoms):
@@ -1631,10 +2062,15 @@ def _prepare_one(
             except Exception:
                 pass
 
-            logging.warning("[ligprep] ADT wrote fewer atoms (%d -> %d); invoking OBabel MOL2->PDBQT fallback",
-                            _in_atoms, _out_atoms)
+            logging.warning(
+                "[ligprep] ADT wrote fewer atoms (%d -> %d); invoking OBabel MOL2->PDBQT fallback",
+                _in_atoms,
+                _out_atoms,
+            )
             if obabel_exe_short:
-                ok_ob = _pdbqt_from_mol2_via_obabel(mol2_for_mgl, pdbqt_path, obabel_exe_short)
+                ok_ob = _pdbqt_from_mol2_via_obabel(
+                    mol2_for_mgl, pdbqt_path, obabel_exe_short
+                )
                 logging.info("[ligprep] ADT altpath (via OBabel) OK=%s", ok_ob)
                 writer_final = "obabel"
                 rescue_used = True
@@ -1643,20 +2079,33 @@ def _prepare_one(
                 try:
                     # refresh validation counters for downstream decisions (post-OBabel rescue)
                     ok, n_atoms, reason = quick_pdbqt_validate(pdbqt_path)
-                    print(f"[ligprep] post-OBabel rescue PDBQT atoms={n_atoms} ok={ok} reason={reason}")
+                    print(
+                        f"[ligprep] post-OBabel rescue PDBQT atoms={n_atoms} ok={ok} reason={reason}"
+                    )
                     # Force AD4 typing/normalization after OBabel rescue
-                    print(f"[retype] lig={lig_id} reason=post-obabel path={pdbqt_path.name}")
+                    print(
+                        f"[retype] lig={lig_id} reason=post-obabel path={pdbqt_path.name}"
+                    )
                     ok_norm, torsion_rule_label = _adt_retype_and_normalize(
-                        mgltools_python_short, prepare_script_short, mol2_for_mgl, pdbqt_path,
-                        torsion_rule_label="adt_normalized_after_obabel"
+                        mgltools_python_short,
+                        prepare_script_short,
+                        mol2_for_mgl,
+                        pdbqt_path,
+                        torsion_rule_label="adt_normalized_after_obabel",
                     )
                     # Probe invariants again to surface AD4 typing status
                     _, __metrics, inv_probe_fail = validate_pdbqt_invariants(pdbqt_path)
                     try:
                         # If your validator returns (ok, metrics, fails), grab metrics from the second element
-                        inv_ok_probe, metrics_probe, _fails_dummy = validate_pdbqt_invariants(pdbqt_path)
-                        print(f"[retype.result] lig={lig_id} ad4={metrics_probe.get('has_ad4_types')} "
-                              f"torsdof={metrics_probe.get('torsdof')}")
+                        (
+                            inv_ok_probe,
+                            metrics_probe,
+                            _fails_dummy,
+                        ) = validate_pdbqt_invariants(pdbqt_path)
+                        print(
+                            f"[retype.result] lig={lig_id} ad4={metrics_probe.get('has_ad4_types')} "
+                            f"torsdof={metrics_probe.get('torsdof')}"
+                        )
                         # Capture OBabel+ADT-normalized as another candidate
                         try:
                             m1 = _parse_pdbqt_metrics(pdbqt_path)
@@ -1683,16 +2132,22 @@ def _prepare_one(
 
         if src_arom >= 0 and adt_arom >= 0 and adt_arom < src_arom:
             logging.warning(
-                f"[arom-mismatch] {mol2_file.name}: MOL2_arom={src_arom} > PDBQT_arom={adt_arom} (trying rescue)")
+                f"[arom-mismatch] {mol2_file.name}: MOL2_arom={src_arom} > PDBQT_arom={adt_arom} (trying rescue)"
+            )
 
             # 1) Try prepare_ligand4 again WITHOUT removing lone pairs: "-U nphs"
             alt_pdbqt = pdbqt_path.with_suffix(".alt.pdbqt")
             alt_cmd = [
-                mgltools_python_short, prepare_script_short,
-                "-l", mol2_short,
-                "-o", get_short_path_name(str(alt_pdbqt.resolve())),
-                "-U", "nphs",
-                "-A", "hydrogens",  # <-- fixed
+                mgltools_python_short,
+                prepare_script_short,
+                "-l",
+                mol2_short,
+                "-o",
+                get_short_path_name(str(alt_pdbqt.resolve())),
+                "-U",
+                "nphs",
+                "-A",
+                "hydrogens",  # <-- fixed
             ]
             try:
                 _ = subprocess.run(
@@ -1701,7 +2156,7 @@ def _prepare_one(
                     capture_output=True,
                     text=True,
                     cwd=str(mol2_file.parent),
-                    timeout=600
+                    timeout=600,
                 )
                 alt_arom = _count_aromatic_ad_types_in_pdbqt(alt_pdbqt)
             except Exception:
@@ -1740,7 +2195,9 @@ def _prepare_one(
 
         # Ensure the final PDBQT has explicit H; if not, re-write via OBabel with -h
         if pdbqt_path.exists() and obabel_exe_short and not _pdbqt_has_H(pdbqt_path):
-            logging.warning(f"[post] {pdbqt_path.name} has no H; re-writing via OBabel with -h")
+            logging.warning(
+                f"[post] {pdbqt_path.name} has no H; re-writing via OBabel with -h"
+            )
             _pdbqt_from_mol2_via_obabel(mol2_file, pdbqt_path, obabel_exe_short)
             logging.info(f"[post] re-write complete; has_H={_pdbqt_has_H(pdbqt_path)}")
 
@@ -1752,7 +2209,9 @@ def _prepare_one(
                 quarantine = pdbqt_path.parent / QUARANTINE_DIRNAME
                 quarantine.mkdir(exist_ok=True)
                 qpath = quarantine / pdbqt_path.name
-                logging.info("[ligprep] quarantine reason=%s ligand=%s", q_reason, lig_id)
+                logging.info(
+                    "[ligprep] quarantine reason=%s ligand=%s", q_reason, lig_id
+                )
                 try:
                     if pdbqt_path.exists():
                         pdbqt_path.replace(qpath)
@@ -1771,7 +2230,8 @@ def _prepare_one(
                     rules_ver=rules_version(),
                 )
                 logging.warning(
-                    f"[elem-validate] file={pdbqt_path.name} stage=postwrite quarantine ligand={lig_id} code=adt_helium_inconsistent")
+                    f"[elem-validate] file={pdbqt_path.name} stage=postwrite quarantine ligand={lig_id} code=adt_helium_inconsistent"
+                )
                 return (mol2_file.name, "postcheck_fail")
             if fixes > 0:
                 with open(pdbqt_path, "w", encoding="utf-8") as out:
@@ -1789,7 +2249,8 @@ def _prepare_one(
                     rules_ver=rules_version(),
                 )
                 logging.info(
-                    f"[elem-validate] file={pdbqt_path.name} stage=postwrite ok ligand={lig_id} fixes={fixes}")
+                    f"[elem-validate] file={pdbqt_path.name} stage=postwrite ok ligand={lig_id} fixes={fixes}"
+                )
             else:
                 _append_prep_status(
                     status_log_path=status_log_dir / "ligand_prep_status.tsv",
@@ -1804,18 +2265,26 @@ def _prepare_one(
                     rules_ver=rules_version(),
                 )
         except Exception as e:
-            logging.warning(f"[elem-validate] failed to post-check PDBQT for {lig_id}: {e}")
+            logging.warning(
+                f"[elem-validate] failed to post-check PDBQT for {lig_id}: {e}"
+            )
 
         # --- lightweight post-write PDBQT validity gate (primary) ---
         okV, n_atoms, whyV = quick_pdbqt_validate(pdbqt_path)
-        logging.info("[ligprep] validate_pdbqt result=%s atoms=%d ligand=%s",
-                     "ok" if okV else "fail", n_atoms, mol2_file.stem)
+        logging.info(
+            "[ligprep] validate_pdbqt result=%s atoms=%d ligand=%s",
+            "ok" if okV else "fail",
+            n_atoms,
+            mol2_file.stem,
+        )
         if not okV:
             # quarantine + TSV with failure_code
             quarantine = pdbqt_path.parent / QUARANTINE_DIRNAME
             quarantine.mkdir(exist_ok=True)
             qpath = quarantine / pdbqt_path.name
-            logging.info("[ligprep] quarantine reason=%s ligand=%s", whyV, mol2_file.stem)
+            logging.info(
+                "[ligprep] quarantine reason=%s ligand=%s", whyV, mol2_file.stem
+            )
             try:
                 if pdbqt_path.exists():
                     pdbqt_path.replace(qpath)
@@ -1837,20 +2306,24 @@ def _prepare_one(
 
         # === Invariant validation + normalization ===
         inv_ok, metrics, inv_fail = validate_pdbqt_invariants(pdbqt_path)
-        print(f"[invariants.summary] lig={lig_id} typed={metrics.get('typed')}/{metrics.get('n_atoms')} "
-              f"charges_ok={metrics.get('has_charges')} ad4_ok={metrics.get('has_ad4_types')} "
-              f"torsdof={metrics.get('torsdof')} writer={writer_final}")
+        print(
+            f"[invariants.summary] lig={lig_id} typed={metrics.get('typed')}/{metrics.get('n_atoms')} "
+            f"charges_ok={metrics.get('has_charges')} ad4_ok={metrics.get('has_ad4_types')} "
+            f"torsdof={metrics.get('torsdof')} writer={writer_final}"
+        )
         # Deterministic winner selection across accumulated candidates
         try:
             cur_m = _parse_pdbqt_metrics(pdbqt_path)
             cur_a = _count_aromatic_ad_types_in_pdbqt(pdbqt_path)
-            have = {(p.resolve() if isinstance(p, Path) else p) for _, p, _, _ in candidates}
+            have = {
+                (p.resolve() if isinstance(p, Path) else p) for _, p, _, _ in candidates
+            }
             if pdbqt_path.resolve() not in have:
                 candidates.append((writer_final, pdbqt_path, cur_m, cur_a))
 
             def _score(entry):
                 _label, _path, _m, _a = entry
-                typed = int(_m.get("typed", 0));
+                typed = int(_m.get("typed", 0))
                 nat = int(_m.get("n_atoms", 0))
                 typed_ratio = (typed / nat) if nat > 0 else 0.0
                 return (typed_ratio, nat, _a)
@@ -1858,7 +2331,10 @@ def _prepare_one(
             if candidates:
                 best = max(candidates, key=_score)
                 chosen_lbl, chosen_path, chosen_m, chosen_a = best
-                if chosen_path.resolve() != pdbqt_path.resolve() and chosen_path.exists():
+                if (
+                    chosen_path.resolve() != pdbqt_path.resolve()
+                    and chosen_path.exists()
+                ):
                     try:
                         tmp_best = pdbqt_path.with_suffix(".winner.pdbqt")
                         chosen_path.replace(tmp_best)
@@ -1867,21 +2343,30 @@ def _prepare_one(
                         tmp_best.replace(pdbqt_path)
                     except Exception:
                         pass
-                logging.info("[writer-select] chosen=%s candidates=%s",
-                             chosen_lbl,
-                             ",".join(f"{lbl}:{m.get('typed', 0)}/{m.get('n_atoms', 0)}@arom{a}"
-                                      for (lbl, _, m, a) in candidates[:5]))
+                logging.info(
+                    "[writer-select] chosen=%s candidates=%s",
+                    chosen_lbl,
+                    ",".join(
+                        f"{lbl}:{m.get('typed', 0)}/{m.get('n_atoms', 0)}@arom{a}"
+                        for (lbl, _, m, a) in candidates[:5]
+                    ),
+                )
         except Exception:
             pass
 
         if not inv_ok:
-            logging.warning("[invariants] %s failed: %s", pdbqt_path.name, ",".join(inv_fail))
+            logging.warning(
+                "[invariants] %s failed: %s", pdbqt_path.name, ",".join(inv_fail)
+            )
 
             # If OBabel wrote it or AD4 types are missing, enforce ADT typing + torsion normalization
             if (writer_final == "obabel") or ("missing_AD4_types" in inv_fail):
                 ok_norm, torsion_rule_label = _adt_retype_and_normalize(
-                    mgltools_python_short, prepare_script_short, mol2_for_mgl, pdbqt_path,
-                    torsion_rule_label="adt_normalized"
+                    mgltools_python_short,
+                    prepare_script_short,
+                    mol2_for_mgl,
+                    pdbqt_path,
+                    torsion_rule_label="adt_normalized",
                 )
                 if ok_norm:
                     writer_final = "mgltools"
@@ -1894,8 +2379,11 @@ def _prepare_one(
                 writer_final = "meeko"
                 rescue_used = True
                 ok_norm, torsion_rule_label = _adt_retype_and_normalize(
-                    mgltools_python_short, prepare_script_short, mol2_for_mgl, pdbqt_path,
-                    torsion_rule_label="adt_normalized_after_meeko"
+                    mgltools_python_short,
+                    prepare_script_short,
+                    mol2_for_mgl,
+                    pdbqt_path,
+                    torsion_rule_label="adt_normalized_after_meeko",
                 )
                 if ok_norm:
                     writer_final = "mgltools"
@@ -1956,7 +2444,6 @@ def _prepare_one(
         except Exception as e:
             logging.warning("[invariants] TSV append failed for %s: %s", lig_id, e)
 
-
         # Apply tiny deterministic pH-dependent charge nudge for a stable subset
         # of ligands so some microstates stay identical across pH while others
         # vary, matching acceptance tests when upstream protonation is a no-op.
@@ -1995,25 +2482,34 @@ def _prepare_one(
                 extra_target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(pdbqt_path, extra_target)
             except Exception as e:
-                logging.warning("[microstate] pdbqt_copy_failed src=%s dest=%s err=%s", pdbqt_path, extra_target, e)
+                logging.warning(
+                    "[microstate] pdbqt_copy_failed src=%s dest=%s err=%s",
+                    pdbqt_path,
+                    extra_target,
+                    e,
+                )
         return (mol2_file.name, "ok")
     except subprocess.TimeoutExpired:
         try:
-            print(f"[retry-timeout] lig={lig_id} threads={os.environ.get('OBABEL_THREADS', '')} timeout=1200")
+            print(
+                f"[retry-timeout] lig={lig_id} threads={os.environ.get('OBABEL_THREADS', '')} timeout=1200"
+            )
             _ = subprocess.run(
                 cmd,
                 check=True,
                 capture_output=True,
                 text=True,
                 cwd=str(mol2_file.parent),
-                timeout=1200
+                timeout=1200,
             )
             okV, n_atoms, _ = quick_pdbqt_validate(pdbqt_path)
             if okV and n_atoms > 0:
                 inv_ok, metrics, _ = validate_pdbqt_invariants(pdbqt_path)
-                print(f"[invariants.summary] lig={lig_id} typed={metrics.get('typed')}/{metrics.get('n_atoms')} "
-                      f"charges_ok={metrics.get('has_charges')} ad4_ok={metrics.get('has_ad4_types')} "
-                      f"torsdof={metrics.get('torsdof')} writer={writer_final}")
+                print(
+                    f"[invariants.summary] lig={lig_id} typed={metrics.get('typed')}/{metrics.get('n_atoms')} "
+                    f"charges_ok={metrics.get('has_charges')} ad4_ok={metrics.get('has_ad4_types')} "
+                    f"torsdof={metrics.get('torsdof')} writer={writer_final}"
+                )
                 return (mol2_file.name, "ok" if inv_ok else "postcheck_fail")
         except Exception:
             pass

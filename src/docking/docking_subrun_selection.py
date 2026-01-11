@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple
 
 from .docking_utils import norm
 from .docking_ligands import select_ligands_for_next
@@ -32,16 +32,21 @@ def _apply_force_carry_and_doping(
         (filtered back out here; controls are injected at Stage3 run time)
       - optional rescue of self-RMSD near-miss ligands
     """
-    use_stage1_base = (docking_mode == "polypharmacology" and stage_index == 1)
+    use_stage1_base = docking_mode == "polypharmacology" and stage_index == 1
 
     rescue: List[str] = []
     if invalids and stage_index < len(stages_for_run) - 1:
         for lig, (sc, reason) in invalids.items():
-            if sc is not None and "self_rmsd_" in str(reason).lower() and sc <= float(
-                cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0)
+            if (
+                sc is not None
+                and "self_rmsd_" in str(reason).lower()
+                and sc <= float(cfg.get("RESCUE_SELF_RMSD_SCORE_MAX", -8.0))
             ):
                 rescue.append((sc, lig))
-        rescue = [lig for _, lig in sorted(rescue)[: int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]]
+        rescue = [
+            lig
+            for _, lig in sorted(rescue)[: int(cfg.get("RESCUE_SELF_RMSD_TOP_N", 10))]
+        ]
 
     selected_raw = select_ligands_for_next(
         docking_mode,

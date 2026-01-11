@@ -80,8 +80,9 @@ def is_decoy_like(text: str) -> bool:
     return bool(_DECOY_RE.search(text or ""))
 
 
-
-def _parse_weight(cfg: Dict[str, Any], key: str, default: float, logger: logging.Logger) -> float:
+def _parse_weight(
+    cfg: Dict[str, Any], key: str, default: float, logger: logging.Logger
+) -> float:
     raw = cfg.get(key)
     if raw is None:
         raw = cfg.get(key.lower())
@@ -208,7 +209,11 @@ def _read_consensus_scores(path: Path, logger: logging.Logger) -> List[float]:
         return []
     try:
         with path.open("r", encoding="utf-8") as handle:
-            lines = [line for line in handle if line.strip() and not line.lstrip().startswith("#")]
+            lines = [
+                line
+                for line in handle
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
         if not lines:
             return []
         reader = csv.DictReader(lines)
@@ -314,7 +319,10 @@ def _read_csv(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
 
 
 def _write_csv(
-    path: Path, rows: List[Dict[str, Any]], fieldnames: List[str], preamble_lines: Optional[List[str]] = None
+    path: Path,
+    rows: List[Dict[str, Any]],
+    fieldnames: List[str],
+    preamble_lines: Optional[List[str]] = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as f:
@@ -349,7 +357,9 @@ def _is_numeric_field(name: str, rows: List[Dict[str, Any]]) -> bool:
 
 def _ordered_fields(original_fields: List[str]) -> List[str]:
     # Exclude internal fields
-    base_fields = [f for f in original_fields if f not in {"ligand_base", "scorch_stage_used"}]
+    base_fields = [
+        f for f in original_fields if f not in {"ligand_base", "scorch_stage_used"}
+    ]
     # Always include added fields if not present
     for extra in [
         "scorch_source_used",
@@ -459,13 +469,17 @@ def rerank_consensus_with_scorch(
     overwrite: bool = False,
     scorch_weight: float = SCORCH_WEIGHT_DEFAULT,
     cnn_weight: float = CNN_WEIGHT_DEFAULT,
-    ) -> bool:
+) -> bool:
     if out_csv.exists() and out_csv.stat().st_size > 0 and not overwrite:
         logger.info("%s action=skip reason=exists out=%s", COMPONENT, str(out_csv))
         return True
 
     if not consensus_csv.exists() or consensus_csv.stat().st_size == 0:
-        logger.warning("%s action=skip reason=missing_consensus path=%s", COMPONENT, str(consensus_csv))
+        logger.warning(
+            "%s action=skip reason=missing_consensus path=%s",
+            COMPONENT,
+            str(consensus_csv),
+        )
         return False
     degraded = False
     if isinstance(scorch_csvs, Path):
@@ -504,7 +518,9 @@ def rerank_consensus_with_scorch(
         for row in rows:
             if not row.get("run_mode"):
                 row["run_mode"] = mode_hint
-            counts[row.get("run_mode", mode_hint)] = counts.get(row.get("run_mode", mode_hint), 0) + 1
+            counts[row.get("run_mode", mode_hint)] = (
+                counts.get(row.get("run_mode", mode_hint), 0) + 1
+            )
             sc_rows_all.append(row)
     logger.info(
         "[rerank.load_scorch] fda_exists=%s dud_exists=%s n_fda=%d n_dud=%d",
@@ -518,7 +534,11 @@ def rerank_consensus_with_scorch(
     cnn_csv = base_dir / "cnn_rescoring.csv"
     cnn_rows: List[Dict[str, str]] = []
     if not cnn_csv.exists() or cnn_csv.stat().st_size == 0:
-        logger.warning("%s action=rerank status=degraded reason=missing_or_empty_cnn path=%s", COMPONENT, str(cnn_csv))
+        logger.warning(
+            "%s action=rerank status=degraded reason=missing_or_empty_cnn path=%s",
+            COMPONENT,
+            str(cnn_csv),
+        )
     else:
         try:
             cnn_rows, _ = _read_csv(cnn_csv)
@@ -539,7 +559,11 @@ def rerank_consensus_with_scorch(
 
     cons_rows, cons_fields = _read_csv(consensus_csv)
     if not cons_rows:
-        logger.warning("%s action=skip reason=empty_consensus path=%s", COMPONENT, str(consensus_csv))
+        logger.warning(
+            "%s action=skip reason=empty_consensus path=%s",
+            COMPONENT,
+            str(consensus_csv),
+        )
         return False
 
     cons_bases: Set[str] = set()
@@ -582,12 +606,18 @@ def rerank_consensus_with_scorch(
 
         k1 = (pdb_id, variant, ph, source, lig_base)
         cur = best_by_source.get(k1)
-        if cur is None or (pick.stage_num, pick.scorch_score or -1e9) > (cur.stage_num, cur.scorch_score or -1e9):
+        if cur is None or (pick.stage_num, pick.scorch_score or -1e9) > (
+            cur.stage_num,
+            cur.scorch_score or -1e9,
+        ):
             best_by_source[k1] = pick
 
         k2 = (pdb_id, variant, ph, lig_base)
         cur2 = best_any.get(k2)
-        if cur2 is None or (pick.stage_num, pick.scorch_score or -1e9) > (cur2.stage_num, cur2.scorch_score or -1e9):
+        if cur2 is None or (pick.stage_num, pick.scorch_score or -1e9) > (
+            cur2.stage_num,
+            cur2.scorch_score or -1e9,
+        ):
             best_any[k2] = pick
 
     best_cnn: Dict[str, CnnPick] = {}
@@ -628,11 +658,17 @@ def rerank_consensus_with_scorch(
         library_raw = str(r.get("library", "")).strip()
         rr["library"] = library_raw
         rr["consensus_score_pre"] = str(r.get("consensus_score", "")).strip()
-        rr["t_vs_decoys_consensus_pre"] = str(r.get("t_vs_decoys_consensus", "")).strip()
+        rr["t_vs_decoys_consensus_pre"] = str(
+            r.get("t_vs_decoys_consensus", "")
+        ).strip()
         if "t_vs_decoys_consensus" not in rr:
-            rr["t_vs_decoys_consensus"] = str(r.get("t_vs_decoys_consensus", "")).strip()
+            rr["t_vs_decoys_consensus"] = str(
+                r.get("t_vs_decoys_consensus", "")
+            ).strip()
         else:
-            rr["t_vs_decoys_consensus"] = str(rr.get("t_vs_decoys_consensus", "")).strip()
+            rr["t_vs_decoys_consensus"] = str(
+                rr.get("t_vs_decoys_consensus", "")
+            ).strip()
         rr["consensus_mu_decoy"] = ""
         rr["consensus_sigma_decoy"] = ""
         rr["consensus_n_decoys"] = ""
@@ -648,7 +684,9 @@ def rerank_consensus_with_scorch(
 
         pick = None
         if pdb_id and variant and ph_label and best_engine:
-            pick = best_by_source.get((pdb_id, variant, ph_label, best_engine, lig_base))
+            pick = best_by_source.get(
+                (pdb_id, variant, ph_label, best_engine, lig_base)
+            )
         if pick is None and pdb_id and variant and ph_label:
             pick = best_any.get((pdb_id, variant, ph_label, lig_base))
 
@@ -658,8 +696,16 @@ def rerank_consensus_with_scorch(
         rr["run_mode"] = run_mode_val
 
         rr["scorch_source_used"] = pick.source if pick else ""
-        rr["SCORCH_score_used"] = "" if (not pick or pick.scorch_score is None) else f"{pick.scorch_score:.6g}"
-        rr["SCORCH_certainty_used"] = "" if (not pick or pick.scorch_certainty is None) else f"{pick.scorch_certainty:.6g}"
+        rr["SCORCH_score_used"] = (
+            ""
+            if (not pick or pick.scorch_score is None)
+            else f"{pick.scorch_score:.6g}"
+        )
+        rr["SCORCH_certainty_used"] = (
+            ""
+            if (not pick or pick.scorch_certainty is None)
+            else f"{pick.scorch_certainty:.6g}"
+        )
 
         comp = None
         if pick and pick.scorch_score is not None and pick.scorch_certainty is not None:
@@ -667,12 +713,28 @@ def rerank_consensus_with_scorch(
         rr["scorch_composite"] = "" if comp is None else f"{comp:.6g}"
 
         cnn_pick = best_cnn.get(lig_base)
-        rr["cnn_score_used"] = "" if (not cnn_pick or cnn_pick.cnn_score is None) else f"{cnn_pick.cnn_score:.6g}"
-        rr["cnn_affinity_used"] = "" if (not cnn_pick or cnn_pick.cnn_affinity is None) else f"{cnn_pick.cnn_affinity:.6g}"
-        rr["cnn_vs_used"] = "" if (not cnn_pick or cnn_pick.cnn_vs is None) else f"{cnn_pick.cnn_vs:.6g}"
+        rr["cnn_score_used"] = (
+            ""
+            if (not cnn_pick or cnn_pick.cnn_score is None)
+            else f"{cnn_pick.cnn_score:.6g}"
+        )
+        rr["cnn_affinity_used"] = (
+            ""
+            if (not cnn_pick or cnn_pick.cnn_affinity is None)
+            else f"{cnn_pick.cnn_affinity:.6g}"
+        )
+        rr["cnn_vs_used"] = (
+            ""
+            if (not cnn_pick or cnn_pick.cnn_vs is None)
+            else f"{cnn_pick.cnn_vs:.6g}"
+        )
         rr["cnn_rescored_flag"] = "1" if rr["cnn_vs_used"] != "" else "0"
 
-        rescored = (rr["scorch_composite"] != "") or (rr["SCORCH_score_used"] != "") or (rr["cnn_vs_used"] != "")
+        rescored = (
+            (rr["scorch_composite"] != "")
+            or (rr["SCORCH_score_used"] != "")
+            or (rr["cnn_vs_used"] != "")
+        )
         rr["rescored_flag"] = "1" if rescored else "0"
         if not rescored:
             rr["scorch_source_used"] = ""
@@ -711,8 +773,12 @@ def rerank_consensus_with_scorch(
         rr["blend_n_decoys"] = ""
         rr["best_engine"] = pick.source
         rr["scorch_source_used"] = pick.source
-        rr["SCORCH_score_used"] = "" if pick.scorch_score is None else f"{pick.scorch_score:.6g}"
-        rr["SCORCH_certainty_used"] = "" if pick.scorch_certainty is None else f"{pick.scorch_certainty:.6g}"
+        rr["SCORCH_score_used"] = (
+            "" if pick.scorch_score is None else f"{pick.scorch_score:.6g}"
+        )
+        rr["SCORCH_certainty_used"] = (
+            "" if pick.scorch_certainty is None else f"{pick.scorch_certainty:.6g}"
+        )
         comp = None
         if pick.scorch_score is not None and pick.scorch_certainty is not None:
             comp = pick.scorch_score * pick.scorch_certainty
@@ -721,7 +787,9 @@ def rerank_consensus_with_scorch(
         rr["cnn_affinity_used"] = ""
         rr["cnn_vs_used"] = ""
         rr["cnn_rescored_flag"] = "0"
-        rr["rescored_flag"] = "1" if rr["scorch_composite"] or rr["SCORCH_score_used"] else "0"
+        rr["rescored_flag"] = (
+            "1" if rr["scorch_composite"] or rr["SCORCH_score_used"] else "0"
+        )
         rr["final_score"] = ""
         enriched.append(rr)
 
@@ -783,7 +851,11 @@ def rerank_consensus_with_scorch(
         mu_decoy = sum(decoy_scores) / len(decoy_scores)
         variance = sum((v - mu_decoy) ** 2 for v in decoy_scores) / len(decoy_scores)
         sigma_decoy = math.sqrt(variance)
-        if sigma_decoy <= 0 or not math.isfinite(mu_decoy) or not math.isfinite(sigma_decoy):
+        if (
+            sigma_decoy <= 0
+            or not math.isfinite(mu_decoy)
+            or not math.isfinite(sigma_decoy)
+        ):
             logger.info(
                 "[t-score.consensus.skip] reason=no_decoy_scores_or_sigma0 n_decoys=%d sigma=%s",
                 len(decoy_scores),
@@ -907,7 +979,11 @@ def rerank_consensus_with_scorch(
             sigma,
         )
         stats_key = "|".join(g_key)
-        decoy_stats[stats_key] = {"n_decoys": len(decoy_scores), "mu": mu, "sigma": sigma}
+        decoy_stats[stats_key] = {
+            "n_decoys": len(decoy_scores),
+            "mu": mu,
+            "sigma": sigma,
+        }
         for i in idxs:
             val = _as_float(enriched[i].get("ml_blend_score"))
             enriched[i]["blend_mu_decoy"] = f"{mu:.6g}"
@@ -930,6 +1006,7 @@ def rerank_consensus_with_scorch(
             row["final_score"] = ""
 
     for _, idxs in groups.items():
+
         def _final_rank_key(i: int) -> Tuple[float, float, str]:
             fs_val = _as_float(enriched[i].get("final_score"))
             if fs_val is None or not math.isfinite(fs_val):
@@ -964,12 +1041,16 @@ def rerank_consensus_with_scorch(
             row["t_vs_decoys_blend"] = ""
 
     out_fields = _ordered_fields(cons_fields)
-    pretty_fields = [f for f in out_fields if f not in {"run_id", "pdb_id", "variant", "ph_label"}]
+    pretty_fields = [
+        f for f in out_fields if f not in {"run_id", "pdb_id", "variant", "ph_label"}
+    ]
     sorted_rows = _sort_rows(enriched)
 
     _write_csv(out_csv, sorted_rows, out_fields)
     dud_rows = [row for row in sorted_rows if _is_dud_row(row)]
-    _write_csv(out_csv.with_name("dud_consensus_reranked_scorch.csv"), dud_rows, out_fields)
+    _write_csv(
+        out_csv.with_name("dud_consensus_reranked_scorch.csv"), dud_rows, out_fields
+    )
 
     meta = [
         f"# run_id={str(cons_rows[0].get('run_id', '')).strip()}\n",
@@ -979,7 +1060,12 @@ def rerank_consensus_with_scorch(
             ph=str(cons_rows[0].get("ph_label", "")).strip(),
         ),
     ]
-    _write_csv(out_csv.with_suffix(".pretty.csv"), sorted_rows, pretty_fields, preamble_lines=meta)
+    _write_csv(
+        out_csv.with_suffix(".pretty.csv"),
+        sorted_rows,
+        pretty_fields,
+        preamble_lines=meta,
+    )
     if decoy_stats:
         stats_path = out_csv.with_name("decoy_stats_blend.json")
         try:
@@ -993,7 +1079,13 @@ def rerank_consensus_with_scorch(
                 exc,
             )
 
-    if consensus_source and decoy_scores and mu_decoy is not None and sigma_decoy is not None and sigma_decoy > 0:
+    if (
+        consensus_source
+        and decoy_scores
+        and mu_decoy is not None
+        and sigma_decoy is not None
+        and sigma_decoy > 0
+    ):
         consensus_stats_path = out_csv.with_name("consensus_decoy_stats.json")
         payload = {
             "n_decoys": len(decoy_scores),
@@ -1001,7 +1093,9 @@ def rerank_consensus_with_scorch(
             "sigma_decoy": sigma_decoy,
             "source": consensus_source,
             "dud_consensus_csv": str(dud_consensus_csv) if dud_consensus_csv else None,
-            "dud_consensus_reranked_csv": str(dud_consensus_csv) if dud_consensus_csv else None,
+            "dud_consensus_reranked_csv": str(dud_consensus_csv)
+            if dud_consensus_csv
+            else None,
             "regular_consensus_csv": str(consensus_csv),
         }
         try:
@@ -1038,17 +1132,29 @@ def rerank_run(
     post_root = repo_root / "post_docked" / run_id
     dock_root = repo_root / "docked" / run_id
     if not post_root.exists():
-        logger.warning("%s action=discover status=skip reason=missing_post_root path=%s", COMPONENT, str(post_root))
+        logger.warning(
+            "%s action=discover status=skip reason=missing_post_root path=%s",
+            COMPONENT,
+            str(post_root),
+        )
         return 1
     if not dock_root.exists():
-        logger.warning("%s action=discover status=skip reason=missing_dock_root path=%s", COMPONENT, str(dock_root))
+        logger.warning(
+            "%s action=discover status=skip reason=missing_dock_root path=%s",
+            COMPONENT,
+            str(dock_root),
+        )
         return 1
 
     scorch_paths = list(post_root.glob("**/scorch_scores_all.csv"))
     dud_paths = list(post_root.glob("**/dud_scorch_scores_all.csv"))
     combo_dirs = {p.parent for p in scorch_paths + dud_paths}
     if not combo_dirs:
-        logger.warning("%s action=discover status=skip reason=no_scorch_scores path=%s", COMPONENT, str(post_root))
+        logger.warning(
+            "%s action=discover status=skip reason=no_scorch_scores path=%s",
+            COMPONENT,
+            str(post_root),
+        )
         return 1
 
     ok = 0
@@ -1113,7 +1219,9 @@ def rerank_run(
             )
             fail += 1
 
-    logger.info("%s action=summary status=ok combos_ok=%d combos_failed=%d", COMPONENT, ok, fail)
+    logger.info(
+        "%s action=summary status=ok combos_ok=%d combos_failed=%d", COMPONENT, ok, fail
+    )
     return 0 if ok > 0 and fail == 0 else (0 if ok > 0 else 1)
 
 
@@ -1124,7 +1232,9 @@ def _configure_logging(verbose: bool) -> logging.Logger:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Rerank consensus docking results using SCORCH rescoring outputs.")
+    ap = argparse.ArgumentParser(
+        description="Rerank consensus docking results using SCORCH rescoring outputs."
+    )
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--repo-root", required=True)
     ap.add_argument("--overwrite", action="store_true")

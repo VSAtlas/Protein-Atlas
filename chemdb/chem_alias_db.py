@@ -1,5 +1,7 @@
 from __future__ import annotations
-import os, re, logging
+import os
+import re
+import logging
 from pathlib import Path
 from typing import Dict, List, Set, Optional
 
@@ -11,6 +13,7 @@ except Exception:  # pragma: no cover
 # ---------------- path resolution ----------------
 
 _ENV = os.environ.get("CHEM_ALIASES_YAML") or os.environ.get("CHEMDB_ALIASES")
+
 
 def _find_yaml() -> Optional[Path]:
     # 1) explicit env var
@@ -26,16 +29,20 @@ def _find_yaml() -> Optional[Path]:
     p = Path(__file__).with_name("aliases.yaml")
     return p if p.is_file() else None
 
+
 # ---------------- normalization ------------------
 
 _norm_rx = re.compile(r"[^0-9a-z]+")
+
 
 def _norm(s: str) -> str:
     if not s:
         return ""
     return _norm_rx.sub("", s.strip().lower())
 
+
 # ---------------- loaders -----------------------
+
 
 def _load_yaml_blocks() -> Dict[str, object]:
     """
@@ -63,8 +70,10 @@ def _load_yaml_blocks() -> Dict[str, object]:
         logging.warning("[chem-alias] failed to read %s: %s", p, e)
         return {}
 
-def _build_chemcomp_alias(alias_map: Dict[str, List[str]] | None,
-                          canonical: Dict[str, str] | None) -> Dict[str, List[str]]:
+
+def _build_chemcomp_alias(
+    alias_map: Dict[str, List[str]] | None, canonical: Dict[str, str] | None
+) -> Dict[str, List[str]]:
     """
     Build a mapping like {'STI': ['gleevec','imatinib','sti571',...], ...}
     Keys are kept UPPER for HET codes if they look like 2-4 letters; values are lowercase.
@@ -103,6 +112,7 @@ def _build_chemcomp_alias(alias_map: Dict[str, List[str]] | None,
     # finalize as lists (sorted for repeatability)
     return {k: sorted(v) for k, v in out.items() if v}
 
+
 # ---------------- built-in fallback --------------
 
 _BUILTIN_CHEMCOMP_ALIAS: Dict[str, List[str]] = {
@@ -121,16 +131,42 @@ _BUILTIN_CHEMCOMP_ALIAS: Dict[str, List[str]] = {
     # extend here as needed
 }
 _BUILTIN_EXCLUDE_HET_IDS: Set[str] = {
-    "HOH","WAT","DOD","NA","K","CL","BR","I","CA","MG","MN","ZN","FE","CU","CO","NI","MO"
+    "HOH",
+    "WAT",
+    "DOD",
+    "NA",
+    "K",
+    "CL",
+    "BR",
+    "I",
+    "CA",
+    "MG",
+    "MN",
+    "ZN",
+    "FE",
+    "CU",
+    "CO",
+    "NI",
+    "MO",
 }
 _BUILTIN_EXCLUDE_HET_NAME_KEYWORDS: Set[str] = {
     # uppercase substrings checked against names
-    "WATER","SOLVENT","BUFFER","GLYCEROL","TRIS","HEPES","MES","PEG","ETHYLENE","DMSO"
+    "WATER",
+    "SOLVENT",
+    "BUFFER",
+    "GLYCEROL",
+    "TRIS",
+    "HEPES",
+    "MES",
+    "PEG",
+    "ETHYLENE",
+    "DMSO",
 }
 _BUILTIN_PER_PDB_HINTS: Dict[str, dict] = {}
 _BUILTIN_HARD_FDA_BY_PDB: Dict[str, str] = {}
 
 # ---------------- module globals (API) ----------
+
 
 def _init():
     data = _load_yaml_blocks()
@@ -144,17 +180,23 @@ def _init():
     hard = data.get("hard_fda_control_by_pdb") or {}
 
     # Exported names (keep EXACT identifiers expected by external code)
-    globals().update({
-        "CHEMCOMP_ALIAS": chem_alias or _BUILTIN_CHEMCOMP_ALIAS,
-        "EXCLUDE_HET_IDS": set(map(str.upper, exclude_ids)) or _BUILTIN_EXCLUDE_HET_IDS,
-        "EXCLUDE_HET_NAME_KEYWORDS": set(map(str.upper, exclude_kw)) or _BUILTIN_EXCLUDE_HET_NAME_KEYWORDS,
-        "PER_PDB_HINTS": per_pdb or _BUILTIN_PER_PDB_HINTS,
-        "HARD_FDA_CONTROL_BY_PDB": hard or _BUILTIN_HARD_FDA_BY_PDB,
-    })
+    globals().update(
+        {
+            "CHEMCOMP_ALIAS": chem_alias or _BUILTIN_CHEMCOMP_ALIAS,
+            "EXCLUDE_HET_IDS": set(map(str.upper, exclude_ids))
+            or _BUILTIN_EXCLUDE_HET_IDS,
+            "EXCLUDE_HET_NAME_KEYWORDS": set(map(str.upper, exclude_kw))
+            or _BUILTIN_EXCLUDE_HET_NAME_KEYWORDS,
+            "PER_PDB_HINTS": per_pdb or _BUILTIN_PER_PDB_HINTS,
+            "HARD_FDA_CONTROL_BY_PDB": hard or _BUILTIN_HARD_FDA_BY_PDB,
+        }
+    )
+
 
 _init()
 
 # ---------------- convenience helpers -----------
+
 
 def resolve_name_tokens(raw: str) -> List[str]:
     """
@@ -166,16 +208,29 @@ def resolve_name_tokens(raw: str) -> List[str]:
         return []
     return [n]
 
+
 def alias_list_for_het(het_code: str) -> List[str]:
     """Return the synonym list for a three/four-letter HET code (lowercased tokens)."""
     return CHEMCOMP_ALIAS.get(str(het_code).upper(), [])
 
+
 # Keep a minimal CLI for sanity checks
 if __name__ == "__main__":
-    import sys, json
+    import sys
+
     if len(sys.argv) == 1:
-        print("keys:", ", ".join(["CHEMCOMP_ALIAS","EXCLUDE_HET_IDS","EXCLUDE_HET_NAME_KEYWORDS",
-                                  "PER_PDB_HINTS","HARD_FDA_CONTROL_BY_PDB"]))
+        print(
+            "keys:",
+            ", ".join(
+                [
+                    "CHEMCOMP_ALIAS",
+                    "EXCLUDE_HET_IDS",
+                    "EXCLUDE_HET_NAME_KEYWORDS",
+                    "PER_PDB_HINTS",
+                    "HARD_FDA_CONTROL_BY_PDB",
+                ]
+            ),
+        )
         print("CHEMCOMP_ALIAS entries:", len(CHEMCOMP_ALIAS))
         print("example STI ->", alias_list_for_het("STI"))
         sys.exit(0)

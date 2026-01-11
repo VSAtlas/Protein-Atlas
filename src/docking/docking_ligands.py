@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -23,18 +22,42 @@ from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
 
 
-def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) -> Optional[Path]:
+def ensure_deepcoy_decoy_sdfs(
+    cfg: Dict, pdb_id: str, logger: logging.Logger
+) -> Optional[Path]:
     enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
     if enabled not in {"on", "true", "1", "yes"}:
         return None
-    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}
+    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
 
     pdb_up = pdb_id.upper()
-    deepcoy_dir = Path(cfg.get("DEEPCOY_DUDS_DIR", "/home/michael/atlas/code/protein_automation/DeepCoy_duds"))
-    out_root = Path(cfg.get("DEEPCOY_OUT_ROOT", deepcoy_dir / "extracted_ligands/deepcoy"))
-    work_root = Path(cfg.get("DEEPCOY_WORK_ROOT", deepcoy_dir / "deepcoy_work")) / pdb_up
-    input_pdb_dir = Path(cfg.get("DEEPCOY_INPUT_PDB_DIR", "/home/michael/atlas/code/protein_automation/input_pdbs"))
-    deepcoy_python = cfg.get("DEEPCOY_PYTHON", "/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python")
+    deepcoy_dir = Path(
+        cfg.get(
+            "DEEPCOY_DUDS_DIR",
+            "/home/michael/atlas/code/protein_automation/DeepCoy_duds",
+        )
+    )
+    out_root = Path(
+        cfg.get("DEEPCOY_OUT_ROOT", deepcoy_dir / "extracted_ligands/deepcoy")
+    )
+    work_root = (
+        Path(cfg.get("DEEPCOY_WORK_ROOT", deepcoy_dir / "deepcoy_work")) / pdb_up
+    )
+    input_pdb_dir = Path(
+        cfg.get(
+            "DEEPCOY_INPUT_PDB_DIR",
+            "/home/michael/atlas/code/protein_automation/input_pdbs",
+        )
+    )
+    deepcoy_python = cfg.get(
+        "DEEPCOY_PYTHON",
+        "/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python",
+    )
     fb_map = cfg.get("_DEEPCOY_FALLBACK_SMILES_BY_PDB", {})
     fallback_smiles = None
     if isinstance(fb_map, dict):
@@ -77,7 +100,9 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
                         break
                 if fallback_smiles:
                     break
-    offline = str(cfg.get("DEEPCOY_OFFLINE", os.environ.get("DEEPCOY_OFFLINE", "off"))).strip().lower() in {"on", "true", "1", "yes"}
+    offline = str(
+        cfg.get("DEEPCOY_OFFLINE", os.environ.get("DEEPCOY_OFFLINE", "off"))
+    ).strip().lower() in {"on", "true", "1", "yes"}
 
     def _find_existing() -> Optional[Path]:
         pattern = f"{pdb_up}_*"
@@ -105,8 +130,10 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
     elif existing:
         return existing
 
+    # Run the autogen driver with the current Python (requests/rdkit), but still point DeepCoy itself
+    # at the DeepCoy environment via --deepcoy-python.
     cmd = [
-        str(deepcoy_python),
+        sys.executable,
         str(deepcoy_dir / "generate_dud_library.py"),
         "--pdb",
         pdb_up,
@@ -143,14 +170,20 @@ def ensure_deepcoy_decoy_sdfs(cfg: Dict, pdb_id: str, logger: logging.Logger) ->
         try:
             stdout_log.write_text(stdout_text or "")
         except Exception as exc:
-            logger.warning("[deepcoy.autogen] pdb=%s stdout_log_write_failed=%s", pdb_up, exc)
+            logger.warning(
+                "[deepcoy.autogen] pdb=%s stdout_log_write_failed=%s", pdb_up, exc
+            )
         try:
             stderr_log.write_text(stderr_text or "")
         except Exception as exc:
-            logger.warning("[deepcoy.autogen] pdb=%s stderr_log_write_failed=%s", pdb_up, exc)
+            logger.warning(
+                "[deepcoy.autogen] pdb=%s stderr_log_write_failed=%s", pdb_up, exc
+            )
 
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
     except Exception as exc:
         _write_autogen_logs("", f"{exc}\n")
         fallback_existing = _find_existing()
@@ -245,11 +278,27 @@ def ensure_deepcoy_decoy_pdbqts(
     prepped_dir = base_root / prepped_root / label
     prepped_dir.mkdir(parents=True, exist_ok=True)
 
-    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}
-    actives_enabled = str(cfg.get("DEEPCOY_PREP_ACTIVES", "on")).strip().lower() in {"on", "true", "1", "yes"}
-    decoy_existing = [p for p in prepped_dir.glob("decoys_*.pdbqt") if p.stat().st_size > 0]
-    decoy_existing += [p for p in prepped_dir.glob("deepcoy_decoys_*.pdbqt") if p.stat().st_size > 0]
-    actives_existing = [p for p in prepped_dir.glob("actives_*.pdbqt") if p.stat().st_size > 0]
+    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
+    actives_enabled = str(cfg.get("DEEPCOY_PREP_ACTIVES", "on")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
+    decoy_existing = [
+        p for p in prepped_dir.glob("decoys_*.pdbqt") if p.stat().st_size > 0
+    ]
+    decoy_existing += [
+        p for p in prepped_dir.glob("deepcoy_decoys_*.pdbqt") if p.stat().st_size > 0
+    ]
+    actives_existing = [
+        p for p in prepped_dir.glob("actives_*.pdbqt") if p.stat().st_size > 0
+    ]
     if decoy_existing and (actives_existing or not actives_enabled) and not force:
         return prepped_dir
 
@@ -262,7 +311,11 @@ def ensure_deepcoy_decoy_pdbqts(
         existing = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
         if existing:
             return prepped_dir
-        logger.warning("[deepcoy.ligprep] pdb=%s lock_exists=%s waiting skipped", pdb_id.upper(), lock_path)
+        logger.warning(
+            "[deepcoy.ligprep] pdb=%s lock_exists=%s waiting skipped",
+            pdb_id.upper(),
+            lock_path,
+        )
         return None
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -322,7 +375,13 @@ def ensure_deepcoy_decoy_pdbqts(
                     label,
                     actives_sdf,
                     prepped_dir,
-                    len([p for p in prepped_dir.glob("actives_*.pdbqt") if p.stat().st_size > 0]),
+                    len(
+                        [
+                            p
+                            for p in prepped_dir.glob("actives_*.pdbqt")
+                            if p.stat().st_size > 0
+                        ]
+                    ),
                 )
             else:
                 logger.warning(
@@ -353,23 +412,54 @@ def ensure_deepcoy_decoy_pdbqts(
 
 
 def _maybe_set_deepcoy_as_dud_library(
-    cfg: Dict, pdb_id: str, effective_mode: str, prepped_dir: Optional[Path], logger: logging.Logger
+    cfg: Dict,
+    pdb_id: str,
+    effective_mode: str,
+    prepped_dir: Optional[Path],
+    logger: logging.Logger,
 ) -> None:
     allowed_modes = {"dud", "fda+dud", "hmdb+dud", "fda+dud+hmdb"}
     if effective_mode not in allowed_modes:
-        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=mode_not_dud", pdb_id.upper(), effective_mode)
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=mode_not_dud",
+            pdb_id.upper(),
+            effective_mode,
+        )
         return
-    if str(cfg.get("DEEPCOY_USE_AS_DUD_LIBRARY", "on")).strip().lower() not in {"on", "true", "1", "yes"}:
-        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=feature_disabled", pdb_id.upper(), effective_mode)
+    if str(cfg.get("DEEPCOY_USE_AS_DUD_LIBRARY", "on")).strip().lower() not in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }:
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=feature_disabled",
+            pdb_id.upper(),
+            effective_mode,
+        )
         return
     if prepped_dir is None:
-        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_prepped_dir", pdb_id.upper(), effective_mode)
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_prepped_dir",
+            pdb_id.upper(),
+            effective_mode,
+        )
         return
     if not prepped_dir.exists():
-        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=missing_dir dir=%s", pdb_id.upper(), effective_mode, prepped_dir)
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=missing_dir dir=%s",
+            pdb_id.upper(),
+            effective_mode,
+            prepped_dir,
+        )
         return
     if not any(p.stat().st_size > 0 for p in prepped_dir.glob("*.pdbqt")):
-        logger.debug("[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_pdbqt dir=%s", pdb_id.upper(), effective_mode, prepped_dir)
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_pdbqt dir=%s",
+            pdb_id.upper(),
+            effective_mode,
+            prepped_dir,
+        )
         return
 
     tag = prepped_dir.name
@@ -395,7 +485,12 @@ def _maybe_set_deepcoy_as_dud_library(
         canonical = {}
         cfg["_TEST_LIBRARY_CANONICAL"] = canonical
 
-    force_map = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}
+    force_map = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
     existing = test_map.get(key)
     if existing:
         if existing == mapped_subdir:
@@ -408,7 +503,9 @@ def _maybe_set_deepcoy_as_dud_library(
             return
         base_root = prepped_dir.parent.parent if prepped_dir.parent else prepped_dir
         existing_dir = base_root / existing
-        existing_ok = existing_dir.exists() and any(p.stat().st_size > 0 for p in existing_dir.glob("*.pdbqt"))
+        existing_ok = existing_dir.exists() and any(
+            p.stat().st_size > 0 for p in existing_dir.glob("*.pdbqt")
+        )
         if not existing_ok or force_map:
             logger.info(
                 "[deepcoy.dud-map] pdb=%s mode=%s action=update existing=%s new=%s reason=%s",
@@ -574,13 +671,13 @@ def _is_under_ph_subdir(p: Path, roots: list[Path]) -> bool:
 
 
 def select_ligands_for_next(
-        docking_mode: str,
-        i: int,
-        stages: List[Dict],
-        scores: Dict[str, float],
-        logger: logging.Logger,
-        base_pool_n: Optional[int] = None,          #  if provided, select % of this
-        force_include: Optional[set] = None         #  always add these
+    docking_mode: str,
+    i: int,
+    stages: List[Dict],
+    scores: Dict[str, float],
+    logger: logging.Logger,
+    base_pool_n: Optional[int] = None,  #  if provided, select % of this
+    force_include: Optional[set] = None,  #  always add these
 ) -> List[str]:
     if not scores:
         # Still allow force-carry if provided and next stage exists
@@ -606,7 +703,9 @@ def select_ligands_for_next(
         forced_add = [l for l in sorted(force_include) if l not in in_set]
         next_list.extend(forced_add)
         if forced_add:
-            logger.info(f"[Force-carry] Added {len(forced_add)} extracted ligands to next stage.")
+            logger.info(
+                f"[Force-carry] Added {len(forced_add)} extracted ligands to next stage."
+            )
 
     logger.info(
         f"Selected {k} by score (+{len(force_include or [])} forced) "
@@ -633,11 +732,20 @@ def compute_stage_membership_from_scores(
         return {}
 
     # Filter to numeric scores only
-    valid_scores = {l: s for l, s in scores.items() if isinstance(s, (int, float)) and math.isfinite(s)}
+    valid_scores = {
+        l: s
+        for l, s in scores.items()
+        if isinstance(s, (int, float)) and math.isfinite(s)
+    }
     if not valid_scores:
         return {}
 
-    order = [l for l, _ in sorted(valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better)]
+    order = [
+        l
+        for l, _ in sorted(
+            valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better
+        )
+    ]
     total = len(order)
     schedule = _selection_schedule(docking_mode, n_stages)
 
@@ -678,32 +786,48 @@ def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
 def _load_mol_any(pdbqt_path: Path, obabel_exe: str | None) -> Chem.Mol | None:
     base = pdbqt_path.with_suffix("")
     # prefer SDF, then MOL2, then PDB
-    sdf = base.with_suffix(".sdf"); mol2 = base.with_suffix(".mol2"); pdb = base.with_suffix(".pdb")
+    sdf = base.with_suffix(".sdf")
+    mol2 = base.with_suffix(".mol2")
+    pdb = base.with_suffix(".pdb")
     if sdf.exists():
         supp = Chem.SDMolSupplier(str(sdf), removeHs=False, sanitize=True)
         for m in supp:
-            if m: return m
+            if m:
+                return m
     for fp, reader in [(mol2, Chem.MolFromMol2File), (pdb, Chem.MolFromPDBFile)]:
         if fp.exists():
             m = reader(str(fp), sanitize=True, removeHs=False)
-            if m: return m
+            if m:
+                return m
     # fallback: PDBQT -> SDF via obabel (Linux-friendly)
     if obabel_exe:
         with tempfile.TemporaryDirectory() as td:
             out = Path(td, "tmp.sdf")
             try:
-                subprocess.check_call([obabel_exe, "-ipdbqt", str(pdbqt_path), "-osdf", "-O", str(out), "--retype", "--addh"])
+                subprocess.check_call(
+                    [
+                        obabel_exe,
+                        "-ipdbqt",
+                        str(pdbqt_path),
+                        "-osdf",
+                        "-O",
+                        str(out),
+                        "--retype",
+                        "--addh",
+                    ]
+                )
                 supp = Chem.SDMolSupplier(str(out), removeHs=False, sanitize=True)
                 for m in supp:
-                    if m: return m
+                    if m:
+                        return m
             except Exception:
                 return None
     return None
 
 
 def _standardize(m: Chem.Mol) -> Chem.Mol:
-    parent = rdMolStandardize.ChargeParent(m)   # neutralize/parent
-    rdMolStandardize.Normalize(parent)          # FG normalization
+    parent = rdMolStandardize.ChargeParent(m)  # neutralize/parent
+    rdMolStandardize.Normalize(parent)  # FG normalization
     Chem.SanitizeMol(parent)
     return parent
 
@@ -717,7 +841,8 @@ pains_catalog = FilterCatalog.FilterCatalog(params)
 
 
 def _coerce_test_map(m) -> Dict[str, str]:
-    import json as _json, ast as _ast
+    import json as _json
+    import ast as _ast
 
     if isinstance(m, dict):
         return {str(k).upper(): str(v) for k, v in m.items()}
@@ -732,7 +857,10 @@ def _coerce_test_map(m) -> Dict[str, str]:
             parsed = _ast.literal_eval(s)
         except Exception:
             parsed = {}
-    return {str(k).upper(): str(v) for k, v in (parsed if isinstance(parsed, dict) else {}).items()}
+    return {
+        str(k).upper(): str(v)
+        for k, v in (parsed if isinstance(parsed, dict) else {}).items()
+    }
 
 
 def _resolve_test_mode(cfg) -> str:
@@ -756,7 +884,7 @@ def _resolve_test_mode(cfg) -> str:
 
     Any unrecognized string logs a warning and falls back to "off".
     """
-    #env has priority over config
+    # env has priority over config
     raw = os.environ.get("TEST_MODE_ENABLE", cfg.get("TEST_MODE_ENABLE", "off"))
 
     if isinstance(raw, bool):
@@ -783,10 +911,7 @@ def _resolve_test_mode(cfg) -> str:
         return direct_aliases[s_lower]
 
     normalized = (
-        s_lower.replace("_", "+")
-        .replace("-", "+")
-        .replace(" ", "")
-        .replace("only", "")
+        s_lower.replace("_", "+").replace("-", "+").replace(" ", "").replace("only", "")
     ).strip("+")
     if normalized in direct_aliases:
         return direct_aliases[normalized]
@@ -812,6 +937,7 @@ def _resolve_test_mode(cfg) -> str:
 
     print(f"[test-mode] WARNING: Unknown TEST_MODE_ENABLE={raw!r}; treating as 'off'.")
     return "off"
+
 
 def _dedup_index_roots(seq: list[Path]) -> list[Path]:
     deduped: list[Path] = []
@@ -860,7 +986,9 @@ def _lib_roots_for_pdb(
     maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
     test_map: Dict[str, str] = {}
     test_map = _coerce_test_map(maybe_map)
-    logger.info(f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}")
+    logger.info(
+        f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}"
+    )
     mapped_value = (test_map or {}).get(pdb_id)
 
     base_root = Path(
@@ -900,7 +1028,11 @@ def _lib_roots_for_pdb(
     elif test_mode == "dud":
         roots_for_mode = dud_roots or [base_root / subdir_default]
     elif test_mode == "fda+dud":
-        roots_for_mode = dud_roots + [base_root / subdir_default] if dud_roots else [base_root / subdir_default]
+        roots_for_mode = (
+            dud_roots + [base_root / subdir_default]
+            if dud_roots
+            else [base_root / subdir_default]
+        )
     elif test_mode == "hmdb":
         roots_for_mode = [hmdb_root]
     elif test_mode == "hmdb+dud":
@@ -942,7 +1074,9 @@ def _lib_roots_for_pdb(
     )
     cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
 
-    primary_root_str = str(allowed_noncontrol_roots[0]) if allowed_noncontrol_roots else None
+    primary_root_str = (
+        str(allowed_noncontrol_roots[0]) if allowed_noncontrol_roots else None
+    )
     logger.info(
         "[ph_ligand.roots] test_mode=%s pdb=%s ph_root=%s noncontrol_roots=%s",
         test_mode,
@@ -994,13 +1128,22 @@ def prepare_and_filter_ligands(
 
     deepcoy_prepped_dir: Optional[Path] = None
     try:
-        deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(cfg, paths.pdb_id, logger, run_mode=run_mode)
+        deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(
+            cfg, paths.pdb_id, logger, run_mode=run_mode
+        )
     except Exception as exc:
         logger.warning("[deepcoy.autogen] pdb=%s error=%s", paths.pdb_id, exc)
-        if str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {"on", "true", "1", "yes"}:
+        if str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+            "on",
+            "true",
+            "1",
+            "yes",
+        }:
             raise
 
-    _maybe_set_deepcoy_as_dud_library(cfg, paths.pdb_id, effective_mode, deepcoy_prepped_dir, logger)
+    _maybe_set_deepcoy_as_dud_library(
+        cfg, paths.pdb_id, effective_mode, deepcoy_prepped_dir, logger
+    )
 
     # Keep existing prep step for extracted controls (harmless if nothing to do)
     prep_ligands_from_pdb(
@@ -1054,7 +1197,9 @@ def prepare_and_filter_ligands(
         )
 
         candidates: list[Path] = []
-        microstate_roots = [r for r in resolved_existing if (r / "microstates.json").exists()]
+        microstate_roots = [
+            r for r in resolved_existing if (r / "microstates.json").exists()
+        ]
         if microstate_roots:
             try:
                 all_ms: list[Path] = []
@@ -1068,7 +1213,11 @@ def prepare_and_filter_ligands(
                         force=False,
                     )
                     all_ms.extend(ms_paths)
-                ms_filtered = [p for p in all_ms if any(_under(p, root) for root in resolved_existing)]
+                ms_filtered = [
+                    p
+                    for p in all_ms
+                    if any(_under(p, root) for root in resolved_existing)
+                ]
                 candidates.extend(ms_filtered)
                 logger.info(
                     "[lib-index.microstate] roots=%d ligands=%d",
@@ -1144,26 +1293,34 @@ def prepare_and_filter_ligands(
             per_protein_allow,
             crawl_allowed,
         )
-        for p in _iter_pdbqt_dirfirst(prepped_lig_root, allowed_subdirs=per_protein_allow):
+        for p in _iter_pdbqt_dirfirst(
+            prepped_lig_root, allowed_subdirs=per_protein_allow
+        ):
             pn = norm(p)
             if pn not in seen:
                 seen.add(pn)
                 controls.append(p)
 
-    noncontrol_candidates = _enumerate_noncontrol_candidates_via_index(cfg, allowed_noncontrol_roots, logger)
+    noncontrol_candidates = _enumerate_noncontrol_candidates_via_index(
+        cfg, allowed_noncontrol_roots, logger
+    )
 
     all_pdbqt_paths: list[Path] = []
     all_pdbqt_paths.extend(controls)
     all_pdbqt_paths.extend(noncontrol_candidates)
 
-    logger.info("[ligands.scan] roots=%d found=%d", len(scan_roots), len(all_pdbqt_paths))
+    logger.info(
+        "[ligands.scan] roots=%d found=%d", len(scan_roots), len(all_pdbqt_paths)
+    )
     cfg["ALL_LIGAND_PATHS"] = [str(p) for p in all_pdbqt_paths]
 
     if not all_pdbqt_paths:
         logger.warning("No .pdbqt ligands were found under the configured roots.")
         return [], {}, {}
 
-    global_root = Path(cfg["OUTPUT_LIGANDS_DIR"]) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+    global_root = (
+        Path(cfg["OUTPUT_LIGANDS_DIR"]) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+    )
 
     valid_pdbqt: Dict[str, Path] = {}
     for p in all_pdbqt_paths:
@@ -1242,7 +1399,9 @@ def prepare_and_filter_ligands(
     # --- Optional: build library manifests from scan results ---
     if cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN"):
         try:
-            manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+            manifest_filename = str(
+                cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
+            )
             by_root: Dict[Path, list[Path]] = {}
 
             for root in allowed_noncontrol_roots:
@@ -1309,7 +1468,9 @@ def prepare_and_filter_ligands(
                         str(manifest_path),
                     )
         except Exception:
-            logger.exception("[lib-manifest.scan.error] unexpected failure during build_on_scan")
+            logger.exception(
+                "[lib-manifest.scan.error] unexpected failure during build_on_scan"
+            )
     # ------------------------------------------------------------
 
     # Merge back: controls (unaltered) + filtered non-controls
@@ -1317,15 +1478,19 @@ def prepare_and_filter_ligands(
         resolved_path = Path(cfg["_SINGLE_RESOLVED_PATH"])
         final_paths = controls_valid + [resolved_path]
         filtered_noncontrols = [resolved_path]
-        logger.info("[single.fuel] resolved=%s controls=%d (blocking non-control pool)", cfg["_SINGLE_RESOLVED_PATH"], len(controls_valid))
+        logger.info(
+            "[single.fuel] resolved=%s controls=%d (blocking non-control pool)",
+            cfg["_SINGLE_RESOLVED_PATH"],
+            len(controls_valid),
+        )
     else:
         final_paths = controls_valid + filtered_noncontrols
 
     # --- PAINS flags (keep as before; default to {}) ---
     pains_flags: Dict[str, bool] = {}
     try:
-        from rdkit import Chem
-        from rdkit.Chem import FilterCatalog, rdMolStandardize
+        from rdkit.Chem import FilterCatalog
+
         # Build catalog once at module-level if you prefer; safe inline here too
         params = FilterCatalog.FilterCatalogParams()
         params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
@@ -1357,7 +1522,9 @@ def prepare_and_filter_ligands(
     # Final return (stringify paths)
     ligands = [str(p) for p in final_paths]
     non_control_count = max(0, len(final_paths) - len(controls))
-    logger.info(f"Selected ligands -> controls={len(controls)} + non-controls={non_control_count} = total={len(ligands)}")
+    logger.info(
+        f"Selected ligands -> controls={len(controls)} + non-controls={non_control_count} = total={len(ligands)}"
+    )
     # GUARD: enforce .pdbqt-only pool
     bad = [p for p in ligands if not str(p).lower().endswith(".pdbqt")]
     if bad:
@@ -1391,20 +1558,26 @@ def _read_any_lig(path: str):
         elif ext in (".pdbqt",):
             loader = "MolFromPDBFile(pdbqt)"
             sanitize = False
-            mol = Chem.MolFromPDBFile(path, sanitize=False, removeHs=False, proximityBonding=True)
+            mol = Chem.MolFromPDBFile(
+                path, sanitize=False, removeHs=False, proximityBonding=True
+            )
             if mol is not None:
                 try:
                     Chem.SanitizeMol(mol)
                 except Exception as e:
                     sanitize_failed = True
                     if _rlog:
-                        _rlog.warning(f"[read_any] sanitize failed for path='{path}' err={e!r}")
+                        _rlog.warning(
+                            f"[read_any] sanitize failed for path='{path}' err={e!r}"
+                        )
         elif ext in (".pdb",):
             loader = "MolFromPDBFile"
             sanitize = True
             # If you use proximityBonding or flavor flags elsewhere, keep them consistent here.
             try:
-                mol = Chem.MolFromPDBFile(path, sanitize=True, removeHs=False, proximityBonding=True)
+                mol = Chem.MolFromPDBFile(
+                    path, sanitize=True, removeHs=False, proximityBonding=True
+                )
             except Exception as e:
                 load_err = e
                 mol = None
@@ -1414,7 +1587,9 @@ def _read_any_lig(path: str):
                         head = fh.read(1024)
                 except Exception:
                     head = ""
-                looks_like_pdbqt = ("REMARK VINA" in head) or ("TORSDOF" in head) or ("ROOT" in head)
+                looks_like_pdbqt = (
+                    ("REMARK VINA" in head) or ("TORSDOF" in head) or ("ROOT" in head)
+                )
                 if looks_like_pdbqt:
                     if _rlog:
                         _rlog.warning(
@@ -1423,7 +1598,9 @@ def _read_any_lig(path: str):
                     loader = "MolFromPDBFile(pdbqt-fallback)"
                     sanitize = False
                     try:
-                        mol = Chem.MolFromPDBFile(path, sanitize=False, removeHs=False, proximityBonding=True)
+                        mol = Chem.MolFromPDBFile(
+                            path, sanitize=False, removeHs=False, proximityBonding=True
+                        )
                     except Exception as e:
                         load_err = e
                         mol = None
@@ -1433,11 +1610,15 @@ def _read_any_lig(path: str):
                         except Exception as e:
                             sanitize_failed = True
                             if _rlog:
-                                _rlog.warning(f"[read_any] sanitize failed for path='{path}' err={e!r}")
+                                _rlog.warning(
+                                    f"[read_any] sanitize failed for path='{path}' err={e!r}"
+                                )
         else:
             loader = "auto"
             sanitize = True
-            mol = Chem.MolFromMolFile(path, sanitize=True, removeHs=False)  # last-ditch; or return None
+            mol = Chem.MolFromMolFile(
+                path, sanitize=True, removeHs=False
+            )  # last-ditch; or return None
     except Exception as e:
         load_err = e if load_err is None else load_err
         mol = None
@@ -1449,22 +1630,30 @@ def _read_any_lig(path: str):
         _rlog = logging.getLogger("rmsd")
         if _rlog and mol is not None:
             from rdkit.Chem import rdMolDescriptors
+
             # formula = e.g., "C20H25N3O"
             formula = rdMolDescriptors.CalcMolFormula(mol)
             # InChIKey may be unavailable if RDKit was built without InChI; guard it.
             try:
                 from rdkit.Chem import inchi
+
                 inchikey = inchi.MolToInchiKey(mol)
             except Exception:
                 inchikey = "NA"
             extra = " sanitize_failed=True" if sanitize_failed else ""
-            _rlog.info(f"[read_any] loader={loader} sanitize={sanitize} path='{path}'{extra} "
-                       f"atoms={mol.GetNumAtoms()} heavy={mol.GetNumHeavyAtoms()} formula={formula} inchikey={inchikey}")
+            _rlog.info(
+                f"[read_any] loader={loader} sanitize={sanitize} path='{path}'{extra} "
+                f"atoms={mol.GetNumAtoms()} heavy={mol.GetNumHeavyAtoms()} formula={formula} inchikey={inchikey}"
+            )
         elif _rlog:
             if (mol is None) and (load_err is not None):
-                _rlog.info(f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None err={load_err!r}")
+                _rlog.info(
+                    f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None err={load_err!r}"
+                )
             else:
-                _rlog.info(f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None")
+                _rlog.info(
+                    f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None"
+                )
     except Exception:
         pass
     # ───────────────────────────────────────────────────────────────────────────
@@ -1483,6 +1672,7 @@ def _is_readable_ref(pth: Path) -> bool:
 def compute_rmsd(ref_path: str, docked_path: str) -> float:
     """Heavy-atom RMSD using best mapping; supports PDB/SDF/MOL2 refs and adds a minimal MCS fallback."""
     _rlog = logging.getLogger("rmsd")
+
     def _clamp(val: float) -> float:
         try:
             if 0 < val < 0.01:
@@ -1535,7 +1725,9 @@ def compute_rmsd(ref_path: str, docked_path: str) -> float:
     try:
         rmsd = float(rdMolAlign.GetBestRMS(ref, dock))
         if _rlog:
-            _rlog.info(f"[rmsd.best] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A")
+            _rlog.info(
+                f"[rmsd.best] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A"
+            )
         return _clamp(rmsd)
     except Exception as e:
         if _rlog:
@@ -1549,39 +1741,49 @@ def compute_rmsd(ref_path: str, docked_path: str) -> float:
         Chem.FastFindRings(ref)
         Chem.FastFindRings(dock)
 
-        mcs = rdFMCS.FindMCS([ref, dock],
-                             ringMatchesRingOnly=True,
-                             completeRingsOnly=True,
-                             matchValences=True)
+        mcs = rdFMCS.FindMCS(
+            [ref, dock],
+            ringMatchesRingOnly=True,
+            completeRingsOnly=True,
+            matchValences=True,
+        )
         patt = Chem.MolFromSmarts(mcs.smartsString)
         if patt is None:
             if _rlog:
-                _rlog.warning(f"[rmsd.mcs] no SMARTS pattern for ref='{ref_path}' dock='{docked_path}'")
+                _rlog.warning(
+                    f"[rmsd.mcs] no SMARTS pattern for ref='{ref_path}' dock='{docked_path}'"
+                )
             return float("inf")
         ref_match = ref.GetSubstructMatch(patt)
         dock_match = dock.GetSubstructMatch(patt)
         if not ref_match or not dock_match or (len(ref_match) != len(dock_match)):
             if _rlog:
-                _rlog.warning(f"[rmsd.mcs] match-fail ref='{ref_path}' dock='{docked_path}'")
+                _rlog.warning(
+                    f"[rmsd.mcs] match-fail ref='{ref_path}' dock='{docked_path}'"
+                )
             return float("inf")
         amap = list(zip(dock_match, ref_match))  # (probe->ref)
         rmsd = float(rdMolAlign.AlignMol(dock, ref, atomMap=amap))
         if _rlog:
-            _rlog.info(f"[rmsd.mcs] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A atoms={len(amap)}")
+            _rlog.info(
+                f"[rmsd.mcs] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A atoms={len(amap)}"
+            )
         return _clamp(rmsd)
     except Exception as e:
         if _rlog:
-            _rlog.warning(f"[rmsd.mcs] failed ref='{ref_path}' dock='{docked_path}' err={e!r}")
+            _rlog.warning(
+                f"[rmsd.mcs] failed ref='{ref_path}' dock='{docked_path}' err={e!r}"
+            )
         return float("inf")
 
 
 def validate_ligand(
-        ligand_name: str,
-        docked_path: str,
-        crystal_path: str = None,
-        rmsd_thresh: float = 2.0,
-        self_rmsd: float = None,
-        logger=None
+    ligand_name: str,
+    docked_path: str,
+    crystal_path: str = None,
+    rmsd_thresh: float = 2.0,
+    self_rmsd: float = None,
+    logger=None,
 ) -> bool:
     """
     Validate ligand docking.
@@ -1609,7 +1811,9 @@ def validate_ligand(
             redock_rmsd = compute_rmsd(crystal_path, docked_path)
         if logger:
             sr = f"{self_rmsd:.2f}" if isinstance(self_rmsd, (int, float)) else "n/a"
-            logger.info(f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} A, self_RMSD={sr}")
+            logger.info(
+                f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} A, self_RMSD={sr}"
+            )
         if redock_rmsd <= rmsd_thresh:
             return True
         else:

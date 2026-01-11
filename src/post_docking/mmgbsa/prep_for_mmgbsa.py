@@ -33,7 +33,10 @@ def _get_logger() -> logging.Logger:
 def _ensure_file_handler(logger: logging.Logger, log_file: Path) -> None:
     for handler in logger.handlers:
         if isinstance(handler, logging.FileHandler):
-            if Path(getattr(handler, "baseFilename", "")).resolve() == log_file.resolve():
+            if (
+                Path(getattr(handler, "baseFilename", "")).resolve()
+                == log_file.resolve()
+            ):
                 return
     log_file.parent.mkdir(parents=True, exist_ok=True)
     fh = logging.FileHandler(log_file, mode="a", encoding="utf-8")
@@ -42,7 +45,9 @@ def _ensure_file_handler(logger: logging.Logger, log_file: Path) -> None:
     logger.addHandler(fh)
 
 
-def _log(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
+def _log(
+    logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None
+) -> None:
     level_map = {
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
@@ -144,7 +149,9 @@ def _resolve_post_docked_paths(sdf_path: Path) -> Tuple[str, str, str, str, str,
         )
 
     if len(parts) <= idx + 5:
-        raise ValueError("sdf_path does not include runid/pdb/variant/pH/stage_dir components")
+        raise ValueError(
+            "sdf_path does not include runid/pdb/variant/pH/stage_dir components"
+        )
 
     runid = parts[idx + 1]
     pdb = parts[idx + 2]
@@ -172,7 +179,11 @@ def _read_rdkit_info(
         _log(
             logger,
             "WARNING",
-            {"reason": "rdkit_unavailable", "detail": str(exc), "fallback": "skip_rdkit"},
+            {
+                "reason": "rdkit_unavailable",
+                "detail": str(exc),
+                "fallback": "skip_rdkit",
+            },
             "rdkit_unavailable",
         )
         return None, None
@@ -204,7 +215,9 @@ def _read_rdkit_info(
     except Exception:
         formal_charge = None
     try:
-        radical_electrons = int(sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms()))
+        radical_electrons = int(
+            sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms())
+        )
     except Exception:
         radical_electrons = None
 
@@ -222,7 +235,9 @@ def _looks_like_pkgs_cache(prefix: Path) -> bool:
 
 
 def _prefix_has_tools(prefix: Path) -> bool:
-    return (prefix / "bin" / "antechamber").is_file() and (prefix / "bin" / "parmchk2").is_file()
+    return (prefix / "bin" / "antechamber").is_file() and (
+        prefix / "bin" / "parmchk2"
+    ).is_file()
 
 
 def _resolve_micromamba() -> Optional[Path]:
@@ -244,10 +259,14 @@ def _select_ambertools(
                 f"refusing amber_prefix under pkgs cache: {prefix}; use an environment prefix instead"
             )
         if not _prefix_has_tools(prefix):
-            raise FileNotFoundError(f"amber_prefix missing AmberTools binaries: {prefix}")
+            raise FileNotFoundError(
+                f"amber_prefix missing AmberTools binaries: {prefix}"
+            )
         micromamba = _resolve_micromamba()
         if not micromamba:
-            raise FileNotFoundError("micromamba not found; cannot run AmberTools from prefix")
+            raise FileNotFoundError(
+                "micromamba not found; cannot run AmberTools from prefix"
+            )
         runner = [str(micromamba), "run", "-p", str(prefix)]
         return runner, "antechamber", "parmchk2", f"prefix:{prefix}"
 
@@ -264,7 +283,9 @@ def _select_ambertools(
         elif _prefix_has_tools(prefix):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run AmberTools from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run AmberTools from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "antechamber", "parmchk2", f"prefix:{prefix}"
         else:
@@ -289,11 +310,15 @@ def _select_ambertools(
         if _prefix_has_tools(prefix) and not _looks_like_pkgs_cache(prefix):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run AmberTools from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run AmberTools from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "antechamber", "parmchk2", f"prefix:{prefix}"
 
-    raise FileNotFoundError("could not locate AmberTools antechamber/parmchk2; set AMBERTOOLS_PREFIX or PATH")
+    raise FileNotFoundError(
+        "could not locate AmberTools antechamber/parmchk2; set AMBERTOOLS_PREFIX or PATH"
+    )
 
 
 def _tmp_path(final_path: Path) -> Path:
@@ -363,7 +388,9 @@ def _run_command_to_log(
     _log(logger, "DEBUG", {"cmd": " ".join(cmd), "log": log_path})
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.run(cmd, cwd=str(cwd) if cwd else None, stdout=handle, stderr=subprocess.STDOUT)
+        proc = subprocess.run(
+            cmd, cwd=str(cwd) if cwd else None, stdout=handle, stderr=subprocess.STDOUT
+        )
     return int(proc.returncode)
 
 
@@ -383,7 +410,10 @@ def _log_attempt_failure(
 
 def _build_bcc_sweep(cfg: object | None) -> List[int]:
     sweep = _parse_int_list(_cfg_get(cfg, "MMGBSA_LIGAND_BCC_CHARGE_SWEEP", "-1,1"))
-    include_pm2 = _to_bool(_cfg_get(cfg, "MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2", False), default=False)
+    include_pm2 = _to_bool(
+        _cfg_get(cfg, "MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2", False),
+        default=False,
+    )
     if include_pm2:
         for val in (-2, 2):
             if val not in sweep:
@@ -416,14 +446,18 @@ def parameterize_ligand_with_fallback(
     work_dir = mmgbsa_dir / "ambertools_work"
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    rdkit_validate = _to_bool(_cfg_get(cfg, "MMGBSA_RDKit_VALIDATE", True), default=True)
+    rdkit_validate = _to_bool(
+        _cfg_get(cfg, "MMGBSA_RDKit_VALIDATE", True), default=True
+    )
     rdkit_formal_charge: Optional[int] = None
     rdkit_radical_electrons: Optional[int] = None
     low_confidence = False
     if rdkit_validate:
         rdkit_formal_charge, rdkit_radical_electrons = _read_rdkit_info(sdf, logger)
         if rdkit_radical_electrons is not None:
-            threshold = _to_int(_cfg_get(cfg, "MMGBSA_RDKit_RADICAL_LOWCONF_THRESHOLD", 1), 1)
+            threshold = _to_int(
+                _cfg_get(cfg, "MMGBSA_RDKit_RADICAL_LOWCONF_THRESHOLD", 1), 1
+            )
             if threshold <= 0:
                 threshold = 1
             if rdkit_radical_electrons >= threshold:
@@ -441,18 +475,28 @@ def parameterize_ligand_with_fallback(
 
     nominal_charge = _resolve_nominal_charge(sdf, logger, cfg, None)
 
-    ligand_at = str(_cfg_get(cfg, "MMGBSA_LIGAND_AT", "gaff2") or "gaff2").strip() or "gaff2"
-    primary_method = str(
-        _cfg_get(
-            cfg,
-            "MMGBSA_LIGAND_PRIMARY_CHARGE_METHOD",
-            _cfg_get(cfg, "MMGBSA_LIGAND_CHARGE_METHOD", "bcc"),
+    ligand_at = (
+        str(_cfg_get(cfg, "MMGBSA_LIGAND_AT", "gaff2") or "gaff2").strip() or "gaff2"
+    )
+    primary_method = (
+        str(
+            _cfg_get(
+                cfg,
+                "MMGBSA_LIGAND_PRIMARY_CHARGE_METHOD",
+                _cfg_get(cfg, "MMGBSA_LIGAND_CHARGE_METHOD", "bcc"),
+            )
+            or "bcc"
         )
-        or "bcc"
-    ).strip().lower()
+        .strip()
+        .lower()
+    )
     if primary_method not in {"bcc", "gas"}:
         primary_method = "bcc"
-    fallback_method = str(_cfg_get(cfg, "MMGBSA_LIGAND_FALLBACK_CHARGE_METHOD", "gas") or "gas").strip().lower()
+    fallback_method = (
+        str(_cfg_get(cfg, "MMGBSA_LIGAND_FALLBACK_CHARGE_METHOD", "gas") or "gas")
+        .strip()
+        .lower()
+    )
     if fallback_method not in {"bcc", "gas"}:
         fallback_method = "gas"
 
@@ -499,13 +543,21 @@ def parameterize_ligand_with_fallback(
         amber_prefix = _cfg_get(cfg, "AMBERTOOLS_PREFIX", None)
     amber_prefix = str(amber_prefix).strip() if amber_prefix else None
 
-    runner, antechamber_bin, parmchk2_bin, tool_source = _select_ambertools(amber_prefix, logger)
-    antechamber_label = " ".join(runner + [antechamber_bin]) if runner else antechamber_bin
+    runner, antechamber_bin, parmchk2_bin, tool_source = _select_ambertools(
+        amber_prefix, logger
+    )
+    antechamber_label = (
+        " ".join(runner + [antechamber_bin]) if runner else antechamber_bin
+    )
     parmchk2_label = " ".join(runner + [parmchk2_bin]) if runner else parmchk2_bin
     _log(
         logger,
         "INFO",
-        {"antechamber": antechamber_label, "parmchk2": parmchk2_label, "source": tool_source},
+        {
+            "antechamber": antechamber_label,
+            "parmchk2": parmchk2_label,
+            "source": tool_source,
+        },
     )
 
     commands_run: List[str] = []
@@ -546,7 +598,9 @@ def parameterize_ligand_with_fallback(
             _log_attempt_failure(logger, cmd, rc, attempt_log, "antechamber_failed")
         commands_run.append(" ".join(cmd))
         if method == "bcc":
-            bcc_attempts.append({"nc": charge, "ok": ok, "rc": rc, "log": str(attempt_log)})
+            bcc_attempts.append(
+                {"nc": charge, "ok": ok, "rc": rc, "log": str(attempt_log)}
+            )
         return ok
 
     succeeded = False
@@ -597,7 +651,9 @@ def parameterize_ligand_with_fallback(
         else:
             if frcmod_tmp.exists():
                 frcmod_tmp.unlink()
-            _log_attempt_failure(logger, parmchk2_cmd, rc, parmchk2_log, "parmchk2_failed")
+            _log_attempt_failure(
+                logger, parmchk2_cmd, rc, parmchk2_log, "parmchk2_failed"
+            )
         commands_run.append(" ".join(parmchk2_cmd))
 
     ok = succeeded and parmchk2_ok
@@ -611,7 +667,9 @@ def parameterize_ligand_with_fallback(
         "output_mol2": str(mol2_path),
         "output_frcmod": str(frcmod_path),
         "charge_method": charge_method_used or primary_method,
-        "net_charge_used": int(net_charge_used) if net_charge_used is not None else nominal_charge,
+        "net_charge_used": int(net_charge_used)
+        if net_charge_used is not None
+        else nominal_charge,
         "bcc_attempts": bcc_attempts,
         "gas_fallback_used": gas_fallback_used,
         "rdkit_formal_charge": rdkit_formal_charge,
@@ -628,7 +686,9 @@ def parameterize_ligand_with_fallback(
         "output_frcmod": str(frcmod_path),
         "metadata_path": str(metadata_path),
         "charge_method": charge_method_used or primary_method,
-        "net_charge_used": int(net_charge_used) if net_charge_used is not None else nominal_charge,
+        "net_charge_used": int(net_charge_used)
+        if net_charge_used is not None
+        else nominal_charge,
         "low_confidence": low_confidence,
         "commands_run": commands_run,
         "bcc_attempts": bcc_attempts,
@@ -657,14 +717,20 @@ def prep_mmgbsa_from_sdf(
 
     _log(logger, "INFO", {"input": path})
 
-    runid, pdb, variant, ph_label, stage_dir, mmgbsa_dir = _resolve_post_docked_paths(path)
+    runid, pdb, variant, ph_label, stage_dir, mmgbsa_dir = _resolve_post_docked_paths(
+        path
+    )
     if not dry_run:
         _ensure_file_handler(logger, mmgbsa_dir / "mmgbsa_prep.log")
 
     _log(logger, "INFO", {"stage_dir": stage_dir, "mmgbsa_dir": mmgbsa_dir})
     work_dir = mmgbsa_dir / "ambertools_work"
     _log(logger, "INFO", {"work_dir": work_dir})
-    _log(logger, "DEBUG", {"runid": runid, "pdb": pdb, "variant": variant, "ph": ph_label})
+    _log(
+        logger,
+        "DEBUG",
+        {"runid": runid, "pdb": pdb, "variant": variant, "ph": ph_label},
+    )
 
     ligand_base = path.stem
     mol2_path = mmgbsa_dir / "mol2" / stage_dir / f"{ligand_base}.mol2"
@@ -685,7 +751,9 @@ def prep_mmgbsa_from_sdf(
     if sqm_level is not None:
         cfg_local["MMGBSA_LIGAND_SQM_LEVEL"] = int(sqm_level)
 
-    force_val = force or _to_bool(_cfg_get(cfg_local, "MMGBSA_LIGAND_FORCE", False), default=False)
+    force_val = force or _to_bool(
+        _cfg_get(cfg_local, "MMGBSA_LIGAND_FORCE", False), default=False
+    )
     if _to_bool(_cfg_get(cfg_local, "MMGBSA_FORCE", False), default=False):
         force_val = True
 
@@ -754,7 +822,9 @@ def prep_mmgbsa_from_sdfs(
         paths = paths[:max_ligands]
 
     cfg_force = _to_bool(_cfg_get(cfg, "MMGBSA_FORCE", False), default=False)
-    cfg_force = cfg_force or _to_bool(_cfg_get(cfg, "MMGBSA_LIGAND_FORCE", False), default=False)
+    cfg_force = cfg_force or _to_bool(
+        _cfg_get(cfg, "MMGBSA_LIGAND_FORCE", False), default=False
+    )
     force_val = cfg_force if force is None else force
 
     _log(
@@ -801,12 +871,33 @@ def prep_mmgbsa_from_sdfs(
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Prepare MMGBSA mol2/frcmod files from a docked SDF.")
-    parser.add_argument("--sdf", required=True, help="Input SDF under post_docked/<runid>/<pdb>/<variant>/<pH>/<stage_dir>/.")
-    parser.add_argument("--net-charge", type=int, default=None, help="Net charge override for antechamber.")
-    parser.add_argument("--amber-prefix", default=None, help="AmberTools environment prefix (contains bin/antechamber).")
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without running AmberTools.")
-    parser.add_argument("--force", action="store_true", help="Regenerate mol2/frcmod even if present.")
+    parser = argparse.ArgumentParser(
+        description="Prepare MMGBSA mol2/frcmod files from a docked SDF."
+    )
+    parser.add_argument(
+        "--sdf",
+        required=True,
+        help="Input SDF under post_docked/<runid>/<pdb>/<variant>/<pH>/<stage_dir>/.",
+    )
+    parser.add_argument(
+        "--net-charge",
+        type=int,
+        default=None,
+        help="Net charge override for antechamber.",
+    )
+    parser.add_argument(
+        "--amber-prefix",
+        default=None,
+        help="AmberTools environment prefix (contains bin/antechamber).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print commands without running AmberTools.",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Regenerate mol2/frcmod even if present."
+    )
     return parser
 
 
@@ -824,7 +915,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             force=args.force,
         )
     except Exception as exc:
-        _log(logger, "ERROR", {"reason": type(exc).__name__, "detail": str(exc)}, "failed")
+        _log(
+            logger,
+            "ERROR",
+            {"reason": type(exc).__name__, "detail": str(exc)},
+            "failed",
+        )
         return 1
     return 0
 

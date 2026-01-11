@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from path_router.path_router import load_ph_tags, receptor_file
 
@@ -93,7 +93,12 @@ def init_ph_tags_and_manifest(
         try:
             _keys = sorted(list((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).keys()))
             _len_here = len((cfg.get("_PH_ENSEMBLE_CANONICAL") or {}).get(pdb_id, []))
-            ph_log.info("[ph_ensemble.debug] map_keys=%s map_len[%s]=%d", ",".join(_keys), pdb_id, _len_here)
+            ph_log.info(
+                "[ph_ensemble.debug] map_keys=%s map_len[%s]=%d",
+                ",".join(_keys),
+                pdb_id,
+                _len_here,
+            )
         except Exception:
             pass
 
@@ -108,7 +113,9 @@ def init_ph_tags_and_manifest(
 
         canonical: list[tuple[str, str]] = []
         for tag in ph_tags:
-            rec_path = receptor_file(pdb_id, variant=variant_token, ph_tag=tag, legacy=legacy_mode)
+            rec_path = receptor_file(
+                pdb_id, variant=variant_token, ph_tag=tag, legacy=legacy_mode
+            )
             canonical.append((tag, str(rec_path)))
         if canonical:
             cfg.setdefault("_PH_ENSEMBLE_CANONICAL", {})[pdb_id] = canonical
@@ -133,7 +140,9 @@ def prewarm_ph_ligand_microstates(
     - Call prep_ligands.enumerate_ligands_for_docking(...) once on the union.
     - Log the same [ph_ligand.*] messages and swallow exceptions gracefully.
     """
-    if cfg.get("PH_LIGAND_MODE", "").lower() != "context_window" or not cfg.get("PH_ENSEMBLE"):
+    if cfg.get("PH_LIGAND_MODE", "").lower() != "context_window" or not cfg.get(
+        "PH_ENSEMBLE"
+    ):
         return
 
     ph_log = logging.getLogger("ph_ensemble")

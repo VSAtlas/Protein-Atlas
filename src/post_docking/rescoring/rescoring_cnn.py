@@ -11,7 +11,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 # Ensure repository root is in sys.path for root-level imports
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -123,10 +123,18 @@ def configure_logging(verbose: bool) -> logging.Logger:
 
 
 def resolve_roots(args: argparse.Namespace) -> Tuple[Path, Path, Path]:
-    repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parents[3]
-    docked_root = Path(args.docked_root).resolve() if args.docked_root else repo_root / "docked"
+    repo_root = (
+        Path(args.repo_root).resolve()
+        if args.repo_root
+        else Path(__file__).resolve().parents[3]
+    )
+    docked_root = (
+        Path(args.docked_root).resolve() if args.docked_root else repo_root / "docked"
+    )
     post_docked_root = (
-        Path(args.post_docked_root).resolve() if args.post_docked_root else repo_root / "post_docked"
+        Path(args.post_docked_root).resolve()
+        if args.post_docked_root
+        else repo_root / "post_docked"
     )
     return repo_root, docked_root, post_docked_root
 
@@ -171,7 +179,11 @@ def _collect_stage_sdfs(ph_root: Path, stage_dir: str) -> List[Path]:
     ]
 
     for child in ph_root.iterdir() if ph_root.exists() else []:
-        if child.is_dir() and child.name.startswith(stage_dir) and "retry" in child.name:
+        if (
+            child.is_dir()
+            and child.name.startswith(stage_dir)
+            and "retry" in child.name
+        ):
             candidates.append(child)
 
     collected: Set[Path] = set()
@@ -201,7 +213,11 @@ def _has_any_sdf_in_stage_dirs(ph_root: Path, stage_dirs: Sequence[str]) -> bool
             ph_root / f"{stage_dir}_retry",
         ]
         for child in ph_root.iterdir() if ph_root.exists() else []:
-            if child.is_dir() and child.name.startswith(stage_dir) and "retry" in child.name:
+            if (
+                child.is_dir()
+                and child.name.startswith(stage_dir)
+                and "retry" in child.name
+            ):
                 candidates.append(child)
         for candidate in candidates:
             if not candidate.exists():
@@ -235,7 +251,9 @@ def _control_base_from_path(p: Path) -> str:
     return stem.split(".sanitized")[0]
 
 
-def _load_control_bases(processed_root: Path, pdb_id: str, logger: logging.Logger) -> Set[str]:
+def _load_control_bases(
+    processed_root: Path, pdb_id: str, logger: logging.Logger
+) -> Set[str]:
     roots = [
         processed_root / pdb_id / "ligands_raw",
         processed_root / f"{pdb_id}_NOLIG" / "ligands_raw",
@@ -272,7 +290,10 @@ def _stage_priority(name: str) -> int:
 
 
 def _collect_best_sdf_per_base(
-    ph_root: Path, stage_dirs: Sequence[str], allowed_bases: Optional[Set[str]], logger: logging.Logger
+    ph_root: Path,
+    stage_dirs: Sequence[str],
+    allowed_bases: Optional[Set[str]],
+    logger: logging.Logger,
 ) -> Tuple[Dict[str, Tuple[int, str, Path]], Dict[int, int], int]:
     best: Dict[str, Tuple[int, str, Path]] = {}
     total_candidates = 0
@@ -313,7 +334,10 @@ def _collect_best_sdf_per_base(
 
 
 def _load_consensus_top_bases(
-    consensus_csv: Path, frac: float, logger: logging.Logger, control_bases: Optional[Set[str]] = None
+    consensus_csv: Path,
+    frac: float,
+    logger: logging.Logger,
+    control_bases: Optional[Set[str]] = None,
 ) -> Tuple[Set[str], int, int, int, int]:
     rows: List[Dict[str, str]] = []
     try:
@@ -364,7 +388,9 @@ def _load_consensus_top_bases(
         return set(), len(rows), 0, 0, 0
 
     controls_in_consensus = {base for _, base, is_ctrl in scored_rows if is_ctrl}
-    non_controls = [(score, base) for score, base, is_ctrl in scored_rows if not is_ctrl]
+    non_controls = [
+        (score, base) for score, base, is_ctrl in scored_rows if not is_ctrl
+    ]
     non_controls_sorted = sorted(non_controls, key=lambda item: item[0], reverse=True)
     k = max(1, math.ceil(len(non_controls_sorted) * frac)) if non_controls_sorted else 0
 
@@ -401,7 +427,9 @@ def _sdfs_missing(post_root: Path, combos: Set[Tuple[str, str, str]]) -> bool:
     return True
 
 
-def _run_pose_bust(run_id: str, repo_root: Path, overwrite: bool, logger: logging.Logger) -> bool:
+def _run_pose_bust(
+    run_id: str, repo_root: Path, overwrite: bool, logger: logging.Logger
+) -> bool:
     cmd = [sys.executable, str(repo_root / "pose_bust.py"), "--run-id", run_id]
     if overwrite:
         cmd.append("--overwrite")
@@ -415,11 +443,15 @@ def _run_pose_bust(run_id: str, repo_root: Path, overwrite: bool, logger: loggin
             proc.stdout.strip(),
         )
         return False
-    logger.info("%s action=autofix status=ok step=pose_bust run_id=%s", COMPONENT, run_id)
+    logger.info(
+        "%s action=autofix status=ok step=pose_bust run_id=%s", COMPONENT, run_id
+    )
     return True
 
 
-def _resolve_gnina_exe(cfg: Dict[str, object], repo_root: Path, logger: logging.Logger) -> Optional[Path]:
+def _resolve_gnina_exe(
+    cfg: Dict[str, object], repo_root: Path, logger: logging.Logger
+) -> Optional[Path]:
     exe_cfg = cfg.get(GNINA_EXE_KEY) or cfg.get(GNINA_EXE_KEY.lower())
     if exe_cfg:
         exe_path = Path(str(exe_cfg)).expanduser()
@@ -440,7 +472,9 @@ def _resolve_gnina_exe(cfg: Dict[str, object], repo_root: Path, logger: logging.
     if which:
         return Path(which)
 
-    logger.error("%s action=preflight status=failed reason=missing_gnina_exe", COMPONENT)
+    logger.error(
+        "%s action=preflight status=failed reason=missing_gnina_exe", COMPONENT
+    )
     return None
 
 
@@ -480,7 +514,9 @@ def _extract_sdf_tags(block: str) -> Dict[str, str]:
     return tags
 
 
-def _select_best_pose(poses: List[Dict[str, Optional[float]]]) -> Optional[Dict[str, Optional[float]]]:
+def _select_best_pose(
+    poses: List[Dict[str, Optional[float]]],
+) -> Optional[Dict[str, Optional[float]]]:
     if not poses:
         return None
     if any(p.get("cnn_score") is not None for p in poses):
@@ -490,7 +526,11 @@ def _select_best_pose(poses: List[Dict[str, Optional[float]]]) -> Optional[Dict[
             return top[0]
         with_affinity = [p for p in top if p.get("cnn_affinity") is not None]
         if with_affinity:
-            min_affinity = min(p["cnn_affinity"] for p in with_affinity if p.get("cnn_affinity") is not None)
+            min_affinity = min(
+                p["cnn_affinity"]
+                for p in with_affinity
+                if p.get("cnn_affinity") is not None
+            )
             for pose in top:
                 if pose.get("cnn_affinity") == min_affinity:
                     return pose
@@ -498,7 +538,9 @@ def _select_best_pose(poses: List[Dict[str, Optional[float]]]) -> Optional[Dict[
     return poses[0]
 
 
-def _parse_sdf_scores(path: Path, logger: logging.Logger) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
+def _parse_sdf_scores(
+    path: Path, logger: logging.Logger
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except Exception as exc:
@@ -515,7 +557,9 @@ def _parse_sdf_scores(path: Path, logger: logging.Logger) -> Tuple[Optional[floa
         tags_lower = {k.lower(): v for k, v in tags.items()}
         affinity_val = tags.get("Affinity") or tags_lower.get("affinity")
         if affinity_val is None:
-            affinity_val = tags.get("minimizedAffinity") or tags_lower.get("minimizedaffinity")
+            affinity_val = tags.get("minimizedAffinity") or tags_lower.get(
+                "minimizedaffinity"
+            )
         poses.append(
             {
                 "cnn_score": _safe_float(tags_lower.get("cnnscore")),
@@ -526,7 +570,9 @@ def _parse_sdf_scores(path: Path, logger: logging.Logger) -> Tuple[Optional[floa
 
     best = _select_best_pose(poses)
     if best is None:
-        logger.warning("%s action=parse status=warning reason=no_poses path=%s", COMPONENT, path)
+        logger.warning(
+            "%s action=parse status=warning reason=no_poses path=%s", COMPONENT, path
+        )
         return None, None, None, "no_poses"
     return best.get("cnn_score"), best.get("cnn_affinity"), best.get("affinity"), None
 
@@ -538,7 +584,9 @@ def _compact_error(text: str, limit: int = 400) -> str:
     return cleaned[:limit]
 
 
-def _gnina_command(gnina_exe: Path, receptor: Path, input_sdf: Path, output_sdf: Path, model: str) -> List[str]:
+def _gnina_command(
+    gnina_exe: Path, receptor: Path, input_sdf: Path, output_sdf: Path, model: str
+) -> List[str]:
     return [
         str(gnina_exe),
         "-r",
@@ -653,7 +701,9 @@ def _rescore_task(
             task.output_sdf,
         )
     else:
-        cmd = _gnina_command(gnina_exe, context.receptor, task.input_sdf, task.output_sdf, model)
+        cmd = _gnina_command(
+            gnina_exe, context.receptor, task.input_sdf, task.output_sdf, model
+        )
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             row["status"] = "failed"
@@ -683,7 +733,9 @@ def _rescore_task(
         return row
 
     # Parse GNINA output without RDKit to keep dependencies minimal.
-    cnn_score, cnn_affinity, affinity, parse_error = _parse_sdf_scores(task.output_sdf, logger)
+    cnn_score, cnn_affinity, affinity, parse_error = _parse_sdf_scores(
+        task.output_sdf, logger
+    )
     if parse_error:
         row["status"] = "failed"
         row["error"] = parse_error
@@ -726,7 +778,8 @@ def _ensure_combo_logger(
     combo_dir.mkdir(parents=True, exist_ok=True)
     log_path = combo_dir / "cnn_rescore.log"
     if not any(
-        isinstance(handler, logging.FileHandler) and getattr(handler, "baseFilename", "") == str(log_path)
+        isinstance(handler, logging.FileHandler)
+        and getattr(handler, "baseFilename", "") == str(log_path)
         for handler in logger.handlers
     ):
         handler = logging.FileHandler(log_path)
@@ -770,13 +823,19 @@ def main() -> int:
                 CNN_TOP_FRACTION_DEFAULT,
             )
 
-    cnn_model = str(cfg.get(CNN_MODEL_KEY, CNN_MODEL_DEFAULT)).strip() or CNN_MODEL_DEFAULT
+    cnn_model = (
+        str(cfg.get(CNN_MODEL_KEY, CNN_MODEL_DEFAULT)).strip() or CNN_MODEL_DEFAULT
+    )
 
     repo_root, docked_root, post_root, processed_root = _resolve_roots(args)
     run_root = docked_root / args.run_id
     post_run_root = post_root / args.run_id
     if not run_root.exists():
-        logger.error("%s action=preflight status=failed reason=missing_run_root path=%s", COMPONENT, run_root)
+        logger.error(
+            "%s action=preflight status=failed reason=missing_run_root path=%s",
+            COMPONENT,
+            run_root,
+        )
         return 1
 
     gnina_exe = _resolve_gnina_exe(cfg, repo_root, logger)
@@ -806,7 +865,11 @@ def main() -> int:
 
     combos = discover_combos(run_root, post_run_root)
     if not combos:
-        logger.warning("%s action=discover status=skip reason=no_combos run_id=%s", COMPONENT, args.run_id)
+        logger.warning(
+            "%s action=discover status=skip reason=no_combos run_id=%s",
+            COMPONENT,
+            args.run_id,
+        )
         return 0
 
     combo_contexts: List[ComboContext] = []
@@ -832,7 +895,14 @@ def main() -> int:
             skipped_existing += 1
             continue
 
-        receptor = processed_root / pdb_id / variant / "receptor" / "ph_ensemble" / f"{pdb_id}_{ph}.pdbqt"
+        receptor = (
+            processed_root
+            / pdb_id
+            / variant
+            / "receptor"
+            / "ph_ensemble"
+            / f"{pdb_id}_{ph}.pdbqt"
+        )
         if not receptor.exists():
             combo_logger.error(
                 "%s action=combo status=skip reason=missing_receptor pdb_id=%s variant=%s ph=%s receptor=%s",
@@ -845,10 +915,20 @@ def main() -> int:
             skipped_missing_receptor += 1
             continue
 
-        consensus_csv = run_root / pdb_id / variant / ph / "consensus_docking_scores.csv"
+        consensus_csv = (
+            run_root / pdb_id / variant / ph / "consensus_docking_scores.csv"
+        )
         if pdb_id not in control_cache:
-            control_cache[pdb_id] = _load_control_bases(processed_root, pdb_id, combo_logger)
-        allowed_bases, total_rows, selected_rows, noncontrol_rows, control_rows = _load_consensus_top_bases(
+            control_cache[pdb_id] = _load_control_bases(
+                processed_root, pdb_id, combo_logger
+            )
+        (
+            allowed_bases,
+            total_rows,
+            selected_rows,
+            noncontrol_rows,
+            control_rows,
+        ) = _load_consensus_top_bases(
             consensus_csv, top_fraction, combo_logger, control_cache[pdb_id]
         )
         if total_rows == 0:
@@ -938,7 +1018,12 @@ def main() -> int:
                 stage_counts.get(0, 0),
             )
             for base, (priority, stage_dir, sdf_path) in best_map.items():
-                output_sdf = ctx.combo_post_root / "cnn_outputs" / spec.source / f"{sdf_path.stem}.cnn.sdf"
+                output_sdf = (
+                    ctx.combo_post_root
+                    / "cnn_outputs"
+                    / spec.source
+                    / f"{sdf_path.stem}.cnn.sdf"
+                )
                 tasks.append(
                     RescoreTask(
                         context=ctx,
@@ -970,7 +1055,9 @@ def main() -> int:
     if args.jobs <= 1:
         for task in tasks:
             row = _rescore_task(task, gnina_exe, cnn_model, args.overwrite)
-            results_by_combo[(task.context.pdb_id, task.context.variant, task.context.ph)].append(row)
+            results_by_combo[
+                (task.context.pdb_id, task.context.variant, task.context.ph)
+            ].append(row)
             if row.get("status") == "failed":
                 failed_jobs += 1
             else:
@@ -978,7 +1065,10 @@ def main() -> int:
     else:
         with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
             future_map = {
-                pool.submit(_rescore_task, task, gnina_exe, cnn_model, args.overwrite): task for task in tasks
+                pool.submit(
+                    _rescore_task, task, gnina_exe, cnn_model, args.overwrite
+                ): task
+                for task in tasks
             }
             for future in as_completed(future_map):
                 task = future_map[future]
@@ -995,7 +1085,9 @@ def main() -> int:
                         task.base,
                         exc,
                     )
-                results_by_combo[(task.context.pdb_id, task.context.variant, task.context.ph)].append(row)
+                results_by_combo[
+                    (task.context.pdb_id, task.context.variant, task.context.ph)
+                ].append(row)
                 if row.get("status") == "failed":
                     failed_jobs += 1
                 else:

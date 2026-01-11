@@ -179,7 +179,9 @@ def _resolve_ambertools_prefix(cfg: object | None) -> Optional[str]:
     return None
 
 
-def _select_cpptraj_runner(logger: logging.Logger, cfg: object | None) -> Tuple[Sequence[str], str, str]:
+def _select_cpptraj_runner(
+    logger: logging.Logger, cfg: object | None
+) -> Tuple[Sequence[str], str, str]:
     prefix_value = _resolve_ambertools_prefix(cfg)
     if prefix_value:
         prefix = Path(prefix_value).expanduser()
@@ -193,7 +195,9 @@ def _select_cpptraj_runner(logger: logging.Logger, cfg: object | None) -> Tuple[
         elif _prefix_has_tool(prefix, "cpptraj"):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run cpptraj from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run cpptraj from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "cpptraj", f"prefix:{prefix}"
         else:
@@ -217,7 +221,9 @@ def _select_cpptraj_runner(logger: logging.Logger, cfg: object | None) -> Tuple[
         if _prefix_has_tool(prefix, "cpptraj") and not _looks_like_pkgs_cache(prefix):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run cpptraj from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run cpptraj from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "cpptraj", f"prefix:{prefix}"
 
@@ -243,9 +249,16 @@ def _select_sander_runner(
                 if _prefix_has_tool(prefix, tool):
                     micromamba = _resolve_micromamba()
                     if not micromamba:
-                        raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
+                        raise FileNotFoundError(
+                            "micromamba not found; cannot run sander from prefix"
+                        )
                     runner = [str(micromamba), "run", "-p", str(prefix)]
-                    return runner, str((prefix / "bin" / tool)), f"prefix:{prefix}", prefix
+                    return (
+                        runner,
+                        str((prefix / "bin" / tool)),
+                        f"prefix:{prefix}",
+                        prefix,
+                    )
             _log(
                 logger,
                 "WARNING",
@@ -264,28 +277,51 @@ def _select_sander_runner(
         Path("/home/michael/atlas/micromamba/envs/AmberTools25"),
     ]
     for prefix in common_prefixes:
-        if _prefix_has_tool(prefix, tool_order[0]) and not _looks_like_pkgs_cache(prefix):
+        if _prefix_has_tool(prefix, tool_order[0]) and not _looks_like_pkgs_cache(
+            prefix
+        ):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run sander from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
-            return runner, str((prefix / "bin" / tool_order[0])), f"prefix:{prefix}", prefix
-        if _prefix_has_tool(prefix, tool_order[1]) and not _looks_like_pkgs_cache(prefix):
+            return (
+                runner,
+                str((prefix / "bin" / tool_order[0])),
+                f"prefix:{prefix}",
+                prefix,
+            )
+        if _prefix_has_tool(prefix, tool_order[1]) and not _looks_like_pkgs_cache(
+            prefix
+        ):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run sander from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run sander from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
-            return runner, str((prefix / "bin" / tool_order[1])), f"prefix:{prefix}", prefix
+            return (
+                runner,
+                str((prefix / "bin" / tool_order[1])),
+                f"prefix:{prefix}",
+                prefix,
+            )
 
     raise FileNotFoundError("could not locate sander; set AMBERTOOLS_PREFIX or PATH")
 
 
 def _format_restraint_block(cfg: object | None) -> List[str]:
-    restrain = _to_bool(_cfg_get(cfg, "MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY", True), default=True)
+    restrain = _to_bool(
+        _cfg_get(cfg, "MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY", True), default=True
+    )
     if not restrain:
         return []
     wt = _to_float(_cfg_get(cfg, "MMGBSA_MD_RESTRAINT_WT", 5.0), 5.0)
-    mask = str(_cfg_get(cfg, "MMGBSA_MD_RESTRAINT_MASK", ":1-999999 & !@H=") or ":1-999999 & !@H=")
+    mask = str(
+        _cfg_get(cfg, "MMGBSA_MD_RESTRAINT_MASK", ":1-999999 & !@H=")
+        or ":1-999999 & !@H="
+    )
     return [
         " ntr=1,",
         f" restraint_wt={wt:.3f},",
@@ -344,7 +380,15 @@ def _select_mpi_launcher(
         for name in prefer:
             try:
                 proc = subprocess.run(
-                    [str(micromamba), "run", "-p", str(prefix_path), "bash", "-lc", f"command -v {name}"],
+                    [
+                        str(micromamba),
+                        "run",
+                        "-p",
+                        str(prefix_path),
+                        "bash",
+                        "-lc",
+                        f"command -v {name}",
+                    ],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -395,7 +439,9 @@ def _run_mpi_smoke(
 
     cmd_path.write_text(" ".join(cmd), encoding="utf-8")
     with log_path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.run(cmd, stdout=handle, stderr=subprocess.STDOUT, cwd=str(smoke_dir))
+        proc = subprocess.run(
+            cmd, stdout=handle, stderr=subprocess.STDOUT, cwd=str(smoke_dir)
+        )
 
     log_text = ""
     try:
@@ -450,7 +496,9 @@ def build_sander_inputs(cfg: object | None) -> Dict[str, str]:
     igb = _to_int(_cfg_get(cfg, "MMGBSA_MD_IGB", 5), 5)
     saltcon = _to_float(_cfg_get(cfg, "MMGBSA_MD_SALTCON", 0.150), 0.150)
     frame_stride_ps = _to_float(_cfg_get(cfg, "MMGBSA_MD_FRAME_STRIDE_PS", 2.0), 2.0)
-    traj_format = str(_cfg_get(cfg, "MMGBSA_MD_TRAJ_FORMAT", "nc") or "nc").strip().lower()
+    traj_format = (
+        str(_cfg_get(cfg, "MMGBSA_MD_TRAJ_FORMAT", "nc") or "nc").strip().lower()
+    )
 
     heat_steps = _compute_steps(heat_ps, dt_ps)
     equil_steps = _compute_steps(equil_ps, dt_ps)
@@ -630,7 +678,9 @@ def _run_cpptraj_impl(
 
     cfg = load_config()
     cmd_prefix, cpptraj_bin, source = _select_cpptraj_runner(logger, cfg)
-    cpptraj_arg = cpptraj_path.name if cpptraj_path.parent == work_path else str(cpptraj_path)
+    cpptraj_arg = (
+        cpptraj_path.name if cpptraj_path.parent == work_path else str(cpptraj_path)
+    )
     cmd = list(cmd_prefix) + [cpptraj_bin, "-i", cpptraj_arg]
     log_path = work_path / "cpptraj.log"
 
@@ -660,7 +710,9 @@ def _run_cpptraj_impl(
             result["ok"] = runner_result == 0
     else:
         with log_path.open("w", encoding="utf-8") as handle:
-            proc = subprocess.run(cmd, cwd=str(work_path), stdout=handle, stderr=subprocess.STDOUT)
+            proc = subprocess.run(
+                cmd, cwd=str(work_path), stdout=handle, stderr=subprocess.STDOUT
+            )
         result["returncode"] = proc.returncode
         result["ok"] = proc.returncode == 0
 
@@ -668,8 +720,15 @@ def _run_cpptraj_impl(
     result["trajout_path"] = str(trajout_path) if trajout_path else ""
 
     if not result["ok"]:
-        _log(logger, "ERROR", {"returncode": result["returncode"], "log": log_path}, "cpptraj_failed")
-        raise RuntimeError(f"cpptraj failed (code={result['returncode']}); see {log_path}")
+        _log(
+            logger,
+            "ERROR",
+            {"returncode": result["returncode"], "log": log_path},
+            "cpptraj_failed",
+        )
+        raise RuntimeError(
+            f"cpptraj failed (code={result['returncode']}); see {log_path}"
+        )
 
     _log(logger, "INFO", {"ok": "true", "log": log_path}, "cpptraj_done")
     return result
@@ -708,7 +767,9 @@ def run_implicit_md(
     inpcrd_path = Path(complex_inpcrd)
     base_dir = Path(out_dir)
 
-    engine = str(_cfg_get(cfg, "MMGBSA_MD_ENGINE", "sander") or "sander").strip().lower()
+    engine = (
+        str(_cfg_get(cfg, "MMGBSA_MD_ENGINE", "sander") or "sander").strip().lower()
+    )
     if engine != "sander":
         raise ValueError(f"MMGBSA_MD_ENGINE must be sander (got {engine})")
 
@@ -722,7 +783,9 @@ def run_implicit_md(
     md_dir.mkdir(parents=True, exist_ok=True)
 
     traj_name = str(_cfg_get(cfg, "MMGBSA_MD_TRAJ_NAME", "prod.nc") or "prod.nc")
-    traj_format = str(_cfg_get(cfg, "MMGBSA_MD_TRAJ_FORMAT", "nc") or "nc").strip().lower()
+    traj_format = (
+        str(_cfg_get(cfg, "MMGBSA_MD_TRAJ_FORMAT", "nc") or "nc").strip().lower()
+    )
     traj_path = md_dir / traj_name
 
     dt_ps = _to_float(_cfg_get(cfg, "MMGBSA_MD_DT_PS", 0.002), 0.002)
@@ -775,13 +838,19 @@ def run_implicit_md(
         )
         return _result({"ok": False, "run": False, "skipped": True})
 
-    def _extract(selection_obj: Sequence[object]) -> Tuple[Sequence[str], str, str, Optional[Path]]:
+    def _extract(
+        selection_obj: Sequence[object],
+    ) -> Tuple[Sequence[str], str, str, Optional[Path]]:
         if len(selection_obj) == 3:
             return selection_obj[0], selection_obj[1], selection_obj[2], None
         return selection_obj  # type: ignore[return-value]
 
-    cmd_prefix, sander_bin, source, amber_prefix = _extract(_select_sander_runner(logger, cfg))
-    sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+    cmd_prefix, sander_bin, source, amber_prefix = _extract(
+        _select_sander_runner(logger, cfg)
+    )
+    sander_path = (
+        str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+    )
     micromamba = _resolve_micromamba()
     mpi_launcher = ""
     launcher_source = ""
@@ -794,16 +863,29 @@ def run_implicit_md(
             _log(
                 logger,
                 "WARNING",
-                {"reason": "missing_mpi_launcher", "fallback": "sander", "source": source},
+                {
+                    "reason": "missing_mpi_launcher",
+                    "fallback": "sander",
+                    "source": source,
+                },
                 "md_mpi_disabled",
                 component=_COMPONENT_MD,
             )
-            cmd_prefix, sander_bin, source, amber_prefix = _extract(_select_sander_runner(logger, cfg, prefer_mpi=False))
-            sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+            cmd_prefix, sander_bin, source, amber_prefix = _extract(
+                _select_sander_runner(logger, cfg, prefer_mpi=False)
+            )
+            sander_path = (
+                str(Path(sander_bin).resolve())
+                if Path(sander_bin).exists()
+                else sander_bin
+            )
             use_mpi = False
             mpi_ranks = 1
         else:
-            if amber_prefix and amber_prefix not in Path(mpi_launcher).resolve().parents:
+            if (
+                amber_prefix
+                and amber_prefix not in Path(mpi_launcher).resolve().parents
+            ):
                 _log(
                     logger,
                     "WARNING",
@@ -819,7 +901,11 @@ def run_implicit_md(
                 cmd_prefix, sander_bin, source, amber_prefix = _extract(
                     _select_sander_runner(logger, cfg, prefer_mpi=False)
                 )
-                sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+                sander_path = (
+                    str(Path(sander_bin).resolve())
+                    if Path(sander_bin).exists()
+                    else sander_bin
+                )
                 use_mpi = False
                 mpi_ranks = 1
                 mpi_launcher = ""
@@ -838,7 +924,11 @@ def run_implicit_md(
                     cmd_prefix, sander_bin, source, amber_prefix = _extract(
                         _select_sander_runner(logger, cfg, prefer_mpi=False)
                     )
-                    sander_path = str(Path(sander_bin).resolve()) if Path(sander_bin).exists() else sander_bin
+                    sander_path = (
+                        str(Path(sander_bin).resolve())
+                        if Path(sander_bin).exists()
+                        else sander_bin
+                    )
                     use_mpi = False
                     mpi_ranks = 1
                     mpi_launcher = ""
@@ -873,7 +963,9 @@ def run_implicit_md(
         component=_COMPONENT_MD,
     )
 
-    restrain = _to_bool(_cfg_get(cfg, "MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY", True), default=True)
+    restrain = _to_bool(
+        _cfg_get(cfg, "MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY", True), default=True
+    )
     prmtop_rel = os.path.relpath(prmtop_path, md_dir)
     inpcrd_rel = os.path.relpath(inpcrd_path, md_dir)
 
@@ -941,15 +1033,21 @@ def run_implicit_md(
         )
 
         with launch_log.open("w", encoding="utf-8") as handle:
-            proc = subprocess.run(cmd, cwd=str(md_dir), stdout=handle, stderr=subprocess.STDOUT)
+            proc = subprocess.run(
+                cmd, cwd=str(md_dir), stdout=handle, stderr=subprocess.STDOUT
+            )
 
         if proc.returncode != 0:
             snippet = ""
             try:
-                lines = launch_log.read_text(encoding="utf-8", errors="ignore").splitlines()
+                lines = launch_log.read_text(
+                    encoding="utf-8", errors="ignore"
+                ).splitlines()
                 head = lines[:5]
                 tail = lines[-5:] if len(lines) > 5 else []
-                snippet = " | ".join([";".join(head), ";".join(tail)]) if head or tail else ""
+                snippet = (
+                    " | ".join([";".join(head), ";".join(tail)]) if head or tail else ""
+                )
             except Exception:
                 snippet = ""
             _log(
@@ -1021,7 +1119,9 @@ def make_mmgbsa_trajectory(
 
     trajout_name = str(_cfg_get(cfg, "MMGBSA_TRAJOUT_NAME", "mdcrd") or "mdcrd")
     trajout_format = str(_cfg_get(cfg, "MMGBSA_TRAJOUT_FORMAT", "mdcrd") or "mdcrd")
-    trajin_source = str(_cfg_get(cfg, "MMGBSA_TRAJIN_SOURCE", "INPCRD") or "INPCRD").strip().upper()
+    trajin_source = (
+        str(_cfg_get(cfg, "MMGBSA_TRAJIN_SOURCE", "INPCRD") or "INPCRD").strip().upper()
+    )
     trajin_format = str(_cfg_get(cfg, "MMGBSA_TRAJIN_FORMAT", "inpcrd") or "inpcrd")
 
     startframe = _to_int(_cfg_get(cfg, "MMGBSA_TRAJ_STARTFRAME", 1), 1)
@@ -1033,12 +1133,16 @@ def make_mmgbsa_trajectory(
     elif trajin_source == "EXTERNAL":
         trajin_value = str(_cfg_get(cfg, "MMGBSA_TRAJIN_PATH", "") or "")
         if not trajin_value:
-            raise ValueError("MMGBSA_TRAJIN_PATH is required when MMGBSA_TRAJIN_SOURCE=EXTERNAL")
+            raise ValueError(
+                "MMGBSA_TRAJIN_PATH is required when MMGBSA_TRAJIN_SOURCE=EXTERNAL"
+            )
         trajin_path = Path(trajin_value)
         if not trajin_path.exists():
             raise FileNotFoundError(f"external trajin not found: {trajin_path}")
     else:
-        raise ValueError(f"MMGBSA_TRAJIN_SOURCE must be INPCRD or EXTERNAL (got {trajin_source})")
+        raise ValueError(
+            f"MMGBSA_TRAJIN_SOURCE must be INPCRD or EXTERNAL (got {trajin_source})"
+        )
 
     cpptraj_in_path = out_path / "cpptraj_mmgbsa.in"
     trajout_path = out_path / trajout_name
@@ -1058,7 +1162,9 @@ def make_mmgbsa_trajectory(
         trajout_format=trajout_format,
     )
 
-    cpptraj_in_written = write_cpptraj_file(cpptraj_text, str(cpptraj_in_path), force=force)
+    cpptraj_in_written = write_cpptraj_file(
+        cpptraj_text, str(cpptraj_in_path), force=force
+    )
 
     run_flag = _to_bool(_cfg_get(cfg, "MMGBSA_CPPTRAJ_RUN", True), default=True)
     if not run_cpptraj:
@@ -1097,12 +1203,22 @@ def make_mmgbsa_trajectory(
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Generate an MMGBSA trajectory via cpptraj.")
+    parser = argparse.ArgumentParser(
+        description="Generate an MMGBSA trajectory via cpptraj."
+    )
     parser.add_argument("--prmtop", required=True, help="Complex prmtop path.")
     parser.add_argument("--inpcrd", required=True, help="Complex inpcrd path.")
-    parser.add_argument("--out-dir", required=True, help="Output directory for cpptraj input and trajectory.")
-    parser.add_argument("--force", action="store_true", help="Overwrite outputs if present.")
-    parser.add_argument("--no-run", action="store_true", help="Write cpptraj input only.")
+    parser.add_argument(
+        "--out-dir",
+        required=True,
+        help="Output directory for cpptraj input and trajectory.",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Overwrite outputs if present."
+    )
+    parser.add_argument(
+        "--no-run", action="store_true", help="Write cpptraj input only."
+    )
     return parser
 
 
@@ -1122,7 +1238,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             run_cpptraj=not args.no_run,
         )
     except Exception as exc:
-        _log(logger, "ERROR", {"reason": type(exc).__name__, "detail": str(exc)}, "failed")
+        _log(
+            logger,
+            "ERROR",
+            {"reason": type(exc).__name__, "detail": str(exc)},
+            "failed",
+        )
         return 1
     return 0
 

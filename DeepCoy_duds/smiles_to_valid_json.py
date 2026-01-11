@@ -9,11 +9,16 @@ import utils
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Convert SMILES to a DeepCoy-compatible valid JSON file.")
+        description="Convert SMILES to a DeepCoy-compatible valid JSON file."
+    )
     parser.add_argument("--in-smi", required=True, help="Input SMILES file.")
     parser.add_argument("--out-json", required=True, help="Output JSON file.")
-    parser.add_argument("--dataset", default="zinc", help="Dataset name (default: zinc).")
-    parser.add_argument("--max-n", type=int, default=None, help="Maximum number of valid rows to emit.")
+    parser.add_argument(
+        "--dataset", default="zinc", help="Dataset name (default: zinc)."
+    )
+    parser.add_argument(
+        "--max-n", type=int, default=None, help="Maximum number of valid rows to emit."
+    )
     return parser.parse_args()
 
 
@@ -56,14 +61,16 @@ def main():
                 skipped += 1
                 continue
 
-            rows.append({
-                "graph_in": edges,
-                "graph_out": edges,
-                "node_features_in": nodes,
-                "node_features_out": nodes,
-                "smiles_in": smiles,
-                "smiles_out": smiles,
-            })
+            rows.append(
+                {
+                    "graph_in": edges,
+                    "graph_out": edges,
+                    "node_features_in": nodes,
+                    "node_features_out": nodes,
+                    "smiles_in": smiles,
+                    "smiles_out": smiles,
+                }
+            )
 
             if args.max_n is not None and len(rows) >= args.max_n:
                 break

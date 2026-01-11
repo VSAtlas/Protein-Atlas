@@ -26,7 +26,11 @@ def test_bindingdb_parsing_filters_by_cutoff():
 
 def test_chembl_activity_and_molecule_parsing():
     activities = load_fixture("chembl_activity.json")
-    good = [a for a in activities if filter_chembl_activity(a, cutoff_nm=100, allowed_types=["Ki", "Kd", "IC50"])]
+    good = [
+        a
+        for a in activities
+        if filter_chembl_activity(a, cutoff_nm=100, allowed_types=["Ki", "Kd", "IC50"])
+    ]
     assert len(good) == 1
     mol_json = load_fixture("chembl_molecule.json")
     smi = parse_chembl_molecule(mol_json, max_phase=4)

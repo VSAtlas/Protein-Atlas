@@ -36,7 +36,9 @@ def _convert_one_pdbqt_to_mol2(src: Path, dst: Path, logger: logging.Logger) -> 
     return True
 
 
-def _convert_one_pdbqt_to_mol2_worker(arg: Tuple[Path, Path]) -> Tuple[Path, Path, bool, str | None]:
+def _convert_one_pdbqt_to_mol2_worker(
+    arg: Tuple[Path, Path],
+) -> Tuple[Path, Path, bool, str | None]:
     src, dst = arg
     worker_logger = logging.getLogger("ledock.mol2")
     try:
@@ -85,7 +87,9 @@ def mirror_library_to_mol2(
     )
 
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        for src, dst, _converted, err in ex.map(_convert_one_pdbqt_to_mol2_worker, tasks):
+        for src, dst, _converted, err in ex.map(
+            _convert_one_pdbqt_to_mol2_worker, tasks
+        ):
             if err:
                 logger.warning(
                     "[ledock.mol2.error] src=%s dst=%s reason=%s",
@@ -205,7 +209,9 @@ def _canonicalize_ph_key(raw: str | None, pdb_id: str | None = None) -> Optional
         return None
 
     # Normalize degenerate tokens to a stable base key for withH selection.
-    looks_like_path = any(sep in token for sep in ("/", "\\")) or "." in Path(token).name
+    looks_like_path = (
+        any(sep in token for sep in ("/", "\\")) or "." in Path(token).name
+    )
     if looks_like_path:
         token = Path(token).name
         token = Path(token).stem
@@ -339,7 +345,9 @@ def ensure_ledock_receptor(
     Ensure a LePro-processed receptor (pro.pdb) exists for the given target.
     """
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     variant_for_ph = _variant_for_ph(variant_token, legacy_mode)
     ph_token_raw = _normalize_ph_label(ph_label)
     if not ph_token_raw:

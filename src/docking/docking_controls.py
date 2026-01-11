@@ -7,7 +7,7 @@ import os
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Mapping
+from typing import Any, Optional, Tuple, Mapping
 
 import numpy as np
 
@@ -18,6 +18,7 @@ from .run_vina import run_docking_task
 
 from .docking_ligands import _is_readable_ref, compute_rmsd
 from .pose_validation import compute_redock_rmsd
+
 
 def _canonical_ctrl_base_from_stem(stem: str) -> str:
     """
@@ -61,7 +62,10 @@ def build_control_lookup(paths: Paths) -> dict:
     prefs = [".sdf", ".mol2", ".pdb"]
     by_base: dict[str, dict[str, Path]] = {}
 
-    search_dirs = [paths.ligand_output_dir, paths.ligand_output_dir.parent / "reference"]
+    search_dirs = [
+        paths.ligand_output_dir,
+        paths.ligand_output_dir.parent / "reference",
+    ]
     for root in search_dirs:
         if not root.exists():
             continue
@@ -97,7 +101,9 @@ def receptor_sanity_check(receptor_pdbqt: str, min_atoms: int = 10) -> bool:
                 if (ln.startswith("ATOM") or ln.startswith("HETATM")) and len(ln) >= 54:
                     atoms += 1
                     try:
-                        x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                        x = float(ln[30:38])
+                        y = float(ln[38:46])
+                        z = float(ln[46:54])
                         if (abs(x) + abs(y) + abs(z)) > 0.0:
                             any_nonzero = True
                     except Exception:
@@ -129,7 +135,9 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
     nolig_dst = paths.nolig_pdb_path
     ligands_dir = paths.ligand_output_dir
 
-    logger.debug("[extract.debug] in=%s nolig=%s ldir=%s", src_pdb, nolig_dst, ligands_dir)
+    logger.debug(
+        "[extract.debug] in=%s nolig=%s ldir=%s", src_pdb, nolig_dst, ligands_dir
+    )
 
     ligands_dict, _ = extract_and_remove_ligands(
         str(src_pdb), str(nolig_dst), str(ligands_dir)
@@ -157,8 +165,6 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
     return len(control_stems), control_stems
 
 
-
-
 def _ph_control_centroid(paths: Paths) -> Optional[Tuple[float, float, float]]:
     try:
         primary = paths.ligand_output_dir
@@ -167,11 +173,13 @@ def _ph_control_centroid(paths: Paths) -> Optional[Tuple[float, float, float]]:
     roots = []
     if primary is not None:
         roots.append(primary)
-        legacy = primary.parent.parent / f"{paths.pdb_id}_NOLIG" / 'ligands_raw'
+        legacy = primary.parent.parent / f"{paths.pdb_id}_NOLIG" / "ligands_raw"
         roots.append(legacy)
     else:
-        roots.append(paths.root_pdb_dir / 'ligands_raw')
-        roots.append(paths.root_pdb_dir.parent / f"{paths.pdb_id}_NOLIG" / 'ligands_raw')
+        roots.append(paths.root_pdb_dir / "ligands_raw")
+        roots.append(
+            paths.root_pdb_dir.parent / f"{paths.pdb_id}_NOLIG" / "ligands_raw"
+        )
     centroids = []
     seen = set()
     for root in roots:
@@ -182,12 +190,12 @@ def _ph_control_centroid(paths: Paths) -> Optional[Tuple[float, float, float]]:
         if key in seen or not root.exists():
             continue
         seen.add(key)
-        for pdb_path in sorted(root.glob('*.pdb')):
+        for pdb_path in sorted(root.glob("*.pdb")):
             xs = ys = zs = count = 0.0
             try:
-                with open(pdb_path, 'r', encoding='utf-8', errors='ignore') as fh:
+                with open(pdb_path, "r", encoding="utf-8", errors="ignore") as fh:
                     for line in fh:
-                        if not line.startswith(('ATOM  ', 'HETATM')):
+                        if not line.startswith(("ATOM  ", "HETATM")):
                             continue
                         try:
                             xs += float(line[30:38])
@@ -202,37 +210,47 @@ def _ph_control_centroid(paths: Paths) -> Optional[Tuple[float, float, float]]:
                 centroids.append((xs / count, ys / count, zs / count))
     if centroids:
         n = float(len(centroids))
-        return (sum(x for x, _, _ in centroids) / n,
-                sum(y for _, y, _ in centroids) / n,
-                sum(z for _, _, z in centroids) / n)
+        return (
+            sum(x for x, _, _ in centroids) / n,
+            sum(y for _, y, _ in centroids) / n,
+            sum(z for _, _, z in centroids) / n,
+        )
     return None
 
 
 # pH helpers  ----------------------
-def _resolve_ph_scope(scope_cfg: str, radius_nominal: float, paths: Paths, cleaned_pdb: str, log: logging.Logger) -> Tuple[str, Tuple[float, float, float], float]:
-    scope = (scope_cfg or '').strip().lower()
+def _resolve_ph_scope(
+    scope_cfg: str,
+    radius_nominal: float,
+    paths: Paths,
+    cleaned_pdb: str,
+    log: logging.Logger,
+) -> Tuple[str, Tuple[float, float, float], float]:
+    scope = (scope_cfg or "").strip().lower()
     try:
         radius = float(radius_nominal)
     except Exception:
         radius = 10.0
     if radius <= 0:
         radius = 10.0
-    if scope == 'pocket':
+    if scope == "pocket":
         center = _ph_control_centroid(paths)
         if center is None:
             try:
                 detect_res = detect_active_site(cleaned_pdb)
             except Exception as exc:
-                log.debug('[ph_ensemble.scope] detect_active_site failed: %s', exc)
+                log.debug("[ph_ensemble.scope] detect_active_site failed: %s", exc)
                 detect_res = None
             if detect_res and detect_res[0]:
                 center = tuple(float(x) for x in detect_res[0])
         if center is None:
-            log.warning('[ph_ensemble.scope] pocket requested but no center found; fallback=global')
-            return 'global', (0.0, 0.0, 0.0), 1_000_000.0
+            log.warning(
+                "[ph_ensemble.scope] pocket requested but no center found; fallback=global"
+            )
+            return "global", (0.0, 0.0, 0.0), 1_000_000.0
         cx, cy, cz = (float(center[0]), float(center[1]), float(center[2]))
-        return 'pocket', (cx, cy, cz), radius
-    return 'global', (0.0, 0.0, 0.0), 1_000_000.0
+        return "pocket", (cx, cy, cz), radius
+    return "global", (0.0, 0.0, 0.0), 1_000_000.0
 
 
 def _ph_values_from_context(pdb_path: str) -> list[float]:
@@ -243,10 +261,11 @@ def _ph_values_from_context(pdb_path: str) -> list[float]:
     vals = []
     try:
         from path_router.context_ph import select_ph_values_for_protonation
+
         raw = select_ph_values_for_protonation(pdb_path)  # returns ensemble or [target]
         logging.info(f"[ph.ctx.list] taken_from_context={raw}")
 
-        for x in (raw or []):
+        for x in raw or []:
             # round & clamp
             v = max(3.0, min(10.5, round(float(x), 1)))
             vals.append(v)
@@ -281,8 +300,9 @@ def _ph_ligand_mode(cfg: Mapping[str, Any]) -> str:
 # ----------------------
 
 
-
-def _ensure_ctrl_vina_manifest(cfg, paths, stage_name, variant_token, ph_label, legacy_mode, logger):
+def _ensure_ctrl_vina_manifest(
+    cfg, paths, stage_name, variant_token, ph_label, legacy_mode, logger
+):
     run_id = cfg["RUN_ID"]
     stage_dir = paths.configs_stage_dir(run_id, variant_token, stage_name, ph_label)
     manifest_path = stage_dir / "vina.json"
@@ -529,26 +549,37 @@ def select_center_via_control_redock(
         try:
             with open(p, "r", encoding="utf-8", errors="ignore") as f:
                 for ln in f:
-                    if ln.startswith(("ATOM","HETATM")):
+                    if ln.startswith(("ATOM", "HETATM")):
                         try:
-                            xs.append(float(ln[30:38])); ys.append(float(ln[38:46])); zs.append(float(ln[46:54]))
+                            xs.append(float(ln[30:38]))
+                            ys.append(float(ln[38:46]))
+                            zs.append(float(ln[46:54]))
                         except Exception:
                             continue
         except Exception:
             return None
-        if not xs: return None
+        if not xs:
+            return None
         return (float(_np.mean(xs)), float(_np.mean(ys)), float(_np.mean(zs)))
 
     # discover crystal controls in preferred locations (current + legacy sibling)
     ctrl_pdbs = _find_control_pdbs(paths.ligand_output_dir)
-    logger.info(f"[control-redock] controls_found={len(ctrl_pdbs)} dir={paths.ligand_output_dir}")
+    logger.info(
+        f"[control-redock] controls_found={len(ctrl_pdbs)} dir={paths.ligand_output_dir}"
+    )
     if not ctrl_pdbs:
-        legacy = paths.ligand_output_dir.parent.parent / f"{paths.pdb_id}_NOLIG" / "ligands_raw"
+        legacy = (
+            paths.ligand_output_dir.parent.parent
+            / f"{paths.pdb_id}_NOLIG"
+            / "ligands_raw"
+        )
         if legacy.exists():
             ctrl_pdbs = _find_control_pdbs(legacy)
 
     if not ctrl_pdbs:
-        logger.warning("[control-redock] No extracted control PDBs present; skipping redock.")
+        logger.warning(
+            "[control-redock] No extracted control PDBs present; skipping redock."
+        )
         return None, None  # let caller go to P2Rank directly if no control
     # Map base control name -> extracted crystal PDB (for Kabsch RMSD)
     ctrl_pdb_map: dict[str, _Path] = {}
@@ -561,10 +592,13 @@ def select_center_via_control_redock(
         except Exception:
             continue
 
-
     policy = str(cfg.get("CONTROL_CENTER_POLICY", "best_redock")).lower().strip()
-    variant_env = variant if variant is not None else (os.environ.get("APO_HOLO_VARIANT", "") or "")
-    variant_token = (str(variant_env).strip().upper() or None)
+    variant_env = (
+        variant
+        if variant is not None
+        else (os.environ.get("APO_HOLO_VARIANT", "") or "")
+    )
+    variant_token = str(variant_env).strip().upper() or None
     ph_label = str(ph_token).strip() if ph_token is not None else None
     legacy_mode = bool(legacy)
     thr = float(cfg.get("CONTROL_CENTER_CLOSE_MAX_A", 8.0))
@@ -579,58 +613,83 @@ def select_center_via_control_redock(
 
     bases = list(centroids.keys())
     coords = [centroids[b] for b in bases]
-    def _dist(a,b):
-        return float(((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2) ** 0.5)
+
+    def _dist(a, b):
+        return float(
+            ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+        )
+
     max_delta = 0.0
     for i in range(len(coords)):
-        for j in range(i+1, len(coords)):
+        for j in range(i + 1, len(coords)):
             d = _dist(coords[i], coords[j])
-            if d > max_delta: max_delta = d
+            if d > max_delta:
+                max_delta = d
 
     if not coords:
-        raise RuntimeError("[control-centers] No control centroids available; cannot select center.")
-    logger.info(f"[control-centers] n={len(coords)} max?={max_delta:.2f}A policy={policy} thr={thr:.2f}A")
+        raise RuntimeError(
+            "[control-centers] No control centroids available; cannot select center."
+        )
+    logger.info(
+        f"[control-centers] n={len(coords)} max?={max_delta:.2f}A policy={policy} thr={thr:.2f}A"
+    )
     for b, c in zip(bases, coords):
         logger.debug(f"[control-centers] {b}: ({c[0]:.3f},{c[1]:.3f},{c[2]:.3f})")
 
     # single-control or simple policies
     if len(coords) == 1 and policy != "best_redock":
         center = coords[0]
-        logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
-        return center, (24.0,24.0,24.0)
+        logger.info(
+            f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)"
+        )
+        return center, (24.0, 24.0, 24.0)
 
     if policy == "first":
         center = coords[0]
-        logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
-        return center, (24.0,24.0,24.0)
+        logger.info(
+            f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)"
+        )
+        return center, (24.0, 24.0, 24.0)
     # if best_redock, skip consensus short-circuit:
     if policy == "best_redock":
         pass  # fall through to redock block below
 
     elif max_delta <= thr:
         # consensus average when controls are close
-        c = (float(_np.mean([x for x,_,_ in coords])),
-             float(_np.mean([y for _,y,_ in coords])),
-             float(_np.mean([z for _,_,z in coords])))
-        logger.info(f"[Control-center] chosen=consensus center=({c[0]:.3f},{c[1]:.3f},{c[2]:.3f}) box=(24,24,24)")
-        return c, (24.0,24.0,24.0)
+        c = (
+            float(_np.mean([x for x, _, _ in coords])),
+            float(_np.mean([y for _, y, _ in coords])),
+            float(_np.mean([z for _, _, z in coords])),
+        )
+        logger.info(
+            f"[Control-center] chosen=consensus center=({c[0]:.3f},{c[1]:.3f},{c[2]:.3f}) box=(24,24,24)"
+        )
+        return c, (24.0, 24.0, 24.0)
 
     elif policy == "average_when_close":
         # far apart ? fall back to first per spec
         center = coords[0]
-        logger.info(f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)")
-        return center, (24.0,24.0,24.0)
+        logger.info(
+            f"[Control-center] chosen={bases[0]} center=({center[0]:.3f},{center[1]:.3f},{center[2]:.3f}) box=(24,24,24)"
+        )
+        return center, (24.0, 24.0, 24.0)
 
     # best_redock path (controls far apart)
     control_lookup = build_control_lookup(paths)  # base -> reference path
     # collect prepped control pdbqts (per-protein dir and global output dir)
-    prepped_dirs = [paths.prepped_ligands_dir, _Path(str(cfg.get("OUTPUT_LIGANDS_DIR", ""))) / paths.pdb_id]
+    prepped_dirs = [
+        paths.prepped_ligands_dir,
+        _Path(str(cfg.get("OUTPUT_LIGANDS_DIR", ""))) / paths.pdb_id,
+    ]
     cand_pdbqts = []
-    logger.info(f"[control-redock] search_prepped_dirs={[str(d) for d in prepped_dirs]}")
-
+    logger.info(
+        f"[control-redock] search_prepped_dirs={[str(d) for d in prepped_dirs]}"
+    )
 
     logger.info(f"[control-redock.debug] centroids_keys={list(centroids.keys())}")
-    logger.info(f"[control-redock.debug] control_lookup_keys={list(control_lookup.keys())}")
+    logger.info(
+        f"[control-redock.debug] control_lookup_keys={list(control_lookup.keys())}"
+    )
 
     seen = set()
     for root in prepped_dirs:
@@ -640,7 +699,11 @@ def select_center_via_control_redock(
         if not root_path.exists():
             continue
         pdbqt_files = list(root_path.glob("*.pdbqt"))
-        logger.info("[control-redock] prepped_pdbqt_count dir=%s count=%d", root_path, len(pdbqt_files))
+        logger.info(
+            "[control-redock] prepped_pdbqt_count dir=%s count=%d",
+            root_path,
+            len(pdbqt_files),
+        )
         # Find all PDBQTs, then group by base to pick the best variant
         candidates_by_base: dict[str, list[_Path]] = {}
         for p in pdbqt_files:
@@ -662,7 +725,9 @@ def select_center_via_control_redock(
     logger.info(f"[control-redock] candidates={len(cand_pdbqts)}")
 
     if not cand_pdbqts:
-        logger.warning("[control-redock] No prepped control PDBQTs found; redock impossible (will fall back).")
+        logger.warning(
+            "[control-redock] No prepped control PDBQTs found; redock impossible (will fall back)."
+        )
         return None, None
 
     def _build_ctrl_stage_info() -> dict[str, Any]:
@@ -676,10 +741,11 @@ def select_center_via_control_redock(
             info["exhaustiveness"] = 1
         return info
 
-    threads_per_vina = int(cfg.get("THREADS_PER_VINA_CTRL", 8))  # control redock uses its own threads default=8
+    threads_per_vina = int(
+        cfg.get("THREADS_PER_VINA_CTRL", 8)
+    )  # control redock uses its own threads default=8
     vina_exe = str(cfg.get("VINA_EXE") or cfg.get("VINA_PATH") or "vina")
     obabel = str(cfg.get("OPENBABEL_PATH") or "obabel")
-
 
     best = None  # (rmsd, score, base, center_tuple)
 
@@ -763,23 +829,48 @@ def select_center_via_control_redock(
             rmsd = float("inf")
 
             if best_pdb and ref_path:
-                logger.info(f"[rmsd.debug] ref={ref_path} | {_ctrl_quick_file_sig(str(ref_path))}")
-                logger.info(f"[rmsd.debug] dock={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}")
-                same_file = (Path(ref_path).resolve() == Path(best_pdb).resolve())
+                logger.info(
+                    f"[rmsd.debug] ref={ref_path} | {_ctrl_quick_file_sig(str(ref_path))}"
+                )
+                logger.info(
+                    f"[rmsd.debug] dock={best_pdb} | {_ctrl_quick_file_sig(str(best_pdb))}"
+                )
+                same_file = Path(ref_path).resolve() == Path(best_pdb).resolve()
                 if same_file:
-                    logger.warning("[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected.")
+                    logger.warning(
+                        "[rmsd.debug] ref and dock paths resolve to the same file! RMSD=0.0 is expected."
+                    )
                 try:
                     rmsd = compute_rmsd(str(ref_path), str(best_pdb))
                 except Exception as e:
                     rmsd = float("inf")
                     logger.exception(f"[rmsd.debug] compute_rmsd failed: {e}")
 
-            e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
-            logger.info(f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol")
+            e_print = (
+                best_e
+                if (best_e is not None)
+                else (score if score is not None else float("nan"))
+            )
+            logger.info(
+                f"[control-redock] lig={lig_pdbqt.name} rmsd={rmsd:.2f}A score={e_print if e_print is not None else float('nan')} kcal/mol"
+            )
 
             if _math.isfinite(rmsd):
-                if (best is None) or (rmsd < best[0]) or (rmsd == best[0] and (e_print is not None) and (best[1] is None or e_print < best[1])):
-                    best = (rmsd, e_print if e_print is not None else None, base, center)
+                if (
+                    (best is None)
+                    or (rmsd < best[0])
+                    or (
+                        rmsd == best[0]
+                        and (e_print is not None)
+                        and (best[1] is None or e_print < best[1])
+                    )
+                ):
+                    best = (
+                        rmsd,
+                        e_print if e_print is not None else None,
+                        base,
+                        center,
+                    )
     else:
         cfg_payload = dict(cfg)
         jobs = []
@@ -830,7 +921,9 @@ def select_center_via_control_redock(
         if jobs:
             try:
                 with ProcessPoolExecutor(max_workers=workers) as pool:
-                    future_map = {pool.submit(_ctrl_redock_job, job): job for job in jobs}
+                    future_map = {
+                        pool.submit(_ctrl_redock_job, job): job for job in jobs
+                    }
                     for fut in as_completed(future_map):
                         res = fut.result()
                         results.append(res)
@@ -843,7 +936,9 @@ def select_center_via_control_redock(
                 # A hard failure here should signal the caller to fall back to activesite
                 return None, None
         else:
-            logger.warning("[control-redock] No jobs constructed for ctrl_redock; skipping redock.")
+            logger.warning(
+                "[control-redock] No jobs constructed for ctrl_redock; skipping redock."
+            )
             return None, None
 
         if not results:
@@ -904,7 +999,11 @@ def select_center_via_control_redock(
 
             best_e = res["best_e"]
             score = res["score"]
-            e_print = best_e if (best_e is not None) else (score if score is not None else float("nan"))
+            e_print = (
+                best_e
+                if (best_e is not None)
+                else (score if score is not None else float("nan"))
+            )
             logger.info(
                 f"[control-redock] lig={res['ligand_name']} rmsd={rmsd:.2f}A "
                 f"score={e_print if e_print is not None else float('nan')} kcal/mol"
@@ -920,8 +1019,12 @@ def select_center_via_control_redock(
                         and (best[1] is None or e_print < best[1])
                     )
                 ):
-                    best = (rmsd, e_print if e_print is not None else None, base, center)
-
+                    best = (
+                        rmsd,
+                        e_print if e_print is not None else None,
+                        base,
+                        center,
+                    )
 
     if best is None:
         return None, None
@@ -945,6 +1048,7 @@ def select_center_via_control_redock(
             pass
         try:
             from rdkit import Chem as _Chem
+
             mol = None
             if ext in {"sdf", "mol"}:
                 suppl = _Chem.SDMolSupplier(str(ref_path))
@@ -975,21 +1079,27 @@ def select_center_via_control_redock(
                 bool(fb_smiles),
             )
 
-    logger.info(f"[Control-center] chosen={best[2]} center=({chosen_center[0]:.3f},{chosen_center[1]:.3f},{chosen_center[2]:.3f})")
-    #BOX SIZE SPECIFIED HERE, NEED TO EDIT THIS TO CALCULATE BOX SIZE, LARGE BOX  SIZES DECREASE VINA  ACCURACY 
-    return chosen_center, (24.0,24.0,24.0)
+    logger.info(
+        f"[Control-center] chosen={best[2]} center=({chosen_center[0]:.3f},{chosen_center[1]:.3f},{chosen_center[2]:.3f})"
+    )
+    # BOX SIZE SPECIFIED HERE, NEED TO EDIT THIS TO CALCULATE BOX SIZE, LARGE BOX  SIZES DECREASE VINA  ACCURACY
+    return chosen_center, (24.0, 24.0, 24.0)
 
-def detect_pocket(cleaned_pdb: str,
-                  ligand_dir: Path,
-                  logger: logging.Logger) -> Tuple[
-    Optional[Tuple[float,float,float]],
-    Optional[Tuple[float,float,float]],
-    str  # source ("control" | "ligand_top" | "p2rank" | "activesite" | "none")
+
+def detect_pocket(
+    cleaned_pdb: str, ligand_dir: Path, logger: logging.Logger
+) -> Tuple[
+    Optional[Tuple[float, float, float]],
+    Optional[Tuple[float, float, float]],
+    str,  # source ("control" | "ligand_top" | "p2rank" | "activesite" | "none")
 ]:
     """
     Prefer control ligands for docking center/box. If none, fall back to the active-site module.
     """
-    def _his_counts_within(pdb_path: str, center_xyz: tuple[float,float,float], r: float = 6.0) -> tuple[int,int,int]:
+
+    def _his_counts_within(
+        pdb_path: str, center_xyz: tuple[float, float, float], r: float = 6.0
+    ) -> tuple[int, int, int]:
         HID = HIE = HIP = 0
         try:
             with open(pdb_path, "r", encoding="utf-8", errors="ignore") as fh:
@@ -999,21 +1109,26 @@ def detect_pocket(cleaned_pdb: str,
                     if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
                         continue
                     res = ln[17:20].strip().upper()  # residue name
-                    if res not in {"HID","HIE","HIP"}:
+                    if res not in {"HID", "HIE", "HIP"}:
                         continue
                     try:
-                        x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                        x = float(ln[30:38])
+                        y = float(ln[38:46])
+                        z = float(ln[46:54])
                     except Exception:
                         continue
-                    if (x-cx)**2 + (y-cy)**2 + (z-cz)**2 <= r*r:
+                    if (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2 <= r * r:
                         # key by (chain, resseq, resname) so we count each residue once
                         key = (ln[21].strip(), ln[22:26].strip(), res)
                         if key in seen:
                             continue
                         seen.add(key)
-                        if res == "HID": HID += 1
-                        elif res == "HIE": HIE += 1
-                        elif res == "HIP": HIP += 1
+                        if res == "HID":
+                            HID += 1
+                        elif res == "HIE":
+                            HIE += 1
+                        elif res == "HIP":
+                            HIP += 1
         except Exception:
             pass
         return HID, HIE, HIP
@@ -1023,14 +1138,17 @@ def detect_pocket(cleaned_pdb: str,
 
     # 1) Controls check in canonical ligands_raw
     ctrl_files = find_control_pdbs(ligand_dir)
+
     # --- AUDIT: summarize control centroids & policy ---
-    def _centroid_of_pdb(p: Path) -> tuple[float,float,float] | None:
+    def _centroid_of_pdb(p: Path) -> tuple[float, float, float] | None:
         xs, ys, zs = [], [], []
         try:
             with open(p, "r", encoding="utf-8", errors="ignore") as fh:
                 for ln in fh:
-                    if ln.startswith(("ATOM","HETATM")) and len(ln) >= 54:
-                        xs.append(float(ln[30:38])); ys.append(float(ln[38:46])); zs.append(float(ln[46:54]))
+                    if ln.startswith(("ATOM", "HETATM")) and len(ln) >= 54:
+                        xs.append(float(ln[30:38]))
+                        ys.append(float(ln[38:46]))
+                        zs.append(float(ln[46:54]))
         except Exception:
             return None
         if xs:
@@ -1041,14 +1159,17 @@ def detect_pocket(cleaned_pdb: str,
     dmax = 0.0
     if len(centers) >= 2:
         for i in range(len(centers)):
-            for j in range(i+1, len(centers)):
+            for j in range(i + 1, len(centers)):
                 dx = centers[i][0] - centers[j][0]
                 dy = centers[i][1] - centers[j][1]
                 dz = centers[i][2] - centers[j][2]
-                d = float((dx*dx + dy*dy + dz*dz) ** 0.5)
-                if d > dmax: dmax = d
+                d = float((dx * dx + dy * dy + dz * dz) ** 0.5)
+                if d > dmax:
+                    dmax = d
     policy = "first" if ctrl_files else "activesite"
-    logger.info("[control-centers] n=%d max?=%.2f A policy=%s", len(ctrl_files), dmax, policy)
+    logger.info(
+        "[control-centers] n=%d max?=%.2f A policy=%s", len(ctrl_files), dmax, policy
+    )
 
     # Back-compat (read-only): if none found, check legacy sibling <PDB>_NOLIG/ligands_raw
     if not ctrl_files:
@@ -1058,24 +1179,36 @@ def detect_pocket(cleaned_pdb: str,
         if legacy.exists():
             ctrl_files = find_control_pdbs(legacy)
             if ctrl_files:
-                logger.info(f"[Control-center] Found controls in legacy sibling: {legacy}")
+                logger.info(
+                    f"[Control-center] Found controls in legacy sibling: {legacy}"
+                )
 
     if ctrl_files:
         p = ctrl_files[0]
         xs, ys, zs = [], [], []
         with open(p, "r", encoding="utf-8", errors="ignore") as f:
             for ln in f:
-                if ln.startswith(("ATOM","HETATM")):
+                if ln.startswith(("ATOM", "HETATM")):
                     try:
-                        x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
-                        xs.append(x); ys.append(y); zs.append(z)
+                        x = float(ln[30:38])
+                        y = float(ln[38:46])
+                        z = float(ln[46:54])
+                        xs.append(x)
+                        ys.append(y)
+                        zs.append(z)
                     except ValueError:
                         continue
         if xs:
             ctrl_center = (float(np.mean(xs)), float(np.mean(ys)), float(np.mean(zs)))
             box_size = (24.0, 24.0, 24.0)
             hid, hie, hip = _his_counts_within(cleaned_pdb, ctrl_center, r=6.0)
-            logger.info("[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d", hid, hie, hip, 0)
+            logger.info(
+                "[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d",
+                hid,
+                hie,
+                hip,
+                0,
+            )
             return ctrl_center, box_size, "control"
 
     # 2) Fallback to active-site module (ligand-based or P2Rank)
@@ -1092,13 +1225,25 @@ def detect_pocket(cleaned_pdb: str,
     if center:
         box_size = tuple(min(28.0, float(s)) for s in box_size)
         source = src or "activesite"
-        logger.info("[active-site] Using center %s with box %s source=%s",
-                    center, box_size, source)
+        logger.info(
+            "[active-site] Using center %s with box %s source=%s",
+            center,
+            box_size,
+            source,
+        )
         hid, hie, hip = _his_counts_within(cleaned_pdb, center, r=6.0)
-        logger.info("[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d", hid, hie, hip, 0)
+        logger.info(
+            "[reduce] his={'HID':%d,'HIE':%d,'HIP':%d} flips_near_box=%d",
+            hid,
+            hie,
+            hip,
+            0,
+        )
         return center, box_size, source
     else:
-        logger.error("Active-site detection failed (no controls, active-site returned None).")
+        logger.error(
+            "Active-site detection failed (no controls, active-site returned None)."
+        )
         return None, None, "none"
 
 
@@ -1132,9 +1277,15 @@ def _summarize_ions_file(file_path: Path | str) -> dict[str, object]:
             "error": str(exc),
         }
 
-    hist = ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
-    metals_present = any(token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts)
-    salts_present = any(token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts)
+    hist = (
+        ",".join(f"{tok}:{counts[tok]}" for tok in sorted(counts)) if counts else "none"
+    )
+    metals_present = any(
+        token in _ION_AUDIT_METALS and counts[token] > 0 for token in counts
+    )
+    salts_present = any(
+        token in _ION_AUDIT_SALTS and counts[token] > 0 for token in counts
+    )
     return {
         "hist": hist,
         "counts": dict(counts),

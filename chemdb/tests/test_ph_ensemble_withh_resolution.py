@@ -110,7 +110,9 @@ def test_ensure_ledock_receptor_uses_canonical_withh(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_ph_ensemble_dir(pdb_id: str, variant: str | None = None, legacy: bool = False) -> Path:
+    def fake_ph_ensemble_dir(
+        pdb_id: str, variant: str | None = None, legacy: bool = False
+    ) -> Path:
         return ensemble_dirs[variant or "HOLO"]
 
     def fake_run(cmd, check=False, cwd=None, **_kwargs):
@@ -143,7 +145,9 @@ def test_ensure_dock6_surface_selects_base_withh(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_ph_ensemble_dir(pdb_id: str, variant: str | None = None, legacy: bool = False) -> Path:
+    def fake_ph_ensemble_dir(
+        pdb_id: str, variant: str | None = None, legacy: bool = False
+    ) -> Path:
         return ensemble_dirs[variant or "HOLO"]
 
     def fake_run(cmd, check=False, cwd=None, **_kwargs):
@@ -155,7 +159,12 @@ def test_ensure_dock6_surface_selects_base_withh(
         return SimpleNamespace(returncode=0)
 
     def fake_ensure_dock6_grids(
-        cfg, dock6_root: Path, receptor_pdb: Path, logger, grid_prefix: str, grid_spacing: float
+        cfg,
+        dock6_root: Path,
+        receptor_pdb: Path,
+        logger,
+        grid_prefix: str,
+        grid_spacing: float,
     ) -> Path:
         grid_path = dock6_root / f"{grid_prefix}.nrg"
         grid_path.write_text("GRID")

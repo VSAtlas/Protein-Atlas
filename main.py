@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 HELP_TEXT = """
 Atlas2 multi-stage docking pipeline
 
@@ -209,23 +210,21 @@ Examples:
   python main.py --pdbs "1BN1,2OJ9" --single imatinib
 
 """
-from activesite import extract_and_remove_ligands, get_atom_rules
-import sys, hashlib, re, logging, json, time, os, shutil, re, shlex, subprocess, math, random
-import csv
-import statistics
-from dataclasses import dataclass, field
-import datetime
-import yaml
+from activesite import get_atom_rules
+import sys
+import logging
+import time
+import os
+import shutil
+import shlex
+import subprocess
 from pathlib import Path
-from collections import defaultdict, Counter
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple, Any, Mapping, Sequence
-import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Any, Mapping
 from tqdm import tqdm
 import traceback
 from logging_topics import (
     _tee_stdio_to,
-    make_protein_logger,
     bootstrap_root_logging,
 )
 from run_manifest import (
@@ -240,6 +239,7 @@ from run_manifest import (
     update_manifest_for_run_config,
     update_manifest_for_scheduled_proteins,
 )
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -247,13 +247,10 @@ from input_and_export_functions import (
     load_inputs,
     validate_config,
     define_docking_stages,
-    write_score_summary_to_csv,
-    extract_best_score,
     _to_bool,
     init_config_run_dir,
 )
 from cli.cli_utils import (
-    _normalize_flag_name,
     _cli_val,
     _cli_has,
     _parse_single_from_cli,
@@ -268,38 +265,39 @@ from cli.run_context import (
     ConfigDict,
 )
 from docking.docking_vina import emit_vina_config as _emit_vina_config_impl
-from docking.docking_stage_runner import RetryManager, run_one_stage
-from docking.docking_ligands import select_ligands_for_next, _coerce_test_map, _resolve_test_mode
-from docking.docking_utils import norm, final_pose_validation_and_screenshots
+from docking.docking_ligands import _coerce_test_map, _resolve_test_mode
 from docking.docking import process_one_protein
 from path_router.path_router import (
-    expand_variants,
     make_paths,
     Paths as RouterPaths,
     receptor_file,
     docked_dir,
     config_dir as router_config_dir,
 )
-from prep_ligands.deepcoy_integration import apply_deepcoy_cli_overrides, apply_deepcoy_defaults
+from prep_ligands.deepcoy_integration import (
+    apply_deepcoy_cli_overrides,
+    apply_deepcoy_defaults,
+)
 import post_docking.mmgbsa.mmgbsa_pipeline as mmgbsa_pipeline
-from post_docking.mmgbsa.mmgbsa_pipeline import _maybe_run_mmgbsa_for_pdb, _mmgbsa_effective_md_config, make_mmgbsa_trajectory, run_implicit_md, run_mmgbsa
+from post_docking.mmgbsa.mmgbsa_pipeline import (
+    _maybe_run_mmgbsa_for_pdb,
+    make_mmgbsa_trajectory,
+    run_implicit_md,
+    run_mmgbsa,
+)
 from docking.fallback_recenter import RecenterParams
 from apo_holo_mode import (
     resolve_apo_holo_mode,
     _debug_normalize_mode_token,
-    _variant_receptor_path,
-    file_sha1,
-    delete_variant_trees,
-    _record_apo_holo_usage,
-    _record_apo_holo_decision,
-)
-import automate_protein_prep as protein_prep
-from single_ligand_index import (
-    _ensure_single_ligand_index,
-    _resolve_single_ligand,
 )
 from debug_fs import install_debug_makedirs
-from postrun_hooks import _maybe_run_dud_eval, _maybe_run_scorch_rescore, _log_rescore_verification, _maybe_run_master_schema_export, _maybe_run_report_generation
+from postrun_hooks import (
+    _maybe_run_dud_eval,
+    _maybe_run_scorch_rescore,
+    _log_rescore_verification,
+    _maybe_run_master_schema_export,
+    _maybe_run_report_generation,
+)
 
 # Install debug wrappers for Path.mkdir and os.makedirs at import time,
 # preserving the previous behavior.
@@ -307,7 +305,9 @@ install_debug_makedirs()
 
 
 def _log_cfg_emit_path_check(pdb_id, receptor_path, variant, legacy):
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     variant_label = variant_token or "legacy"
     contains_variant = bool(variant_token and variant_token in str(receptor_path))
     logging.info(
@@ -396,7 +396,9 @@ def _emit_vina_config_skip_manifest(
 ):
     make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
 
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
     legacy_mode = bool(legacy)
 
@@ -533,14 +535,10 @@ def _emit_vina_config_skip_manifest(
     return str(cfg_path), str(out_path)
 
 
-
-
-
-
-
 # >>> PATHS CLASS START
 Paths = RouterPaths
 # >>> PATHS CLASS END
+
 
 # --- Single-ligand ---
 def _mmgbsa_five_replicate_runner(
@@ -577,10 +575,6 @@ def _mmgbsa_five_replicate_runner(
     )
 
 
-
-
-
-
 def get_recenter_params(cfg: Dict) -> RecenterParams:
     """Load recenter parameters from config with safe defaults."""
     return RecenterParams(
@@ -593,14 +587,9 @@ def get_recenter_params(cfg: Dict) -> RecenterParams:
     )
 
 
-
-
-
 # >>> MAKE_PATHS SHIM START
 # make_paths is imported from path_router above (legacy helper removed).
 # >>> MAKE_PATHS SHIM END
-
-
 
 
 def _smoke_emit_config_demo() -> None:
@@ -651,12 +640,19 @@ def _smoke_emit_config_demo() -> None:
         ph_label = "pH6_7"
         os.environ["APO_HOLO_VARIANT"] = "APO"
 
-        receptor_path = receptor_file(paths.pdb_id, variant="APO", ph_tag=ph_label, legacy=False)
+        receptor_path = receptor_file(
+            paths.pdb_id, variant="APO", ph_tag=ph_label, legacy=False
+        )
         receptor_path.parent.mkdir(parents=True, exist_ok=True)
         if not receptor_path.exists():
             receptor_path.write_text("RECEPTOR", encoding="utf-8")
 
-        stage_info = {"name": "smoke_stage", "exhaustiveness": 8, "num_modes": 9, "verbosity": 0}
+        stage_info = {
+            "name": "smoke_stage",
+            "exhaustiveness": 8,
+            "num_modes": 9,
+            "verbosity": 0,
+        }
         conf_path, out_path = emit_vina_config(
             cfg,
             paths.pdb_id,
@@ -727,9 +723,21 @@ def main() -> None:
     alias_sets = getattr(rules, "alias_sets", None)
     waters_set = set(getattr(rules, "waters", set()))
     if not waters_set and alias_sets is not None:
-        waters_set = {str(tok).strip().upper() for tok in getattr(alias_sets, "waters", set()) if str(tok).strip()}
-    cofactors_set = {str(tok).strip().upper() for tok in getattr(rules, "cofactors", set()) if str(tok).strip()}
-    elements_set = {str(tok).strip().upper() for tok in getattr(rules, "elem_tokens_canonical", set()) if str(tok).strip()}
+        waters_set = {
+            str(tok).strip().upper()
+            for tok in getattr(alias_sets, "waters", set())
+            if str(tok).strip()
+        }
+    cofactors_set = {
+        str(tok).strip().upper()
+        for tok in getattr(rules, "cofactors", set())
+        if str(tok).strip()
+    }
+    elements_set = {
+        str(tok).strip().upper()
+        for tok in getattr(rules, "elem_tokens_canonical", set())
+        if str(tok).strip()
+    }
     logging.info(
         "[aliases.summary] mode=%s keep={waters:%d, cofactors:%d, elements:%d}",
         getattr(rules, "policy_mode", "LEGACY"),
@@ -768,7 +776,12 @@ def main() -> None:
         cfg.PH_RADIUS = 10000000.0
 
     log = logging.getLogger("ph_ensemble")
-    log.info("[ph_ensemble.mode] enabled=%s scope=%s radius=%s", cfg.PH_ENSEMBLE, getattr(cfg, "PH_SCOPE", "auto"), getattr(cfg, "PH_RADIUS", 1000000.0))
+    log.info(
+        "[ph_ensemble.mode] enabled=%s scope=%s radius=%s",
+        cfg.PH_ENSEMBLE,
+        getattr(cfg, "PH_SCOPE", "auto"),
+        getattr(cfg, "PH_RADIUS", 1000000.0),
+    )
 
     if is_resume:
         resume_manifest = load_run_manifest(cfg, run_id)
@@ -790,18 +803,24 @@ def main() -> None:
                     logging.info("[resume] using stored argv=%s", parsed_args)
             except Exception:
                 logging.warning(
-                    "[resume] Failed to parse stored argv=%r", stored_argv, exc_info=True
+                    "[resume] Failed to parse stored argv=%r",
+                    stored_argv,
+                    exc_info=True,
                 )
 
         listed = command_section.get("pdb_list") or []
         if isinstance(listed, (list, tuple)):
-            resume_protein_ids.extend(str(x).strip().upper() for x in listed if str(x).strip())
+            resume_protein_ids.extend(
+                str(x).strip().upper() for x in listed if str(x).strip()
+            )
 
         if not resume_protein_ids:
             summary_section = resume_manifest.get("summary") or {}
             summary_list = summary_section.get("total_protein_list") or []
             if isinstance(summary_list, (list, tuple)):
-                resume_protein_ids.extend(str(x).strip().upper() for x in summary_list if str(x).strip())
+                resume_protein_ids.extend(
+                    str(x).strip().upper() for x in summary_list if str(x).strip()
+                )
 
         proteins = resume_manifest.get("proteins") or {}
         aggregated: dict[tuple[str, str], bool] = {}
@@ -816,7 +835,9 @@ def main() -> None:
                     pdb_token = (pdb_part or "").strip().upper()
                     if not pdb_token:
                         continue
-                    variant_token = (variant_part or "legacy").strip().lower() or "legacy"
+                    variant_token = (
+                        variant_part or "legacy"
+                    ).strip().lower() or "legacy"
                     ckey = (pdb_token, variant_token)
                     if not resume_protein_ids:
                         resume_protein_ids.append(pdb_token)
@@ -826,7 +847,10 @@ def main() -> None:
                         aggregated[ckey] = False
                 except Exception:
                     logging.warning(
-                        "[resume.lookup.skip] key=%r entry=%r", key, entry, exc_info=True
+                        "[resume.lookup.skip] key=%r entry=%r",
+                        key,
+                        entry,
+                        exc_info=True,
                     )
 
         completed_lookup = {k: True for k, v in aggregated.items() if v}
@@ -872,7 +896,6 @@ def main() -> None:
     cfg.setdefault("CONFIGS_DIR", str(Path(cfg["OVERALL_DIR"]) / "configs"))
     cfg.setdefault("RESET_CONFIGS", True)
 
-
     # CLI > ENV > CFG
     cli_cfg_dir = _cli_val(argv_for_parsing, "--configs-dir")
     cli_no_reset = _cli_has(argv_for_parsing, "--no-reset-configs")
@@ -885,8 +908,12 @@ def main() -> None:
     elif cli_no_reset:
         cfg["RESET_CONFIGS"] = False
 
-    init_config_run_dir(cfg, run_id=cfg.get("RUN_ID"), reset=cfg.get("RESET_CONFIGS"),
-                        logger=logging.getLogger("run"))
+    init_config_run_dir(
+        cfg,
+        run_id=cfg.get("RUN_ID"),
+        reset=cfg.get("RESET_CONFIGS"),
+        logger=logging.getLogger("run"),
+    )
     print(f"[cfg.run] run_id={cfg['RUN_ID']} run_dir={cfg['CONFIG_RUN_DIR']}")
     print(f"[ph.mode] PH_ENSEMBLE={cfg.get('PH_ENSEMBLE', False)}")
 
@@ -932,7 +959,9 @@ def main() -> None:
         "[lib-manifest.scan] build_on_scan=%s",
         str(bool(cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN", True))).lower(),
     )
-    cfg.setdefault("FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv")))
+    cfg.setdefault(
+        "FDA_MAPPING_CSV", str(Path(__file__).with_name("fda_mapping_from_pdbqt.csv"))
+    )
 
     # CLI > ENV > CFG precedence
     cli_single = _parse_single_from_cli(argv_for_parsing)
@@ -942,8 +971,10 @@ def main() -> None:
     effective_single = next((x for x in (cli_single, env_single, cfg_single) if x), "")
     cfg["_EFFECTIVE_SINGLE_LIGAND"] = effective_single
     if effective_single:
-        print(f"[config] SINGLE_LIGAND effective='{effective_single}' "
-              f"(order=CLI>{'ENV' if env_single else ''}>{'CFG' if cfg_single else ''})")
+        print(
+            f"[config] SINGLE_LIGAND effective='{effective_single}' "
+            f"(order=CLI>{'ENV' if env_single else ''}>{'CFG' if cfg_single else ''})"
+        )
 
     # --- Library subfolder selection -----------------------------------
     cfg.setdefault("LIBRARY_SUBDIR_DEFAULT", "fda_library")
@@ -965,7 +996,9 @@ def main() -> None:
     #   extracted_ligands/fda_test_library_10/
     cfg.setdefault("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
 
-    if _cli_has(argv_for_parsing, "-test-fda") or _cli_has(argv_for_parsing, "--test-fda"):
+    if _cli_has(argv_for_parsing, "-test-fda") or _cli_has(
+        argv_for_parsing, "--test-fda"
+    ):
         cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get(
             "TEST_FDA_LIBRARY_SUBDIR",
             "fda_test_library_10",
@@ -978,9 +1011,13 @@ def main() -> None:
     cfg.setdefault("SPECIFIED_PROTEINS", "")
     requested_ids, _sel_src = _parse_specified_proteins(argv_for_parsing, cfg)
     cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = requested_ids
-    print(f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)")
+    print(
+        f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)"
+    )
     # --- Fast mode: force exhaustiveness=1 everywhere ---
-    cfg["FAST_MODE"] = _parse_fast_flag(argv_for_parsing) or bool(cfg.get("FAST_MODE", False))
+    cfg["FAST_MODE"] = _parse_fast_flag(argv_for_parsing) or bool(
+        cfg.get("FAST_MODE", False)
+    )
     apply_deepcoy_cli_overrides(cfg, argv_for_parsing)
     if cfg["FAST_MODE"]:
         print("[config] FAST_MODE effective=True (exhaustiveness=1)")
@@ -993,12 +1030,16 @@ def main() -> None:
     except Exception:
         control_consensus = bool(cfg.get("CONTROL_CONSENSUS", False))
 
-    if _cli_has(argv_for_parsing, "-control-consensus") or _cli_has(argv_for_parsing, "--control-consensus"):
+    if _cli_has(argv_for_parsing, "-control-consensus") or _cli_has(
+        argv_for_parsing, "--control-consensus"
+    ):
         control_consensus = True
 
     cfg["CONTROL_CONSENSUS"] = bool(control_consensus)
     if cfg["CONTROL_CONSENSUS"]:
-        print("[config] CONTROL_CONSENSUS effective=True (multi-engine control docking enabled)")
+        print(
+            "[config] CONTROL_CONSENSUS effective=True (multi-engine control docking enabled)"
+        )
 
     # --- No-library docking mode (controls-only + ligand planning) ------
     #
@@ -1033,17 +1074,25 @@ def main() -> None:
         )
 
     # --- Center selection knobs (safe defaults) ---
-    cfg.setdefault("CENTER_MODE", "control-first")  # ["control-first","hybrid","library-first"]
+    cfg.setdefault(
+        "CENTER_MODE", "control-first"
+    )  # ["control-first","hybrid","library-first"]
     cfg.setdefault("CONTROL_BLACKLIST", "GOL,EDO,PG4,MPD,ACT,SO4,PO4,CL,NA,CA")
     cfg.setdefault("CONTROL_MIN_HEAVY_ATOMS", 10)
-    cfg.setdefault("CONTROL_ANCHOR_MIN_VALID_RATE", 0.10)  # if current cluster has control hits + =10% valid, anchor
+    cfg.setdefault(
+        "CONTROL_ANCHOR_MIN_VALID_RATE", 0.10
+    )  # if current cluster has control hits + =10% valid, anchor
     cfg.setdefault("ALLOW_SWITCH_FROM_CONTROL", True)
     cfg.setdefault("REQUIRE_CONTROL_FAILURE_TO_SWITCH", False)
-    cfg.setdefault("SWITCH_AWAY_FROM_CONTROL_MIN_BOOST", 2.5)  # kcal/mol median boost needed to leave control
+    cfg.setdefault(
+        "SWITCH_AWAY_FROM_CONTROL_MIN_BOOST", 2.5
+    )  # kcal/mol median boost needed to leave control
     # Optional lock score gate (kcal/mol). Use a large positive number (or remove) to lock on RMSD alone.
     cfg.setdefault("CONTROL_LOCK_SCORE_MAX", -6.0)
     cfg.setdefault("CONTROL_LOCK_MIN_HITS", 1)  # require = this many validated controls
-    cfg.setdefault("CONTROL_LOCK_CENTER_MAX_DIST", 4.0)  # A; control centroid must be within this of center
+    cfg.setdefault(
+        "CONTROL_LOCK_CENTER_MAX_DIST", 4.0
+    )  # A; control centroid must be within this of center
 
     # clustering + switching thresholds
     cfg.setdefault("CLUSTER_EPS_ANG", 3.5)
@@ -1078,15 +1127,23 @@ def main() -> None:
     cfg.setdefault("AUDIT_JSON", True)
 
     # --- logging/noise controls ---
-    cfg.setdefault("QUIET_CONSOLE", False)   # console shows WARN+ only; file keeps DEBUG
-    cfg.setdefault("VINA_VERBOSITY", 2)     # 0=minimal, 1=normal, 2=verbose
-    cfg.setdefault("FILTER_VINA_STDOUT", False)  # reserved if we need extra filtering later
+    cfg.setdefault("QUIET_CONSOLE", False)  # console shows WARN+ only; file keeps DEBUG
+    cfg.setdefault("VINA_VERBOSITY", 2)  # 0=minimal, 1=normal, 2=verbose
+    cfg.setdefault(
+        "FILTER_VINA_STDOUT", False
+    )  # reserved if we need extra filtering later
 
-    #RMSD PARAMETERS
+    # RMSD PARAMETERS
     cfg.setdefault("SELF_RMSD_MAX_ANG", 2.0)
-    cfg.setdefault("SELF_RMSD_REQUIRE_FOR_CONTROLS", True)  # reserved for future stricter gating
-    cfg.setdefault("EARLY_EXIT_MAX_MODELS", 3)  # validate at most N poses, stop on first PASS
-    cfg.setdefault("MAX_RETRY_SECONDS_PER_LIGAND", 300)  # wall-clock for retries/validation per ligand
+    cfg.setdefault(
+        "SELF_RMSD_REQUIRE_FOR_CONTROLS", True
+    )  # reserved for future stricter gating
+    cfg.setdefault(
+        "EARLY_EXIT_MAX_MODELS", 3
+    )  # validate at most N poses, stop on first PASS
+    cfg.setdefault(
+        "MAX_RETRY_SECONDS_PER_LIGAND", 300
+    )  # wall-clock for retries/validation per ligand
 
     params = get_recenter_params(cfg)
     stages = define_docking_stages(cfg.get("DOCKING_MODE", "discovery").lower())
@@ -1094,7 +1151,8 @@ def main() -> None:
 
     # Discover all candidate PDB files (unchanged default behavior)
     pdb_files = [
-        f for f in os.listdir(cfg["INPUT_DIR"])
+        f
+        for f in os.listdir(cfg["INPUT_DIR"])
         if f.lower().endswith(".pdb") and "_nolig" not in f.lower()
     ]
 
@@ -1115,21 +1173,27 @@ def main() -> None:
         hits = [nid for nid in req if nid in id_index]
         miss = [nid for nid in req if nid not in id_index]
 
-        print(f"[filter.proteins] mode=on requested={len(req)} present={len(hits)} missing={len(miss)} ? {hits}")
+        print(
+            f"[filter.proteins] mode=on requested={len(req)} present={len(hits)} missing={len(miss)} ? {hits}"
+        )
         for m in miss:
-            print(f"WARNING: requested PDB '{m}' not found under INPUT_DIR={cfg['INPUT_DIR']} or was excluded (_nolig).")
+            print(
+                f"WARNING: requested PDB '{m}' not found under INPUT_DIR={cfg['INPUT_DIR']} or was excluded (_nolig)."
+            )
 
         if not hits:
-            print("ERROR: No requested proteins found. Exiting with status 2 to avoid a no-op run.")
+            print(
+                "ERROR: No requested proteins found. Exiting with status 2 to avoid a no-op run."
+            )
             sys.exit(2)
 
         # Restrict queue to the selected files, preserving user order
         pdb_files = [id_index[nid] for nid in hits]
         print("Selected proteins (Specified Proteins Mode): " + ", ".join(hits))
     else:
-        print(f"[filter.proteins] mode=off requested=0 present={len(pdb_files)} missing=0 ? []")
-
-
+        print(
+            f"[filter.proteins] mode=off requested=0 present={len(pdb_files)} missing=0 ? []"
+        )
 
     # --- Test-mode protein filter: keep only PDBs listed in TEST_LIBRARY_MAP ---
     test_mode = _resolve_test_mode(cfg)
@@ -1138,7 +1202,8 @@ def main() -> None:
         test_map = _coerce_test_map(raw_map)
         try:
             cfg["_TEST_LIBRARY_CANONICAL"] = {
-                str(k).upper(): str(v) for k, v in getattr(test_map, "items", lambda: [])()
+                str(k).upper(): str(v)
+                for k, v in getattr(test_map, "items", lambda: [])()
             }
         except Exception:
             cfg["_TEST_LIBRARY_CANONICAL"] = {}
@@ -1179,10 +1244,11 @@ def main() -> None:
 
             pdb_files = kept
         else:
-            print("[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied.")
+            print(
+                "[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied."
+            )
     else:
         cfg["_TEST_LIBRARY_CANONICAL"] = {}
-
 
     print("Working directory:", os.getcwd())
     print("Loaded config keys:", list(cfg.keys()))
@@ -1201,11 +1267,10 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-
     start = time.time()
     plan_only = os.environ.get("A2_PLAN_ONLY") == "1"
     mode, variants = resolve_apo_holo_mode(cfg)
-    router_legacy = (mode == "legacy")
+    router_legacy = mode == "legacy"
     ph_enabled = bool(cfg.get("PH_ENSEMBLE"))
     cfg_raw_mode = cfg.get("APO_HOLO_MODE")
     logging.info(
@@ -1259,14 +1324,14 @@ def main() -> None:
         )
 
         with tqdm(
-                total=len(pdb_files),
-                desc=f"Processing Proteins ({label})",
-                unit="protein",
-                position=0,
-                dynamic_ncols=True,
-                mininterval=0.2,
-                leave=True,
-                file=sys.stdout,
+            total=len(pdb_files),
+            desc=f"Processing Proteins ({label})",
+            unit="protein",
+            position=0,
+            dynamic_ncols=True,
+            mininterval=0.2,
+            leave=True,
+            file=sys.stdout,
         ) as bar:
             cfg_v = cfg  # no per-variant mutation; variant is propagated via APO_HOLO_VARIANT env
 
@@ -1293,7 +1358,9 @@ def main() -> None:
                     library_name = None
                     try:
                         if test_mode != "off":
-                            lib_map = cfg_for_pdb.get("_TEST_LIBRARY_CANONICAL", {}) or {}
+                            lib_map = (
+                                cfg_for_pdb.get("_TEST_LIBRARY_CANONICAL", {}) or {}
+                            )
                             library_name = lib_map.get(pdb_id)
                         if not library_name:
                             library_name = cfg_for_pdb.get("LIBRARY_SUBDIR_DEFAULT")
@@ -1451,11 +1518,6 @@ def main() -> None:
         sys.exit(0)
 
     try:
-        _maybe_run_scorch_rescore(cfg, run_id, verbose=False)
-    except Exception:
-        logging.warning("[scorch-rescore.hook] action=skip reason=unexpected_exception", exc_info=True)
-
-    try:
         failed_lookup = {(entry[0], entry[1]) for entry in failed_entries}
         for variant in variants:
             label = "legacy" if variant is None else str(variant).lower()
@@ -1477,27 +1539,46 @@ def main() -> None:
     except Exception:
         if _to_bool(cfg.get("MMGBSA_STRICT", False)):
             raise
-        logging.warning("[mmgbsa.pipeline] action=skip reason=unexpected_exception", exc_info=True)
+        logging.warning(
+            "[mmgbsa.pipeline] action=skip reason=unexpected_exception", exc_info=True
+        )
+
+    try:
+        _maybe_run_scorch_rescore(cfg, run_id, verbose=False)
+    except Exception:
+        logging.warning(
+            "[scorch-rescore.hook] action=skip reason=unexpected_exception",
+            exc_info=True,
+        )
 
     try:
         _maybe_run_dud_eval(cfg, run_id, pdb_files)
     except Exception:
-        logging.warning("[dud-eval.invoke] action=skip reason=unexpected_exception", exc_info=True)
-
-    try:
-        _log_rescore_verification(run_id)
-    except Exception:
-        logging.warning("[post-check.invoke] action=skip reason=unexpected_exception", exc_info=True)
+        logging.warning(
+            "[dud-eval.invoke] action=skip reason=unexpected_exception", exc_info=True
+        )
 
     try:
         _maybe_run_master_schema_export(cfg, run_id)
     except Exception:
-        logging.warning("[master-export.invoke] action=skip reason=unexpected_exception", exc_info=True)
+        logging.warning(
+            "[master-export.invoke] action=skip reason=unexpected_exception",
+            exc_info=True,
+        )
 
     try:
         _maybe_run_report_generation(cfg, run_id)
     except Exception:
-        logging.warning("[report.invoke] action=skip reason=unexpected_exception", exc_info=True)
+        logging.warning(
+            "[report.invoke] action=skip reason=unexpected_exception", exc_info=True
+        )
+
+    try:
+        _log_rescore_verification(run_id)
+    except Exception:
+        logging.warning(
+            "[post-check.invoke] action=skip reason=unexpected_exception", exc_info=True
+        )
 
 
 def _send_run_email(status: int, start_time: str, end_time: str) -> None:
@@ -1555,7 +1636,9 @@ def _send_run_email(status: int, start_time: str, end_time: str) -> None:
     except Exception:
         # Absolute last-resort guard: never let notification kill the process
         try:
-            logging.exception("[notify] unexpected error while building notification email")
+            logging.exception(
+                "[notify] unexpected error while building notification email"
+            )
         except Exception:
             pass
 

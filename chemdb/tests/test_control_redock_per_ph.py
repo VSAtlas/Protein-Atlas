@@ -10,9 +10,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import docking.docking as docking
-import path_router
-import docking.docking_controls as docking_controls
 import docking.docking_control_redock as docking_control_redock
 from docking.docking_subruns import ProteinDockingContext, resolve_center_box_for_ph
 from docking.fallback_recenter import RecenterParams
@@ -27,13 +24,19 @@ class _StubPaths:
         self.prepped_ligands_dir.mkdir(parents=True, exist_ok=True)
 
 
-def test_control_centers_by_ph_calls_per_tag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_control_centers_by_ph_calls_per_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ph_tags = ["pH3_0", "pH6_0", "pH9_0"]
-    monkeypatch.setattr(docking_control_redock, "load_ph_tags", lambda _pdb_id, variant=None: ph_tags)
+    monkeypatch.setattr(
+        docking_control_redock, "load_ph_tags", lambda _pdb_id, variant=None: ph_tags
+    )
 
     rec_paths: dict[str, Path] = {}
 
-    def fake_receptor_file(pdb_id: str, variant=None, ph_tag=None, legacy: bool = False) -> Path:
+    def fake_receptor_file(
+        pdb_id: str, variant=None, ph_tag=None, legacy: bool = False
+    ) -> Path:
         path = tmp_path / f"{pdb_id}_{ph_tag}.pdbqt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("RECEPTOR\n", encoding="utf-8")
@@ -49,14 +52,18 @@ def test_control_centers_by_ph_calls_per_tag(tmp_path: Path, monkeypatch: pytest
         "pH9_0": (7.0, 8.0, 9.0),
     }
 
-    def fake_select_center(cfg, paths, receptor_pdbqt, logger, *, variant=None, ph_token=None, legacy=False):
+    def fake_select_center(
+        cfg, paths, receptor_pdbqt, logger, *, variant=None, ph_token=None, legacy=False
+    ):
         calls.append((receptor_pdbqt, ph_token))
         return centers[str(ph_token)], (24.0, 24.0, 24.0)
 
     # Provide a dummy control PDB file so it doesn't skip
     (tmp_path / "ligands_raw").mkdir(parents=True, exist_ok=True)
     (tmp_path / "ligands_raw" / "ctrl.pdb").write_text("DUMMY", encoding="utf-8")
-    monkeypatch.setattr(docking_control_redock, "select_center_via_control_redock", fake_select_center)
+    monkeypatch.setattr(
+        docking_control_redock, "select_center_via_control_redock", fake_select_center
+    )
 
     cfg = {
         "PH_ENSEMBLE": True,
@@ -70,10 +77,14 @@ def test_control_centers_by_ph_calls_per_tag(tmp_path: Path, monkeypatch: pytest
     # Patch Path.exists to return True for the receptor files we "wrote" in fake_receptor_file
     # because they might be resolved to different paths than rec_paths[tag] depending on make_paths logic.
     # Actually, simpler: make_paths uses cfg['OUTPUT_DIR'].
-    
+
     logger = logging.getLogger("test.control_redock_per_ph")
 
-    center_by_ph, box_by_ph, source_by_ph = docking_control_redock._control_centers_by_ph(
+    (
+        center_by_ph,
+        box_by_ph,
+        source_by_ph,
+    ) = docking_control_redock._control_centers_by_ph(
         cfg,
         paths,
         logger,
@@ -120,7 +131,9 @@ def test_resolve_center_box_for_ph_uses_per_ph_map() -> None:
     assert box == (20.0, 20.0, 20.0)
     assert src == "control_ph"
 
-    center_fallback, box_fallback, src_fallback = resolve_center_box_for_ph(ctx, "pH8_0")
+    center_fallback, box_fallback, src_fallback = resolve_center_box_for_ph(
+        ctx, "pH8_0"
+    )
     assert center_fallback == (0.0, 0.0, 0.0)
     assert box_fallback == (10.0, 10.0, 10.0)
     assert src_fallback == "control_missing"

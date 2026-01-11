@@ -134,8 +134,8 @@ def _fetch_uniprot_and_ec_for_pdb(
                 if ec_clean and ec_clean not in ec_numbers:
                     ec_numbers.append(ec_clean)
 
-        pdb_description = (
-            entity_data.get("rcsb_polymer_entity", {}).get("pdbx_description", None)
+        pdb_description = entity_data.get("rcsb_polymer_entity", {}).get(
+            "pdbx_description", None
         )
     except Exception as exc:
         logger.warning(
@@ -492,7 +492,11 @@ def _detect_metal_near_center(
                 if elem in metals or resname in metals:
                     return True
     except Exception as exc:
-        logging.debug("[druggability.fpocket.metal.detect.error] path=%s err=%s", receptor_pdb, exc)
+        logging.debug(
+            "[druggability.fpocket.metal.detect.error] path=%s err=%s",
+            receptor_pdb,
+            exc,
+        )
     return False
 
 
@@ -657,7 +661,9 @@ def _summarize_fpocket_info(
 
     polar_frac = polar_sasa / total_sasa if total_sasa > 0 else 0.0
     has_metal = _detect_metal_near_center(receptor_pdb, center)
-    tier, triggers = _classify_druggability(druggability, volume, openness, polar_frac, has_metal)
+    tier, triggers = _classify_druggability(
+        druggability, volume, openness, polar_frac, has_metal
+    )
 
     pdb_header_text = _extract_pdb_header_text(receptor_pdb, logger)
 
@@ -689,7 +695,11 @@ def _summarize_fpocket_info(
     family_prior_triggers: List[str] = []
     protein_class: Optional[str] = None
     try:
-        family_prior_tier, family_prior_triggers, protein_class = _infer_family_prior_from_metadata(
+        (
+            family_prior_tier,
+            family_prior_triggers,
+            protein_class,
+        ) = _infer_family_prior_from_metadata(
             uniprot_id=uniprot_id,
             protein_name=protein_name,
             protein_family=protein_family,
@@ -842,7 +852,9 @@ def run_fpocket_for_explicit_pocket(
     stem = receptor_path.stem
     fpocket_exe = get_fpocket_exe(cfg)
     if fpocket_exe is None:
-        logger.warning("[druggability.fpocket.skip] pdb=%s reason=missing_exe", receptor_path)
+        logger.warning(
+            "[druggability.fpocket.skip] pdb=%s reason=missing_exe", receptor_path
+        )
         return None
     if not pocket_residues:
         logger.warning(
@@ -938,8 +950,10 @@ def evaluate_druggability_for_active_site(
         return None
 
     preferred = getattr(paths, "input_pdb_path", None)
-    receptor_pdb = Path(preferred) if preferred and Path(preferred).exists() else Path(
-        paths.receptor_cleaned_pdb(variant)
+    receptor_pdb = (
+        Path(preferred)
+        if preferred and Path(preferred).exists()
+        else Path(paths.receptor_cleaned_pdb(variant))
     )
     logger.info(
         "[druggability.fpocket.receptor] pdb_id=%s variant=%s ph=%s receptor_pdb=%s",
@@ -980,7 +994,9 @@ def evaluate_druggability_for_active_site(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Evaluate fpocket druggability for a PDB.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate fpocket druggability for a PDB."
+    )
     parser.add_argument("pdb", help="PDB ID or path to a receptor PDB file.")
     args = parser.parse_args()
 
@@ -992,7 +1008,9 @@ if __name__ == "__main__":
 
     try:
         from docking.docking import get_active_site_center_and_size  # type: ignore
-    except Exception as exc:  # pragma: no cover - defensive; avoids circular import issues
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - defensive; avoids circular import issues
         print(f"Failed to import docking helpers: {exc}")
         raise SystemExit(1)
 
@@ -1007,8 +1025,10 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     preferred = getattr(paths, "input_pdb_path", None)
-    receptor_path = Path(preferred) if preferred and Path(preferred).exists() else Path(
-        paths.receptor_cleaned_pdb("HOLO")
+    receptor_path = (
+        Path(preferred)
+        if preferred and Path(preferred).exists()
+        else Path(paths.receptor_cleaned_pdb("HOLO"))
     )
 
     center_box = get_active_site_center_and_size(cfg, pdb_id, "HOLO", None, logger)

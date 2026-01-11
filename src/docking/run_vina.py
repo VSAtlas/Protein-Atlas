@@ -4,23 +4,22 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Tuple, Optional, List, Dict, Any, Iterable
-import logging, json
+import logging
+import json
+
 _log = logging.getLogger("vina")
 
 from .docking_utils import write_failure_marker
 from input_and_export_functions import extract_best_score
+
 try:
     from input_and_export_functions import load_config, validate_config
+
     _CFG = load_config("config.txt")
     validate_config(_CFG)
 except Exception:
     _CFG = {}
 
-
-
-
-
-import io
 
 from path_router.path_router import (
     make_paths,
@@ -28,10 +27,13 @@ from path_router.path_router import (
     docked_dir as router_docked_dir,
 )
 
-_SCORE_LINE = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+_SCORE_LINE = re.compile(
+    r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+(?:\.\d+)?)", re.IGNORECASE
+)
 _MODEL_START = re.compile(r"^\s*MODEL\b", re.IGNORECASE)
 
-def _extract_best_score_robust(pdbqt_path: str) -> tuple[float|None, int]:
+
+def _extract_best_score_robust(pdbqt_path: str) -> tuple[float | None, int]:
     """
     Robust score scan that tolerates spacing/case/line-endings and multi-MODEL files.
     Returns (best_energy, n_models_seen).
@@ -73,10 +75,9 @@ def _extract_best_score_robust(pdbqt_path: str) -> tuple[float|None, int]:
         n_models = 1
     return best, n_models
 
-    
-    
+
 # ----------------------------
-# Selection helper 
+# Selection helper
 # ----------------------------
 def select_for_next_stage(docking_mode, i, stages, scores, logger):
     """
@@ -87,7 +88,8 @@ def select_for_next_stage(docking_mode, i, stages, scores, logger):
         return []
 
     def _parse_pcts(val, default_list):
-        if isinstance(val, (list, tuple)): return [float(x) for x in val]
+        if isinstance(val, (list, tuple)):
+            return [float(x) for x in val]
         if isinstance(val, str) and val.strip():
             try:
                 return [float(x) for x in val.split(",")]
@@ -99,19 +101,25 @@ def select_for_next_stage(docking_mode, i, stages, scores, logger):
     poly_default = [1.0, 0.05, 0.005]
     disc = _parse_pcts(_CFG.get("DISCOVERY_SELECTION_PCTS", disc_default), disc_default)
     poly = _parse_pcts(_CFG.get("POLYPHARM_SELECTION_PCTS", poly_default), poly_default)
-    percentages = {"discovery": disc, "polypharmacology": poly}.get(docking_mode, [1.0] * len(stages))
+    percentages = {"discovery": disc, "polypharmacology": poly}.get(
+        docking_mode, [1.0] * len(stages)
+    )
     pct = percentages[i + 1] if i + 1 < len(percentages) else 0.0
     num_to_select = int(len(scores) * pct)
     if num_to_select < 1:
-        logger.warning(f"Percentage {pct*100:.5f}% yielded <1 ligand. Using best-scoring ligand.")
+        logger.warning(
+            f"Percentage {pct * 100:.5f}% yielded <1 ligand. Using best-scoring ligand."
+        )
         num_to_select = 1
 
     top_ligands = sorted(
         ((l, s) for l, s in scores.items() if isinstance(s, (int, float))),
-        key=lambda x: x[1]
+        key=lambda x: x[1],
     )[:num_to_select]
     next_list = [l for l, _ in top_ligands if l]
-    logger.info(f"Selected top {len(next_list)} ligands ({pct * 100:.5f}%) for next stage.")
+    logger.info(
+        f"Selected top {len(next_list)} ligands ({pct * 100:.5f}%) for next stage."
+    )
     return next_list
 
 
@@ -123,11 +131,17 @@ _ERR_PAT = re.compile(
     re.IGNORECASE,
 )
 
+
 def _should_filter_stdout() -> bool:
     v = os.environ.get("FILTER_VINA_STDOUT")
     if v is not None:
-        return v.strip().lower() in {"1","true","yes","on"}
-    return str(_CFG.get("FILTER_VINA_STDOUT", "false")).strip().lower() in {"1","true","yes","on"}
+        return v.strip().lower() in {"1", "true", "yes", "on"}
+    return str(_CFG.get("FILTER_VINA_STDOUT", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _maybe_print_useful_lines(stdout: str, stderr: str) -> None:
@@ -144,11 +158,13 @@ def _maybe_print_useful_lines(stdout: str, stderr: str) -> None:
                 # Surface only meaningful lines
                 _log.warning("[vina.emit] %s", ln)
 
+
 def _get_timeout() -> Optional[int]:
     v = os.environ.get("VINA_TIMEOUT_SEC")
     if v not in (None, ""):
         try:
-            t = int(v);  return t if t > 0 else None
+            t = int(v)
+            return t if t > 0 else None
         except Exception:
             return None
     try:
@@ -186,7 +202,9 @@ def run_docking_task(
         if not Path(resolved_exe).exists():
             found = which(vina_exe)
             if not found:
-                raise FileNotFoundError(f"[!] AutoDock Vina not found (VINA_EXE='{vina_exe}', not a file and not on PATH)")
+                raise FileNotFoundError(
+                    f"[!] AutoDock Vina not found (VINA_EXE='{vina_exe}', not a file and not on PATH)"
+                )
             resolved_exe = found
 
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -211,10 +229,13 @@ def run_docking_task(
             _log.warning("[vina.emit] %s", proc.stderr.strip())
 
         if proc.returncode != 0:
-            msg = proc.stderr.strip().splitlines()[-1] if proc.stderr else f"Return code {proc.returncode}"
+            msg = (
+                proc.stderr.strip().splitlines()[-1]
+                if proc.stderr
+                else f"Return code {proc.returncode}"
+            )
             _log.warning("[vina.emit] Docking failed for %s: %s", ligand_name, msg)
             failure_reason = msg
-
 
         # Primary parse using project helper
         score = extract_best_score(out_path)
@@ -224,19 +245,28 @@ def run_docking_task(
             robust_score, n_models = _extract_best_score_robust(out_path)
             score = robust_score
             if score is None:
-                _log.info("[parser] %s no Vina score found in %s (models_in_file=%d)", ligand_name, out_path, n_models)
+                _log.info(
+                    "[parser] %s no Vina score found in %s (models_in_file=%d)",
+                    ligand_name,
+                    out_path,
+                    n_models,
+                )
                 failure_reason = failure_reason or "no_score"
 
         if write_failure_marker_flag and failure_reason:
             try:
-                write_failure_marker(out_path_obj, failure_reason, stdout_tail, stderr_tail)
+                write_failure_marker(
+                    out_path_obj, failure_reason, stdout_tail, stderr_tail
+                )
             except Exception:
                 pass
 
         return ligand_name, score
-    
+
     except subprocess.TimeoutExpired:
-        _log.error("[vina.emit] Docking timed out for %s (> %ss)", ligand_name, _get_timeout())
+        _log.error(
+            "[vina.emit] Docking timed out for %s (> %ss)", ligand_name, _get_timeout()
+        )
         if write_failure_marker_flag:
             try:
                 write_failure_marker(Path(out_path), "timeout")
@@ -261,8 +291,6 @@ def run_docking_task(
         return ligand_name, None
 
 
-
-
 # ----------------------------
 # Pose helpers
 # ----------------------------
@@ -281,6 +309,7 @@ def extract_models(pdbqt_path: str) -> List[List[str]]:
         else:
             current.append(line)
     return models
+
 
 def validate_all_poses(
     pdbqt_path: str,
@@ -320,7 +349,9 @@ def validate_all_poses(
 
             if result.get("valid", False):
                 score = extract_best_score(str(temp_path))
-                if best_valid_score is None or (score is not None and score < best_valid_score):
+                if best_valid_score is None or (
+                    score is not None and score < best_valid_score
+                ):
                     best_valid_score = score
                     best_valid_model = temp_path
 
@@ -358,7 +389,9 @@ def resolve_stage_and_config_dirs(
     # >>> PATHS INIT END
 
     # >>> DOCKED PATHS PATCH START
-    stage_root = router_docked_dir(pdb_id, variant=variant, ph_tag=ph_token, legacy=legacy)
+    stage_root = router_docked_dir(
+        pdb_id, variant=variant, ph_tag=ph_token, legacy=legacy
+    )
     stage_dir = stage_root / stage
     # >>> DOCKED PATHS PATCH END
 

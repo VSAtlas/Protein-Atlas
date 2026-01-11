@@ -110,6 +110,7 @@ def cfg() -> dict[str, str]:
 def _reset_router_roots(monkeypatch):
     # Ensure each test re-evaluates roots (allows run-id tweaks).
     import path_router.path_router as pr
+
     pr._ROUTER_ROOTS = None  # type: ignore[attr-defined]
     monkeypatch.setenv("ATLAS_RUN_ID", TEST_RUN_ID)
     yield
@@ -139,6 +140,7 @@ def test_ensure_router_roots_matches_config(cfg: dict[str, str]) -> None:
     config.txt after token expansion.
     """
     import path_router.path_router as pr
+
     pr._ROUTER_ROOTS = None
 
     roots = _ensure_router_roots()
@@ -193,6 +195,7 @@ def test_variant_directories_follow_output_dir_layout(
         OUTPUT_DIR / PDB_ID / [variant?] / <subdir>
     """
     import path_router.path_router as pr
+
     pr._ROUTER_ROOTS = None
 
     output_root = Path(cfg["OUTPUT_DIR"])
@@ -223,6 +226,7 @@ def test_docked_dir_layout(cfg: dict[str, str], variant) -> None:
             DOCKED_DIR / PDB / [variant?] / 'pH7_0'
     """
     import path_router.path_router as pr
+
     pr._ROUTER_ROOTS = None
 
     docked_root = Path(cfg["DOCKED_DIR"]) / TEST_RUN_ID
@@ -230,14 +234,20 @@ def test_docked_dir_layout(cfg: dict[str, str], variant) -> None:
     v_seg = _variant_segment(variant)
 
     expected_no_ph = docked_root.joinpath(pdb_id, *v_seg)
-    assert docked_dir(pdb_id, variant=variant, ph_tag=None, legacy=False) == expected_no_ph
+    assert (
+        docked_dir(pdb_id, variant=variant, ph_tag=None, legacy=False) == expected_no_ph
+    )
 
     expected_legacy = docked_root / pdb_id
-    assert docked_dir(pdb_id, variant=variant, ph_tag=None, legacy=True) == expected_legacy
+    assert (
+        docked_dir(pdb_id, variant=variant, ph_tag=None, legacy=True) == expected_legacy
+    )
 
     ph_tag = "pH7_0"
     expected_ph = docked_root.joinpath(pdb_id, *v_seg, ph_tag)
-    assert docked_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=False) == expected_ph
+    assert (
+        docked_dir(pdb_id, variant=variant, ph_tag=ph_tag, legacy=False) == expected_ph
+    )
 
 
 def test_docked_dir_scopes_run_id_and_legacy(monkeypatch, cfg: dict[str, str]) -> None:
@@ -332,7 +342,7 @@ def test_canon_pdb_id_from_path_variants(path: str, expected: str) -> None:
 
 
 def test_default_variant_matches_current_config_when_apo_vs_holo(
-    cfg: dict[str, str]
+    cfg: dict[str, str],
 ) -> None:
     """
     If _default_variant exists and APO_HOLO_MODE=='apo_vs_holo', we expect

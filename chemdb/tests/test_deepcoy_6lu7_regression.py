@@ -19,7 +19,9 @@ MIN_DECOYS = 5
 
 LOG_PATH_RE = re.compile(r"log_file=(?P<path>\\S+)")
 DEEPCOY_DIR_RE = re.compile(r"Decoys should be generated in:\\s*(?P<dir>.+)")
-DEEPCOY_WARN_RE = re.compile(r"\\[deepcoy\\]\\s+WARNING: DeepCoy generated\\s+(?P<count>\\d+)\\s+decoys")
+DEEPCOY_WARN_RE = re.compile(
+    r"\\[deepcoy\\]\\s+WARNING: DeepCoy generated\\s+(?P<count>\\d+)\\s+decoys"
+)
 ACTIVES_PATTERNS = [
     re.compile(r"-> Found\\s+(?P<count>\\d+)\\s+unique SMILES strings\\."),
     re.compile(r"\\[deepcoy\\.actives\\.sdf\\].*\\bn=(?P<count>\\d+)\\b"),
@@ -100,7 +102,9 @@ def _temporary_decoys_per_active_one():
                     new_lines.append(line)
             if not replaced:
                 new_lines.append("DEEPCOY_DECOYS_PER_ACTIVE=1")
-            path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""))
+            path.write_text(
+                "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
+            )
         yield
     finally:
         for path, content in originals.items():
@@ -165,8 +169,12 @@ def test_deepcoy_generation_for_6lu7_produces_decoys() -> None:
     assert log_path.exists(), f"Log file not found (expected {log_path})"
     log_text = log_path.read_text()
 
-    assert "## 5. Executing DeepCoy workflow..." in log_text, "DeepCoy workflow was not invoked"
-    assert "simplified fallback" not in log_text.lower(), "DeepCoy fell back to simplified preprocessing path"
+    assert (
+        "## 5. Executing DeepCoy workflow..." in log_text
+    ), "DeepCoy workflow was not invoked"
+    assert (
+        "simplified fallback" not in log_text.lower()
+    ), "DeepCoy fell back to simplified preprocessing path"
     assert (
         "[deepcoy] WARNING: DeepCoy generated" not in log_text
     ), "DeepCoy emitted underproduction warning"
@@ -176,7 +184,9 @@ def test_deepcoy_generation_for_6lu7_produces_decoys() -> None:
     if decoy_dir is None or not decoy_dir.exists():
         decoy_dir = _find_recent_deepcoy_dir(start_time)
 
-    assert decoy_dir is not None and decoy_dir.exists(), "DeepCoy decoy output dir not found"
+    assert (
+        decoy_dir is not None and decoy_dir.exists()
+    ), "DeepCoy decoy output dir not found"
 
     decoys_smi = decoy_dir / "deepcoy_decoys.smi"
     assert decoys_smi.exists(), f"deepcoy_decoys.smi missing in {decoy_dir}"
@@ -198,7 +208,9 @@ def test_deepcoy_generation_for_6lu7_produces_decoys() -> None:
     if n_actives is not None:
         expected_min = max(expected_min, int(0.5 * n_actives))
 
-    failure_msg = f"DeepCoy generated {decoy_lines} decoys; expected at least {expected_min}"
+    failure_msg = (
+        f"DeepCoy generated {decoy_lines} decoys; expected at least {expected_min}"
+    )
     if reported_count is not None:
         failure_msg += f" (warning reported {reported_count})"
     assert decoy_lines >= expected_min, failure_msg

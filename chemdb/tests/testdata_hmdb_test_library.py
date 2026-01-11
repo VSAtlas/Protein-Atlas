@@ -9,7 +9,9 @@ from typing import Mapping, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _root_from_cfg(cfg: Mapping[str, object], keys: tuple[str, ...], default_dir: Path) -> Path:
+def _root_from_cfg(
+    cfg: Mapping[str, object], keys: tuple[str, ...], default_dir: Path
+) -> Path:
     """
     Prefer a config dict key, then environment, else fall back to the repo-local default.
     """
@@ -43,7 +45,9 @@ def infer_ligand_roots(cfg: Mapping[str, object] | None = None) -> Tuple[Path, P
     return extracted_root, prepped_root
 
 
-def ensure_hmdb_test_library(extracted_root: Path, prepped_root: Path) -> dict[str, Path]:
+def ensure_hmdb_test_library(
+    extracted_root: Path, prepped_root: Path
+) -> dict[str, Path]:
     """
     Ensure hmdb_test_library_10 exists under both roots by mirroring test_library_10.
 

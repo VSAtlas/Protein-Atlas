@@ -13,7 +13,6 @@ Programmatic:
 import os
 import re
 import json
-import math
 import argparse
 from typing import Dict, List, Tuple, Optional
 import logging
@@ -32,13 +31,16 @@ logger.setLevel(logging.INFO)
 # Presets loading
 # -------------------------
 
+
 def _project_root() -> str:
     here = os.path.abspath(os.path.dirname(__file__))
     return os.path.abspath(os.path.join(here))
 
+
 def _presets_path() -> str:
     # chemdb/context_ph_presets.json relative to this module
     return os.path.join(_project_root(), "chemdb", "context_ph_presets.json")
+
 
 def load_presets(path: Optional[str] = None) -> Dict:
     p = path or _presets_path()
@@ -48,7 +50,12 @@ def load_presets(path: Optional[str] = None) -> Dict:
     except Exception as e:
         logger.error("Failed to load presets from %s: %s", p, e)
         # Minimal safe fallback
-        return {"compartment_pH": {"extracellular": [7.35, 7.45]}, "aliases": {}, "weights": {"default": 0.5}, "default_pH": 7.0}
+        return {
+            "compartment_pH": {"extracellular": [7.35, 7.45]},
+            "aliases": {},
+            "weights": {"default": 0.5},
+            "default_pH": 7.0,
+        }
 
     # Minimal schema validation + normalization
     if "compartment_pH" not in data or not isinstance(data["compartment_pH"], dict):
@@ -60,19 +67,27 @@ def load_presets(path: Optional[str] = None) -> Dict:
     for k, v in data["compartment_pH"].items():
         try:
             lo, hi = float(v[0]), float(v[1])
-            if hi < lo: lo, hi = hi, lo
+            if hi < lo:
+                lo, hi = hi, lo
             # clip and warn if extreme
             lo_c = max(0.0, min(14.0, lo))
             hi_c = max(0.0, min(14.0, hi))
             if (lo_c, hi_c) != (lo, hi):
-                logger.debug("Clipped pH range for %s from (%.2f, %.2f) to (%.2f, %.2f)", k, lo, hi, lo_c, hi_c)
+                logger.debug(
+                    "Clipped pH range for %s from (%.2f, %.2f) to (%.2f, %.2f)",
+                    k,
+                    lo,
+                    hi,
+                    lo_c,
+                    hi_c,
+                )
             clean_map[_norm(k)] = [lo_c, hi_c]
         except Exception:
             logger.warning("Ignoring invalid pH range for %r: %r", k, v)
     data["compartment_pH"] = clean_map
 
     if "aliases" in data and isinstance(data["aliases"], dict):
-        data["aliases"] = { _norm(k): _norm(v) for k, v in data["aliases"].items() }
+        data["aliases"] = {_norm(k): _norm(v) for k, v in data["aliases"].items()}
     else:
         data["aliases"] = {}
 
@@ -80,12 +95,14 @@ def load_presets(path: Optional[str] = None) -> Dict:
         data["weights"] = {"default": 0.5}
     if "default_pH" not in data:
         data["default_pH"] = 7.0
-    #validate  location_tokens(phrases + singles)  from JSON
+    # validate  location_tokens(phrases + singles)  from JSON
     lt = data.get("location_tokens", {})
     phrases = lt.get("phrases", []) if isinstance(lt, dict) else []
     singles = lt.get("singles", []) if isinstance(lt, dict) else []
-    if not isinstance(phrases, list): phrases = []
-    if not isinstance(singles, list): singles = []
+    if not isinstance(phrases, list):
+        phrases = []
+    if not isinstance(singles, list):
+        singles = []
 
     # normalize to lower, dedupe, drop empties
     def _norm_list(xs):
@@ -104,9 +121,13 @@ def load_presets(path: Optional[str] = None) -> Dict:
         "singles": _norm_list(singles),
     }
 
-    logger.debug("Loaded presets: %d compartments, %d aliases, %d phrases, %d singles",
-                 len(data["compartment_pH"]), len(data["aliases"]),
-                 len(data["location_tokens"]["phrases"]), len(data["location_tokens"]["singles"]))
+    logger.debug(
+        "Loaded presets: %d compartments, %d aliases, %d phrases, %d singles",
+        len(data["compartment_pH"]),
+        len(data["aliases"]),
+        len(data["location_tokens"]["phrases"]),
+        len(data["location_tokens"]["singles"]),
+    )
     return data
 
 
@@ -114,26 +135,38 @@ def load_presets(path: Optional[str] = None) -> Dict:
 # Small utilities
 # -------------------------
 
+
 def _mid(a: float, b: float) -> float:
     return (a + b) / 2.0
+
 
 def _clip(x: float, lo: float = 3.0, hi: float = 10.5) -> float:
     return max(lo, min(hi, x))
 
+
 def _round01(x: float) -> float:
     return round(x, 1)
+
 
 def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
 
+
 def _cand(name: str, value: float, weight: float, note: str) -> Dict:
-    return {"source": name, "pH": float(round(_clip(value), 3)), "w": float(weight), "note": str(note)}
+    return {
+        "source": name,
+        "pH": float(round(_clip(value), 3)),
+        "w": float(weight),
+        "note": str(note),
+    }
+
 
 # -------------------------
 # Header parsing (PDB / AlphaFold)
 # -------------------------
 
 _PH_RE = re.compile(r"\bPH\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+
 
 def parse_pdb_header_text(pdb_path: str, max_lines: int = 2000) -> str:
     """
@@ -161,6 +194,7 @@ def header_find_explicit_ph(header_text: str) -> Optional[float]:
     m = _PH_RE.search(header_text)
     return float(m.group(1)) if m else None
 
+
 def header_detect_alphafold(header_text: str) -> bool:
     """
     AlphaFold PDBs typically contain 'AlphaFold' in TITLE/HEADER/COMPND, and DBREF/DBSOURCE UNP.
@@ -174,6 +208,7 @@ def header_detect_alphafold(header_text: str) -> bool:
         return True
     return False
 
+
 def header_extract_uniprot_accessions(header_text: str) -> List[str]:
     """
     Extract UniProt accessions from DBREF/COMPND/DBSOURCE-like lines.
@@ -182,17 +217,25 @@ def header_extract_uniprot_accessions(header_text: str) -> List[str]:
     accs = set()
     # DBREF ... UNP <ACCN> <NAME>
     for line in header_text.splitlines():
-        if line.startswith(("DBREF", "DBREF1", "DBREF2", "DBREF3", "COMPND", "DBSOURCE", "REMARK")):
+        if line.startswith(
+            ("DBREF", "DBREF1", "DBREF2", "DBREF3", "COMPND", "DBSOURCE", "REMARK")
+        ):
             # Look for UniProt-style accessions: 1-2 letters + 4-5 alphanum, possibly with a dash for isoforms
-            for m in re.finditer(r"\b([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9][A-Z0-9]{3}[0-9])(-\d+)?\b", line):
+            for m in re.finditer(
+                r"\b([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9][A-Z0-9]{3}[0-9])(-\d+)?\b",
+                line,
+            ):
                 accs.add(m.group(0))
             # Also detect tokens after 'UNP ' or 'UNIPROT'
-            m2 = re.search(r"\bUNP(?:ROTK?)?\s*[:=]?\s*([A-Z0-9\-]+)", line, re.IGNORECASE)
+            m2 = re.search(
+                r"\bUNP(?:ROTK?)?\s*[:=]?\s*([A-Z0-9\-]+)", line, re.IGNORECASE
+            )
             if m2:
                 token = m2.group(1).strip()
                 if re.match(r"^[A-Z0-9\-]{5,10}$", token):
                     accs.add(token)
     return sorted(accs)
+
 
 def header_extract_location_keywords(header_text: str, presets: Dict) -> List[str]:
     """
@@ -233,10 +276,10 @@ def header_extract_location_keywords(header_text: str, presets: Dict) -> List[st
     return dedup
 
 
-
 # -------------------------
 # Mapping locations ? pH (presets)
 # -------------------------
+
 
 def ph_from_compartment(name: str, presets: Dict) -> Optional[float]:
     comp_map = presets.get("compartment_pH", {})
@@ -253,9 +296,11 @@ def ph_from_compartment(name: str, presets: Dict) -> Optional[float]:
             return round(_mid(lo, hi), 2)
     return None
 
+
 # -------------------------
 # Main selection logic
 # -------------------------
+
 
 def select_ph(signals: Dict, presets: Dict) -> Dict:
     """
@@ -278,7 +323,12 @@ def select_ph(signals: Dict, presets: Dict) -> Dict:
 
     # 1) Explicit override
     if (v := signals.get("TARGET_PH")) is not None:
-        return {"target_pH": float(v), "provenance": [_cand("override", float(v), W["override"], "explicit")], "confidence": 1.0, "ensemble": None}
+        return {
+            "target_pH": float(v),
+            "provenance": [_cand("override", float(v), W["override"], "explicit")],
+            "confidence": 1.0,
+            "ensemble": None,
+        }
 
     # 2) Assay/buffer
     for key in ("ASSAY_PH", "BUFFER_PH"):
@@ -292,7 +342,7 @@ def select_ph(signals: Dict, presets: Dict) -> Dict:
             cands.append(_cand("pdb_header", float(v), W["pdb_header"], "REMARK PH"))
 
     # 4) Compartment from project hint
-    if (pc := signals.get("PROJECT_COMPARTMENT")):
+    if pc := signals.get("PROJECT_COMPARTMENT"):
         v = ph_from_compartment(pc, presets)
         if v is not None:
             cands.append(_cand("project_compartment", v, W["project_compartment"], pc))
@@ -307,19 +357,35 @@ def select_ph(signals: Dict, presets: Dict) -> Dict:
             cands.append(_cand("uniprot_go", v, W["uniprot_go"], term))
 
     # 6) Enzyme optimum range (if known)
-    if (rng := signals.get("ENZYME_OPT_RANGE")):
+    if rng := signals.get("ENZYME_OPT_RANGE"):
         lo, hi = rng
-        cands.append(_cand("enzyme_optimum", _mid(float(lo), float(hi)), W["enzyme_optimum"], f"{lo}-{hi}"))
+        cands.append(
+            _cand(
+                "enzyme_optimum",
+                _mid(float(lo), float(hi)),
+                W["enzyme_optimum"],
+                f"{lo}-{hi}",
+            )
+        )
 
     # 7) Default if still nothing
     if not cands:
         v = float(signals.get("DEFAULT_PH", presets.get("default_pH", 7.0)))
-        return {"target_pH": v, "provenance": [_cand("default", v, W["default"], "no signals")], "confidence": W["default"], "ensemble": None}
+        return {
+            "target_pH": v,
+            "provenance": [_cand("default", v, W["default"], "no signals")],
+            "confidence": W["default"],
+            "ensemble": None,
+        }
 
     # Choose winner / blend
     cands_sorted = sorted(cands, key=lambda d: d["w"], reverse=True)
     if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("Candidates (n=%d): %s", len(cands_sorted), "; ".join(f"{d['source']}@{d['pH']} (w={d['w']})" for d in cands_sorted))
+        logger.debug(
+            "Candidates (n=%d): %s",
+            len(cands_sorted),
+            "; ".join(f"{d['source']}@{d['pH']} (w={d['w']})" for d in cands_sorted),
+        )
 
     top = cands_sorted[0]
     second = cands_sorted[1] if len(cands_sorted) > 1 else None
@@ -327,32 +393,72 @@ def select_ph(signals: Dict, presets: Dict) -> Dict:
     # If a clearly dominant source exists, pick it
     if second and (top["w"] - second["w"] >= 0.2):
         target = _round01(top["pH"])
-        logger.info("select_ph: dominant=%s pH=%.1f (w=%.2f)", top["source"], target, top["w"])
-        return {"target_pH": target, "provenance": cands_sorted, "confidence": min(1.0, top["w"]), "ensemble": None}
-
+        logger.info(
+            "select_ph: dominant=%s pH=%.1f (w=%.2f)", top["source"], target, top["w"]
+        )
+        return {
+            "target_pH": target,
+            "provenance": cands_sorted,
+            "confidence": min(1.0, top["w"]),
+            "ensemble": None,
+        }
 
     # Otherwise weighted blend
     wsum = sum(d["w"] for d in cands_sorted)
-    target = _round01(sum(d["pH"] * d["w"] for d in cands_sorted) / (wsum if wsum else 1.0))
+    target = _round01(
+        sum(d["pH"] * d["w"] for d in cands_sorted) / (wsum if wsum else 1.0)
+    )
     span = max(d["pH"] for d in cands_sorted) - min(d["pH"] for d in cands_sorted)
 
     if span <= 0.3:
         logger.info("select_ph: blended pH=%.1f span=%.2f (no ensemble)", target, span)
-        return {"target_pH": target, "provenance": cands_sorted, "confidence": min(0.9, wsum / max(1.0, len(cands_sorted))), "ensemble": None}
+        return {
+            "target_pH": target,
+            "provenance": cands_sorted,
+            "confidence": min(0.9, wsum / max(1.0, len(cands_sorted))),
+            "ensemble": None,
+        }
     elif span <= 1.0:
         alt = target + 0.5 if target < top["pH"] else target - 0.5
         ens = sorted({_clip(target), _clip(_round01(alt))})
-        logger.info("select_ph: blended pH=%.1f span=%.2f → ensemble=%s", target, span, [float(x) for x in ens])
-        return {"target_pH": target, "provenance": cands_sorted, "confidence": 0.7, "ensemble": [float(x) for x in ens]}
+        logger.info(
+            "select_ph: blended pH=%.1f span=%.2f → ensemble=%s",
+            target,
+            span,
+            [float(x) for x in ens],
+        )
+        return {
+            "target_pH": target,
+            "provenance": cands_sorted,
+            "confidence": 0.7,
+            "ensemble": [float(x) for x in ens],
+        }
     else:
-        ens = sorted({_clip(_round01(target - 0.5)), _clip(target), _clip(_round01(target + 0.5))})
-        logger.info("select_ph: blended pH=%.1f span=%.2f → ensemble=%s", target, span, [float(x) for x in ens])
-        return {"target_pH": target, "provenance": cands_sorted, "confidence": 0.6, "ensemble": [float(x) for x in ens]}
+        ens = sorted(
+            {
+                _clip(_round01(target - 0.5)),
+                _clip(target),
+                _clip(_round01(target + 0.5)),
+            }
+        )
+        logger.info(
+            "select_ph: blended pH=%.1f span=%.2f → ensemble=%s",
+            target,
+            span,
+            [float(x) for x in ens],
+        )
+        return {
+            "target_pH": target,
+            "provenance": cands_sorted,
+            "confidence": 0.6,
+            "ensemble": [float(x) for x in ens],
+        }
 
 
 # -------------------------
 # High-level convenience
 # -------------------------
+
 
 def select_ph_from_pdb(
     pdb_path: str,
@@ -392,6 +498,7 @@ def select_ph_from_pdb(
     result["uniprot_accessions"] = uniprot_accs
     return result
 
+
 # >>> CONTEXTPH PATHS PATCH START
 def select_ph_for_pdbid(cfg, pdb_id: str, **kwargs) -> Dict:
     """
@@ -400,23 +507,59 @@ def select_ph_for_pdbid(cfg, pdb_id: str, **kwargs) -> Dict:
     """
     p = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     return select_ph_from_pdb(str(p.input_pdb_path), **kwargs)
+
+
 # >>> CONTEXTPH PATHS PATCH END
 
 # -------------------------
 # CLI
 # -------------------------
 
+
 def _build_cli():
-    ap = argparse.ArgumentParser(description="Infer environmental pH from PDB/AlphaFold headers + context hints.")
+    ap = argparse.ArgumentParser(
+        description="Infer environmental pH from PDB/AlphaFold headers + context hints."
+    )
     ap.add_argument("pdb", help="Path to PDB file (AlphaFold or experimental).")
-    ap.add_argument("--buffer-ph", type=float, default=None, help="Assay/buffer pH hint.")
-    ap.add_argument("--assay-ph", type=float, default=None, help="Assay pH hint (overrides buffer if both).")
-    ap.add_argument("--compartment", type=str, default=None, help="Project compartment hint (e.g., lysosome, cytosol).")
-    ap.add_argument("--enzyme-opt", type=str, default=None, help="Enzyme optimum range 'lo,hi' (e.g., '5.5,6.5').")
-    ap.add_argument("--default-ph", type=float, default=7.0, help="Fallback pH when no signals found.")
-    ap.add_argument("--presets", type=str, default=None, help="Path to context_ph_presets.json (optional).")
-    ap.add_argument("--print-provenance", action="store_true", help="Print detailed provenance.")
-    ap.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG logging.")
+    ap.add_argument(
+        "--buffer-ph", type=float, default=None, help="Assay/buffer pH hint."
+    )
+    ap.add_argument(
+        "--assay-ph",
+        type=float,
+        default=None,
+        help="Assay pH hint (overrides buffer if both).",
+    )
+    ap.add_argument(
+        "--compartment",
+        type=str,
+        default=None,
+        help="Project compartment hint (e.g., lysosome, cytosol).",
+    )
+    ap.add_argument(
+        "--enzyme-opt",
+        type=str,
+        default=None,
+        help="Enzyme optimum range 'lo,hi' (e.g., '5.5,6.5').",
+    )
+    ap.add_argument(
+        "--default-ph",
+        type=float,
+        default=7.0,
+        help="Fallback pH when no signals found.",
+    )
+    ap.add_argument(
+        "--presets",
+        type=str,
+        default=None,
+        help="Path to context_ph_presets.json (optional).",
+    )
+    ap.add_argument(
+        "--print-provenance", action="store_true", help="Print detailed provenance."
+    )
+    ap.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable DEBUG logging."
+    )
     ap.add_argument("--json", action="store_true", help="Emit JSON result to stdout.")
 
     return ap
@@ -432,6 +575,8 @@ def _parse_opt_range(s: Optional[str]) -> Optional[Tuple[float, float]]:
     if hi < lo:
         lo, hi = hi, lo
     return (lo, hi)
+
+
 def select_ph_values_for_protonation(pdb_path: str, **kwargs) -> List[float]:
     """
     Returns a list of pH values to use (ensemble if present, else [target]).
@@ -439,6 +584,7 @@ def select_ph_values_for_protonation(pdb_path: str, **kwargs) -> List[float]:
     """
     res = select_ph_from_pdb(pdb_path, **kwargs)
     return list(res.get("ensemble") or [res["target_pH"]])
+
 
 def main():
     ap = _build_cli()
@@ -459,6 +605,7 @@ def main():
     )
     if args.json:
         import json as _json
+
         print(_json.dumps(res, indent=2, sort_keys=True))
         return
     # Minimal, stable text output
@@ -473,6 +620,7 @@ def main():
         print("provenance:")
         for d in res["provenance"]:
             print(f"  - {d['source']}: pH={d['pH']} w={d['w']} note={d['note']}")
+
 
 if __name__ == "__main__":
     main()

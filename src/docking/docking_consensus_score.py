@@ -67,7 +67,9 @@ FDA_PREFIX_DEFAULTS = ["fda_"]
 DECOY_PREFIX_DEFAULTS = ["dud_", "deepcoy_", "decoy_", "decoys"]
 
 
-def _library_prefixes(cfg: Dict[str, Any], key: str, defaults: Sequence[str]) -> List[str]:
+def _library_prefixes(
+    cfg: Dict[str, Any], key: str, defaults: Sequence[str]
+) -> List[str]:
     raw = cfg.get(key)
     if raw is None:
         raw = cfg.get(key.lower())
@@ -82,7 +84,9 @@ def _library_prefixes(cfg: Dict[str, Any], key: str, defaults: Sequence[str]) ->
         return list(defaults)
 
 
-def _infer_library(ligand_display: str, fda_prefixes: Sequence[str], decoy_prefixes: Sequence[str]) -> str:
+def _infer_library(
+    ligand_display: str, fda_prefixes: Sequence[str], decoy_prefixes: Sequence[str]
+) -> str:
     name = Path(ligand_display).name.lower()
     for prefix in fda_prefixes:
         if name.startswith(prefix.lower()):
@@ -124,7 +128,12 @@ def _collect_ligands_from_csv(
                 display_name_by_id[lig_id] = lig
                 added += 1
     except Exception as exc:
-        logger.warning("[consensus.skip] reason=read_error path=%s label=%s error=%s", str(csv_path), label, exc)
+        logger.warning(
+            "[consensus.skip] reason=read_error path=%s label=%s error=%s",
+            str(csv_path),
+            label,
+            exc,
+        )
         return
     if overlaps:
         logger.warning(
@@ -134,7 +143,9 @@ def _collect_ligands_from_csv(
             overlaps,
         )
     if added:
-        logger.info("[consensus.extend] path=%s label=%s added=%d", str(csv_path), label, added)
+        logger.info(
+            "[consensus.extend] path=%s label=%s added=%d", str(csv_path), label, added
+        )
 
 
 def _merge_scores(
@@ -150,7 +161,9 @@ def _merge_scores(
     overlaps = set(base_scores).intersection(incoming)
     if overlaps:
         logger.warning(
-            "[consensus.decoy_overlap] label=%s overlaps=%d action=keep_best", label, len(overlaps)
+            "[consensus.decoy_overlap] label=%s overlaps=%d action=keep_best",
+            label,
+            len(overlaps),
         )
     for lig, val in incoming.items():
         existing = base_scores.get(lig)
@@ -192,7 +205,11 @@ def _load_best_scores_per_ligand(
 ) -> Dict[str, float]:
     scores: Dict[str, float] = {}
     if not csv_path.exists() or value_key is None:
-        logger.info("[consensus.skip] reason=missing_csv_or_key path=%s key=%s", str(csv_path), value_key)
+        logger.info(
+            "[consensus.skip] reason=missing_csv_or_key path=%s key=%s",
+            str(csv_path),
+            value_key,
+        )
         return scores
 
     with csv_path.open("r", newline="", encoding="utf-8") as f:
@@ -226,7 +243,12 @@ def _load_best_scores_per_ligand(
                     if val < scores[lig_id]:
                         scores[lig_id] = val
 
-    logger.info("[consensus.load] path=%s key=%s n_ligands=%d", str(csv_path), value_key, len(scores))
+    logger.info(
+        "[consensus.load] path=%s key=%s n_ligands=%d",
+        str(csv_path),
+        value_key,
+        len(scores),
+    )
     return scores
 
 
@@ -284,21 +306,37 @@ def _pick_best_engine(
 
     candidates = []
     if lig_id in cnn_scores:
-        candidates.append((p_cnn.get(lig_id, 0.0), priority["gnina_cnn"], "gnina", "gnina_cnn"))
+        candidates.append(
+            (p_cnn.get(lig_id, 0.0), priority["gnina_cnn"], "gnina", "gnina_cnn")
+        )
     if lig_id in ledock_scores:
-        candidates.append((p_ledock.get(lig_id, 0.0), priority["ledock"], "ledock", "ledock"))
+        candidates.append(
+            (p_ledock.get(lig_id, 0.0), priority["ledock"], "ledock", "ledock")
+        )
     if lig_id in dock6_scores:
-        candidates.append((p_dock6.get(lig_id, 0.0), priority["dock6"], "dock6", "dock6"))
+        candidates.append(
+            (p_dock6.get(lig_id, 0.0), priority["dock6"], "dock6", "dock6")
+        )
     if lig_id in vina_scores:
         candidates.append((p_vina.get(lig_id, 0.0), priority["vina"], "vina", "vina"))
     if lig_id in gnina_energy_scores:
-        candidates.append((p_gnina_energy.get(lig_id, 0.0), priority["gnina_energy"], "gnina", "gnina_energy"))
+        candidates.append(
+            (
+                p_gnina_energy.get(lig_id, 0.0),
+                priority["gnina_energy"],
+                "gnina",
+                "gnina_energy",
+            )
+        )
 
     if not candidates:
         return "", ""
 
     best_p, _, best_engine, best_signal = max(candidates, key=lambda x: (x[0], x[1]))
-    return best_engine if best_p is not None else "", best_signal if best_p is not None else ""
+    return (
+        best_engine if best_p is not None else "",
+        best_signal if best_p is not None else "",
+    )
 
 
 def compute_consensus_for_variant_ph(
@@ -344,15 +382,47 @@ def compute_consensus_for_variant_ph(
     include_decoys_raw = cfg.get("CONSENSUS_INCLUDE_DECOYS")
     if include_decoys_raw is None:
         include_decoys_raw = cfg.get("consensus_include_decoys")
-    include_decoys = True if include_decoys_raw is None else _to_bool_flag(include_decoys_raw)
+    include_decoys = (
+        True if include_decoys_raw is None else _to_bool_flag(include_decoys_raw)
+    )
     fda_prefixes = _library_prefixes(cfg, "FDA_LIGAND_PREFIXES", FDA_PREFIX_DEFAULTS)
-    decoy_prefixes = _library_prefixes(cfg, "DECOY_LIGAND_PREFIXES", DECOY_PREFIX_DEFAULTS)
+    decoy_prefixes = _library_prefixes(
+        cfg, "DECOY_LIGAND_PREFIXES", DECOY_PREFIX_DEFAULTS
+    )
 
     if include_decoys:
-        _collect_ligands_from_csv(decoy_vina_csv, ligand_ids, display_name_by_id, seen, log, label="vina_decoys")
-        _collect_ligands_from_csv(decoy_gnina_csv, ligand_ids, display_name_by_id, seen, log, label="gnina_decoys")
-        _collect_ligands_from_csv(decoy_ledock_csv, ligand_ids, display_name_by_id, seen, log, label="ledock_decoys")
-        _collect_ligands_from_csv(decoy_dock6_csv, ligand_ids, display_name_by_id, seen, log, label="dock6_decoys")
+        _collect_ligands_from_csv(
+            decoy_vina_csv,
+            ligand_ids,
+            display_name_by_id,
+            seen,
+            log,
+            label="vina_decoys",
+        )
+        _collect_ligands_from_csv(
+            decoy_gnina_csv,
+            ligand_ids,
+            display_name_by_id,
+            seen,
+            log,
+            label="gnina_decoys",
+        )
+        _collect_ligands_from_csv(
+            decoy_ledock_csv,
+            ligand_ids,
+            display_name_by_id,
+            seen,
+            log,
+            label="ledock_decoys",
+        )
+        _collect_ligands_from_csv(
+            decoy_dock6_csv,
+            ligand_ids,
+            display_name_by_id,
+            seen,
+            log,
+            label="dock6_decoys",
+        )
     if not ligand_ids:
         log.warning("[consensus.skip] reason=no_ligands path=%s", str(vina_csv))
         return None
@@ -415,7 +485,11 @@ def compute_consensus_for_variant_ph(
             logger=log,
         )
         vina_scores = _merge_scores(
-            vina_scores, decoy_vina_scores, higher_is_better=False, logger=log, label="vina_decoys"
+            vina_scores,
+            decoy_vina_scores,
+            higher_is_better=False,
+            logger=log,
+            label="vina_decoys",
         )
 
         decoy_gnina_energy_scores = _load_best_scores_per_ligand(
@@ -442,7 +516,11 @@ def compute_consensus_for_variant_ph(
                 logger=log,
             )
             cnn_scores = _merge_scores(
-                cnn_scores, decoy_cnn_scores, higher_is_better=True, logger=log, label="gnina_cnn_decoys"
+                cnn_scores,
+                decoy_cnn_scores,
+                higher_is_better=True,
+                logger=log,
+                label="gnina_cnn_decoys",
             )
 
         decoy_ledock_scores = _load_best_scores_per_ligand(
@@ -484,8 +562,12 @@ def compute_consensus_for_variant_ph(
         )
 
     p_vina = _percentiles_from_scores(ligand_ids, vina_scores, higher_is_better=False)
-    p_gnina_energy = _percentiles_from_scores(ligand_ids, gnina_energy_scores, higher_is_better=False)
-    p_ledock = _percentiles_from_scores(ligand_ids, ledock_scores, higher_is_better=False)
+    p_gnina_energy = _percentiles_from_scores(
+        ligand_ids, gnina_energy_scores, higher_is_better=False
+    )
+    p_ledock = _percentiles_from_scores(
+        ligand_ids, ledock_scores, higher_is_better=False
+    )
     p_cnn = _percentiles_from_scores(ligand_ids, cnn_scores, higher_is_better=True)
     p_dock6 = _percentiles_from_scores(ligand_ids, dock6_scores, higher_is_better=False)
 
@@ -548,7 +630,13 @@ def compute_consensus_for_variant_ph(
         )
         n_engines = sum(
             1
-            for store in (vina_scores, gnina_energy_scores, ledock_scores, dock6_scores, cnn_scores)
+            for store in (
+                vina_scores,
+                gnina_energy_scores,
+                ledock_scores,
+                dock6_scores,
+                cnn_scores,
+            )
             if lig in store
         )
         best_engine, best_signal = _pick_best_engine(
@@ -591,7 +679,9 @@ def compute_consensus_for_variant_ph(
     decoy_scores = [
         float(r["consensus_score"])
         for r in out_rows
-        if r.get("library") == "DECOY" and isinstance(r.get("consensus_score"), (int, float)) and math.isfinite(r.get("consensus_score"))
+        if r.get("library") == "DECOY"
+        and isinstance(r.get("consensus_score"), (int, float))
+        and math.isfinite(r.get("consensus_score"))
     ]
     if decoy_scores:
         mu_decoy = sum(decoy_scores) / len(decoy_scores)

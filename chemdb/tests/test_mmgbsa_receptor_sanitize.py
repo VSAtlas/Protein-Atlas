@@ -16,7 +16,9 @@ def _pdb_line(record, serial, name, resname, chain, resseq, x, y, z, element):
 
 def test_mmgbsa_receptor_sanitize_nterm_and_chainbreak():
     sys.modules.pop("protein_prep_mmgbsa", None)
-    protein_prep_mmgbsa = importlib.import_module("post_docking.mmgbsa.protein_prep_mmgbsa")
+    protein_prep_mmgbsa = importlib.import_module(
+        "post_docking.mmgbsa.protein_prep_mmgbsa"
+    )
 
     lines = [
         _pdb_line("ATOM", 1, "N", "PHE", "A", 17, 0.0, 0.0, 0.0, "N"),
@@ -52,12 +54,18 @@ def test_mmgbsa_receptor_sanitize_nterm_and_chainbreak():
     )
 
     idx_first_330 = next(
-        idx for idx, line in enumerate(sanitized) if line.startswith("ATOM") and line[22:26].strip() == "330"
+        idx
+        for idx, line in enumerate(sanitized)
+        if line.startswith("ATOM") and line[22:26].strip() == "330"
     )
     idx_last_329 = max(
-        idx for idx, line in enumerate(sanitized) if line.startswith("ATOM") and line[22:26].strip() == "329"
+        idx
+        for idx, line in enumerate(sanitized)
+        if line.startswith("ATOM") and line[22:26].strip() == "329"
     )
-    assert any(line.startswith("TER") for line in sanitized[idx_last_329 + 1 : idx_first_330])
+    assert any(
+        line.startswith("TER") for line in sanitized[idx_last_329 + 1 : idx_first_330]
+    )
 
     assert info["inserted_TER_count"] == 1
     assert info["nterm_h_stripped_count"] == 1

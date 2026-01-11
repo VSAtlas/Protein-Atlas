@@ -26,16 +26,24 @@ def _phase5_ph_ensemble_global(
     if bool(cfg.get("PH_ENSEMBLE", False)):
         try:
             raw_vals = select_ph_values_for_protonation(str(paths.input_pdb_path))
-            logger.info("[ph.ctx.raw] path=%s values=%s", str(paths.input_pdb_path),
-                        ",".join(f"{v:.2f}" for v in (raw_vals or [])))
+            logger.info(
+                "[ph.ctx.raw] path=%s values=%s",
+                str(paths.input_pdb_path),
+                ",".join(f"{v:.2f}" for v in (raw_vals or [])),
+            )
 
-            ph_values = sorted({max(3.0, min(10.5, round(float(x), 1))) for x in (raw_vals or [])})
+            ph_values = sorted(
+                {max(3.0, min(10.5, round(float(x), 1))) for x in (raw_vals or [])}
+            )
             if not ph_values:
                 logger.warning("[ph.ctx.fallback] context list empty -> using [7.0]")
                 ph_values = [7.0]
 
-            logger.info("[ph.list] n=%d values=%s", len(ph_values),
-                        ",".join(f"{v:.1f}" for v in ph_values))
+            logger.info(
+                "[ph.list] n=%d values=%s",
+                len(ph_values),
+                ",".join(f"{v:.1f}" for v in ph_values),
+            )
 
             ph_center = (0.0, 0.0, 0.0)
             ph_radius = 1_000_000.0

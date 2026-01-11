@@ -14,6 +14,8 @@ from typing import Iterable, Set
 # --- Debug wrappers to locate legacy/incorrect folder creation ---
 
 _orig_mkdir = Path.mkdir
+
+
 def _dbg_mkdir(self, *a, **k):
     path_str = str(self)
     # Log legacy cleaned_ligands creations
@@ -32,7 +34,10 @@ def _dbg_mkdir(self, *a, **k):
         )
     return _orig_mkdir(self, *a, **k)
 
+
 _orig_makedirs = os.makedirs
+
+
 def _dbg_makedirs(name, *a, **k):
     p = str(name)
     if p.lower().endswith("_cleaned_ligands"):
@@ -49,6 +54,7 @@ def _dbg_makedirs(name, *a, **k):
         )
     return _orig_makedirs(name, *a, **k)
 
+
 def install_debug_makedirs() -> None:
     """
     Install debug wrappers for Path.mkdir and os.makedirs so we can see
@@ -57,15 +63,18 @@ def install_debug_makedirs() -> None:
     Path.mkdir = _dbg_mkdir
     os.makedirs = _dbg_makedirs
 
+
 # --- sanitize-collapse helpers ---
 
 _SANITIZED_RUN = re.compile(r"(?:\.sanitized){2,}")
+
 
 def _collapse_sanitized_token(fn: str) -> str:
     """Collapse any repeated '.sanitized' tokens anywhere in the stem."""
     stem, ext = os.path.splitext(fn)
     new_stem = _SANITIZED_RUN.sub(".sanitized", stem)
     return new_stem + ext
+
 
 def _sha1(path: str, bufsize: int = 1 << 20) -> str:
     h = hashlib.sha1()
@@ -77,6 +86,7 @@ def _sha1(path: str, bufsize: int = 1 << 20) -> str:
             h.update(b)
     return h.hexdigest()
 
+
 def _files_identical(a: str, b: str) -> bool:
     try:
         if os.path.getsize(a) != os.path.getsize(b):
@@ -84,6 +94,7 @@ def _files_identical(a: str, b: str) -> bool:
         return _sha1(a) == _sha1(b)
     except Exception:
         return False
+
 
 def collapse_sanitized_names(
     root_dirs: Iterable[object],

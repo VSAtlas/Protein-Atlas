@@ -43,7 +43,10 @@ def _get_logger() -> logging.Logger:
 def _ensure_file_handler(logger: logging.Logger, log_file: Path) -> None:
     for handler in logger.handlers:
         if isinstance(handler, logging.FileHandler):
-            if Path(getattr(handler, "baseFilename", "")).resolve() == log_file.resolve():
+            if (
+                Path(getattr(handler, "baseFilename", "")).resolve()
+                == log_file.resolve()
+            ):
                 return
     log_file.parent.mkdir(parents=True, exist_ok=True)
     fh = logging.FileHandler(log_file, mode="a", encoding="utf-8")
@@ -74,15 +77,21 @@ def _log_component(
     logger.log(level_map[level], line)
 
 
-def _log_receptor(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
+def _log_receptor(
+    logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None
+) -> None:
     _log_component(logger, _COMPONENT_RECEPTOR, level, kvs, msg)
 
 
-def _log_leap(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
+def _log_leap(
+    logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None
+) -> None:
     _log_component(logger, _COMPONENT_LEAP, level, kvs, msg)
 
 
-def _log_leap_prep(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
+def _log_leap_prep(
+    logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None
+) -> None:
     _log_component(logger, _COMPONENT_LEAP_PREP, level, kvs, msg)
 
 
@@ -272,7 +281,9 @@ def _sanitize_receptor_lines(
                 atom_name = line[12:16].strip().upper()
                 if atom_name in _NTERM_H_ALLOWLIST:
                     element = line[76:78].strip().upper()
-                    if (element and element == "H") or (not element and atom_name.startswith("H")):
+                    if (element and element == "H") or (
+                        not element and atom_name.startswith("H")
+                    ):
                         nterm_h_stripped_count += 1
                         stripped_residues.add(key)
                         continue
@@ -286,7 +297,9 @@ def _sanitize_receptor_lines(
     }
 
 
-def _strip_receptor_h_for_leap(receptor_path: Path, strip_all_h: bool) -> Tuple[Path, Dict[str, object]]:
+def _strip_receptor_h_for_leap(
+    receptor_path: Path, strip_all_h: bool
+) -> Tuple[Path, Dict[str, object]]:
     if not strip_all_h:
         hoh_residues: set[str] = set()
         with receptor_path.open("r", encoding="utf-8", errors="ignore") as handle:
@@ -302,7 +315,9 @@ def _strip_receptor_h_for_leap(receptor_path: Path, strip_all_h: bool) -> Tuple[
             "hoh_residue_count": len(hoh_residues),
         }
 
-    out_path = receptor_path.with_name(f"{receptor_path.stem}.noH{receptor_path.suffix}")
+    out_path = receptor_path.with_name(
+        f"{receptor_path.stem}.noH{receptor_path.suffix}"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     kept_lines: List[str] = []
@@ -333,7 +348,9 @@ def _strip_receptor_h_for_leap(receptor_path: Path, strip_all_h: bool) -> Tuple[
     }
 
 
-def _leap_water_lines(water_model: str, map_hoh_to_wat: bool, hoh_residue_count: int) -> List[str]:
+def _leap_water_lines(
+    water_model: str, map_hoh_to_wat: bool, hoh_residue_count: int
+) -> List[str]:
     lines: List[str] = []
     if water_model:
         lines.append(f"source leaprc.water.{water_model}")
@@ -367,7 +384,9 @@ def _resolve_ambertools_prefix(cfg: Optional[object]) -> Optional[str]:
     try:
         cfg_prefix = cfg.get("MMGBSA_AMBERTOOLS_PREFIX") or cfg.get("AMBERTOOLS_PREFIX")
     except Exception:
-        cfg_prefix = getattr(cfg, "MMGBSA_AMBERTOOLS_PREFIX", None) or getattr(cfg, "AMBERTOOLS_PREFIX", None)
+        cfg_prefix = getattr(cfg, "MMGBSA_AMBERTOOLS_PREFIX", None) or getattr(
+            cfg, "AMBERTOOLS_PREFIX", None
+        )
     if cfg_prefix:
         return str(cfg_prefix)
     return None
@@ -388,7 +407,9 @@ def _select_tleap_runner(logger: logging.Logger) -> Tuple[List[str], str, str]:
         elif _prefix_has_tool(prefix, "tleap"):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run tleap from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run tleap from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "tleap", f"prefix:{prefix}"
         else:
@@ -412,7 +433,9 @@ def _select_tleap_runner(logger: logging.Logger) -> Tuple[List[str], str, str]:
         if _prefix_has_tool(prefix, "tleap") and not _looks_like_pkgs_cache(prefix):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run tleap from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run tleap from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "tleap", f"prefix:{prefix}"
 
@@ -437,12 +460,19 @@ def _run_tleap_impl(leap_file_path: str, work_dir: str, force: bool = False) -> 
     _log_leap(
         logger,
         "INFO",
-        {"tleap": " ".join(cmd), "source": source, "work_dir": work_path, "force": force},
+        {
+            "tleap": " ".join(cmd),
+            "source": source,
+            "work_dir": work_path,
+            "force": force,
+        },
         "run",
     )
 
     with log_path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.run(cmd, cwd=str(work_path), stdout=handle, stderr=subprocess.STDOUT)
+        proc = subprocess.run(
+            cmd, cwd=str(work_path), stdout=handle, stderr=subprocess.STDOUT
+        )
 
     result = {
         "args": " ".join(cmd),
@@ -452,7 +482,12 @@ def _run_tleap_impl(leap_file_path: str, work_dir: str, force: bool = False) -> 
     }
 
     if proc.returncode != 0:
-        _log_leap(logger, "ERROR", {"returncode": proc.returncode, "log": log_path}, "tleap_failed")
+        _log_leap(
+            logger,
+            "ERROR",
+            {"returncode": proc.returncode, "log": log_path},
+            "tleap_failed",
+        )
         raise RuntimeError(f"tleap failed (code={proc.returncode}); see {log_path}")
 
     _log_leap(logger, "INFO", {"ok": "true", "log": log_path}, "tleap_done")
@@ -460,7 +495,9 @@ def _run_tleap_impl(leap_file_path: str, work_dir: str, force: bool = False) -> 
 
 
 def run_tleap(leap_file_path: str, work_dir: str, force: bool = False) -> dict:
-    return _run_tleap_impl(leap_file_path=leap_file_path, work_dir=work_dir, force=force)
+    return _run_tleap_impl(
+        leap_file_path=leap_file_path, work_dir=work_dir, force=force
+    )
 
 
 def write_leap_receptor_only(
@@ -486,7 +523,13 @@ def write_leap_receptor_only(
 
     receptor_rel = os.path.relpath(receptor_path, out_path)
     leap_lines = ["source leaprc.protein.ff14SB"]
-    leap_lines.extend(_leap_water_lines(water_model=water_model, map_hoh_to_wat=map_hoh_to_wat, hoh_residue_count=hoh_residue_count))
+    leap_lines.extend(
+        _leap_water_lines(
+            water_model=water_model,
+            map_hoh_to_wat=map_hoh_to_wat,
+            hoh_residue_count=hoh_residue_count,
+        )
+    )
     leap_lines.extend(
         [
             f"REC = loadpdb {receptor_rel}",
@@ -555,7 +598,13 @@ def write_leap_for_ligand(
         "source leaprc.protein.ff14SB",
         "source leaprc.gaff2",
     ]
-    leap_lines.extend(_leap_water_lines(water_model=water_model, map_hoh_to_wat=map_hoh_to_wat, hoh_residue_count=hoh_residue_count))
+    leap_lines.extend(
+        _leap_water_lines(
+            water_model=water_model,
+            map_hoh_to_wat=map_hoh_to_wat,
+            hoh_residue_count=hoh_residue_count,
+        )
+    )
     receptor_comment = receptor_rel.replace(".noH.pdb", ".pdb")
     leap_lines.append(f"# receptor_source {receptor_comment}")
     leap_lines.extend(
@@ -648,7 +697,9 @@ def prep_mmgbsa_receptor(
 
     _log_receptor(logger, "INFO", {"input": path})
 
-    inferred_runid, pdb_id, variant, ph_label, base_dir = _resolve_post_docked_context(path)
+    inferred_runid, pdb_id, variant, ph_label, base_dir = _resolve_post_docked_context(
+        path
+    )
     if runid and runid != inferred_runid:
         raise ValueError(f"runid mismatch: arg={runid} path={inferred_runid}")
     runid = runid or inferred_runid
@@ -658,7 +709,11 @@ def prep_mmgbsa_receptor(
     out_dir.mkdir(parents=True, exist_ok=True)
     _ensure_file_handler(logger, out_dir / "mmgbsa_receptor_prep.log")
 
-    _log_receptor(logger, "INFO", {"runid": runid, "pdb": pdb_id, "variant": variant, "ph": ph_label})
+    _log_receptor(
+        logger,
+        "INFO",
+        {"runid": runid, "pdb": pdb_id, "variant": variant, "ph": ph_label},
+    )
     _log_receptor(logger, "INFO", {"output": out_path})
 
     cfg = load_config()
@@ -689,18 +744,24 @@ def prep_mmgbsa_receptor(
     strip_metals = not keep_metals
 
     keep_waters = _to_bool(cfg.get("MMGBSA_KEEP_WATERS", True), default=True)
-    water_policy_raw = str(cfg.get("MMGBSA_WATER_POLICY", "ACTIVE_SITE") or "ACTIVE_SITE")
+    water_policy_raw = str(
+        cfg.get("MMGBSA_WATER_POLICY", "ACTIVE_SITE") or "ACTIVE_SITE"
+    )
     water_policy = water_policy_raw.strip().upper().replace("-", "_").replace(" ", "_")
     if "MMGBSA_KEEP_WATERS" in file_cfg or "MMGBSA_WATER_POLICY" not in file_cfg:
         water_policy = "ACTIVE_SITE" if keep_waters else "NONE"
 
-    water_radius_cfg = cfg.get("MMGBSA_WATER_KEEP_RADIUS", cfg.get("MMGBSA_WATER_KEEP_RADIUS_A", 6.0))
+    water_radius_cfg = cfg.get(
+        "MMGBSA_WATER_KEEP_RADIUS", cfg.get("MMGBSA_WATER_KEEP_RADIUS_A", 6.0)
+    )
     water_radius = _to_float(water_radius_cfg, 6.0)
     if radius is not None:
         water_radius = float(radius)
 
     if water_policy not in {"NONE", "ACTIVE_SITE", "ALL"}:
-        raise ValueError(f"MMGBSA_WATER_POLICY must be NONE, ACTIVE_SITE, or ALL (got {water_policy_raw})")
+        raise ValueError(
+            f"MMGBSA_WATER_POLICY must be NONE, ACTIVE_SITE, or ALL (got {water_policy_raw})"
+        )
 
     if water_policy == "ACTIVE_SITE" and center is None:
         raise ValueError("center is required when MMGBSA_WATER_POLICY=ACTIVE_SITE")
@@ -721,12 +782,24 @@ def prep_mmgbsa_receptor(
     water_override = _parse_token_list(cfg.get("MMGBSA_WATER_RETAIN_TOKENS", ""))
     metal_override = _parse_token_list(cfg.get("MMGBSA_METAL_RETAIN_TOKENS", ""))
 
-    use_water_aliases = _to_bool(cfg.get("MMGBSA_WATER_USE_ALIASES", True), default=True)
-    use_metal_aliases = _to_bool(cfg.get("MMGBSA_METAL_USE_ALIASES", True), default=True)
+    use_water_aliases = _to_bool(
+        cfg.get("MMGBSA_WATER_USE_ALIASES", True), default=True
+    )
+    use_metal_aliases = _to_bool(
+        cfg.get("MMGBSA_METAL_USE_ALIASES", True), default=True
+    )
 
     rules = get_atom_rules()
-    metals_set = {rules.normalize_resname(t) or t for t in metal_override} if metal_override else load_canonical_metals(None)
-    waters_set = {rules.normalize_resname(t) or t for t in water_override} if water_override else load_canonical_waters(None)
+    metals_set = (
+        {rules.normalize_resname(t) or t for t in metal_override}
+        if metal_override
+        else load_canonical_metals(None)
+    )
+    waters_set = (
+        {rules.normalize_resname(t) or t for t in water_override}
+        if water_override
+        else load_canonical_waters(None)
+    )
     cofactors_set = load_canonical_cofactors(None)
 
     if not use_water_aliases or not use_metal_aliases:
@@ -804,7 +877,11 @@ def prep_mmgbsa_receptor(
         _log_receptor(
             logger,
             "WARNING",
-            {"reason": "water_missing_oxygen", "count": len(missing_oxygen_keys), "action": "removed"},
+            {
+                "reason": "water_missing_oxygen",
+                "count": len(missing_oxygen_keys),
+                "action": "removed",
+            },
         )
 
     kept_lines: List[str] = []
@@ -825,7 +902,9 @@ def prep_mmgbsa_receptor(
 
         if strip_metals:
             element_raw = line[76:78].strip().upper()
-            element_norm = rules.normalize_resname(element_raw) if element_raw else element_raw
+            element_norm = (
+                rules.normalize_resname(element_raw) if element_raw else element_raw
+            )
             if resn_norm in metals_set or (element_norm and element_norm in metals_set):
                 metal_lines_removed += 1
                 continue
@@ -840,7 +919,9 @@ def prep_mmgbsa_receptor(
         kept_lines.append(line)
 
     strip_nterm_h = _to_bool(cfg.get("MMGBSA_TLEAP_STRIP_NTERM_H", True), default=True)
-    insert_ter_on_break = _to_bool(cfg.get("MMGBSA_TLEAP_INSERT_TER_ON_CHAINBREAK", True), default=True)
+    insert_ter_on_break = _to_bool(
+        cfg.get("MMGBSA_TLEAP_INSERT_TER_ON_CHAINBREAK", True), default=True
+    )
     chainbreak_cn_max = _to_float(cfg.get("MMGBSA_TLEAP_CHAINBREAK_CN_MAX_A", 2.2), 2.2)
 
     if strip_nterm_h or insert_ter_on_break:
@@ -859,7 +940,9 @@ def prep_mmgbsa_receptor(
             shown = stripped_res[:10]
             extra = len(stripped_res) - len(shown)
             if extra > 0:
-                log_kvs["nterm_h_stripped_residues"] = ",".join(shown) + f",+{extra} more"
+                log_kvs["nterm_h_stripped_residues"] = (
+                    ",".join(shown) + f",+{extra} more"
+                )
             else:
                 log_kvs["nterm_h_stripped_residues"] = ",".join(shown)
         _log_receptor(logger, "INFO", log_kvs, "sanitize")
@@ -912,10 +995,15 @@ def prep_mmgbsa_receptor_and_topologies(
     logger = _get_logger()
     cfg = load_config()
 
-    topo_enabled = _to_bool(cfg.get("MMGBSA_TLEAP_ENABLED", cfg.get("MMGBSA_TOPOLOGY_PREP_ENABLED", True)), default=True)
+    topo_enabled = _to_bool(
+        cfg.get("MMGBSA_TLEAP_ENABLED", cfg.get("MMGBSA_TOPOLOGY_PREP_ENABLED", True)),
+        default=True,
+    )
     if not topo_enabled:
         _log_leap(logger, "INFO", {"enabled": False}, "topology_prep_disabled")
-        receptor_result = prep_mmgbsa_receptor(pdb_path, runid, center, radius, force=force)
+        receptor_result = prep_mmgbsa_receptor(
+            pdb_path, runid, center, radius, force=force
+        )
         return {
             "receptor": receptor_result,
             "topology_enabled": False,
@@ -923,17 +1011,29 @@ def prep_mmgbsa_receptor_and_topologies(
             "ligand_topologies": [],
         }
 
-    strip_all_h_for_leap = _to_bool(cfg.get("MMGBSA_TLEAP_STRIP_ALL_H", True), default=True)
-    water_model = str(cfg.get("MMGBSA_TLEAP_WATER_MODEL", "tip3p") or "tip3p").strip().lower()
-    map_hoh_to_wat = _to_bool(cfg.get("MMGBSA_TLEAP_MAP_HOH_TO_WAT", True), default=True)
+    strip_all_h_for_leap = _to_bool(
+        cfg.get("MMGBSA_TLEAP_STRIP_ALL_H", True), default=True
+    )
+    water_model = (
+        str(cfg.get("MMGBSA_TLEAP_WATER_MODEL", "tip3p") or "tip3p").strip().lower()
+    )
+    map_hoh_to_wat = _to_bool(
+        cfg.get("MMGBSA_TLEAP_MAP_HOH_TO_WAT", True), default=True
+    )
     if water_model not in {"tip3p"}:
-        raise ValueError(f"MMGBSA_TLEAP_WATER_MODEL supports tip3p only (got {water_model})")
+        raise ValueError(
+            f"MMGBSA_TLEAP_WATER_MODEL supports tip3p only (got {water_model})"
+        )
 
-    inferred_runid, pdb_id, variant, ph_label, base_dir = _resolve_post_docked_context(Path(pdb_path))
+    inferred_runid, pdb_id, variant, ph_label, base_dir = _resolve_post_docked_context(
+        Path(pdb_path)
+    )
     if runid and runid != inferred_runid:
         raise ValueError(f"runid mismatch: arg={runid} path={inferred_runid}")
 
-    topology_dirname = str(cfg.get("MMGBSA_TOPOLOGY_DIRNAME", "mmgbsa_topologies") or "mmgbsa_topologies")
+    topology_dirname = str(
+        cfg.get("MMGBSA_TOPOLOGY_DIRNAME", "mmgbsa_topologies") or "mmgbsa_topologies"
+    )
     top_root = base_dir / topology_dirname
 
     if _to_bool(cfg.get("MMGBSA_TLEAP_FORCE", False), default=False):
@@ -941,7 +1041,9 @@ def prep_mmgbsa_receptor_and_topologies(
 
     receptor_result = prep_mmgbsa_receptor(pdb_path, runid, center, radius, force=force)
     receptor_pdb = receptor_result["output_path"]
-    receptor_for_leap_path, strip_info = _strip_receptor_h_for_leap(Path(receptor_pdb), strip_all_h_for_leap)
+    receptor_for_leap_path, strip_info = _strip_receptor_h_for_leap(
+        Path(receptor_pdb), strip_all_h_for_leap
+    )
     hoh_residue_count = strip_info.get("hoh_residue_count", 0)
     _log_leap_prep(
         logger,
@@ -957,7 +1059,11 @@ def prep_mmgbsa_receptor_and_topologies(
     _log_leap_prep(
         logger,
         "INFO",
-        {"map_hoh_to_wat": map_hoh_to_wat, "water_model": water_model, "hoh_residues": hoh_residue_count},
+        {
+            "map_hoh_to_wat": map_hoh_to_wat,
+            "water_model": water_model,
+            "hoh_residues": hoh_residue_count,
+        },
         "water_mapping",
     )
 
@@ -1017,10 +1123,23 @@ def prep_mmgbsa_receptor_and_topologies(
         if not sdf_path.exists():
             raise FileNotFoundError(f"ligand sdf not found: {sdf_path}")
 
-        lig_runid, lig_pdb, lig_variant, lig_ph, lig_base_dir = _resolve_post_docked_context(sdf_path)
+        (
+            lig_runid,
+            lig_pdb,
+            lig_variant,
+            lig_ph,
+            lig_base_dir,
+        ) = _resolve_post_docked_context(sdf_path)
         if lig_base_dir != base_dir:
-            raise ValueError(f"ligand path does not match receptor base dir: {sdf_path}")
-        if lig_runid != inferred_runid or lig_pdb != pdb_id or lig_variant != variant or lig_ph != ph_label:
+            raise ValueError(
+                f"ligand path does not match receptor base dir: {sdf_path}"
+            )
+        if (
+            lig_runid != inferred_runid
+            or lig_pdb != pdb_id
+            or lig_variant != variant
+            or lig_ph != ph_label
+        ):
             raise ValueError(f"ligand path context mismatch for {sdf_path}")
 
         stage_dir = sdf_path.parent.name
@@ -1098,15 +1217,45 @@ def prep_mmgbsa_receptor_and_topologies(
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Prepare an MMGBSA receptor PDB from a post_docked receptor.")
-    parser.add_argument("--pdb", required=True, help="Input receptor PDB under post_docked/<runid>/<pdb>/<variant>/<pH>/." )
-    parser.add_argument("--runid", default="", help="Run ID for validation if path contains post_docked.")
-    parser.add_argument("--center", required=True, help="Active-site center as 'x,y,z'.")
-    parser.add_argument("--radius", type=float, default=None, help="Active-site radius (A). Overrides config.")
-    parser.add_argument("--ligand-sdf", action="append", default=[], help="Ligand SDF under post_docked/<runid>/<pdb>/<variant>/<pH>/<stage_dir>/. Can be repeated.")
-    parser.add_argument("--no-topology-prep", action="store_true", help="Skip MMGBSA topology prep.")
-    parser.add_argument("--no-tleap", action="store_true", help="Write tleap scripts but do not run tleap.")
-    parser.add_argument("--force", action="store_true", help="Overwrite outputs if present.")
+    parser = argparse.ArgumentParser(
+        description="Prepare an MMGBSA receptor PDB from a post_docked receptor."
+    )
+    parser.add_argument(
+        "--pdb",
+        required=True,
+        help="Input receptor PDB under post_docked/<runid>/<pdb>/<variant>/<pH>/.",
+    )
+    parser.add_argument(
+        "--runid",
+        default="",
+        help="Run ID for validation if path contains post_docked.",
+    )
+    parser.add_argument(
+        "--center", required=True, help="Active-site center as 'x,y,z'."
+    )
+    parser.add_argument(
+        "--radius",
+        type=float,
+        default=None,
+        help="Active-site radius (A). Overrides config.",
+    )
+    parser.add_argument(
+        "--ligand-sdf",
+        action="append",
+        default=[],
+        help="Ligand SDF under post_docked/<runid>/<pdb>/<variant>/<pH>/<stage_dir>/. Can be repeated.",
+    )
+    parser.add_argument(
+        "--no-topology-prep", action="store_true", help="Skip MMGBSA topology prep."
+    )
+    parser.add_argument(
+        "--no-tleap",
+        action="store_true",
+        help="Write tleap scripts but do not run tleap.",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Overwrite outputs if present."
+    )
     return parser
 
 
@@ -1119,7 +1268,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         center = _parse_center(args.center)
         cfg = load_config()
 
-        topo_enabled = _to_bool(cfg.get("MMGBSA_TOPOLOGY_PREP_ENABLED", True), default=True)
+        topo_enabled = _to_bool(
+            cfg.get("MMGBSA_TOPOLOGY_PREP_ENABLED", True), default=True
+        )
         if args.no_topology_prep:
             topo_enabled = False
 
@@ -1148,7 +1299,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
 
     except Exception as exc:
-        _log_receptor(logger, "ERROR", {"reason": type(exc).__name__, "detail": str(exc)}, "failed")
+        _log_receptor(
+            logger,
+            "ERROR",
+            {"reason": type(exc).__name__, "detail": str(exc)},
+            "failed",
+        )
         return 1
     return 0
 

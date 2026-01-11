@@ -1,8 +1,8 @@
 run_id: test_run
-generated_at: '2026-01-10T01:21:20.849582Z'
+generated_at: '2026-01-11T17:15:42.258619Z'
 sources:
   master_rows_csv: data/test_run/master_rows.csv
-  manifest_yaml: null
+  manifest_yaml: manifests/test_run/run_manifest.yaml
 summary:
   n_target_combos: 2
   n_rows: 18
@@ -10,13 +10,14 @@ summary:
 targets:
   TEST|APO|pH7_0:
     qc:
-      ef1: null
-      roc_auc: null
-      roc_auc_adj: null
+      ef1: 0.0
+      roc_auc: 0.0
+      roc_auc_adj: 0.0
       dud_eval_status_reason: null
       n_rows: 9
       n_decoys: 5
       n_controls: 4
+      fdr: SMALL 0.333333
       decoy_stats:
         consensus:
           mu: null
@@ -30,7 +31,15 @@ targets:
           mu: null
           sigma: null
           n: null
-      fdr: null
+      fdr_stats:
+        score_field: consensus_score
+        n_decoys: 5
+        n_tested: 4
+        n_hits_q05: 0
+        n_hits_q10: 0
+        best_q: 0.333333
+        unique_decoy_scores: 5
+        reliable: false
     pocket:
       method: null
       center: null
@@ -63,13 +72,14 @@ targets:
       is_decoy: true
   TEST|HOLO|pH7_0:
     qc:
-      ef1: null
-      roc_auc: null
-      roc_auc_adj: null
-      dud_eval_status_reason: null
+      ef1: 0.0
+      roc_auc: 0.0
+      roc_auc_adj: 0.0
+      dud_eval_status_reason: degenerate_set
       n_rows: 9
       n_decoys: 5
       n_controls: 4
+      fdr: SMALL 1
       decoy_stats:
         consensus:
           mu: null
@@ -83,11 +93,25 @@ targets:
           mu: 0.00325689
           sigma: 0.00426441
           n: 4
-      fdr: null
+      fdr_stats:
+        score_field: consensus_score
+        n_decoys: 5
+        n_tested: 4
+        n_hits_q05: 0
+        n_hits_q10: 0
+        best_q: 1.0
+        unique_decoy_scores: 5
+        reliable: false
     pocket:
-      method: null
-      center: null
-      box: null
+      method: control
+      center:
+      - 4.833
+      - 1.833
+      - 3.633
+      box:
+      - 24.0
+      - 24.0
+      - 24.0
     top5_ligands:
     - ligand_base: LIG_A301
       t_selected: null

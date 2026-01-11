@@ -7,29 +7,24 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_vina import emit_vina_config, emit_vina_config as _emit_vina_config_impl
-
-from apo_holo_mode import (
-    _record_apo_holo_usage,
-    resolve_apo_holo_mode,
-)
-from .fallback_recenter import RecenterParams
 from logging_topics import make_protein_logger
 from path_router.path_router import Paths, make_paths
-from run_manifest import (
-    update_manifest_for_docking_overall,
-)
-from .docking_subruns import ProteinDockingContext, SubrunSpec, subruns_for_test_mode, run_ligand_pipeline_subrun
-from druggability_evaluation import evaluate_druggability_for_active_site
-from druggability_orchestrator import decide_engine_policy
+from protein_functions import detect_active_site
+from run_manifest import update_manifest_for_docking_overall
 
+from . import docking as _docking
 from . import docking_controls
+from .docking_control_centering_phase import _phase5b_controls_and_control_redock
+from .docking_control_redock import (
+    _collect_control_pdbqts,
+    run_control_docking_multi_engine,
+)
 from .docking_controls import (
     _summarize_ions_file,
     _is_readable_ref,
-    _resolve_ph_scope,
 )
 from .docking_ligands import (
     select_ligands_for_next,
@@ -39,32 +34,25 @@ from .docking_ligands import (
     compute_rmsd,
     validate_ligand,
 )
-from .docking_utils import (
-    norm,
+from .docking_ph_ensemble_phase import _phase5_ph_ensemble_global
+from .docking_receptor_phases import _phase2_to4_receptor_and_center
+from .docking_stage_runner import RetryManager, run_one_stage, _map_reason_to_category
+from .docking_subruns import (
+    ProteinDockingContext,
+    SubrunSpec,
+    subruns_for_test_mode,
+    run_ligand_pipeline_subrun,
 )
-from protein_functions import detect_active_site
+from .docking_utils import norm
+from .docking_vina import emit_vina_config
+from .fallback_recenter import RecenterParams
+from druggability_evaluation import evaluate_druggability_for_active_site
 
 # Bridge functions for docking helpers
-from . import docking as _docking
-
 _docking.emit_vina_config = emit_vina_config
 _docking.norm = norm
 _docking._read_any_lig = _read_any_lig
 _docking.validate_ligand = validate_ligand
-
-from .docking_stage_runner import RetryManager, run_one_stage, _map_reason_to_category
-
-from .docking_control_redock import (
-    _collect_control_pdbqts,
-    _control_centers_by_ph,
-    _select_control_engines,
-    run_control_docking_multi_engine,
-)
-
-# New extracted phases
-from .docking_receptor_phases import _phase2_to4_receptor_and_center
-from .docking_ph_ensemble_phase import _phase5_ph_ensemble_global
-from .docking_control_centering_phase import _phase5b_controls_and_control_redock
 
 docking_controls._is_readable_ref = _is_readable_ref
 docking_controls.compute_rmsd = compute_rmsd
@@ -121,7 +109,9 @@ def get_active_site_center_and_size(
     Prefers cached values populated during docking setup; falls back to running
     detect_active_site on the cleaned receptor.
     """
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     variant_key = variant_token or "HOLO"
     ph_key = (str(ph_label).strip() or "") or "base"
 
@@ -204,14 +194,16 @@ def get_active_site_center_and_size(
         pdb_id,
         variant_key,
         ph_key,
-        source if 'source' in locals() else "unknown",
+        source if "source" in locals() else "unknown",
     )
     return None
 
 
-def _phase0_setup_paths_and_logger(cfg: Dict, pdb_file: str) -> Tuple[Paths, str, logging.Logger]:
+def _phase0_setup_paths_and_logger(
+    cfg: Dict, pdb_file: str
+) -> Tuple[Paths, str, logging.Logger]:
     base_id = os.path.splitext(pdb_file)[0]
-    pdb_id = re.sub(r'(?i)_cleaned$', '', base_id)
+    pdb_id = re.sub(r"(?i)_cleaned$", "", base_id)
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=os.path.basename(pdb_file))
 
     logger = make_protein_logger(str(paths.docked_pdb_root()), pdb_id, cfg)
@@ -220,7 +212,9 @@ def _phase0_setup_paths_and_logger(cfg: Dict, pdb_file: str) -> Tuple[Paths, str
     return paths, pdb_id, logger
 
 
-def _phase1_variant_and_ion_context(cfg: Dict, paths: Paths, logger: logging.Logger) -> Tuple[str, Optional[str], str, dict, dict, bool, Path]:
+def _phase1_variant_and_ion_context(
+    cfg: Dict, paths: Paths, logger: logging.Logger
+) -> Tuple[str, Optional[str], str, dict, dict, bool, Path]:
     variant_env = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper()
     variant_token = variant_env or None
     variant_label = variant_env or "legacy"
@@ -273,7 +267,15 @@ def _phase1_variant_and_ion_context(cfg: Dict, paths: Paths, logger: logging.Log
         receptor_target,
         receptor_target.exists(),
     )
-    return variant_env, variant_token, variant_label, pdb_audit, clean_audit, legacy_mode, receptor_target
+    return (
+        variant_env,
+        variant_token,
+        variant_label,
+        pdb_audit,
+        clean_audit,
+        legacy_mode,
+        receptor_target,
+    )
 
 
 def _phase6_to8_ligands_and_docking(
@@ -333,12 +335,32 @@ def _phase6_to8_ligands_and_docking(
         run_ligand_pipeline_subrun(ctx, sub)
 
 
-def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams) -> None:
+def process_one_protein(
+    cfg: Dict, pdb_file: str, stages: List[Dict], params: RecenterParams
+) -> None:
     paths, pdb_id, logger = _phase0_setup_paths_and_logger(cfg, pdb_file)
-    variant_env, variant_token, variant_label, pdb_audit, clean_audit, legacy_mode, receptor_target = _phase1_variant_and_ion_context(cfg, paths, logger)
+    (
+        variant_env,
+        variant_token,
+        variant_label,
+        pdb_audit,
+        clean_audit,
+        legacy_mode,
+        receptor_target,
+    ) = _phase1_variant_and_ion_context(cfg, paths, logger)
     active_ph_label = None
 
-    cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup = _phase2_to4_receptor_and_center(
+    (
+        cleaned_pdb,
+        receptor_pdbqt,
+        pdb_audit,
+        clean_audit,
+        center,
+        box_size,
+        center_source,
+        control_stems,
+        control_lookup,
+    ) = _phase2_to4_receptor_and_center(
         cfg,
         paths,
         logger,
@@ -367,7 +389,15 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         box_size,
     )
 
-    center, box_size, center_by_ph, box_by_ph, center_source_by_ph, control_stems, control_lookup = _phase5b_controls_and_control_redock(
+    (
+        center,
+        box_size,
+        center_by_ph,
+        box_by_ph,
+        center_source_by_ph,
+        control_stems,
+        control_lookup,
+    ) = _phase5b_controls_and_control_redock(
         cfg,
         paths,
         logger,
@@ -379,7 +409,12 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
         center,
         box_size,
     )
-    if center_by_ph and (None not in center_by_ph) and center is None and box_size is None:
+    if (
+        center_by_ph
+        and (None not in center_by_ph)
+        and center is None
+        and box_size is None
+    ):
         center = center_by_ph.get(active_ph_label) or center_by_ph.get(None)
         box_size = box_by_ph.get(active_ph_label) if box_by_ph else None
     if not center_by_ph and center is not None and box_size is not None:
@@ -483,6 +518,7 @@ def process_one_protein(cfg: Dict, pdb_file: str, stages: List[Dict], params: Re
                     docking_event,
                     exc_info=True,
                 )
+
 
 __all__ = [
     "_map_reason_to_category",

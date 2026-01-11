@@ -48,7 +48,9 @@ def _ensure_stage_entry() -> dict[str, Any]:
     }
 
 
-def _ensure_protein_entry(pdb_id: str, variant: str, ph: str | None = None) -> dict[str, Any]:
+def _ensure_protein_entry(
+    pdb_id: str, variant: str, ph: str | None = None
+) -> dict[str, Any]:
     return {
         "pdb_id": pdb_id,
         "library": "test_library_10",
@@ -66,7 +68,9 @@ def _ensure_protein_entry(pdb_id: str, variant: str, ph: str | None = None) -> d
     }
 
 
-def _run_python(args: list[str], env: Mapping[str, str], *, check: bool = True) -> subprocess.CompletedProcess:
+def _run_python(
+    args: list[str], env: Mapping[str, str], *, check: bool = True
+) -> subprocess.CompletedProcess:
     cmd = ["micromamba", "run", "-n", "docking-env", "python"] + args
     return subprocess.run(
         cmd,
@@ -138,7 +142,9 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     cfg["CONFIG_RUN_DIR"] = str(REPO_ROOT / "configs" / RUN_ID)
     cfg["TEST_MODE_ENABLE"] = "dud+fda"
     cfg["USE_GNINA"] = "false"
-    cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
+    cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get(
+        "TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10"
+    )
     specified_proteins = ["TEMP", "T3MP"]
     cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = specified_proteins
     cfg["SPECIFIED_PROTEINS"] = specified_proteins
@@ -244,9 +250,13 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
 
     if not proteins:
         variant = "HOLO"
-        proteins[f"TEMP|{variant}|{ph_token}"] = _ensure_protein_entry("TEMP", variant, ph_token)
+        proteins[f"TEMP|{variant}|{ph_token}"] = _ensure_protein_entry(
+            "TEMP", variant, ph_token
+        )
         proteins[f"TEMP|{variant}|{ph_token}"]["status"] = "completed"
-        proteins[f"T3MP|{variant}|{ph_token}"] = _ensure_protein_entry("T3MP", variant, ph_token)
+        proteins[f"T3MP|{variant}|{ph_token}"] = _ensure_protein_entry(
+            "T3MP", variant, ph_token
+        )
     else:
         existing_ids = {
             str(k).split("|", 1)[0].upper()
@@ -255,11 +265,15 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
         }
         if "TEMP" not in existing_ids:
             variant = "HOLO"
-            proteins[f"TEMP|{variant}|{ph_token}"] = _ensure_protein_entry("TEMP", variant, ph_token)
+            proteins[f"TEMP|{variant}|{ph_token}"] = _ensure_protein_entry(
+                "TEMP", variant, ph_token
+            )
             proteins[f"TEMP|{variant}|{ph_token}"]["status"] = "completed"
         if "T3MP" not in existing_ids:
             variant = "HOLO"
-            proteins[f"T3MP|{variant}|{ph_token}"] = _ensure_protein_entry("T3MP", variant, ph_token)
+            proteins[f"T3MP|{variant}|{ph_token}"] = _ensure_protein_entry(
+                "T3MP", variant, ph_token
+            )
 
     manifest["proteins"] = proteins
     cmd_block = manifest.get("command") or {}
@@ -282,7 +296,8 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     completed_count = sum(
         1
         for entry in proteins.values()
-        if isinstance(entry, dict) and str(entry.get("status", "")).lower() == "completed"
+        if isinstance(entry, dict)
+        and str(entry.get("status", "")).lower() == "completed"
     )
     manifest["summary"] = {
         "total_proteins_scheduled": len(protein_ids),
@@ -308,7 +323,9 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     drift_cfg = holo_config
     drift_cfg = drift_cfg.replace("APO_HOLO_MODE = holo", "APO_HOLO_MODE = apo")
     drift_cfg = drift_cfg.replace("PH_ENSEMBLE=true", "PH_ENSEMBLE=false")
-    drift_cfg = drift_cfg.replace("TEST_MODE_ENABLE = dud+fda", "TEST_MODE_ENABLE = off")
+    drift_cfg = drift_cfg.replace(
+        "TEST_MODE_ENABLE = dud+fda", "TEST_MODE_ENABLE = off"
+    )
     drift_cfg = drift_cfg.replace('"T3MP": "test_library_10",', "")
     CONFIG_PATH.write_text(drift_cfg)
 
@@ -336,18 +353,28 @@ def test_resume_mode(tmp_path: Path, request: pytest.FixtureRequest) -> None:
 
         entry_temp = _lookup("TEMP", "HOLO")
         entry_t3mp = _lookup("T3MP", "HOLO")
-        assert entry_temp is not None and str(entry_temp.get("status", "")).lower() == "completed"
-        assert entry_t3mp is not None and str(entry_t3mp.get("status", "")).lower() == "completed"
+        assert (
+            entry_temp is not None
+            and str(entry_temp.get("status", "")).lower() == "completed"
+        )
+        assert (
+            entry_t3mp is not None
+            and str(entry_t3mp.get("status", "")).lower() == "completed"
+        )
 
         summary = manifest_after.get("summary") or {}
         assert summary.get("total_proteins_scheduled") == 2
         completed_count = sum(
             1
             for entry in proteins_after.values()
-            if isinstance(entry, dict) and str(entry.get("status", "")).lower() == "completed"
+            if isinstance(entry, dict)
+            and str(entry.get("status", "")).lower() == "completed"
         )
         summary_completed = summary.get("total_proteins_completed")
-        assert summary_completed is not None and int(summary_completed) == completed_count == 2
+        assert (
+            summary_completed is not None
+            and int(summary_completed) == completed_count == 2
+        )
         assert summary.get("total_proteins_failed") == 0
 
         cmd = manifest_after.get("command") or {}

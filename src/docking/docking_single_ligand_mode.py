@@ -40,7 +40,9 @@ def resolve_single_ligand_or_prepare(
         cfg.setdefault("paths", {})
         cfg["paths"]["prepped_ligands_dir"] = str(paths.prepped_ligands_dir)
 
-        hit = _resolve_single_ligand(cfg["_EFFECTIVE_SINGLE_LIGAND"], pdb_id, cfg, logger)
+        hit = _resolve_single_ligand(
+            cfg["_EFFECTIVE_SINGLE_LIGAND"], pdb_id, cfg, logger
+        )
         if hit:
             cfg["_SINGLE_RESOLVED_PATH"] = str(hit)
             single_ligand_hit = hit
@@ -58,7 +60,9 @@ def resolve_single_ligand_or_prepare(
             except Exception:
                 suggestions = []
             if suggestions:
-                logger.error("[single.miss.suggest] did_you_mean=%s", ", ".join(suggestions))
+                logger.error(
+                    "[single.miss.suggest] did_you_mean=%s", ", ".join(suggestions)
+                )
 
             allow_flag = os.environ.get("ALLOW_FDA_FALLBACK")
             if allow_flag is None:
@@ -82,15 +86,23 @@ def resolve_single_ligand_or_prepare(
         ha = _count_heavy_atoms_from_pdbqt(single_ligand_hit)
         heavy_atom_counts = {str(single_ligand_hit): ha}
         pains_flags = {}
-        logger.info(f"[single] Active ? docking only: {single_ligand_hit.name} (heavy={ha})")
+        logger.info(
+            f"[single] Active ? docking only: {single_ligand_hit.name} (heavy={ha})"
+        )
 
-        if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get("PH_ENSEMBLE_IN_PREP"):
+        if cfg.get("PH_LIGAND_MODE", "").lower() == "context_window" and cfg.get(
+            "PH_ENSEMBLE_IN_PREP"
+        ):
             try:
                 ph_values = [6.0, 8.0]
                 if "_PH_CONTEXT_VALUES" in cfg:
                     ph_values = cfg["_PH_CONTEXT_VALUES"]
                 ligand_window = sorted(
-                    {round(p, 1) for ph in ph_values for p in (float(ph) - 1.0, float(ph), float(ph) + 1.0)}
+                    {
+                        round(p, 1)
+                        for ph in ph_values
+                        for p in (float(ph) - 1.0, float(ph), float(ph) + 1.0)
+                    }
                 )
                 logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
 
@@ -107,7 +119,9 @@ def resolve_single_ligand_or_prepare(
                     logger,
                     test_mode_override=ph_override_single,
                 )
-                ph_root_path = noncontrol_roots_single[0] if noncontrol_roots_single else None
+                ph_root_path = (
+                    noncontrol_roots_single[0] if noncontrol_roots_single else None
+                )
                 ph_root_cfg = str(ph_root_path) if ph_root_path else ""
 
                 logger.info(
@@ -129,7 +143,9 @@ def resolve_single_ligand_or_prepare(
                         "skipping microstate priming for single-ligand mode"
                     )
             except Exception as e:
-                logger.warning(f"[single.ph_ligand.skip] Could not run PH-ligand window for single mode: {e}")
+                logger.warning(
+                    f"[single.ph_ligand.skip] Could not run PH-ligand window for single mode: {e}"
+                )
 
         return ligands, heavy_atom_counts, pains_flags
 

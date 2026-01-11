@@ -89,13 +89,10 @@ def maybe_handle_no_library_docking(
 
     # How many ligands would be docked for this PH / mode?
     preview_n = int(cfg.get("NO_DOCKING_PREVIEW_N", 10))
-    preview_names = ", ".join(
-        Path(l).name for l in stage1_original[:preview_n]
-    )
+    preview_names = ", ".join(Path(l).name for l in stage1_original[:preview_n])
 
     logger.info(
-        "[no-docking-planned] pdb=%s variant=%s ph=%s mode=%s "
-        "n_stage1=%d preview=[%s]",
+        "[no-docking-planned] pdb=%s variant=%s ph=%s mode=%s n_stage1=%d preview=[%s]",
         paths.pdb_id,
         variant_label,
         ph_label if ph_label else "base",

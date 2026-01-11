@@ -214,17 +214,20 @@ def _ensure_sphgen_spheres(
             )
             return rec_sph_path
 
-    insph_contents = "\n".join(
-        [
-            "rec.ms",
-            "R",
-            "X",
-            "0.0",
-            "4.0",
-            "1.4",
-            "rec.sph",
-        ]
-    ) + "\n"
+    insph_contents = (
+        "\n".join(
+            [
+                "rec.ms",
+                "R",
+                "X",
+                "0.0",
+                "4.0",
+                "1.4",
+                "rec.sph",
+            ]
+        )
+        + "\n"
+    )
 
     dock6_root.mkdir(parents=True, exist_ok=True)
     insph_path.write_text(insph_contents, encoding="utf-8")
@@ -284,7 +287,9 @@ def _ensure_selected_spheres(
     """
     rec_sph_path = dock6_root / "rec.sph"
     if not rec_sph_path.exists() or rec_sph_path.stat().st_size == 0:
-        logger.warning("[dock6.selector.skip] reason=missing_rec_sph dir=%s", dock6_root)
+        logger.warning(
+            "[dock6.selector.skip] reason=missing_rec_sph dir=%s", dock6_root
+        )
         return None
 
     selected_path = dock6_root / "selected_spheres.sph"
@@ -344,7 +349,12 @@ def _ensure_selected_spheres(
 
     try:
         subprocess.run(
-            [sphere_selector_exe, str(rec_sph_path), str(site_center_path), f"{radius:.3f}"],
+            [
+                sphere_selector_exe,
+                str(rec_sph_path),
+                str(site_center_path),
+                f"{radius:.3f}",
+            ],
             check=True,
             cwd=str(dock6_root),
             stdout=subprocess.PIPE,
@@ -381,19 +391,24 @@ def _ensure_site_box(
     box_path = dock6_root / "site_box.pdb"
 
     if not selected_path.exists() or selected_path.stat().st_size == 0:
-        logger.warning("[dock6.showbox.skip] reason=missing_selected_spheres dir=%s", dock6_root)
+        logger.warning(
+            "[dock6.showbox.skip] reason=missing_selected_spheres dir=%s", dock6_root
+        )
         return None
 
     showbox_exe = _resolve_showbox_exe(cfg, logger)
-    showbox_input = "\n".join(
-        [
-            "Y",  # automatically construct box
-            "5.0",  # margin in Å
-            "selected_spheres.sph",
-            "1",  # cluster number
-            "site_box.pdb",
-        ]
-    ) + "\n"
+    showbox_input = (
+        "\n".join(
+            [
+                "Y",  # automatically construct box
+                "5.0",  # margin in Å
+                "selected_spheres.sph",
+                "1",  # cluster number
+                "site_box.pdb",
+            ]
+        )
+        + "\n"
+    )
 
     try:
         subprocess.run(
@@ -484,40 +499,53 @@ def _write_grid_in(
     grid_prefix: str,
     grid_spacing: float,
 ) -> None:
-    rec_name = receptor_pdb.name if receptor_pdb.parent == grid_in_path.parent else str(receptor_pdb)
-    grid_contents = "\n".join(
-        [
-            "compute_grids yes",
-            f"grid_spacing {grid_spacing}",
-            "output_molecule yes",
-            "",
-            "contact_score no",
-            "chemical_score no",
-            "energy_score yes",
-            "energy_cutoff_distance 999",
-            "",
-            "atom_model a",
-            "attractive_exponent 6",
-            "repulsive_exponent 9",
-            "distance_dielectric yes",
-            "dielectric_factor 4",
-            "bump_filter yes",
-            "bump_overlap 0.75",
-            "",
-            "allow_non_integral_charges yes",
-            "",
-            f"receptor_file {rec_name}",
-            "box_file site_box.pdb",
-            f"vdw_definition_file {vdw_defn}",
-            "",
-            f"score_grid_prefix {grid_prefix}",
-            f"receptor_out_file {receptor_pdb.stem}_{grid_prefix}.grid.pdb",
-        ]
-    ) + "\n"
+    rec_name = (
+        receptor_pdb.name
+        if receptor_pdb.parent == grid_in_path.parent
+        else str(receptor_pdb)
+    )
+    grid_contents = (
+        "\n".join(
+            [
+                "compute_grids yes",
+                f"grid_spacing {grid_spacing}",
+                "output_molecule yes",
+                "",
+                "contact_score no",
+                "chemical_score no",
+                "energy_score yes",
+                "energy_cutoff_distance 999",
+                "",
+                "atom_model a",
+                "attractive_exponent 6",
+                "repulsive_exponent 9",
+                "distance_dielectric yes",
+                "dielectric_factor 4",
+                "bump_filter yes",
+                "bump_overlap 0.75",
+                "",
+                "allow_non_integral_charges yes",
+                "",
+                f"receptor_file {rec_name}",
+                "box_file site_box.pdb",
+                f"vdw_definition_file {vdw_defn}",
+                "",
+                f"score_grid_prefix {grid_prefix}",
+                f"receptor_out_file {receptor_pdb.stem}_{grid_prefix}.grid.pdb",
+            ]
+        )
+        + "\n"
+    )
     grid_in_path.write_text(grid_contents, encoding="utf-8")
 
 
-def _run_grid(grid_exe: str, grid_in_path: Path, grid_out_path: Path, dock6_root: Path, logger: logging.Logger) -> bool:
+def _run_grid(
+    grid_exe: str,
+    grid_in_path: Path,
+    grid_out_path: Path,
+    dock6_root: Path,
+    logger: logging.Logger,
+) -> bool:
     try:
         subprocess.run(
             [grid_exe, "-i", grid_in_path.name, "-o", grid_out_path.name],
@@ -567,8 +595,19 @@ def _ensure_dock6_grids(
     grid_in_path = dock6_root / f"{grid_prefix}.in"
     grid_out_path = dock6_root / f"{grid_prefix}.out"
 
-    if grid_nrg.exists() and grid_nrg.stat().st_size > 0 and grid_bmp.exists() and grid_bmp.stat().st_size > 0:
-        logger.info("[dock6.grid.reuse] dir=%s prefix=%s nrg=%s bmp=%s", dock6_root, grid_prefix, grid_nrg, grid_bmp)
+    if (
+        grid_nrg.exists()
+        and grid_nrg.stat().st_size > 0
+        and grid_bmp.exists()
+        and grid_bmp.stat().st_size > 0
+    ):
+        logger.info(
+            "[dock6.grid.reuse] dir=%s prefix=%s nrg=%s bmp=%s",
+            dock6_root,
+            grid_prefix,
+            grid_nrg,
+            grid_bmp,
+        )
         return grid_nrg
 
     vdw_defn = _resolve_vdw_defn_path(cfg, logger)
@@ -592,7 +631,6 @@ def _ensure_dock6_grids(
     return grid_nrg
 
 
-
 def ensure_dock6_surface(
     cfg: dict,
     pdb_id: str,
@@ -610,7 +648,9 @@ def ensure_dock6_surface(
       - Run dms to produce rec.ms under dock6/.
     """
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
+    variant_token = (
+        (str(variant).strip().upper() or None) if variant is not None else None
+    )
     variant_for_ph = prep_for_ledock._variant_for_ph(variant_token, legacy_mode)
     ph_raw = prep_for_ledock._normalize_ph_label(ph_label)
     if not ph_raw:
@@ -686,7 +726,12 @@ def ensure_dock6_surface(
                 try:
                     res = fut.result()
                 except Exception as exc:
-                    logger.error("[dock6.grid.error] prefix=%s dir=%s reason=%s", prefix, dock6_root, exc)
+                    logger.error(
+                        "[dock6.grid.error] prefix=%s dir=%s reason=%s",
+                        prefix,
+                        dock6_root,
+                        exc,
+                    )
                     raise
                 if res is None:
                     raise RuntimeError(f"dock6 grid failed for prefix {prefix}")
@@ -738,13 +783,13 @@ def ensure_dock6_surface(
                 _build_grids_once()
             except Exception as exc:
                 logger.error(
-                "[dock6.surface.grid.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
-                pdb_id,
-                variant_for_ph or "HOLO",
-                ph_raw,
-                dock6_root,
-                exc,
-            )
+                    "[dock6.surface.grid.error] pdb=%s variant=%s ph=%s dir=%s reason=%s",
+                    pdb_id,
+                    variant_for_ph or "HOLO",
+                    ph_raw,
+                    dock6_root,
+                    exc,
+                )
             return None
         except Exception as exc:
             logger.error(

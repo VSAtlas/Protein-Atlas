@@ -1,4 +1,5 @@
 """Helper for manifest-backed ligand library lookups."""
+
 from __future__ import annotations
 
 import contextlib
@@ -126,7 +127,9 @@ class LibraryIndex:
         if needs_build and current_mtime is not None:
             with self._acquire_manifest_lock(root) as have_lock:
                 if have_lock:
-                    entries, filenames = self._build_manifest(root, manifest_path, current_mtime)
+                    entries, filenames = self._build_manifest(
+                        root, manifest_path, current_mtime
+                    )
                 else:
                     # Another process is rebuilding; attempt to reuse whatever is on disk.
                     try:
@@ -138,14 +141,22 @@ class LibraryIndex:
                                     data = json.load(fh)
                             raw_entries = data.get("entries")
                             raw_files = data.get("filenames")
-                            if isinstance(raw_entries, dict) and isinstance(raw_files, dict):
-                                entries = {str(k): str(v) for k, v in raw_entries.items()}
-                                filenames = {str(k): str(v) for k, v in raw_files.items()}
+                            if isinstance(raw_entries, dict) and isinstance(
+                                raw_files, dict
+                            ):
+                                entries = {
+                                    str(k): str(v) for k, v in raw_entries.items()
+                                }
+                                filenames = {
+                                    str(k): str(v) for k, v in raw_files.items()
+                                }
                     except Exception:
                         pass
         return _Manifest(entries=entries, filenames=filenames)
 
-    def _build_manifest(self, root: Path, manifest_path: Path, mtime: float) -> tuple[dict[str, str], dict[str, str]]:
+    def _build_manifest(
+        self, root: Path, manifest_path: Path, mtime: float
+    ) -> tuple[dict[str, str], dict[str, str]]:
         entries: dict[str, str] = {}
         filenames: dict[str, str] = {}
         count = 0
@@ -183,7 +194,12 @@ class LibraryIndex:
                 exc,
             )
         elapsed = time.perf_counter() - start
-        self._logger.info("[lib-index.build] root=%s count=%d time_sec=%.3f", str(root), count, elapsed)
+        self._logger.info(
+            "[lib-index.build] root=%s count=%d time_sec=%.3f",
+            str(root),
+            count,
+            elapsed,
+        )
         return entries, filenames
 
     def write_manifest_for_root(
@@ -243,7 +259,12 @@ class LibraryIndex:
             )
 
         elapsed = time.perf_counter() - start
-        self._logger.info("[lib-index.build.scan] root=%s count=%d time_sec=%.3f", str(root), count, elapsed)
+        self._logger.info(
+            "[lib-index.build.scan] root=%s count=%d time_sec=%.3f",
+            str(root),
+            count,
+            elapsed,
+        )
         return manifest_path
 
     def lookup(

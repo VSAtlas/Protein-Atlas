@@ -7,12 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_control_redock import (
-    _control_centers_by_ph,
-)
 from .docking_subrun_selection import (
     _split_controls_and_noncontrols,
-    _interleave_controls,
 )
 from .docking_single_ligand_mode import resolve_single_ligand_or_prepare
 from .docking_ph_subruns import resolve_ph_tags_and_root, enumerate_ph_ligands_if_needed
@@ -21,10 +17,8 @@ from .docking_vina_multistage import run_multistage_vina
 from .docking_subrun_finalize import finalize_ph_subrun
 
 from apo_holo_mode import _record_apo_holo_usage
-from .docking_centering import CenterSelector
 from .docking_utils import norm
 from .fallback_recenter import (
-    GlobalCenterGuard,
     RecenterParams,
 )
 from path_router.path_router import Paths, docked_dir, receptor_file
@@ -77,7 +71,12 @@ def resolve_center_box_for_ph(
     ph_label: Optional[str],
 ) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], str]:
     ph_key = None if ph_label in (None, "base") else ph_label
-    if ctx.center_by_ph and ctx.box_by_ph and ph_key in ctx.center_by_ph and ph_key in ctx.box_by_ph:
+    if (
+        ctx.center_by_ph
+        and ctx.box_by_ph
+        and ph_key in ctx.center_by_ph
+        and ph_key in ctx.box_by_ph
+    ):
         center = ctx.center_by_ph[ph_key]
         box_size = ctx.box_by_ph[ph_key]
         source = "control_ph"
@@ -189,8 +188,8 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
         ligands, heavy_atom_counts, pains_flags = single_res
     else:
         if cfg.get("_EFFECTIVE_SINGLE_LIGAND"):
-             # Fallback triggered or block exit, but if we are here, we continue normally
-             pass
+            # Fallback triggered or block exit, but if we are here, we continue normally
+            pass
         # 2. Prepare & Filter Ligands
         ligands, heavy_atom_counts, pains_flags = prepare_and_filter_ligands(
             cfg,
@@ -242,18 +241,24 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
         missing_controls = [p for p in prepped_control_pdbqts if norm(p) not in lig_set]
 
         if missing_controls:
-            logger.info(f"[Controls] Adding {len(missing_controls)} prepared control(s) to control pool for Stage3.")
+            logger.info(
+                f"[Controls] Adding {len(missing_controls)} prepared control(s) to control pool for Stage3."
+            )
             control_pool_raw.extend(str(p) for p in missing_controls)
             for p in missing_controls:
                 try:
-                    heavy_atom_counts.setdefault(str(p), _count_heavy_atoms_from_pdbqt(p))
+                    heavy_atom_counts.setdefault(
+                        str(p), _count_heavy_atoms_from_pdbqt(p)
+                    )
                 except Exception:
                     heavy_atom_counts.setdefault(str(p), 0)
                 pains_flags.setdefault(str(p), False)
 
     control_pool = _norm_dedupe(control_pool_raw)
     control_norms = {norm(p) for p in control_pool}
-    noncontrol_pool = [p for p in _norm_dedupe(noncontrol_pool_raw) if norm(p) not in control_norms]
+    noncontrol_pool = [
+        p for p in _norm_dedupe(noncontrol_pool_raw) if norm(p) not in control_norms
+    ]
 
     ligands = noncontrol_pool[:]
 
@@ -263,7 +268,12 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
     base_pains_flags = dict(pains_flags)
 
     # 4. Resolve PH Tags & Root
-    ph_tags, ph_ligand_root, ph_test_mode_override, library_for_manifest = resolve_ph_tags_and_root(
+    (
+        ph_tags,
+        ph_ligand_root,
+        ph_test_mode_override,
+        library_for_manifest,
+    ) = resolve_ph_tags_and_root(
         cfg=cfg,
         paths=paths,
         logger=logger,
@@ -275,12 +285,11 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
         return
 
     stages_for_run = [
-        {**stage, "name": f"{stage_name_prefix}{stage['name']}"}
-        for stage in stages
+        {**stage, "name": f"{stage_name_prefix}{stage['name']}"} for stage in stages
     ]
-    
+
     ph_log = logging.getLogger("ph_ensemble")
-    
+
     # 5. Loop PH Tags
     for ph_label in ph_tags:
         ph_start_ts = time.time()
@@ -302,8 +311,12 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 exc_info=True,
             )
 
-        rec_path = receptor_file(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
-        out_root = docked_dir(paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
+        rec_path = receptor_file(
+            paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode
+        )
+        out_root = docked_dir(
+            paths.pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode
+        )
         ph_print = ph_label or "(none)"
         rec_exists = rec_path.exists()
         logger.info(
@@ -333,7 +346,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             # `if plan_only: ... continue` (This was `A2_PLAN_ONLY` env var, used for debugging maybe?)
             # `if not rec_exists: ... continue`
             # Then inside: `if bool(cfg.get("NO_LIBRARY_DOCKING", False)): ... continue`
-            
+
             pass
 
         # Environment variable plan_only check (A2_PLAN_ONLY) - kept from original code
@@ -387,9 +400,13 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 base_pains_flags=base_pains_flags,
                 controls_for_run=base_controls,
             )
-            controls_for_run = base_controls[:] # Copy fresh for filtering
+            controls_for_run = base_controls[:]  # Copy fresh for filtering
 
-            ctrl_blacklist = {t.strip().upper() for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",") if t.strip()}
+            ctrl_blacklist = {
+                t.strip().upper()
+                for t in str(cfg.get("CONTROL_BLACKLIST", "")).split(",")
+                if t.strip()
+            }
             min_ha = int(cfg.get("CONTROL_MIN_HEAVY_ATOMS", 10))
 
             def _eligible_control_path(p: str) -> bool:
@@ -401,7 +418,9 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
                 ha = heavy_atom_counts.get(p)
                 return (ha is None) or (ha >= min_ha)
 
-            controls_for_run = [c for c in controls_for_run if _eligible_control_path(c)]
+            controls_for_run = [
+                c for c in controls_for_run if _eligible_control_path(c)
+            ]
             control_norms_for_run = {norm(c) for c in controls_for_run}
 
             if not ligands and controls_for_run:
@@ -411,9 +430,11 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             if not ligands and not controls_for_run:
                 logger.warning("No valid ligands after filtering; skipping protein.")
                 continue
-            
+
             receptor_pdbqt = str(rec_path)
-            stage1_original = [l for l in ligands if norm(l) not in control_norms_for_run]
+            stage1_original = [
+                l for l in ligands if norm(l) not in control_norms_for_run
+            ]
 
             # Plan-only check
             if maybe_handle_no_library_docking(
@@ -465,14 +486,14 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             # The `MultistageVinaResult` has:
             # `recenter_attempts`
             # But not `switch_history` or `global_switches`.
-            
+
             # Since I cannot change `MultistageVinaResult` (as I didn't edit `docking_vina_multistage.py` in this step),
             # I should probably have updated `docking_vina_multistage.py` to return these, OR
             # `run_multistage_vina` was just extracted in the PREVIOUS turn?
             # Yes, `docking_vina_multistage.py` was extracted in the previous state.
             # I should assume `MultistageVinaResult` probably doesn't have `switch_history`.
             # Let me check `docking_vina_multistage.py` content again.
-            
+
             # `docking_vina_multistage.py` result class:
             # @dataclass
             # class MultistageVinaResult:
@@ -480,19 +501,19 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             #    ...
             #    recenter_attempts: int
             #    ...
-            
+
             # And inside `run_multistage_vina`:
             # selector = CenterSelector(...)
             # guard = GlobalCenterGuard(...)
             # ...
             # return MultistageVinaResult(...)
-            
+
             # It seems `switch_history` is NOT returned. This is a potential regression if `finalize_ph_subrun` needs it.
             # `docking_subruns.py` original code had `selector` and `guard` in the same scope.
             # `finalize_ph_subrun` logic in `docking_subruns.py` (original) used:
             # "switch_history": getattr(selector, "switch_history", []),
             # "global_switches": guard.global_switches,
-            
+
             # So I DO need to pass these out.
             # Since I am not supposed to change `docking_vina_multistage.py` (it was extracted previously),
             # but wait, the prompt says "docking.py: keep phase orchestration, extract large...".
@@ -502,7 +523,7 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             # If I can't change `docking_vina_multistage.py`, then I can't get that info out.
             # BUT, I am allowed to edit `docking_subruns.py` and create NEW modules.
             # `docking_vina_multistage.py` was already there from previous turn.
-            
+
             # **Correction**: I can edit `docking_vina_multistage.py` if needed to fix bugs/add returns, as I am "Refactoring".
             # But the prompt specifically lists "PART A" and "PART B" and doesn't mention editing `docking_vina_multistage.py`.
             # However, if I don't, I lose data.
@@ -510,9 +531,9 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
             # So I definitely need to pass them.
             # I will modify `docking_vina_multistage.py` to return them in `MultistageVinaResult`.
             # I'll do that in a separate write.
-            
+
             # Let's write `docking_subruns.py` assuming `MultistageVinaResult` has `switch_history` and `global_switches`.
-            
+
             finalize_ph_subrun(
                 cfg=cfg,
                 paths=paths,

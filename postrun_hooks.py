@@ -12,7 +12,9 @@ from typing import Any, Mapping
 from cli.cli_utils import _norm_pdb_id
 
 
-def _maybe_run_dud_eval(cfg: Mapping[str, Any], run_id: str, pdb_files: list[str]) -> None:
+def _maybe_run_dud_eval(
+    cfg: Mapping[str, Any], run_id: str, pdb_files: list[str]
+) -> None:
     """
     Best-effort post-run DUD evaluator. Never raises.
     """
@@ -69,7 +71,9 @@ def _maybe_run_dud_eval(cfg: Mapping[str, Any], run_id: str, pdb_files: list[str
         )
 
 
-def _maybe_run_scorch_rescore(cfg: Mapping[str, Any], run_id: str, verbose: bool = False) -> None:
+def _maybe_run_scorch_rescore(
+    cfg: Mapping[str, Any], run_id: str, verbose: bool = False
+) -> None:
     """
     Best-effort post-run SCORCH rescoring. Never raises.
     """
@@ -81,7 +85,9 @@ def _maybe_run_scorch_rescore(cfg: Mapping[str, Any], run_id: str, verbose: bool
     repo_root = Path(__file__).resolve().parent
     script_path = repo_root / "src/post_docking/rescoring/rescoring_scorch.py"
     if not script_path.exists():
-        logger.warning("[scorch-rescore.skip] reason=missing_script path=%s", script_path)
+        logger.warning(
+            "[scorch-rescore.skip] reason=missing_script path=%s", script_path
+        )
         return
 
     def _as_int(val: Any, fallback: int) -> int:
@@ -90,7 +96,10 @@ def _maybe_run_scorch_rescore(cfg: Mapping[str, Any], run_id: str, verbose: bool
         except Exception:
             return fallback
 
-    total_cpu = _as_int(cfg.get("CPU") or cfg.get("MAX_PARALLEL_JOBS") or (os.cpu_count() or 1), os.cpu_count() or 1)
+    total_cpu = _as_int(
+        cfg.get("CPU") or cfg.get("MAX_PARALLEL_JOBS") or (os.cpu_count() or 1),
+        os.cpu_count() or 1,
+    )
     max_jobs_cfg = _as_int(cfg.get("MAX_PARALLEL_JOBS") or total_cpu, total_cpu)
     total_cpu = max(1, total_cpu)
     max_jobs_cfg = max(1, max_jobs_cfg)
@@ -134,7 +143,9 @@ def _maybe_run_scorch_rescore(cfg: Mapping[str, Any], run_id: str, verbose: bool
     try:
         proc = subprocess.run(cmd, cwd=str(repo_root), check=False)
     except Exception:
-        logger.warning("[scorch-rescore.invoke] action=skip reason=execution_failed", exc_info=True)
+        logger.warning(
+            "[scorch-rescore.invoke] action=skip reason=execution_failed", exc_info=True
+        )
         return
 
     if proc.returncode != 0:
@@ -160,16 +171,24 @@ def _log_rescore_verification(run_id: str) -> None:
     docked_root = repo_root / "docked" / run_id
     post_root = repo_root / "post_docked" / run_id
 
-    consensus_paths = [p for p in docked_root.rglob("consensus_docking_scores.csv") if p.is_file()]
+    consensus_paths = [
+        p for p in docked_root.rglob("consensus_docking_scores.csv") if p.is_file()
+    ]
     scorch_paths = [p for p in post_root.rglob("scorch_scores_all.csv") if p.is_file()]
 
     if consensus_paths:
-        logger.info("[post-check.consensus] found=%d sample=%s", len(consensus_paths), consensus_paths[0])
+        logger.info(
+            "[post-check.consensus] found=%d sample=%s",
+            len(consensus_paths),
+            consensus_paths[0],
+        )
     else:
         logger.warning("[post-check.consensus] reason=missing_files run_id=%s", run_id)
 
     if scorch_paths:
-        logger.info("[post-check.scorch] found=%d sample=%s", len(scorch_paths), scorch_paths[0])
+        logger.info(
+            "[post-check.scorch] found=%d sample=%s", len(scorch_paths), scorch_paths[0]
+        )
     else:
         logger.warning("[post-check.scorch] reason=missing_files run_id=%s", run_id)
 
@@ -186,7 +205,9 @@ def _maybe_run_master_schema_export(cfg: Mapping[str, Any], run_id: str) -> None
     repo_root = Path(__file__).resolve().parent
     script_path = repo_root / "analysis" / "master_schema_export.py"
     if not script_path.exists():
-        logger.warning("[master-export.skip] reason=missing_script path=%s", script_path)
+        logger.warning(
+            "[master-export.skip] reason=missing_script path=%s", script_path
+        )
         return
 
     cmd = [
@@ -197,18 +218,28 @@ def _maybe_run_master_schema_export(cfg: Mapping[str, Any], run_id: str) -> None
         str(run_id),
         "--repo-root",
         str(repo_root),
-        "--overwrite"
+        "--overwrite",
     ]
 
     logger.info("[master-export.run] cmd=%s", shlex.join(cmd))
     try:
         result = subprocess.run(cmd, cwd=str(repo_root), check=False)
         if result.returncode != 0:
-            logger.warning("[master-export.fail] run_id=%s returncode=%s", run_id, result.returncode)
+            logger.warning(
+                "[master-export.fail] run_id=%s returncode=%s",
+                run_id,
+                result.returncode,
+            )
         else:
-            logger.info("[master-export.done] run_id=%s returncode=%s", run_id, result.returncode)
+            logger.info(
+                "[master-export.done] run_id=%s returncode=%s",
+                run_id,
+                result.returncode,
+            )
     except Exception:
-        logger.warning("[master-export.fail] reason=unexpected_exception", exc_info=True)
+        logger.warning(
+            "[master-export.fail] reason=unexpected_exception", exc_info=True
+        )
 
 
 def _maybe_run_report_generation(cfg: Mapping[str, Any], run_id: str) -> None:
@@ -234,15 +265,19 @@ def _maybe_run_report_generation(cfg: Mapping[str, Any], run_id: str) -> None:
         str(run_id),
         "--repo-root",
         str(repo_root),
-        "--overwrite"
+        "--overwrite",
     ]
 
     logger.info("[report.run] cmd=%s", shlex.join(cmd))
     try:
         result = subprocess.run(cmd, cwd=str(repo_root), check=False)
         if result.returncode != 0:
-            logger.warning("[report.fail] run_id=%s returncode=%s", run_id, result.returncode)
+            logger.warning(
+                "[report.fail] run_id=%s returncode=%s", run_id, result.returncode
+            )
         else:
-            logger.info("[report.done] run_id=%s returncode=%s", run_id, result.returncode)
+            logger.info(
+                "[report.done] run_id=%s returncode=%s", run_id, result.returncode
+            )
     except Exception:
         logger.warning("[report.fail] reason=unexpected_exception", exc_info=True)

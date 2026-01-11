@@ -10,7 +10,9 @@ if str(ROOT) not in sys.path:
 import post_docking.mmgbsa.mmgbsa_trajectory as mmgbsa_trajectory
 
 
-def test_run_implicit_md_writes_inputs_and_calls_sander(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_implicit_md_writes_inputs_and_calls_sander(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     prmtop = tmp_path / "complex.prmtop"
     inpcrd = tmp_path / "complex.inpcrd"
     prmtop.write_text("X", encoding="utf-8")
@@ -36,7 +38,9 @@ def test_run_implicit_md_writes_inputs_and_calls_sander(tmp_path: Path, monkeypa
 
         return Result()
 
-    monkeypatch.setattr(mmgbsa_trajectory, "_select_sander_runner", fake_select_sander_runner)
+    monkeypatch.setattr(
+        mmgbsa_trajectory, "_select_sander_runner", fake_select_sander_runner
+    )
     monkeypatch.setattr(mmgbsa_trajectory.subprocess, "run", fake_run)
 
     cfg = {

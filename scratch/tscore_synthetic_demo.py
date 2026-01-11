@@ -8,7 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dud_eval import compute_decoy_stats_from_long_csv, guess_ligfile_col, guess_score_col
+from dud_eval import (
+    compute_decoy_stats_from_long_csv,
+    guess_ligfile_col,
+    guess_score_col,
+)
 
 
 def main() -> None:
@@ -57,10 +61,7 @@ def main() -> None:
     score_col = guess_score_col(df, None)
     df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
 
-    best = (
-        df.groupby(lig_col, as_index=False)
-          .agg(best_score=(score_col, "min"))
-    )
+    best = df.groupby(lig_col, as_index=False).agg(best_score=(score_col, "min"))
     best["t_vs_decoys"] = (mu - best["best_score"]) / sigma
     t_map = dict(zip(best[lig_col], best["t_vs_decoys"]))
     df["t_vs_decoys"] = df[lig_col].map(t_map)

@@ -214,7 +214,9 @@ def _parse_pose_pdb(pdb_path: Path) -> Tuple[int, List[Tuple[float, float, float
     return len(atoms), atoms
 
 
-def _validate_ledock_identity(pdb_files: Sequence[Path], sdf_path: Path, tol: float = 1e-2) -> bool:
+def _validate_ledock_identity(
+    pdb_files: Sequence[Path], sdf_path: Path, tol: float = 1e-2
+) -> bool:
     try:
         from rdkit import Chem  # type: ignore
     except Exception as exc:
@@ -225,7 +227,9 @@ def _validate_ledock_identity(pdb_files: Sequence[Path], sdf_path: Path, tol: fl
         )
         return False
 
-    suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=False, strictParsing=False)
+    suppl = Chem.SDMolSupplier(
+        str(sdf_path), removeHs=False, sanitize=False, strictParsing=False
+    )
     mols = []
     for m in suppl:
         if m is None:
@@ -257,7 +261,14 @@ def _validate_ledock_identity(pdb_files: Sequence[Path], sdf_path: Path, tol: fl
                 exc,
             )
             return False
-        sdf_coords = [(conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y, conf.GetAtomPosition(i).z) for i in range(mol.GetNumAtoms())]
+        sdf_coords = [
+            (
+                conf.GetAtomPosition(i).x,
+                conf.GetAtomPosition(i).y,
+                conf.GetAtomPosition(i).z,
+            )
+            for i in range(mol.GetNumAtoms())
+        ]
         if pdb_atoms != len(sdf_coords):
             logging.error(
                 "[pose-bust] action=validate status=failed reason=atom_count_mismatch pose_idx=%d pdb=%s pdb_atoms=%d sdf_atoms=%d",
@@ -320,6 +331,7 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
             pass
 
     local_dok = out_dir / task.input_path.name
+
     def _cleanup_local_dok():
         try:
             local_dok.unlink(missing_ok=True)
@@ -329,7 +341,9 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
     def _cleanup_pose_files(pose_paths: Sequence[Path] | None = None):
         paths = list(pose_paths) if pose_paths else []
         if not paths:
-            paths = list(out_dir.glob(f"{stem}_dock*.pdb")) + list(out_dir.glob(f"{stem}*.pdb"))
+            paths = list(out_dir.glob(f"{stem}_dock*.pdb")) + list(
+                out_dir.glob(f"{stem}*.pdb")
+            )
         for p in paths:
             try:
                 p.unlink(missing_ok=True)
@@ -373,7 +387,14 @@ def _convert_dok(task: LigandTask, overwrite: bool) -> str:
         _cleanup_pose_files()
         return "skipped"
 
-    obabel_cmd = ["obabel", "-ipdb", *[str(p) for p in pose_files], "-osdf", "-O", str(output)]
+    obabel_cmd = [
+        "obabel",
+        "-ipdb",
+        *[str(p) for p in pose_files],
+        "-osdf",
+        "-O",
+        str(output),
+    ]
     convert_proc = subprocess.run(obabel_cmd, capture_output=True, text=True)
     if convert_proc.returncode != 0:
         logging.warning(
@@ -892,8 +913,8 @@ def _run_bust_for_stage(
 
     # Robust ligand_file assignment to tolerate PoseBusters row/SDF mismatches.
     if "mol_pred" in df_stage.columns:
-        df_stage["ligand_file"] = df_stage["mol_pred"].astype(str).apply(
-            lambda x: Path(x).name
+        df_stage["ligand_file"] = (
+            df_stage["mol_pred"].astype(str).apply(lambda x: Path(x).name)
         )
     else:
         sdf_names = [Path(p).name for p in sdfs]
@@ -1182,7 +1203,9 @@ def main() -> int:
     if args.posebusters_max_workers is None or args.posebusters_max_workers <= 0:
         posebusters_workers = GLOBAL_MAX_WORKERS
     else:
-        posebusters_workers = max(1, min(args.posebusters_max_workers, GLOBAL_MAX_WORKERS))
+        posebusters_workers = max(
+            1, min(args.posebusters_max_workers, GLOBAL_MAX_WORKERS)
+        )
 
     if shutil.which("obabel") is None:
         logger.error("[pose-bust] action=init status=failed reason=missing_obabel")
@@ -1194,9 +1217,7 @@ def main() -> int:
         else Path(__file__).resolve().parent
     )
     docked_root = (
-        Path(args.docked_root).resolve()
-        if args.docked_root
-        else repo_root / "docked"
+        Path(args.docked_root).resolve() if args.docked_root else repo_root / "docked"
     )
     post_docked_root = (
         Path(args.post_docked_root).resolve()
@@ -1228,7 +1249,10 @@ def main() -> int:
     dok_tasks = [t for t in tasks if t.kind == "dok"]
     dock6_tasks = [t for t in tasks if t.kind == "dock6"]
     if dok_tasks and shutil.which("ledock") is None:
-        logger.error("[pose-bust] action=init status=failed reason=missing_ledock dok_tasks=%d", len(dok_tasks))
+        logger.error(
+            "[pose-bust] action=init status=failed reason=missing_ledock dok_tasks=%d",
+            len(dok_tasks),
+        )
         return 1
 
     logger.info(
@@ -1264,14 +1288,18 @@ def main() -> int:
             len(dok_tasks),
             convert_workers,
         )
-        statuses.update(process_tasks(dok_tasks, args.overwrite, workers=convert_workers))
+        statuses.update(
+            process_tasks(dok_tasks, args.overwrite, workers=convert_workers)
+        )
     if dock6_tasks:
         logger.info(
             "[pose-bust] action=convert status=info note=parallel_dock6 dock6_tasks=%d workers=%d",
             len(dock6_tasks),
             convert_workers,
         )
-        statuses.update(process_tasks(dock6_tasks, args.overwrite, workers=convert_workers))
+        statuses.update(
+            process_tasks(dock6_tasks, args.overwrite, workers=convert_workers)
+        )
 
     converted = sum(1 for s in statuses.values() if s == "converted")
     skipped = sum(1 for s in statuses.values() if s == "skipped")
@@ -1280,9 +1308,15 @@ def main() -> int:
     missing = validate_outputs(tasks)
     failed_total = failed + len(missing)
 
-    converted_pdbqt = sum(1 for t, s in statuses.items() if t.kind == "pdbqt" and s == "converted")
-    converted_dok = sum(1 for t, s in statuses.items() if t.kind == "dok" and s == "converted")
-    converted_dock6 = sum(1 for t, s in statuses.items() if t.kind == "dock6" and s == "converted")
+    converted_pdbqt = sum(
+        1 for t, s in statuses.items() if t.kind == "pdbqt" and s == "converted"
+    )
+    converted_dok = sum(
+        1 for t, s in statuses.items() if t.kind == "dok" and s == "converted"
+    )
+    converted_dock6 = sum(
+        1 for t, s in statuses.items() if t.kind == "dock6" and s == "converted"
+    )
     logger.info(
         "[pose-bust] action=summary run_id=%s found=%d pdbqt=%d dok=%d dock6=%d converted=%d converted_pdbqt=%d converted_dok=%d converted_dock6=%d skipped=%d failed=%d missing=%d",
         args.run_id,

@@ -79,9 +79,17 @@ def test_reranked_summary_files_written(tmp_path: Path) -> None:
         ]
     )
 
-    dud_eval.emit_reranked_scorch_summary(df, analysis_root, run_label="demo_run", pretty_enabled=True)
+    dud_eval.emit_reranked_scorch_summary(
+        df, analysis_root, run_label="demo_run", pretty_enabled=True
+    )
 
-    summary_path = analysis_root / "post_docked" / "consensus_reranked_scorch_summary_demo_run.tsv"
-    pretty_path = analysis_root / "post_docked" / "consensus_reranked_scorch_summary_demo_run_pretty.txt"
+    summary_path = (
+        analysis_root / "post_docked" / "consensus_reranked_scorch_summary_demo_run.tsv"
+    )
+    pretty_path = (
+        analysis_root
+        / "post_docked"
+        / "consensus_reranked_scorch_summary_demo_run_pretty.txt"
+    )
     assert summary_path.exists()
     assert pretty_path.exists()

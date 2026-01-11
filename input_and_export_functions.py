@@ -1,18 +1,18 @@
-import os, sys, shutil, json
+import csv
+import math
+import os
+import re
+import shutil
+import sys
+import time
+from collections import defaultdict
 from pathlib import Path
 from distutils.util import strtobool
 from typing import Any, Dict, Optional
-import re, csv, math
+
 import pandas as pd
-from collections import defaultdict
 import sitecustomize  # noqa: F401  # ensure HOME is writable for micromamba/pytest sandboxes
-from path_router import (
-    make_paths,
-    config_dir as router_config_dir,
-    config_file as router_config_file,
-    docked_dir as router_docked_dir,
-    receptor_file as router_receptor_file,
-)
+from path_router import make_paths
 
 # -------------------------
 # OS guards (Windows-only)
@@ -29,6 +29,7 @@ except Exception:
     win32api = None
     win32file = None
 
+
 # -------------------------
 # Small helpers
 # -------------------------
@@ -38,17 +39,20 @@ def _to_bool(x):
     except Exception:
         return False
 
+
 def _to_int(x, default=None):
     try:
         return int(x)
     except Exception:
         return default
 
+
 def _to_float(x, default=None):
     try:
         return float(x)
     except Exception:
         return default
+
 
 def which_or_exists(candidates):
     """
@@ -64,12 +68,16 @@ def which_or_exists(candidates):
             return w
     return None
 
+
 # -------------------------
 # Defaults for BRCF layout
 # -------------------------
 def _default_base_dir() -> Path:
     # env wins; else directory of this file
-    return Path(os.environ.get("PROTEIN_AUTOMATION_DIR", Path(__file__).resolve().parent))
+    return Path(
+        os.environ.get("PROTEIN_AUTOMATION_DIR", Path(__file__).resolve().parent)
+    )
+
 
 def _default_dirs(base: Path) -> Dict[str, str]:
     """
@@ -77,21 +85,22 @@ def _default_dirs(base: Path) -> Dict[str, str]:
       /stor/home/<user>/atlas/code/protein_automation/{subdirs}
     """
     return {
-        "OVERALL_DIR":            str(base),
-        "INPUT_DIR":              str(base / "input_pdbs"),
-        "PROTEIN_DIR":            str(base / "pdbqts"),
-        "LIGAND_DIR":             str(base / "input_ligands"),
-        "LIGAND_EXTRACTED_DIR":   str(base / "extracted_ligands"),
-        "LIGANDS_MOL2_DIR":       str(base / "ligands_mol2"),
-        "OUTPUT_LIGANDS_DIR":     str(base / "prepped_ligands"),
-        "OUTPUT_DIR":             str(base / "processed_pdbs"),
-        "PDBQT_DIR":              str(base / "pdbqts"),
-        "DOCKED_DIR":             str(base / "docked"),
+        "OVERALL_DIR": str(base),
+        "INPUT_DIR": str(base / "input_pdbs"),
+        "PROTEIN_DIR": str(base / "pdbqts"),
+        "LIGAND_DIR": str(base / "input_ligands"),
+        "LIGAND_EXTRACTED_DIR": str(base / "extracted_ligands"),
+        "LIGANDS_MOL2_DIR": str(base / "ligands_mol2"),
+        "OUTPUT_LIGANDS_DIR": str(base / "prepped_ligands"),
+        "OUTPUT_DIR": str(base / "processed_pdbs"),
+        "PDBQT_DIR": str(base / "pdbqts"),
+        "DOCKED_DIR": str(base / "docked"),
         # p2rank
-        "P2RANK_OUTPUT_DIR":      str(base / "p2rank_out"),
+        "P2RANK_OUTPUT_DIR": str(base / "p2rank_out"),
         # cleanup script (kept in repo)
-        "PHENIX_CLEAN_SCRIPT":    str(base / "phenix_clean.py"),
+        "PHENIX_CLEAN_SCRIPT": str(base / "phenix_clean.py"),
     }
+
 
 def _default_tools() -> Dict[str, str]:
     """
@@ -112,15 +121,19 @@ def _default_tools() -> Dict[str, str]:
         "PYMOL_PATH": which_or_exists(["pymol"]),
         "REDUCE_EXE": which_or_exists(["reduce"]),
         # prefer env MGLTOOLS_* if set; otherwise try ADFRsuite pythonsh on PATH
-        "MGLTOOLS_PYTHON": os.environ.get("MGL_PYTHON") or which_or_exists(["pythonsh"]),
-        "PREPARE_LIGAND_SCRIPT": os.environ.get("PREPARE_LIGAND_SCRIPT") or which_or_exists(["prepare_ligand4.py"]),
-        "PREPARE_RECEPTOR_SCRIPT": os.environ.get("PREPARE_RECEPTOR_SCRIPT") or which_or_exists(["prepare_receptor4.py"]),
+        "MGLTOOLS_PYTHON": os.environ.get("MGL_PYTHON")
+        or which_or_exists(["pythonsh"]),
+        "PREPARE_LIGAND_SCRIPT": os.environ.get("PREPARE_LIGAND_SCRIPT")
+        or which_or_exists(["prepare_ligand4.py"]),
+        "PREPARE_RECEPTOR_SCRIPT": os.environ.get("PREPARE_RECEPTOR_SCRIPT")
+        or which_or_exists(["prepare_receptor4.py"]),
         # p2rank: either absolute prank or found on PATH
         "P2RANK_PATH": shutil.which("prank") or "prank",
         # SCORCH: optional rescoring stage, default to sibling tools checkout
         "SCORCH_SCRIPT": os.environ.get("SCORCH_SCRIPT") or scorch_script_default,
         "SCORCH_ENV": os.environ.get("SCORCH_ENV") or "scorch-env",
     }
+
 
 def _default_runtime() -> Dict[str, Any]:
     return {
@@ -142,11 +155,9 @@ def _default_runtime() -> Dict[str, Any]:
         "CONTROL_CENTER_CLOSE_MAX_A": 8.0,
         "CTRL_REDOCK_EXHAUSTIVENESS": 32,
         "CTRL_REDOCK_NMODES": 9,
-
         # --- benchmark policy knobs ---
         "BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY": True,
         "BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING": False,
-
         # --- MMGBSA receptor prep ---
         "MMGBSA_STRIP_METALS": True,
         "MMGBSA_WATER_POLICY": "ACTIVE_SITE",
@@ -218,15 +229,45 @@ def _default_runtime() -> Dict[str, Any]:
 # Config loading & validation
 # -------------------------
 _ALLOWED_ENV_OVERRIDES = {
-    "VINA_EXE","VINA_PATH","GNINA_EXE","OPENBABEL_PATH","MGLTOOLS_PYTHON",
-    "PREPARE_LIGAND_SCRIPT","PREPARE_RECEPTOR_SCRIPT","PYMOL_PATH",
-    "P2RANK_PATH","PHENIX_DIR","PHENIX_LIB_PATH","PHENIX_CLEAN_SCRIPT",
-    "INPUT_DIR","OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","LIGAND_DIR",
-    "LIGAND_EXTRACTED_DIR","LIGANDS_MOL2_DIR","OUTPUT_LIGANDS_DIR",
+    "VINA_EXE",
+    "VINA_PATH",
+    "GNINA_EXE",
+    "OPENBABEL_PATH",
+    "MGLTOOLS_PYTHON",
+    "PREPARE_LIGAND_SCRIPT",
+    "PREPARE_RECEPTOR_SCRIPT",
+    "PYMOL_PATH",
+    "P2RANK_PATH",
+    "PHENIX_DIR",
+    "PHENIX_LIB_PATH",
+    "PHENIX_CLEAN_SCRIPT",
+    "INPUT_DIR",
+    "OUTPUT_DIR",
+    "PDBQT_DIR",
+    "DOCKED_DIR",
+    "LIGAND_DIR",
+    "LIGAND_EXTRACTED_DIR",
+    "LIGANDS_MOL2_DIR",
+    "OUTPUT_LIGANDS_DIR",
     "P2RANK_OUTPUT_DIR",
-    "CPU","CPU_ONLY","MAX_PARALLEL_JOBS","DOCKING_MODE","REDUCE_EXE",
-    "USE_MEEKO","OVERALL_DIR","PROTEIN_DIR",
-
+    "CPU",
+    "CPU_ONLY",
+    "MAX_PARALLEL_JOBS",
+    "DOCKING_MODE",
+    "REDUCE_EXE",
+    "USE_MEEKO",
+    "OVERALL_DIR",
+    "PROTEIN_DIR",
+    "DEEPCOY_DECOYS_PER_ACTIVE",
+    "DEEPCOY_PYTHON",
+    "DEEPCOY_CHUNK_SIZE",
+    "DEEPCOY_BASE_SEED",
+    "DEEPCOY_SEED_PER_CHUNK",
+    "DEEPCOY_USE_ARGMAX_GENERATION",
+    "DEEPCOY_TRY_DIFFERENT_STARTING",
+    "DEEPCOY_NUM_DIFFERENT_STARTING",
+    "DEEPCOY_NUM_SAMPLES",
+    "DEEPCOY_KEEP_CHUNKS",
     # ---  allow ENV override for the knobs ---
     "BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY",
     "BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING",
@@ -235,8 +276,9 @@ _ALLOWED_ENV_OVERRIDES = {
     "CTRL_REDOCK_EXHAUSTIVENESS",
     "CTRL_REDOCK_NMODES",
     # logging/topic gates (opt-in; safe to ignore if unset)
-    "LOG_TOPICS", "LOG_LEVEL_FILE", "LOG_LEVEL_CONSOLE",
-
+    "LOG_TOPICS",
+    "LOG_LEVEL_FILE",
+    "LOG_LEVEL_CONSOLE",
     # GNINA follow-up toggle
     "USE_GNINA",
     # LeDock follow-up toggle
@@ -246,7 +288,6 @@ _ALLOWED_ENV_OVERRIDES = {
     # SCORCH rescoring knobs
     "SCORCH_SCRIPT",
     "SCORCH_ENV",
-
     # MMGBSA receptor prep knobs
     "MMGBSA_STRIP_METALS",
     "MMGBSA_WATER_POLICY",
@@ -311,8 +352,9 @@ _ALLOWED_ENV_OVERRIDES = {
     "MMGBSA_GENERAL_ENDFRAME",
     "MMGBSA_GENERAL_INTERVAL",
     "MMGBSA_GENERAL_VERBOSE",
-
 }
+
+
 def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}"):
     """Return the brace-balanced substring starting at the first open_char after start_idx."""
     i = text.find(open_char, start_idx)
@@ -327,9 +369,34 @@ def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}
         elif c == close_char:
             level -= 1
             if level == 0:
-                return text[i:j+1]
+                return text[i : j + 1]
         j += 1
     return None  # unbalanced
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Strip inline comments starting with #, except when inside quotes."""
+    in_single = False
+    in_double = False
+    escaped = False
+    for idx, ch in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if ch == "#" and not in_single and not in_double:
+            return value[:idx]
+    return value
+
+
 def _parse_kv_config(path: Path) -> Dict[str, str]:
     """
     Lightweight key=value parser; allows comments starting with '#'.
@@ -344,8 +411,10 @@ def _parse_kv_config(path: Path) -> Dict[str, str]:
                 continue
             if "=" in line:
                 k, v = line.split("=", 1)
-                out[k.strip().upper()] = v.strip()
+                val = _strip_inline_comment(v).strip()
+                out[k.strip().upper()] = val
     return out
+
 
 def _expand_vars_in_value(val: str, cfg_now: Dict[str, Any]) -> str:
     """
@@ -391,7 +460,10 @@ def _expand_all_vars(cfg: Dict[str, Any]) -> Dict[str, Any]:
             out[k] = _expand_vars_in_value(v, out)
     return out
 
-def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -> Dict[str, Any]:
+
+def load_config(
+    config_path: str = "config.txt", base_dir: Path | None = None
+) -> Dict[str, Any]:
     """
     Load configuration with precedence:
       1) defaults (BRCF-aware)
@@ -408,7 +480,7 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
 
     # overlay config file
     file_cfg = _parse_kv_config(Path(config_path))
-    
+
     # --- preserve multi-line TEST_LIBRARY_MAP block ---
     try:
         raw = file_cfg.get("TEST_LIBRARY_MAP")
@@ -434,7 +506,7 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
     # overlay env vars (uppercased keys only)
     for k, v in os.environ.items():
         K = k.upper()
-        if K in _ALLOWED_ENV_OVERRIDES:
+        if (K in cfg or K in _ALLOWED_ENV_OVERRIDES) and v:
             cfg[K] = v
 
     # type coercion (before expansion is fine)
@@ -446,6 +518,10 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
         "USE_MEEKO",
         "USE_DOCK6",
         "use_dock6",
+        "DEEPCOY_SEED_PER_CHUNK",
+        "DEEPCOY_KEEP_CHUNKS",
+        "DEEPCOY_USE_ARGMAX_GENERATION",
+        "DEEPCOY_TRY_DIFFERENT_STARTING",
         "MMGBSA_STRIP_METALS",
         "MMGBSA_WATER_USE_ALIASES",
         "MMGBSA_METAL_USE_ALIASES",
@@ -482,6 +558,11 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
         "EARLY_RECENTER_MIN_EVAL",
         "CTRL_REDOCK_EXHAUSTIVENESS",
         "CTRL_REDOCK_NMODES",
+        "DEEPCOY_DECOYS_PER_ACTIVE",
+        "DEEPCOY_CHUNK_SIZE",
+        "DEEPCOY_BASE_SEED",
+        "DEEPCOY_NUM_DIFFERENT_STARTING",
+        "DEEPCOY_NUM_SAMPLES",
         "MMGBSA_TRAJ_STARTFRAME",
         "MMGBSA_TRAJ_ENDFRAME",
         "MMGBSA_TRAJ_INTERVAL",
@@ -502,7 +583,6 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
         if k in cfg:
             cfg[k] = _to_int(cfg[k], cfg[k])
 
-
     for k in [
         "EARLY_RECENTER_RATIO",
         "EARLY_RECENTER_FAR_A",
@@ -517,14 +597,14 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
         if k in cfg:
             cfg[k] = _to_float(cfg[k], cfg[k])
 
-
     # normalize mode
-    cfg["DOCKING_MODE"] = str(cfg.get("DOCKING_MODE","discovery")).lower()
+    cfg["DOCKING_MODE"] = str(cfg.get("DOCKING_MODE", "discovery")).lower()
 
     # now expand {OVERALL_DIR}/$OVERALL_DIR appearances
     cfg = _expand_all_vars(cfg)
 
     return cfg
+
 
 def validate_config(cfg: Dict[str, Any]):
     """
@@ -532,8 +612,15 @@ def validate_config(cfg: Dict[str, Any]):
     Auto-create typical output directories if missing.
     """
     required_keys = [
-        "OUTPUT_DIR","INPUT_DIR","PDBQT_DIR","DOCKED_DIR","OVERALL_DIR",
-        "MGLTOOLS_PYTHON","PREPARE_RECEPTOR_SCRIPT","VINA_EXE","MAX_PARALLEL_JOBS",
+        "OUTPUT_DIR",
+        "INPUT_DIR",
+        "PDBQT_DIR",
+        "DOCKED_DIR",
+        "OVERALL_DIR",
+        "MGLTOOLS_PYTHON",
+        "PREPARE_RECEPTOR_SCRIPT",
+        "VINA_EXE",
+        "MAX_PARALLEL_JOBS",
         "PYMOL_PATH",
     ]
     missing = [k for k in required_keys if not cfg.get(k)]
@@ -548,21 +635,23 @@ def validate_config(cfg: Dict[str, Any]):
 
     # Create-if-missing for outputs/caches
     create_keys = [
-        "OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","OUTPUT_LIGANDS_DIR",
-        "LIGAND_EXTRACTED_DIR","LIGANDS_MOL2_DIR","P2RANK_OUTPUT_DIR",
+        "OUTPUT_DIR",
+        "PDBQT_DIR",
+        "DOCKED_DIR",
+        "OUTPUT_LIGANDS_DIR",
+        "LIGAND_EXTRACTED_DIR",
+        "LIGANDS_MOL2_DIR",
+        "P2RANK_OUTPUT_DIR",
     ]
     for path_key in create_keys:
         p = Path(cfg[path_key])
         try:
             p.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise FileNotFoundError(f"Could not create directory for {path_key}: {p} ({e})")
+            raise FileNotFoundError(
+                f"Could not create directory for {path_key}: {p} ({e})"
+            )
 
-
-
-
-
-import time, logging, tempfile
 
 def init_config_run_dir(cfg, run_id=None, reset=None, logger=None):
     root = Path(cfg.get("CONFIGS_DIR", Path(cfg["OVERALL_DIR"]) / "configs"))
@@ -585,7 +674,6 @@ def init_config_run_dir(cfg, run_id=None, reset=None, logger=None):
     (logger.info(msg) if logger else print(msg))
 
 
-
 # -------------------------
 # P2Rank helpers (optional)
 # -------------------------
@@ -605,17 +693,32 @@ def p2rank_out_dir(cfg: Dict[str, Any]) -> Path:
 def define_docking_stages(mode="discovery"):
     if mode == "discovery":
         return [
-            {"name": "stage1", "num_modes": 1,  "energy_range": 2, "exhaustiveness": 2},
-            {"name": "stage2", "num_modes": 3,  "energy_range": 3, "exhaustiveness": 4},
-            {"name": "stage3", "num_modes": 5,  "energy_range": 4, "exhaustiveness": 6},
-            {"name": "stage4", "num_modes": 9,  "energy_range": 6, "exhaustiveness": 8},
-            {"name": "stage5", "num_modes": 20, "energy_range": 9, "exhaustiveness": 20},
+            {"name": "stage1", "num_modes": 1, "energy_range": 2, "exhaustiveness": 2},
+            {"name": "stage2", "num_modes": 3, "energy_range": 3, "exhaustiveness": 4},
+            {"name": "stage3", "num_modes": 5, "energy_range": 4, "exhaustiveness": 6},
+            {"name": "stage4", "num_modes": 9, "energy_range": 6, "exhaustiveness": 8},
+            {
+                "name": "stage5",
+                "num_modes": 20,
+                "energy_range": 9,
+                "exhaustiveness": 20,
+            },
         ]
     elif mode == "polypharmacology":
         return [
-            {"name": "stage1", "num_modes": 3,  "energy_range": 2, "exhaustiveness": 4},
-            {"name": "stage2", "num_modes": 10, "energy_range": 6, "exhaustiveness": 12},
-            {"name": "stage3", "num_modes": 20, "energy_range": 9, "exhaustiveness": 24},
+            {"name": "stage1", "num_modes": 3, "energy_range": 2, "exhaustiveness": 4},
+            {
+                "name": "stage2",
+                "num_modes": 10,
+                "energy_range": 6,
+                "exhaustiveness": 12,
+            },
+            {
+                "name": "stage3",
+                "num_modes": 20,
+                "energy_range": 9,
+                "exhaustiveness": 24,
+            },
         ]
     else:
         raise ValueError(f"Unknown docking mode: {mode}")
@@ -624,7 +727,9 @@ def define_docking_stages(mode="discovery"):
 # -------------------------
 # Score I/O
 # -------------------------
-def write_score_summary_to_csv(score_history, output_path="docking_score_summary.csv", run_id=None, variant=None):
+def write_score_summary_to_csv(
+    score_history, output_path="docking_score_summary.csv", run_id=None, variant=None
+):
     ligand_stage_pattern = re.compile(r"^(.*?)(_stage\d+)?\.pdbqt$", re.IGNORECASE)
     ligand_scores = defaultdict(dict)
 
@@ -668,6 +773,7 @@ def write_score_summary_to_csv(score_history, output_path="docking_score_summary
         writer.writerows(rows)
 
     print(f"\nScore summary written to: {output_path}")
+
 
 def extract_best_score(docked_pdbqt_path):
     best_score = None
@@ -723,7 +829,18 @@ def extract_gnina_scores(docked_pdbqt_path: str) -> Dict[str, Optional[float]]:
 # -------------------------
 # Vina config writer, uses shim(lazy yeah)
 # -------------------------
-def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job, docked_dir=None):
+def generate_config(
+    output_dir,
+    pdb_id,
+    receptor_pdbqt,
+    center,
+    box_size,
+    ligand_path,
+    stage,
+    stage_info,
+    cpu_per_job,
+    docked_dir=None,
+):
     # Legacy shim: derive a minimal cfg for older callers
     from docking.docking_vina import emit_vina_config
 
@@ -753,9 +870,6 @@ def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand
     )
 
 
-
-
-
 # -------------------------
 # Score bookkeeping
 # -------------------------
@@ -780,6 +894,7 @@ def record_score(score_history, stage_name, ligand, score: Any, valid, reason=No
         "reason": reason,
     }
 
+
 def score_key(item):
     """item = (ligand, rec). Sort by numeric score; invalid or None go to bottom."""
     _, rec = item
@@ -791,6 +906,7 @@ def score_key(item):
     except (TypeError, ValueError):
         return math.inf
     return s if rec.get("valid", False) else s + 1e-6
+
 
 def annotate_fda_long_csv_with_t_scores_vs_decoys(
     cfg: Dict[str, Any],
@@ -862,10 +978,7 @@ def annotate_fda_long_csv_with_t_scores_vs_decoys(
     df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
 
     # Best score per ligand
-    best = (
-        df.groupby(lig_col, as_index=False)
-          .agg(best_score=(score_col, "min"))
-    )
+    best = df.groupby(lig_col, as_index=False).agg(best_score=(score_col, "min"))
     best["t_vs_decoys"] = (mu - best["best_score"]) / sigma
     t_map = dict(zip(best[lig_col], best["t_vs_decoys"]))
 
@@ -895,22 +1008,26 @@ def build_paths_for_protein(cfg, base_id, pdb_file, variant=None, ph_token=None)
     p = make_paths(cfg, base_id=base_id, pdb_file=pdb_file)
     return {
         "pdb_id": base_id.upper(),
-        "pdb_path":             str(p.input_pdb_path),
-        "nolig_pdb_path":       str(p.nolig_pdb_path),
-        "ligand_output_dir":    str(p.ligand_output_dir),
-        "ligands_mol2_dir":     str(p.ligands_mol2_dir),
-        "prepped_ligands_dir":  str(p.prepped_ligands_dir),
-        "cleaned_pdb_path":     str(p.receptor_cleaned_pdb(variant)),
-        "receptor_pdbqt_path":  str(p.receptor_pdbqt(variant, ph_token=ph_token)),
+        "pdb_path": str(p.input_pdb_path),
+        "nolig_pdb_path": str(p.nolig_pdb_path),
+        "ligand_output_dir": str(p.ligand_output_dir),
+        "ligands_mol2_dir": str(p.ligands_mol2_dir),
+        "prepped_ligands_dir": str(p.prepped_ligands_dir),
+        "cleaned_pdb_path": str(p.receptor_cleaned_pdb(variant)),
+        "receptor_pdbqt_path": str(p.receptor_pdbqt(variant, ph_token=ph_token)),
     }
+
+
 # >>> BUILD_PATHS SHIM END
 # -------------------------
 # Backward-compat shims
 # -------------------------
 
+
 def load_inputs():
     """Legacy name used by existing scripts. Now just calls load_config()."""
     return load_config()
+
 
 def get_default_config(prompt: bool = False):
     """

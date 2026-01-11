@@ -18,19 +18,25 @@ def _checkpoint_path(
     ph_label: Optional[str] = None,
     variant: Optional[str] = None,
 ) -> Path:
-    variant_token = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
+    variant_token = (
+        variant or os.environ.get("APO_HOLO_VARIANT", "") or ""
+    ).strip().upper() or None
     legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-    root = docked_dir(pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode)
+    root = docked_dir(
+        pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode
+    )
     return root / f".ckpt_{stage_name}.json"
 
 
-def checkpoint_should_skip(cfg: Dict,
-                           pdb_id: str,
-                           stage_name: str,
-                           fingerprint: Dict[str, Any],
-                           ph_label: Optional[str] = None,
-                           variant: Optional[str] = None,
-                           engine: Optional[str] = None) -> bool:
+def checkpoint_should_skip(
+    cfg: Dict,
+    pdb_id: str,
+    stage_name: str,
+    fingerprint: Dict[str, Any],
+    ph_label: Optional[str] = None,
+    variant: Optional[str] = None,
+    engine: Optional[str] = None,
+) -> bool:
     p = _checkpoint_path(cfg, pdb_id, stage_name, ph_label=ph_label, variant=variant)
     if not p.exists():
         return False
@@ -43,8 +49,15 @@ def checkpoint_should_skip(cfg: Dict,
 
     if engine:
         legacy_mode = bool(cfg.get("_ROUTER_LEGACY", False))
-        variant_token = (variant or os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-        stage_dir = docked_dir(pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode) / stage_name
+        variant_token = (
+            variant or os.environ.get("APO_HOLO_VARIANT", "") or ""
+        ).strip().upper() or None
+        stage_dir = (
+            docked_dir(
+                pdb_id, variant=variant_token, ph_tag=ph_label, legacy=legacy_mode
+            )
+            / stage_name
+        )
         marker = stage_dir / f"completion_{engine}.json"
         if not marker.exists():
             return False
@@ -60,12 +73,14 @@ def checkpoint_should_skip(cfg: Dict,
     return True
 
 
-def checkpoint_mark_done(cfg: Dict,
-                         pdb_id: str,
-                         stage_name: str,
-                         fingerprint: Dict[str, Any],
-                         ph_label: Optional[str] = None,
-                         variant: Optional[str] = None) -> None:
+def checkpoint_mark_done(
+    cfg: Dict,
+    pdb_id: str,
+    stage_name: str,
+    fingerprint: Dict[str, Any],
+    ph_label: Optional[str] = None,
+    variant: Optional[str] = None,
+) -> None:
     p = _checkpoint_path(cfg, pdb_id, stage_name, ph_label=ph_label, variant=variant)
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -74,9 +89,14 @@ def checkpoint_mark_done(cfg: Dict,
         pass
 
 
-def checkpoint_invalidate_from(cfg: Dict, pdb_id: str, stages: List[Dict], start_index: int,
-                               ph_label: Optional[str] = None,
-                               variant: Optional[str] = None) -> None:
+def checkpoint_invalidate_from(
+    cfg: Dict,
+    pdb_id: str,
+    stages: List[Dict],
+    start_index: int,
+    ph_label: Optional[str] = None,
+    variant: Optional[str] = None,
+) -> None:
     for j in range(start_index, len(stages)):
         names = [stages[j]["name"]]
         try:

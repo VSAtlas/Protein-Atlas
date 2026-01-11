@@ -14,7 +14,6 @@ from apo_holo_mode import (
     delete_variant_trees,
     file_sha1,
 )
-from .docking_centering import CenterSelector
 from .docking_controls import _summarize_ions_file
 from .docking_receptor import prepare_receptor
 from .docking_utils import norm
@@ -55,18 +54,33 @@ def _phase2_to4_receptor_and_center(
     box_size: Optional[Tuple[float, float, float]] = None
     center_source = "none"
 
-    logger.info("[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s", cfg.get("PH_ENSEMBLE", False))
+    logger.info(
+        "[ph.debug] calling prepare_receptor; PH_ENSEMBLE=%s",
+        cfg.get("PH_ENSEMBLE", False),
+    )
     cleaned_pdb, receptor_pdbqt = prepare_receptor(cfg, paths, logger)
     provenance = getattr(prepare_receptor, "last_provenance", None)
     if provenance is None:
         try:
-            provenance = getattr(protein_prep, "get_clean_provenance", lambda: "unknown")()
+            provenance = getattr(
+                protein_prep, "get_clean_provenance", lambda: "unknown"
+            )()
         except Exception:
             provenance = "unknown"
     logger.info("[receptor.clean.provenance] created_by=%s", provenance)
     if not cleaned_pdb or not receptor_pdbqt:
         logger.warning("Skipping protein due to prep failure.")
-        return cleaned_pdb, None, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
+        return (
+            cleaned_pdb,
+            None,
+            pdb_audit,
+            clean_audit,
+            center,
+            box_size,
+            center_source,
+            control_stems,
+            control_lookup,
+        )
 
     cleaned_hist = "none"
     if cleaned_pdb:
@@ -109,14 +123,25 @@ def _phase2_to4_receptor_and_center(
     try:
         probe_map = protein_prep.get_ion_probe_map(paths.pdb_id)
     except Exception as exc:
-        logger.warning("[ions.summary] pdb=%s variant=%s action=skip err=%s", paths.pdb_id, variant_label, exc)
+        logger.warning(
+            "[ions.summary] pdb=%s variant=%s action=skip err=%s",
+            paths.pdb_id,
+            variant_label,
+            exc,
+        )
     else:
         before_counts = probe_map.get("strip_nonstandard:before", {})
         final_counts = probe_map.get("receptor_write", {})
         metals_before = sum(before_counts.values())
         metals_kept = sum(final_counts.values())
         metals_stripped = max(0, metals_before - metals_kept)
-        logger.info("[ions.summary] pdb=%s variant=%s metals_kept=%d metals_stripped=%d", paths.pdb_id, variant_label, metals_kept, metals_stripped)
+        logger.info(
+            "[ions.summary] pdb=%s variant=%s metals_kept=%d metals_stripped=%d",
+            paths.pdb_id,
+            variant_label,
+            metals_kept,
+            metals_stripped,
+        )
 
     if cleaned_pdb:
         if variant_env == "HOLO":
@@ -138,7 +163,12 @@ def _phase2_to4_receptor_and_center(
         box_size = tuple(min(28.0, float(s)) for s in b2)
         center = c2
         center_source = src or "activesite"
-        logger.info("[active-site] Using center %s with box %s source=%s", center, box_size, center_source)
+        logger.info(
+            "[active-site] Using center %s with box %s source=%s",
+            center,
+            box_size,
+            center_source,
+        )
     else:
         logger.error(
             "[active-site] detection_failed pdb=%s variant=%s action=continue",
@@ -181,7 +211,11 @@ def _phase2_to4_receptor_and_center(
     regen = False
     try:
         logger.info("[holo.restore.call] invoking for pdb=%s", paths.pdb_id)
-        metals_added, cofactors_added, regen = protein_prep._holo_restore_from_input_if_needed(
+        (
+            metals_added,
+            cofactors_added,
+            regen,
+        ) = protein_prep._holo_restore_from_input_if_needed(
             pdb_id=paths.pdb_id,
             cleaned_pdb=cleaned_pdb,
             output_pdbqt=receptor_pdbqt,
@@ -263,7 +297,9 @@ def _phase2_to4_receptor_and_center(
                     audit_err,
                 )
 
-    resolved_mode = (str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or "").strip().lower() or "legacy"
+    resolved_mode = (
+        str(cfg.get("_RESOLVED_APO_HOLO_MODE")) or ""
+    ).strip().lower() or "legacy"
     if variant_env == "HOLO" and resolved_mode == "apo_vs_holo":
         apo_clean = _variant_receptor_path(paths.pdb_id, "APO", cfg)
         holo_clean = cleaned_pdb or _variant_receptor_path(paths.pdb_id, "HOLO", cfg)
@@ -283,8 +319,10 @@ def _phase2_to4_receptor_and_center(
         else:
             logger.info(
                 "[apo-vs-holo] compare.preflight apo=%s exists=%s holo=%s exists=%s",
-                norm(apo_path), ("T" if apo_exists else "F"),
-                norm(holo_path), ("T" if holo_exists else "F"),
+                norm(apo_path),
+                ("T" if apo_exists else "F"),
+                norm(holo_path),
+                ("T" if holo_exists else "F"),
             )
             try:
                 apo_sha = file_sha1(str(apo_path))
@@ -305,15 +343,23 @@ def _phase2_to4_receptor_and_center(
                         holo_sha,
                     )
                     audit_root = cfg.get("_ION_AUDIT", {})
-                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(paths.pdb_id)
+                    pdb_entry = audit_root.get(paths.pdb_id) or audit_root.get(
+                        paths.pdb_id
+                    )
                     warn_needed = False
                     if isinstance(pdb_entry, dict):
                         input_info = pdb_entry.get("input_counts", {})
                         clean_map = pdb_entry.get("clean_counts", {}) or {}
-                        holo_info = clean_map.get("HOLO") or clean_map.get(variant_label) or {}
-                        if input_info.get("metals_present") or input_info.get("salts_present"):
+                        holo_info = (
+                            clean_map.get("HOLO") or clean_map.get(variant_label) or {}
+                        )
+                        if input_info.get("metals_present") or input_info.get(
+                            "salts_present"
+                        ):
                             warn_needed = True
-                        if holo_info.get("metals_present") or holo_info.get("salts_present"):
+                        if holo_info.get("metals_present") or holo_info.get(
+                            "salts_present"
+                        ):
                             warn_needed = True
                     if warn_needed:
                         logger.warning(
@@ -323,8 +369,12 @@ def _phase2_to4_receptor_and_center(
                             holo_sha,
                         )
                     if receptor_pdbqt:
-                        _record_apo_holo_usage(cfg, paths.pdb_id, variant_token, None, receptor_pdbqt)
-                    _record_apo_holo_decision(cfg, paths.pdb_id, "HOLO", "skipped_preflight")
+                        _record_apo_holo_usage(
+                            cfg, paths.pdb_id, variant_token, None, receptor_pdbqt
+                        )
+                    _record_apo_holo_decision(
+                        cfg, paths.pdb_id, "HOLO", "skipped_preflight"
+                    )
                     try:
                         delete_variant_trees(paths.pdb_id, "HOLO", cfg)
                     except Exception as cleanup_err:
@@ -333,7 +383,17 @@ def _phase2_to4_receptor_and_center(
                             paths.pdb_id,
                             cleanup_err,
                         )
-                    return cleaned_pdb, None, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
+                    return (
+                        cleaned_pdb,
+                        None,
+                        pdb_audit,
+                        clean_audit,
+                        center,
+                        box_size,
+                        center_source,
+                        control_stems,
+                        control_lookup,
+                    )
                 else:
                     logger.info(
                         "[apo-vs-holo] pdb_id=%s variant=HOLO stage=preflight action=continue reason=not_identical apo_sha=%s holo_sha=%s",
@@ -341,6 +401,18 @@ def _phase2_to4_receptor_and_center(
                         apo_sha,
                         holo_sha,
                     )
-                    _record_apo_holo_decision(cfg, paths.pdb_id, "HOLO", "not_identical")
+                    _record_apo_holo_decision(
+                        cfg, paths.pdb_id, "HOLO", "not_identical"
+                    )
 
-    return cleaned_pdb, receptor_pdbqt, pdb_audit, clean_audit, center, box_size, center_source, control_stems, control_lookup
+    return (
+        cleaned_pdb,
+        receptor_pdbqt,
+        pdb_audit,
+        clean_audit,
+        center,
+        box_size,
+        center_source,
+        control_stems,
+        control_lookup,
+    )

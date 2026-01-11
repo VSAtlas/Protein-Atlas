@@ -30,7 +30,9 @@ def _get_logger() -> logging.Logger:
     return logger
 
 
-def _log(logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None) -> None:
+def _log(
+    logger: logging.Logger, level: str, kvs: Dict[str, object], msg: str | None = None
+) -> None:
     level_map = {
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
@@ -190,8 +192,14 @@ def write_aggregated_mmpbsa_results(
     Write aggregate FINAL_RESULTS files in a minimal MMPBSA-compatible format so downstream
     readers (frame aggregators) can parse DELTA TOTAL.
     """
-    out_dat_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat") or "FINAL_RESULTS_MMPBSA.dat")
-    out_csv_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv") or "FINAL_RESULTS_MMPBSA.csv")
+    out_dat_name = str(
+        _cfg_get(cfg, "MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat")
+        or "FINAL_RESULTS_MMPBSA.dat"
+    )
+    out_csv_name = str(
+        _cfg_get(cfg, "MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv")
+        or "FINAL_RESULTS_MMPBSA.csv"
+    )
 
     work_dir.mkdir(parents=True, exist_ok=True)
     out_dat_path = work_dir / out_dat_name
@@ -292,7 +300,9 @@ def resolve_mmpbsa_runner(cfg: object) -> Dict[str, object]:
         elif _prefix_has_tool(prefix, "MMPBSA.py"):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run MMPBSA.py from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run MMPBSA.py from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return {
                 "runner": runner,
@@ -324,7 +334,9 @@ def resolve_mmpbsa_runner(cfg: object) -> Dict[str, object]:
         if _prefix_has_tool(prefix, "MMPBSA.py") and not _looks_like_pkgs_cache(prefix):
             micromamba = _resolve_micromamba()
             if not micromamba:
-                raise FileNotFoundError("micromamba not found; cannot run MMPBSA.py from prefix")
+                raise FileNotFoundError(
+                    "micromamba not found; cannot run MMPBSA.py from prefix"
+                )
             runner = [str(micromamba), "run", "-p", str(prefix)]
             return {
                 "runner": runner,
@@ -374,15 +386,25 @@ def run_mmgbsa(
 
     work_path.mkdir(parents=True, exist_ok=True)
 
-    startframe = _to_int(_cfg_first(cfg, ["MMGBSA_GENERAL_STARTFRAME", "MMGBSA_MMPBSA_STARTFRAME"], 1), 1)
-    endframe = _to_int(_cfg_first(cfg, ["MMGBSA_GENERAL_ENDFRAME", "MMGBSA_MMPBSA_ENDFRAME"], 1), 1)
-    interval = _to_int(_cfg_first(cfg, ["MMGBSA_GENERAL_INTERVAL", "MMGBSA_MMPBSA_INTERVAL"], 1), 1)
-    verbose = _to_int(_cfg_first(cfg, ["MMGBSA_GENERAL_VERBOSE", "MMGBSA_MMPBSA_VERBOSE"], 2), 2)
+    startframe = _to_int(
+        _cfg_first(cfg, ["MMGBSA_GENERAL_STARTFRAME", "MMGBSA_MMPBSA_STARTFRAME"], 1), 1
+    )
+    endframe = _to_int(
+        _cfg_first(cfg, ["MMGBSA_GENERAL_ENDFRAME", "MMGBSA_MMPBSA_ENDFRAME"], 1), 1
+    )
+    interval = _to_int(
+        _cfg_first(cfg, ["MMGBSA_GENERAL_INTERVAL", "MMGBSA_MMPBSA_INTERVAL"], 1), 1
+    )
+    verbose = _to_int(
+        _cfg_first(cfg, ["MMGBSA_GENERAL_VERBOSE", "MMGBSA_MMPBSA_VERBOSE"], 2), 2
+    )
     igb = _to_int(_cfg_get(cfg, "MMGBSA_GB_IGB", 5), 5)
     saltcon = _to_float(_cfg_get(cfg, "MMGBSA_GB_SALTCON", 0.150), 0.150)
 
     if _cfg_has_value(cfg, "MMGBSA_MMPBSA_USE_TRAJ_FRAMES"):
-        use_traj_frames = _to_bool(_cfg_get(cfg, "MMGBSA_MMPBSA_USE_TRAJ_FRAMES", True), default=True)
+        use_traj_frames = _to_bool(
+            _cfg_get(cfg, "MMGBSA_MMPBSA_USE_TRAJ_FRAMES", True), default=True
+        )
     else:
         use_traj_frames = _mmgbsa_effective_md_enabled(cfg)
     if use_traj_frames:
@@ -390,10 +412,20 @@ def run_mmgbsa(
         endframe = 999999
         interval = 1
 
-    input_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_INPUT_NAME", "mmpbsa.in") or "mmpbsa.in")
-    log_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_LOG_NAME", "mmpbsa.log") or "mmpbsa.log")
-    out_dat_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat") or "FINAL_RESULTS_MMPBSA.dat")
-    out_csv_name = str(_cfg_get(cfg, "MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv") or "FINAL_RESULTS_MMPBSA.csv")
+    input_name = str(
+        _cfg_get(cfg, "MMGBSA_MMPBSA_INPUT_NAME", "mmpbsa.in") or "mmpbsa.in"
+    )
+    log_name = str(
+        _cfg_get(cfg, "MMGBSA_MMPBSA_LOG_NAME", "mmpbsa.log") or "mmpbsa.log"
+    )
+    out_dat_name = str(
+        _cfg_get(cfg, "MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat")
+        or "FINAL_RESULTS_MMPBSA.dat"
+    )
+    out_csv_name = str(
+        _cfg_get(cfg, "MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv")
+        or "FINAL_RESULTS_MMPBSA.csv"
+    )
     default_traj = str(_cfg_get(cfg, "MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd")
 
     traj_value = trajectory_path or str(work_path / default_traj)
@@ -510,7 +542,9 @@ def run_mmgbsa(
     )
 
     with log_path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.run(cmd, cwd=str(work_path), stdout=handle, stderr=subprocess.STDOUT)
+        proc = subprocess.run(
+            cmd, cwd=str(work_path), stdout=handle, stderr=subprocess.STDOUT
+        )
 
     result = {
         "enabled": True,
@@ -554,14 +588,30 @@ def run_mmgbsa(
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run MMGBSA using AmberTools MMPBSA.py.")
-    parser.add_argument("--work-dir", required=True, help="Working directory for mmpbsa input/log/output.")
+    parser = argparse.ArgumentParser(
+        description="Run MMGBSA using AmberTools MMPBSA.py."
+    )
+    parser.add_argument(
+        "--work-dir",
+        required=True,
+        help="Working directory for mmpbsa input/log/output.",
+    )
     parser.add_argument("--complex-prmtop", required=True, help="Complex prmtop path.")
-    parser.add_argument("--receptor-prmtop", required=True, help="Receptor prmtop path.")
+    parser.add_argument(
+        "--receptor-prmtop", required=True, help="Receptor prmtop path."
+    )
     parser.add_argument("--ligand-prmtop", required=True, help="Ligand prmtop path.")
-    parser.add_argument("--traj", default=None, help="Trajectory path (defaults to work_dir/MMGBSA_DEFAULT_TRAJ_NAME).")
-    parser.add_argument("--force", action="store_true", help="Overwrite outputs if present.")
-    parser.add_argument("--no-run", action="store_true", help="Write mmpbsa input only.")
+    parser.add_argument(
+        "--traj",
+        default=None,
+        help="Trajectory path (defaults to work_dir/MMGBSA_DEFAULT_TRAJ_NAME).",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Overwrite outputs if present."
+    )
+    parser.add_argument(
+        "--no-run", action="store_true", help="Write mmpbsa input only."
+    )
     return parser
 
 
@@ -572,7 +622,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         cfg = load_config()
-        default_traj = str(_cfg_get(cfg, "MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd")
+        default_traj = str(
+            _cfg_get(cfg, "MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd"
+        )
         traj_path = args.traj or str(Path(args.work_dir) / default_traj)
         run_mmgbsa(
             complex_prmtop=args.complex_prmtop,
@@ -585,7 +637,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             run=not args.no_run,
         )
     except Exception as exc:
-        _log(logger, "ERROR", {"reason": type(exc).__name__, "detail": str(exc)}, "failed")
+        _log(
+            logger,
+            "ERROR",
+            {"reason": type(exc).__name__, "detail": str(exc)},
+            "failed",
+        )
         return 1
     return 0
 

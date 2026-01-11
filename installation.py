@@ -1,6 +1,6 @@
-import os
 from pathlib import Path
-from input_and_export_functions import load_config as _load_config, validate_config
+from input_and_export_functions import load_config as _load_config
+
 
 def get_default_config():
     base_dir = Path(__file__).resolve().parent
@@ -17,6 +17,7 @@ def get_default_config():
         "DOCKED_DIR": str(base_dir / "docked"),
         "PDBQT_DIR": str(base_dir / "pdbqts"),
     }
+
 
 def load_config(config_path: str = "config.txt"):
     """

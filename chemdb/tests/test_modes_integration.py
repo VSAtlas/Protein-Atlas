@@ -47,7 +47,9 @@ from docking.ph_ensemble_docking import enumerate_ligands_for_ph_context  # noqa
 from testdata_hmdb_test_library import ensure_hmdb_test_library, infer_ligand_roots  # noqa: E402
 
 
-def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[str, str]:
+def _build_env(
+    tmp_path: Path, extra_env: dict[str, str] | None = None
+) -> dict[str, str]:
     env = os.environ.copy()
     base = {
         "PYTHONUNBUFFERED": "1",
@@ -75,7 +77,12 @@ def _build_env(tmp_path: Path, extra_env: dict[str, str] | None = None) -> dict[
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items()})
 
-    for key in ("DOCKED_DIR", "CONFIGS_DIR", "P2RANK_OUTPUT_DIR", "LIGAND_EXTRACTED_DIR"):
+    for key in (
+        "DOCKED_DIR",
+        "CONFIGS_DIR",
+        "P2RANK_OUTPUT_DIR",
+        "LIGAND_EXTRACTED_DIR",
+    ):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     return env
 
@@ -167,7 +174,15 @@ def run_main_cli(
     config_dir.mkdir(parents=True, exist_ok=True)
 
     # Force fast + test FDA runs to keep integration tests lightweight.
-    args = [sys.executable, str(MAIN_PY), "-test", "-fast", "-test-fda", "--run-id", RUN_ID]
+    args = [
+        sys.executable,
+        str(MAIN_PY),
+        "-test",
+        "-fast",
+        "-test-fda",
+        "--run-id",
+        RUN_ID,
+    ]
     if extra_args:
         cleaned: list[str] = []
         skip = False
@@ -218,7 +233,9 @@ def enumerate_ph_ligands_for_test_pdb(
         cfg["RUN_ID"] = str(env.get("RUN_ID", cfg.get("RUN_ID", ""))).strip()
         # Mirror the CLI -test-fda override used by run_main_cli so enumeration
         # matches the runtime library selection.
-        cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get("TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10")
+        cfg["LIBRARY_SUBDIR_DEFAULT"] = cfg.get(
+            "TEST_FDA_LIBRARY_SUBDIR", "fda_test_library_10"
+        )
         cfg["PH_LIGAND_MODE"] = "context_window"
         chosen = pdb_id or _pick_test_pdb(cfg)
         ph_tags = load_ph_tags(chosen, variant=None)
@@ -267,7 +284,9 @@ def enumerate_ph_ligands_for_test_pdb(
     return {Path(p).stem for p in ligs or []}
 
 
-def _prepare_run(tmp_path: Path, extra_env: dict[str, str] | None = None) -> tuple[dict[str, str], str]:
+def _prepare_run(
+    tmp_path: Path, extra_env: dict[str, str] | None = None
+) -> tuple[dict[str, str], str]:
     env = _build_env(tmp_path, extra_env)
     cfg = _load_cfg(env)
     test_mode_raw = str(env.get("TEST_MODE_ENABLE", "")).lower()
@@ -283,7 +302,11 @@ def _prepare_run(tmp_path: Path, extra_env: dict[str, str] | None = None) -> tup
 
 def test_apo_mode_generates_csv(tmp_path: Path) -> None:
     env, pdb_id = _prepare_run(tmp_path, {"APO_HOLO_MODE": "apo"})
-    cp = run_main_cli(tmp_path, extra_args=["-fast", "-test-fda","-pdb", pdb_id, "--run-id", "apo_mode"], env=env)
+    cp = run_main_cli(
+        tmp_path,
+        extra_args=["-fast", "-test-fda", "-pdb", pdb_id, "--run-id", "apo_mode"],
+        env=env,
+    )
     assert cp.returncode == 0
 
     with patch.dict(os.environ, env, clear=False):
@@ -291,7 +314,9 @@ def test_apo_mode_generates_csv(tmp_path: Path) -> None:
         mode, variants = resolve_apo_holo_mode(cfg)
         legacy = mode == "legacy"
         assert variants, "No variants resolved for APO mode"
-        variant_root = docked_dir(pdb_id, variant=variants[0], ph_tag=None, legacy=legacy)
+        variant_root = docked_dir(
+            pdb_id, variant=variants[0], ph_tag=None, legacy=legacy
+        )
         csv_paths = _score_csvs(variant_root)
         assert csv_paths, f"No docking_score_long.csv found under {variant_root}"
         assert any(_csv_has_rows(p) for p in csv_paths)
@@ -300,7 +325,9 @@ def test_apo_mode_generates_csv(tmp_path: Path) -> None:
 
 def test_holo_mode_generates_csv(tmp_path: Path) -> None:
     env, pdb_id = _prepare_run(tmp_path, {"APO_HOLO_MODE": "holo"})
-    cp = run_main_cli(tmp_path, extra_args=["-pdb", pdb_id, "--run-id", "holo_mode"], env=env)
+    cp = run_main_cli(
+        tmp_path, extra_args=["-pdb", pdb_id, "--run-id", "holo_mode"], env=env
+    )
     assert cp.returncode == 0
 
     with patch.dict(os.environ, env, clear=False):
@@ -308,7 +335,9 @@ def test_holo_mode_generates_csv(tmp_path: Path) -> None:
         mode, variants = resolve_apo_holo_mode(cfg)
         legacy = mode == "legacy"
         assert variants, "No variants resolved for HOLO mode"
-        variant_root = docked_dir(pdb_id, variant=variants[0], ph_tag=None, legacy=legacy)
+        variant_root = docked_dir(
+            pdb_id, variant=variants[0], ph_tag=None, legacy=legacy
+        )
         csv_paths = _score_csvs(variant_root)
         assert csv_paths, f"No docking_score_long.csv found under {variant_root}"
         assert any(_csv_has_rows(p) for p in csv_paths)
@@ -331,14 +360,18 @@ def test_apo_vs_holo_mode_generates_csv_per_variant(tmp_path: Path) -> None:
         assert variants, "No variants resolved for apo_vs_holo mode"
 
         for variant in variants:
-            variant_root = docked_dir(pdb_id, variant=variant, ph_tag=None, legacy=legacy)
+            variant_root = docked_dir(
+                pdb_id, variant=variant, ph_tag=None, legacy=legacy
+            )
             csv_paths = _score_csvs(variant_root)
             assert csv_paths, f"Missing docking_score_long.csv for variant {variant}"
             assert any(_csv_has_rows(p) for p in csv_paths)
             assert any(_ligands_from_csv(p) for p in csv_paths)
 
 
-def test_ph_ligand_mode_context_window_ligands_match_enumeration(tmp_path: Path) -> None:
+def test_ph_ligand_mode_context_window_ligands_match_enumeration(
+    tmp_path: Path,
+) -> None:
     env, pdb_id = _prepare_run(
         tmp_path,
         {
@@ -367,7 +400,9 @@ def test_ph_ligand_mode_context_window_ligands_match_enumeration(tmp_path: Path)
         cfg = load_inputs()
         mode, variants = resolve_apo_holo_mode(cfg)
         legacy = mode == "legacy"
-        variant_root = docked_dir(pdb_id, variant=variants[0], ph_tag=None, legacy=legacy)
+        variant_root = docked_dir(
+            pdb_id, variant=variants[0], ph_tag=None, legacy=legacy
+        )
         csv_paths = _score_csvs(variant_root)
         assert csv_paths, "No docking_score_long.csv produced for PH ligand mode"
 
@@ -393,15 +428,17 @@ def test_no_docking_mode_creates_planned_ligands_only(tmp_path: Path) -> None:
         legacy = mode == "legacy"
 
         for variant in variants:
-            variant_root = docked_dir(pdb_id, variant=variant, ph_tag=None, legacy=legacy)
+            variant_root = docked_dir(
+                pdb_id, variant=variant, ph_tag=None, legacy=legacy
+            )
             planned = list(variant_root.rglob("planned_ligands_*.txt"))
             assert planned, f"No planned_ligands_*.txt files for variant {variant}"
             assert all(p.stat().st_size > 0 for p in planned)
 
             for stage_dir in variant_root.rglob("stage*"):
-                assert not any(stage_dir.glob("*_stage*.pdbqt")), (
-                    f"Found docking outputs in no-docking mode under {stage_dir}"
-                )
+                assert not any(
+                    stage_dir.glob("*_stage*.pdbqt")
+                ), f"Found docking outputs in no-docking mode under {stage_dir}"
 
 
 def test_main_fast_no_docking_excludes_ph_and_microstate_dirs(tmp_path: Path) -> None:
@@ -421,12 +458,16 @@ def test_main_fast_no_docking_excludes_ph_and_microstate_dirs(tmp_path: Path) ->
 
     with patch.dict(os.environ, env, clear=False):
         cfg_for_roots = load_inputs()
-        cfg_for_roots["RUN_ID"] = str(env.get("RUN_ID", cfg_for_roots.get("RUN_ID", ""))).strip()
+        cfg_for_roots["RUN_ID"] = str(
+            env.get("RUN_ID", cfg_for_roots.get("RUN_ID", ""))
+        ).strip()
         make_paths(cfg_for_roots, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     test_map = _coerce_test_map(cfg_for_roots.get("TEST_LIBRARY_MAP", {}))
     mapped = test_map.get(pdb_id)
     base_root = Path(cfg_for_roots["OUTPUT_LIGANDS_DIR"])
-    library_root = base_root / (mapped or cfg_for_roots.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
+    library_root = base_root / (
+        mapped or cfg_for_roots.get("LIBRARY_SUBDIR_DEFAULT", "fda_library")
+    )
     library_root.mkdir(parents=True, exist_ok=True)
 
     lig_root = library_root
@@ -446,7 +487,9 @@ def test_main_fast_no_docking_excludes_ph_and_microstate_dirs(tmp_path: Path) ->
         mode, variants = resolve_apo_holo_mode(cfg)
         legacy = mode == "legacy"
         assert variants, "No variants resolved for PH-off filtering check"
-        variant_root = docked_dir(pdb_id, variant=variants[0], ph_tag=None, legacy=legacy)
+        variant_root = docked_dir(
+            pdb_id, variant=variants[0], ph_tag=None, legacy=legacy
+        )
 
     planned_lists = list(variant_root.rglob("planned_ligands_*.txt"))
     assert planned_lists, "No planned ligands written for PH-off filter check"
@@ -499,13 +542,23 @@ def test_test_mode_enable_generates_prefixed_csvs(
         legacy = mode_token == "legacy"
 
         for variant in variants:
-            variant_root = docked_dir(pdb_id, variant=variant, ph_tag=None, legacy=legacy)
+            variant_root = docked_dir(
+                pdb_id, variant=variant, ph_tag=None, legacy=legacy
+            )
             for prefix in expected_prefixes:
-                long_csv = _score_csvs(variant_root, pattern=f"{prefix}docking_score_long.csv")
-                summary_csv = _score_csvs(variant_root, pattern=f"{prefix}docking_score_summary.csv")
+                long_csv = _score_csvs(
+                    variant_root, pattern=f"{prefix}docking_score_long.csv"
+                )
+                summary_csv = _score_csvs(
+                    variant_root, pattern=f"{prefix}docking_score_summary.csv"
+                )
                 if long_csv or summary_csv:
-                    assert all(_csv_has_rows(p) for p in long_csv), "Empty docking_score_long.csv detected"
-                    assert all(p.stat().st_size > 0 for p in summary_csv), "Empty docking_score_summary.csv detected"
+                    assert all(
+                        _csv_has_rows(p) for p in long_csv
+                    ), "Empty docking_score_long.csv detected"
+                    assert all(
+                        p.stat().st_size > 0 for p in summary_csv
+                    ), "Empty docking_score_summary.csv detected"
                     continue
 
                 suffix = "run"
@@ -518,6 +571,6 @@ def test_test_mode_enable_generates_prefixed_csvs(
 
                 planned = list(variant_root.rglob(f"planned_ligands_{suffix}.txt"))
                 assert planned, f"Missing planned ligands list for mode={mode} prefix={prefix} variant={variant}"
-                assert all(p.stat().st_size > 0 for p in planned), (
-                    f"Planned ligands list empty for mode={mode} prefix={prefix} variant={variant}"
-                )
+                assert all(
+                    p.stat().st_size > 0 for p in planned
+                ), f"Planned ligands list empty for mode={mode} prefix={prefix} variant={variant}"

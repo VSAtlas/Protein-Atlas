@@ -6,7 +6,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,9 @@ def count_sdf_records(sdf_path: Path) -> int:
     return n
 
 
-def split_sdf_into_chunks(sdf_path: Path, out_dir: Path, chunk_size: int = 1000) -> List[Path]:
+def split_sdf_into_chunks(
+    sdf_path: Path, out_dir: Path, chunk_size: int = 1000
+) -> List[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     chunks: List[Path] = []
     idx = 0
@@ -200,7 +202,9 @@ def convert_sdf_to_mol2_split_parallel(
             "-O",
             str(prefix) + ".mol2",
         ]
-        print(f"[ligprep] pre-MOL2-write: chunk={ci} sdf={chunk.name} -> prefix={prefix.name}")
+        print(
+            f"[ligprep] pre-MOL2-write: chunk={ci} sdf={chunk.name} -> prefix={prefix.name}"
+        )
         ok = _attempt_obabel_series(
             base_cmd,
             timeout_sec=timeout_sec,

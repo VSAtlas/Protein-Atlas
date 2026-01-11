@@ -17,18 +17,20 @@ def _pdb_line(record, serial, name, resname, chain, resseq, x, y, z, element):
 def test_mmgbsa_receptor_stripping(tmp_path, monkeypatch):
     aliases_path = tmp_path / "aliases.yaml"
     aliases_path.write_text(
-        "canonical_waters: [HOH]\n"
-        "canonical_metals: [ZN]\n"
-        "canonical_cofactors: []\n",
+        "canonical_waters: [HOH]\ncanonical_metals: [ZN]\ncanonical_cofactors: []\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("ALIASES_YAML", str(aliases_path))
 
     sys.modules.pop("activesite", None)
     sys.modules.pop("protein_prep_mmgbsa", None)
-    protein_prep_mmgbsa = importlib.import_module("post_docking.mmgbsa.protein_prep_mmgbsa")
+    protein_prep_mmgbsa = importlib.import_module(
+        "post_docking.mmgbsa.protein_prep_mmgbsa"
+    )
 
-    base_dir = tmp_path / "post_docked" / "mmgbsa_TEST" / "FAKE" / "HOLO" / "pH7_0" / "stage1"
+    base_dir = (
+        tmp_path / "post_docked" / "mmgbsa_TEST" / "FAKE" / "HOLO" / "pH7_0" / "stage1"
+    )
     base_dir.mkdir(parents=True, exist_ok=True)
     pdb_path = base_dir / "receptor.pdb"
 
@@ -82,5 +84,6 @@ def test_mmgbsa_receptor_stripping(tmp_path, monkeypatch):
         for line in out_lines
     )
     assert not any(
-        line.startswith(("ATOM", "HETATM")) and line[17:20].strip() == "ZN" for line in out_lines
+        line.startswith(("ATOM", "HETATM")) and line[17:20].strip() == "ZN"
+        for line in out_lines
     )

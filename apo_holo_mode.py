@@ -14,7 +14,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 from path_router import make_paths, docked_dir
 
@@ -51,8 +51,11 @@ def resolve_apo_holo_mode(cfg: dict) -> tuple[str, list]:
 
     env_raw = os.environ.get("APO_HOLO_MODE")
     raw_value = env_raw if env_raw is not None else cfg.get("APO_HOLO_MODE")
-    logging.info("[apo-holo.debug] env.APO_HOLO_MODE_raw=%r cfg.APO_HOLO_MODE_raw=%r", env_raw,
-                 cfg.get("APO_HOLO_MODE"))
+    logging.info(
+        "[apo-holo.debug] env.APO_HOLO_MODE_raw=%r cfg.APO_HOLO_MODE_raw=%r",
+        env_raw,
+        cfg.get("APO_HOLO_MODE"),
+    )
 
     token = _clean_mode_token(str(raw_value) if raw_value is not None else "")
 
@@ -84,6 +87,7 @@ def _variant_receptor_path(pdb_id: str, variant: str | None, cfg: dict) -> str |
 
 def file_sha1(path: str) -> str:
     import hashlib
+
     h = hashlib.sha1()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
@@ -94,9 +98,12 @@ def file_sha1(path: str) -> str:
 def delete_variant_trees(pdb_id: str, variant: str, cfg: dict) -> None:
     # Delete processed receptor and docking trees for a specific variant (idempotent)
     import shutil
+
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-    proc_variant_root = paths.receptor_dir(variant).parent      # processed_pdbs/<PDB>/<VARIANT>/
-    dock_variant_root = paths.docked_variant_root(variant)      # docked/<PDB>/<VARIANT>/
+    proc_variant_root = paths.receptor_dir(
+        variant
+    ).parent  # processed_pdbs/<PDB>/<VARIANT>/
+    dock_variant_root = paths.docked_variant_root(variant)  # docked/<PDB>/<VARIANT>/
     for d in (proc_variant_root, dock_variant_root):
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
@@ -107,7 +114,7 @@ def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
     If HOLO and APO cleaned receptors are byte-identical, delete HOLO and keep APO.
     """
     holo = _variant_receptor_path(pdb_id, "HOLO", cfg)
-    apo  = _variant_receptor_path(pdb_id, "APO",  cfg)
+    apo = _variant_receptor_path(pdb_id, "APO", cfg)
 
     # log actual resolved paths and existence flags up-front.
     apo_p = Path(apo) if apo else None
@@ -117,8 +124,10 @@ def dedup_identical_variants(pdb_id: str, cfg: dict) -> None:
     logger = logging.getLogger()
     logger.info(
         "[apo-vs-holo] compare.dedup apo=%s exists=%s holo=%s exists=%s",
-        (_norm_path(apo_p) if apo_p else "None"), ("T" if apo_exists else "F"),
-        (_norm_path(holo_p) if holo_p else "None"), ("T" if holo_exists else "F"),
+        (_norm_path(apo_p) if apo_p else "None"),
+        ("T" if apo_exists else "F"),
+        (_norm_path(holo_p) if holo_p else "None"),
+        ("T" if holo_exists else "F"),
     )
 
     if not holo or not apo:
@@ -180,7 +189,7 @@ def _ensure_apo_holo_variant_entry(cfg: Dict, pdb_id: str, variant: str | None):
             "dedup_decision": "pending",
         },
     )
-    entry["env_token"] = (os.environ.get("APO_HOLO_VARIANT", "") or "")
+    entry["env_token"] = os.environ.get("APO_HOLO_VARIANT", "") or ""
     entry.setdefault("records", [])
     entry.setdefault("dedup_decision", "pending")
     return entry
@@ -229,7 +238,9 @@ def _record_apo_holo_usage(
     _flush_apo_holo_audit(cfg, pdb_id)
 
 
-def _record_apo_holo_decision(cfg: Dict, pdb_id: str, variant: str | None, decision: str) -> None:
+def _record_apo_holo_decision(
+    cfg: Dict, pdb_id: str, variant: str | None, decision: str
+) -> None:
     entry = _ensure_apo_holo_variant_entry(cfg, pdb_id, variant)
     if entry is None:
         return

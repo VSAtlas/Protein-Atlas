@@ -15,7 +15,9 @@ from src import docking
 from path_router import make_paths, docked_dir, receptor_file
 
 
-def test_control_redocking_multi_engine_runs_per_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_control_redocking_multi_engine_runs_per_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cfg = {
         "OVERALL_DIR": str(tmp_path),
         "INPUT_DIR": str(tmp_path / "input_pdbs"),
@@ -35,6 +37,7 @@ def test_control_redocking_multi_engine_runs_per_enabled(tmp_path: Path, monkeyp
     monkeypatch.setattr(docking, "should_run_ledock_for_target", lambda cfg: True)
     monkeypatch.setattr(docking, "should_run_dock6_for_target", lambda cfg: True)
     monkeypatch.setattr(docking, "should_run_gnina_for_target", lambda td, cfg: True)
+
     def fake_run_ledock_for_stage(**kwargs):
         ligs = kwargs.get("ligands", [])
         out_root = kwargs.get("output_root") or tmp_path / "ledock_out"
@@ -98,12 +101,29 @@ def test_control_redocking_multi_engine_runs_per_enabled(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(docking, "ensure_ledock_receptor", fake_ledock_receptor)
 
-    def fake_emit(cfg_in, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage_name, stage_info, cpu_per_job, logger=None, variant=None, ph_token=None, legacy=False):
+    def fake_emit(
+        cfg_in,
+        pdb_id,
+        receptor_pdbqt,
+        center,
+        box_size,
+        ligand_path,
+        stage_name,
+        stage_info,
+        cpu_per_job,
+        logger=None,
+        variant=None,
+        ph_token=None,
+        legacy=False,
+    ):
         cfg_dir = Path(cfg_in["OUTPUT_DIR"]) / "configs" / stage_name
         cfg_dir.mkdir(parents=True, exist_ok=True)
         conf = cfg_dir / f"{Path(ligand_path).stem}.txt"
         conf.write_text("conf\n", encoding="utf-8")
-        out_root = docked_dir(pdb_id, variant=variant, ph_tag=ph_token, legacy=legacy) / stage_name
+        out_root = (
+            docked_dir(pdb_id, variant=variant, ph_tag=ph_token, legacy=legacy)
+            / stage_name
+        )
         out_root.mkdir(parents=True, exist_ok=True)
         out = out_root / f"{Path(ligand_path).stem}.pdbqt"
         out.write_text("pose\n", encoding="utf-8")

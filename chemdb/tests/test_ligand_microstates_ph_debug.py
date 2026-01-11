@@ -105,7 +105,9 @@ def test_ph_debug_microstates_match_pdbqts_and_registry():
 
     cfg = read_config()
     path_to_entry = {
-        (lib_root / e["pdbqt_path"]).resolve(): e for e in entries if e.get("pdbqt_path")
+        (lib_root / e["pdbqt_path"]).resolve(): e
+        for e in entries
+        if e.get("pdbqt_path")
     }
     for ph in ph_values:
         pdbqts = enumerate_ligands_for_docking(

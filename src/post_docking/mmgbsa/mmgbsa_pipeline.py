@@ -17,10 +17,25 @@ from pathlib import Path
 from input_and_export_functions import _to_bool
 from post_docking.mmgbsa.prep_for_mmgbsa import prep_mmgbsa_from_sdfs
 import post_docking.mmgbsa.protein_prep_mmgbsa as ppm
-from post_docking.mmgbsa.protein_prep_mmgbsa import prep_mmgbsa_receptor, run_tleap, write_leap_for_ligands
-from post_docking.mmgbsa.mmgbsa_trajectory import make_mmgbsa_trajectory, run_implicit_md
-from post_docking.mmgbsa.run_mmgbsa import run_mmgbsa, parse_mmpbsa_delta_total, write_aggregated_mmpbsa_results
-from path_router.path_router import make_paths, config_dir as router_config_dir, ph_ensemble_dir as router_ph_ensemble_dir
+from post_docking.mmgbsa.protein_prep_mmgbsa import (
+    prep_mmgbsa_receptor,
+    run_tleap,
+    write_leap_for_ligands,
+)
+from post_docking.mmgbsa.mmgbsa_trajectory import (
+    make_mmgbsa_trajectory,
+    run_implicit_md,
+)
+from post_docking.mmgbsa.run_mmgbsa import (
+    run_mmgbsa,
+    parse_mmpbsa_delta_total,
+    write_aggregated_mmpbsa_results,
+)
+from path_router.path_router import (
+    make_paths,
+    config_dir as router_config_dir,
+    ph_ensemble_dir as router_ph_ensemble_dir,
+)
 
 
 def _mmgbsa_find_vina_config(
@@ -45,7 +60,9 @@ def _mmgbsa_find_vina_config(
     return txt_files[0] if txt_files else None
 
 
-def _mmgbsa_parse_vina_config(cfg_path: Path) -> tuple[Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float]]]:
+def _mmgbsa_parse_vina_config(
+    cfg_path: Path,
+) -> tuple[Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float]]]:
     center_vals: dict[str, float] = {}
     size_vals: dict[str, float] = {}
     try:
@@ -69,7 +86,11 @@ def _mmgbsa_parse_vina_config(cfg_path: Path) -> tuple[Optional[Tuple[float, flo
             size_vals[key] = val
 
     if len(center_vals) == 3:
-        center = (center_vals["center_x"], center_vals["center_y"], center_vals["center_z"])
+        center = (
+            center_vals["center_x"],
+            center_vals["center_y"],
+            center_vals["center_z"],
+        )
     else:
         center = None
 
@@ -91,7 +112,9 @@ def _mmgbsa_resolve_center_radius(
     legacy_mode: bool,
 ) -> tuple[Optional[Tuple[float, float, float]], float, Optional[Path]]:
     fallback_radius = float(cfg.get("MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK", 6.0))
-    cfg_path = _mmgbsa_find_vina_config(run_id, pdb_id, stage_dir, variant_token, ph_label, legacy_mode)
+    cfg_path = _mmgbsa_find_vina_config(
+        run_id, pdb_id, stage_dir, variant_token, ph_label, legacy_mode
+    )
     if not cfg_path:
         return None, fallback_radius, None
 
@@ -117,7 +140,9 @@ def _mmgbsa_resolve_receptor_pdb(
     candidates: List[Path] = []
 
     if ph_label:
-        ensemble_dir = router_ph_ensemble_dir(pdb_id, variant=variant_token, legacy=legacy_mode)
+        ensemble_dir = router_ph_ensemble_dir(
+            pdb_id, variant=variant_token, legacy=legacy_mode
+        )
         tag = f"{pdb_id}_{ph_label}"
         candidates.append(ensemble_dir / f"{tag}.withH.pdb")
         candidates.append(ensemble_dir / f"{tag}.pdb")
@@ -181,7 +206,9 @@ def _mmgbsa_default_pose_group_regexes() -> List[str]:
     ]
 
 
-def _mmgbsa_pose_group_regexes(cfg: Mapping[str, Any], logger: logging.Logger) -> List[re.Pattern]:
+def _mmgbsa_pose_group_regexes(
+    cfg: Mapping[str, Any], logger: logging.Logger
+) -> List[re.Pattern]:
     raw = str(cfg.get("MMGBSA_POSE_GROUP_REGEXES", "") or "").strip()
     patterns: List[str] = []
     if raw:
@@ -203,11 +230,16 @@ def _mmgbsa_pose_group_regexes(cfg: Mapping[str, Any], logger: logging.Logger) -
                 exc,
             )
     if not compiled:
-        compiled = [re.compile(pat, flags=re.IGNORECASE) for pat in _mmgbsa_default_pose_group_regexes()]
+        compiled = [
+            re.compile(pat, flags=re.IGNORECASE)
+            for pat in _mmgbsa_default_pose_group_regexes()
+        ]
     return compiled
 
 
-def _mmgbsa_pose_candidates(stem: str, stage_dir_label: str, regexes: List[re.Pattern]) -> List[str]:
+def _mmgbsa_pose_candidates(
+    stem: str, stage_dir_label: str, regexes: List[re.Pattern]
+) -> List[str]:
     base = stem.replace(".sanitized", "")
     seeds: set[str] = {base}
     for regex in regexes:
@@ -262,7 +294,9 @@ def _mmgbsa_group_pose_sdfs(
 ) -> Dict[str, List[Path]]:
     grouped: Dict[str, List[Path]] = {}
     for sdf in sdfs:
-        ligand_id = _mmgbsa_canonical_ligand_id(sdf.stem, stage_dir_label, regexes, logger)
+        ligand_id = _mmgbsa_canonical_ligand_id(
+            sdf.stem, stage_dir_label, regexes, logger
+        )
         if not ligand_id:
             ligand_id = sdf.stem
         grouped.setdefault(ligand_id, []).append(sdf)
@@ -311,10 +345,14 @@ def _mmgbsa_load_reranked_bases(csv_path: Path, logger: logging.Logger) -> List[
 
     rows: List[Tuple[Optional[int], int, str]] = []
     try:
-        with csv_path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
+        with csv_path.open(
+            "r", encoding="utf-8", errors="ignore", newline=""
+        ) as handle:
             reader = csv.DictReader(handle)
             for idx, row in enumerate(reader):
-                lig_base = row.get("ligand_base") or _mmgbsa_normalize_ligand_base(row.get("ligand", ""))
+                lig_base = row.get("ligand_base") or _mmgbsa_normalize_ligand_base(
+                    row.get("ligand", "")
+                )
                 if not lig_base:
                     continue
                 rank_val = None
@@ -388,7 +426,9 @@ def _mmgbsa_select_sdfs(
                 ordered_ligands: List[str] = []
                 seen: set[str] = set()
                 for base in ordered_bases:
-                    ligand_id = _mmgbsa_canonical_ligand_id(base, stage_label, pose_group_regexes, logger)
+                    ligand_id = _mmgbsa_canonical_ligand_id(
+                        base, stage_label, pose_group_regexes, logger
+                    )
                     if ligand_id in seen or ligand_id not in pose_groups:
                         continue
                     seen.add(ligand_id)
@@ -423,7 +463,9 @@ def _mmgbsa_select_sdfs(
         actives = [p for p in sdfs if "actives_final" in p.name]
         if actives:
             used_actives = True
-            selected_group_map = _mmgbsa_group_pose_sdfs(actives, stage_label, pose_group_regexes, logger)
+            selected_group_map = _mmgbsa_group_pose_sdfs(
+                actives, stage_label, pose_group_regexes, logger
+            )
             selected_ligands = sorted(selected_group_map.keys())
         else:
             selected_group_map = pose_groups
@@ -437,7 +479,9 @@ def _mmgbsa_select_sdfs(
         group = selected_group_map.get(ligand_id, [])
         if not group:
             continue
-        sorted_group = sorted(group, key=lambda p: _mmgbsa_pose_sort_key(p, pose_sort_mode))
+        sorted_group = sorted(
+            group, key=lambda p: _mmgbsa_pose_sort_key(p, pose_sort_mode)
+        )
         if poses_per_ligand > 0:
             sorted_group = sorted_group[:poses_per_ligand]
         selected_sdfs.extend(sorted_group)
@@ -568,7 +612,9 @@ def _mmgbsa_parse_delta_frames(csv_path: Path) -> Dict[str, object]:
     return result
 
 
-def _mmgbsa_write_replicate_summary(summary_path: Path, rows: List[Dict[str, object]], mean: float, sd: float) -> None:
+def _mmgbsa_write_replicate_summary(
+    summary_path: Path, rows: List[Dict[str, object]], mean: float, sd: float
+) -> None:
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["replicate", "seed", "score", "ok", "notes"]
     tmp_path = summary_path.with_suffix(summary_path.suffix + ".part")
@@ -595,9 +641,17 @@ def _mmgbsa_five_replicate_runner(
     run_id: str,
     logger: logging.Logger,
 ) -> Dict[str, object]:
-    seeds = _mmgbsa_five_rep_seeds(run_id, pdb_id, variant_dir, ph_label, stage_dir, ligand_stem)
-    out_dat_name = str(cfg.get("MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat") or "FINAL_RESULTS_MMPBSA.dat")
-    out_csv_name = str(cfg.get("MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv") or "FINAL_RESULTS_MMPBSA.csv")
+    seeds = _mmgbsa_five_rep_seeds(
+        run_id, pdb_id, variant_dir, ph_label, stage_dir, ligand_stem
+    )
+    out_dat_name = str(
+        cfg.get("MMGBSA_MMPBSA_OUT_DAT", "FINAL_RESULTS_MMPBSA.dat")
+        or "FINAL_RESULTS_MMPBSA.dat"
+    )
+    out_csv_name = str(
+        cfg.get("MMGBSA_MMPBSA_OUT_CSV", "FINAL_RESULTS_MMPBSA.csv")
+        or "FINAL_RESULTS_MMPBSA.csv"
+    )
     agg_dat = out_dir / out_dat_name
     agg_csv = out_dir / out_csv_name
 
@@ -648,16 +702,34 @@ def _mmgbsa_five_replicate_runner(
         rep_csv = Path(mm_res.get("out_csv", ""))
         score = parse_mmpbsa_delta_total(rep_csv)
         rep_ok = score is not None and rep_csv.exists()
-        rep_rows.append({"replicate": 1, "seed": seeds[0], "score": score if score is not None else "", "ok": rep_ok, "notes": ""})
+        rep_rows.append(
+            {
+                "replicate": 1,
+                "seed": seeds[0],
+                "score": score if score is not None else "",
+                "ok": rep_ok,
+                "notes": "",
+            }
+        )
         if not rep_ok:
             _mmgbsa_write_replicate_summary(summary_path, rep_rows, mean=0.0, sd=0.0)
-            return {"ok": False, "notes": "rep1_failed", "replicates_ok": 0, "replicates_total": 5}
+            return {
+                "ok": False,
+                "notes": "rep1_failed",
+                "replicates_ok": 0,
+                "replicates_total": 5,
+            }
         scores.append(float(score))
         # clone outputs for other reps
         for idx in range(2, 6):
             clone_dir = out_dir / f"rep{idx}" / "mmpbsa"
             clone_dir.mkdir(parents=True, exist_ok=True)
-            for src in (rep_csv, Path(mm_res.get("out_dat", "")), Path(mm_res.get("log_path", "")), Path(mm_res.get("input_path", ""))):
+            for src in (
+                rep_csv,
+                Path(mm_res.get("out_dat", "")),
+                Path(mm_res.get("log_path", "")),
+                Path(mm_res.get("input_path", "")),
+            ):
                 if not src:
                     continue
                 if not src.exists():
@@ -666,7 +738,15 @@ def _mmgbsa_five_replicate_runner(
                 if dest.exists() and not force:
                     continue
                 shutil.copy2(src, dest)
-            rep_rows.append({"replicate": idx, "seed": seeds[idx - 1], "score": score, "ok": True, "notes": "cloned"})
+            rep_rows.append(
+                {
+                    "replicate": idx,
+                    "seed": seeds[idx - 1],
+                    "score": score,
+                    "ok": True,
+                    "notes": "cloned",
+                }
+            )
             scores.append(float(score))
     else:
         for rep_idx, seed in enumerate(seeds, start=1):
@@ -708,7 +788,15 @@ def _mmgbsa_five_replicate_runner(
                     rep_ok = True
                 else:
                     notes = "missing_outputs"
-            rep_rows.append({"replicate": rep_idx, "seed": seed, "score": score if score is not None else "", "ok": rep_ok, "notes": notes})
+            rep_rows.append(
+                {
+                    "replicate": rep_idx,
+                    "seed": seed,
+                    "score": score if score is not None else "",
+                    "ok": rep_ok,
+                    "notes": notes,
+                }
+            )
             if rep_ok and score is not None:
                 scores.append(float(score))
 
@@ -729,7 +817,9 @@ def _mmgbsa_five_replicate_runner(
         sd_val = 0.0
 
     _mmgbsa_write_replicate_summary(summary_path, rep_rows, mean=mean_val, sd=sd_val)
-    agg_paths = write_aggregated_mmpbsa_results(work_dir=out_dir, mean_score=mean_val, std_score=sd_val, cfg=cfg, force=force)
+    agg_paths = write_aggregated_mmpbsa_results(
+        work_dir=out_dir, mean_score=mean_val, std_score=sd_val, cfg=cfg, force=force
+    )
 
     logger.info(
         "[mmgbsa.aggregate] n=5 mean=%.6g sd=%.6g out_csv=%s out_dat=%s",
@@ -797,7 +887,9 @@ def _mmgbsa_apply_agg(
     return None
 
 
-def _mmgbsa_frame_aggregate(csv_path: Path, cfg: Mapping[str, Any], logger: logging.Logger) -> Dict[str, object]:
+def _mmgbsa_frame_aggregate(
+    csv_path: Path, cfg: Mapping[str, Any], logger: logging.Logger
+) -> Dict[str, object]:
     parsed = _mmgbsa_parse_delta_frames(csv_path)
     frames: List[float] = list(parsed.get("frame_values") or [])
     total_frames = len(frames)
@@ -885,7 +977,9 @@ def _mmgbsa_append_summary(summary_path: Path, row: Dict[str, object]) -> None:
         "replicates_total",
     ]
     with summary_path.open("a", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore", restval="")
+        writer = csv.DictWriter(
+            handle, fieldnames=fieldnames, extrasaction="ignore", restval=""
+        )
         if not exists:
             writer.writeheader()
         writer.writerow(row)
@@ -900,19 +994,26 @@ def _mmgbsa_write_pose_aggregate(
     logger: logging.Logger,
 ) -> None:
     if not summary_path.exists() or summary_path.stat().st_size == 0:
-        logger.info("[mmgbsa.pipeline] aggregate=skip reason=missing_summary path=%s", summary_path)
+        logger.info(
+            "[mmgbsa.pipeline] aggregate=skip reason=missing_summary path=%s",
+            summary_path,
+        )
         return
 
     groups: Dict[Tuple[str, str], Dict[str, object]] = {}
     try:
-        with summary_path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
+        with summary_path.open(
+            "r", encoding="utf-8", errors="ignore", newline=""
+        ) as handle:
             reader = csv.DictReader(handle)
             for row in reader:
                 stage_dir = str(row.get("stage_dir") or stage_dir_label or "").strip()
                 ligand_stem = str(row.get("ligand_stem") or "").strip()
                 if not ligand_stem:
                     continue
-                ligand_id = _mmgbsa_canonical_ligand_id(ligand_stem, stage_dir, pose_group_regexes, logger)
+                ligand_id = _mmgbsa_canonical_ligand_id(
+                    ligand_stem, stage_dir, pose_group_regexes, logger
+                )
                 key = (stage_dir, ligand_id)
                 entry = groups.setdefault(key, {"total": 0, "ok": []})
                 entry["total"] = int(entry.get("total", 0)) + 1
@@ -1003,13 +1104,17 @@ def _mmgbsa_write_pose_aggregate(
     )
 
 
-def _mmgbsa_md_seed_list(cfg: Mapping[str, Any], n_reps: int, logger: logging.Logger) -> List[int]:
+def _mmgbsa_md_seed_list(
+    cfg: Mapping[str, Any], n_reps: int, logger: logging.Logger
+) -> List[int]:
     try:
         base_seed = int(cfg.get("MMGBSA_MD_BASE_SEED", 12345))
     except Exception:
         base_seed = 12345
 
-    mode = str(cfg.get("MMGBSA_MD_SEED_MODE", "increment") or "increment").strip().lower()
+    mode = (
+        str(cfg.get("MMGBSA_MD_SEED_MODE", "increment") or "increment").strip().lower()
+    )
     if n_reps < 1:
         n_reps = 1
 
@@ -1031,7 +1136,9 @@ def _mmgbsa_md_seed_list(cfg: Mapping[str, Any], n_reps: int, logger: logging.Lo
     return seeds
 
 
-def _mmgbsa_five_rep_seeds(run_id: str, pdb_id: str, variant: str, ph_label: str, stage_dir: str, ligand: str) -> List[int]:
+def _mmgbsa_five_rep_seeds(
+    run_id: str, pdb_id: str, variant: str, ph_label: str, stage_dir: str, ligand: str
+) -> List[int]:
     context = f"{run_id}|{pdb_id}|{variant}|{ph_label}|{stage_dir}|{ligand}"
     base_seed = int(hashlib.md5(context.encode("utf-8")).hexdigest()[:8], 16)
     seeds: List[int] = []
@@ -1041,14 +1148,18 @@ def _mmgbsa_five_rep_seeds(run_id: str, pdb_id: str, variant: str, ph_label: str
 
 
 def _mmgbsa_md_aggregate(deltas: List[float], method: str) -> Optional[float]:
-    return _mmgbsa_apply_agg(deltas, method, logger=logging.getLogger("mmgbsa.pipeline"), context="replicate")
+    return _mmgbsa_apply_agg(
+        deltas, method, logger=logging.getLogger("mmgbsa.pipeline"), context="replicate"
+    )
 
 
 _MMGBSA_DEPRECATED_MD_KEYS = ("MMGBSA_MD_RUN", "MMGBSA_TRAJ_MODE")
 _MMGBSA_DEPRECATED_MD_WARNED = False
 
 
-def _mmgbsa_effective_md_config(cfg: Mapping[str, Any], logger: Optional[logging.Logger]) -> Dict[str, object]:
+def _mmgbsa_effective_md_config(
+    cfg: Mapping[str, Any], logger: Optional[logging.Logger]
+) -> Dict[str, object]:
     global _MMGBSA_DEPRECATED_MD_WARNED
     deprecated_keys = []
     for key in _MMGBSA_DEPRECATED_MD_KEYS:
@@ -1061,7 +1172,9 @@ def _mmgbsa_effective_md_config(cfg: Mapping[str, Any], logger: Optional[logging
         md_enabled = _to_bool(md_enabled_raw)
     else:
         traj_mode = str(cfg.get("MMGBSA_TRAJ_MODE", "") or "").strip().upper()
-        md_enabled = traj_mode == "IMPLICIT_MD" or _to_bool(cfg.get("MMGBSA_MD_RUN", False))
+        md_enabled = traj_mode == "IMPLICIT_MD" or _to_bool(
+            cfg.get("MMGBSA_MD_RUN", False)
+        )
 
     if deprecated_keys and not _MMGBSA_DEPRECATED_MD_WARNED and logger is not None:
         logger.warning(
@@ -1077,7 +1190,9 @@ def _mmgbsa_effective_md_config(cfg: Mapping[str, Any], logger: Optional[logging
     }
 
 
-def _mmgbsa_apply_env_overrides(cfg: Mapping[str, Any], keys: Sequence[str]) -> Dict[str, Any]:
+def _mmgbsa_apply_env_overrides(
+    cfg: Mapping[str, Any], keys: Sequence[str]
+) -> Dict[str, Any]:
     updated = dict(cfg)
     for key in keys:
         value = os.environ.get(key)
@@ -1141,7 +1256,10 @@ def _maybe_run_mmgbsa_for_pdb(
     post_root = Path(cfg.get("OVERALL_DIR", ".")) / "post_docked" / run_id / pdb_id
     post_base = post_root if legacy_mode else post_root / variant_dir
     if not post_base.exists():
-        logger.info("[mmgbsa.pipeline] action=skip reason=missing_post_docked path=%s", post_base)
+        logger.info(
+            "[mmgbsa.pipeline] action=skip reason=missing_post_docked path=%s",
+            post_base,
+        )
         return
 
     try:
@@ -1165,12 +1283,19 @@ def _maybe_run_mmgbsa_for_pdb(
     if poses_per_ligand <= 0:
         poses_per_ligand = 1
 
-    pose_sort_mode = str(cfg.get("MMGBSA_POSE_SORT_MODE", "name_numeric") or "name_numeric").strip().lower()
+    pose_sort_mode = (
+        str(cfg.get("MMGBSA_POSE_SORT_MODE", "name_numeric") or "name_numeric")
+        .strip()
+        .lower()
+    )
     pose_group_regexes = _mmgbsa_pose_group_regexes(cfg, logger)
 
     agg_enabled = _to_bool(cfg.get("MMGBSA_AGGREGATE_PER_LIGAND", False))
     agg_method = str(cfg.get("MMGBSA_AGG_METHOD", "min") or "min").strip().lower()
-    agg_output_name = str(cfg.get("MMGBSA_AGG_OUTPUT_CSV", "mmgbsa_pose_aggregate.csv") or "mmgbsa_pose_aggregate.csv")
+    agg_output_name = str(
+        cfg.get("MMGBSA_AGG_OUTPUT_CSV", "mmgbsa_pose_aggregate.csv")
+        or "mmgbsa_pose_aggregate.csv"
+    )
 
     md_cfg = _mmgbsa_effective_md_config(cfg, logger)
     md_enabled = _to_bool(md_cfg.get("md_enabled", False))
@@ -1184,7 +1309,9 @@ def _maybe_run_mmgbsa_for_pdb(
         md_reps = 1
     md_rep_agg = str(cfg.get("MMGBSA_MD_REP_AGG", "mean") or "mean").strip().lower()
     md_copy_best = _to_bool(cfg.get("MMGBSA_MD_COPY_BEST_REPLICATE", False))
-    frame_agg_method = str(cfg.get("MMGBSA_FRAME_AGG", "mean") or "mean").strip().lower()
+    frame_agg_method = (
+        str(cfg.get("MMGBSA_FRAME_AGG", "mean") or "mean").strip().lower()
+    )
     try:
         frame_limit = int(cfg.get("MMGBSA_FRAME_LIMIT", 0))
     except Exception:
@@ -1197,9 +1324,13 @@ def _maybe_run_mmgbsa_for_pdb(
     stage_dir_name = str(cfg.get("MMGBSA_INPUT_STAGE_DIR", "stage1") or "stage1")
     strip_all_h_for_leap = _to_bool(cfg.get("MMGBSA_TLEAP_STRIP_ALL_H", True))
     map_hoh_to_wat = _to_bool(cfg.get("MMGBSA_TLEAP_MAP_HOH_TO_WAT", True))
-    water_model = str(cfg.get("MMGBSA_TLEAP_WATER_MODEL", "tip3p") or "tip3p").strip().lower()
+    water_model = (
+        str(cfg.get("MMGBSA_TLEAP_WATER_MODEL", "tip3p") or "tip3p").strip().lower()
+    )
     if water_model not in {"tip3p"}:
-        raise ValueError(f"MMGBSA_TLEAP_WATER_MODEL supports tip3p only (got {water_model})")
+        raise ValueError(
+            f"MMGBSA_TLEAP_WATER_MODEL supports tip3p only (got {water_model})"
+        )
     mmgbsa_logger = ppm._get_logger()
 
     test_override: Dict[str, object] = {}
@@ -1209,11 +1340,19 @@ def _maybe_run_mmgbsa_for_pdb(
         if candidate_dir.is_dir():
             actives = sorted(candidate_dir.glob("actives_final*.sdf"))
             if actives:
-                test_override = {"ph_dir": candidate_dir.parent, "sdfs": [actives[0]], "stage_dir": test_stage}
+                test_override = {
+                    "ph_dir": candidate_dir.parent,
+                    "sdfs": [actives[0]],
+                    "stage_dir": test_stage,
+                }
             else:
                 sdfs = sorted(candidate_dir.glob("*.sdf"))
                 if sdfs:
-                    test_override = {"ph_dir": candidate_dir.parent, "sdfs": [sdfs[0]], "stage_dir": test_stage}
+                    test_override = {
+                        "ph_dir": candidate_dir.parent,
+                        "sdfs": [sdfs[0]],
+                        "stage_dir": test_stage,
+                    }
 
     if test_override:
         ph_dirs = [test_override["ph_dir"]]
@@ -1221,7 +1360,9 @@ def _maybe_run_mmgbsa_for_pdb(
         ph_dirs = sorted([p for p in post_base.iterdir() if p.is_dir()])
 
     if not ph_dirs:
-        logger.info("[mmgbsa.pipeline] action=skip reason=no_ph_dirs path=%s", post_base)
+        logger.info(
+            "[mmgbsa.pipeline] action=skip reason=no_ph_dirs path=%s", post_base
+        )
         return
 
     amber_prefix = cfg.get("MMGBSA_AMBERTOOLS_PREFIX") or cfg.get("AMBERTOOLS_PREFIX")
@@ -1232,7 +1373,9 @@ def _maybe_run_mmgbsa_for_pdb(
         if test_override:
             sdfs = list(test_override["sdfs"])
             stage_dir_label = str(test_override["stage_dir"])
-            pose_groups = _mmgbsa_group_pose_sdfs(sdfs, stage_dir_label, pose_group_regexes, logger)
+            pose_groups = _mmgbsa_group_pose_sdfs(
+                sdfs, stage_dir_label, pose_group_regexes, logger
+            )
             selected_ligands = sorted(pose_groups.keys())
             logger.info(
                 "[mmgbsa.pipeline] selection=poses stage_dir=%s ligand_ids=%d poses_per_ligand=%d poses_selected=%d reranked=%s actives_only=%s",
@@ -1334,7 +1477,9 @@ def _maybe_run_mmgbsa_for_pdb(
             ph_dir / stage_dir_label / "receptor.pdb",
             ph_dir / "receptor.pdb",
         ]
-        receptor_pdb = next((cand for cand in receptor_candidates if cand.exists()), None)
+        receptor_pdb = next(
+            (cand for cand in receptor_candidates if cand.exists()), None
+        )
         if receptor_pdb is None:
             receptor_pdb = _mmgbsa_resolve_receptor_pdb(
                 cfg,
@@ -1426,7 +1571,11 @@ def _maybe_run_mmgbsa_for_pdb(
         ppm._log_leap_prep(
             mmgbsa_logger,
             "INFO",
-            {"map_hoh_to_wat": map_hoh_to_wat, "water_model": water_model, "hoh_residues": hoh_residue_count},
+            {
+                "map_hoh_to_wat": map_hoh_to_wat,
+                "water_model": water_model,
+                "hoh_residues": hoh_residue_count,
+            },
             "water_mapping",
         )
 
@@ -1596,12 +1745,17 @@ def _maybe_run_mmgbsa_for_pdb(
                             "results_csv": results_csv,
                             "ok": ok,
                             "notes": notes or "",
-                            "frame_agg_method": summary_frames.get("frame_agg_method", "") or "",
+                            "frame_agg_method": summary_frames.get(
+                                "frame_agg_method", ""
+                            )
+                            or "",
                             "frames_used": summary_frames.get("frames_used", "") or "",
-                            "frames_total": summary_frames.get("frames_total", "") or "",
+                            "frames_total": summary_frames.get("frames_total", "")
+                            or "",
                             "frame_mean": summary_frames.get("frame_mean", "") or "",
                             "frame_sd": summary_frames.get("frame_sd", "") or "",
-                            "frame_median": summary_frames.get("frame_median", "") or "",
+                            "frame_median": summary_frames.get("frame_median", "")
+                            or "",
                             "rep_agg_method": rep_agg_method_used,
                             "replicates_ok": replicates_ok,
                             "replicates_total": replicates_total,
@@ -1620,7 +1774,9 @@ def _maybe_run_mmgbsa_for_pdb(
                     )
                     traj_path = Path(traj_result.get("trajout_path") or "")
                     if not traj_path.exists() or traj_path.stat().st_size == 0:
-                        default_traj = str(cfg.get("MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd")
+                        default_traj = str(
+                            cfg.get("MMGBSA_DEFAULT_TRAJ_NAME", "mdcrd") or "mdcrd"
+                        )
                         candidate = out_dir / default_traj
                         if candidate.exists() and candidate.stat().st_size > 0:
                             traj_path = candidate
@@ -1655,17 +1811,29 @@ def _maybe_run_mmgbsa_for_pdb(
                     if not mmpbsa_result.get("enabled", True):
                         notes = "mmpbsa_disabled"
                     else:
-                        if results_csv and results_dat and Path(results_csv).exists() and Path(results_dat).exists():
-                            frame_meta = _mmgbsa_frame_aggregate(Path(results_csv), cfg, logger)
+                        if (
+                            results_csv
+                            and results_dat
+                            and Path(results_csv).exists()
+                            and Path(results_dat).exists()
+                        ):
+                            frame_meta = _mmgbsa_frame_aggregate(
+                                Path(results_csv), cfg, logger
+                            )
                             delta_val = frame_meta.get("delta_total")
                             if delta_val is not None:
                                 delta_total = f"{float(delta_val):.6g}"
                                 ok = True
                             else:
-                                notes = frame_meta.get("notes", "missing_delta") or "missing_delta"
+                                notes = (
+                                    frame_meta.get("notes", "missing_delta")
+                                    or "missing_delta"
+                                )
                             summary_frames.update(
                                 {
-                                    "frame_agg_method": frame_meta.get("frame_agg_method", ""),
+                                    "frame_agg_method": frame_meta.get(
+                                        "frame_agg_method", ""
+                                    ),
                                     "frames_used": frame_meta.get("frames_used", ""),
                                     "frame_mean": frame_meta.get("frame_mean", ""),
                                     "frame_sd": frame_meta.get("frame_sd", ""),
@@ -1728,24 +1896,44 @@ def _maybe_run_mmgbsa_for_pdb(
                                 rep_log = mmpbsa_result.get("log_path", "")
                                 if not mmpbsa_result.get("enabled", True):
                                     rep_notes = "mmpbsa_disabled"
-                                elif rep_csv and rep_dat and Path(rep_csv).exists() and Path(rep_dat).exists():
-                                    frame_meta = _mmgbsa_frame_aggregate(Path(rep_csv), cfg, logger)
+                                elif (
+                                    rep_csv
+                                    and rep_dat
+                                    and Path(rep_csv).exists()
+                                    and Path(rep_dat).exists()
+                                ):
+                                    frame_meta = _mmgbsa_frame_aggregate(
+                                        Path(rep_csv), cfg, logger
+                                    )
                                     delta_val = frame_meta.get("delta_total")
                                     rep_frames.update(
                                         {
-                                            "frame_agg_method": frame_meta.get("frame_agg_method", frame_agg_method),
-                                            "frames_used": frame_meta.get("frames_used", ""),
-                                            "frames_total": frame_meta.get("frames_total", ""),
-                                            "frame_mean": frame_meta.get("frame_mean", ""),
+                                            "frame_agg_method": frame_meta.get(
+                                                "frame_agg_method", frame_agg_method
+                                            ),
+                                            "frames_used": frame_meta.get(
+                                                "frames_used", ""
+                                            ),
+                                            "frames_total": frame_meta.get(
+                                                "frames_total", ""
+                                            ),
+                                            "frame_mean": frame_meta.get(
+                                                "frame_mean", ""
+                                            ),
                                             "frame_sd": frame_meta.get("frame_sd", ""),
-                                            "frame_median": frame_meta.get("frame_median", ""),
+                                            "frame_median": frame_meta.get(
+                                                "frame_median", ""
+                                            ),
                                         }
                                     )
                                     if delta_val is not None:
                                         rep_delta = float(delta_val)
                                         rep_ok = True
                                     else:
-                                        rep_notes = frame_meta.get("notes", "missing_delta") or "missing_delta"
+                                        rep_notes = (
+                                            frame_meta.get("notes", "missing_delta")
+                                            or "missing_delta"
+                                        )
                                 else:
                                     rep_notes = "missing_outputs"
                             except Exception as exc:
@@ -1779,7 +1967,9 @@ def _maybe_run_mmgbsa_for_pdb(
                                 "frames_total": rep_frames.get("frames_total", ""),
                                 "frame_mean": rep_frames.get("frame_mean", ""),
                                 "frame_sd": rep_frames.get("frame_sd", ""),
-                                "frame_agg_method": rep_frames.get("frame_agg_method", frame_agg_method),
+                                "frame_agg_method": rep_frames.get(
+                                    "frame_agg_method", frame_agg_method
+                                ),
                                 "frame_median": rep_frames.get("frame_median", ""),
                             }
                         )
@@ -1788,7 +1978,11 @@ def _maybe_run_mmgbsa_for_pdb(
                     n_ok = len(ok_reps)
                     replicates_ok = n_ok
                     agg_delta_val = _mmgbsa_md_aggregate(
-                        [float(r["delta_total"]) for r in ok_reps if r.get("delta_total") is not None],
+                        [
+                            float(r["delta_total"])
+                            for r in ok_reps
+                            if r.get("delta_total") is not None
+                        ],
                         md_rep_agg,
                     )
                     if agg_delta_val is not None:
@@ -1800,23 +1994,43 @@ def _maybe_run_mmgbsa_for_pdb(
                     best_rep = None
                     if ok_reps:
                         if md_rep_agg == "min":
-                            best_rep = min(ok_reps, key=lambda r: (r.get("delta_total", 0), r.get("replicate", 0)))
+                            best_rep = min(
+                                ok_reps,
+                                key=lambda r: (
+                                    r.get("delta_total", 0),
+                                    r.get("replicate", 0),
+                                ),
+                            )
                         elif md_rep_agg == "median":
                             best_rep = min(
                                 ok_reps,
-                                key=lambda r: (abs(float(r.get("delta_total", 0)) - float(agg_delta_val or 0)), r.get("replicate", 0)),
+                                key=lambda r: (
+                                    abs(
+                                        float(r.get("delta_total", 0))
+                                        - float(agg_delta_val or 0)
+                                    ),
+                                    r.get("replicate", 0),
+                                ),
                             )
                         else:
                             best_rep = min(
                                 ok_reps,
-                                key=lambda r: (abs(float(r.get("delta_total", 0)) - float(agg_delta_val or 0)), r.get("replicate", 0)),
+                                key=lambda r: (
+                                    abs(
+                                        float(r.get("delta_total", 0))
+                                        - float(agg_delta_val or 0)
+                                    ),
+                                    r.get("replicate", 0),
+                                ),
                             )
 
                     if best_rep:
                         results_csv = str(best_rep.get("results_csv", ""))
                         summary_frames.update(
                             {
-                                "frame_agg_method": best_rep.get("frame_agg_method", frame_agg_method),
+                                "frame_agg_method": best_rep.get(
+                                    "frame_agg_method", frame_agg_method
+                                ),
                                 "frames_used": best_rep.get("frames_used", ""),
                                 "frame_mean": best_rep.get("frame_mean", ""),
                                 "frame_sd": best_rep.get("frame_sd", ""),
@@ -1839,7 +2053,9 @@ def _maybe_run_mmgbsa_for_pdb(
                     try:
                         tmp_json = summary_json.with_suffix(".json.part")
                         with tmp_json.open("w", encoding="utf-8") as handle:
-                            json.dump(replicate_summary, handle, indent=2, sort_keys=True)
+                            json.dump(
+                                replicate_summary, handle, indent=2, sort_keys=True
+                            )
                         os.replace(tmp_json, summary_json)
                     except Exception as exc:
                         logger.warning(
@@ -1853,7 +2069,12 @@ def _maybe_run_mmgbsa_for_pdb(
                         )
 
                     if md_copy_best and best_rep:
-                        for filename in ("FINAL_RESULTS_MMPBSA.dat", "FINAL_RESULTS_MMPBSA.csv", "mmpbsa.log", "mmpbsa.in"):
+                        for filename in (
+                            "FINAL_RESULTS_MMPBSA.dat",
+                            "FINAL_RESULTS_MMPBSA.csv",
+                            "mmpbsa.log",
+                            "mmpbsa.in",
+                        ):
                             src = Path(best_rep.get("work_dir", "")) / filename
                             dest = out_dir / filename
                             if not src.exists():
@@ -1898,7 +2119,8 @@ def _maybe_run_mmgbsa_for_pdb(
                     "results_csv": results_csv,
                     "ok": ok,
                     "notes": notes,
-                    "frame_agg_method": summary_frames.get("frame_agg_method", "") or "",
+                    "frame_agg_method": summary_frames.get("frame_agg_method", "")
+                    or "",
                     "frames_used": summary_frames.get("frames_used", "") or "",
                     "frames_total": summary_frames.get("frames_total", "") or "",
                     "frame_mean": summary_frames.get("frame_mean", "") or "",

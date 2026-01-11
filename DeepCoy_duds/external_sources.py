@@ -24,7 +24,9 @@ def load_cached_smiles(cache_dir: Path, source: str, key_dict: Dict) -> Optional
     return None
 
 
-def save_cached_smiles(cache_dir: Path, source: str, key_dict: Dict, payload: Dict) -> None:
+def save_cached_smiles(
+    cache_dir: Path, source: str, key_dict: Dict, payload: Dict
+) -> None:
     path = _make_cache_path(cache_dir, source, key_dict)
     tmp = tempfile.NamedTemporaryFile("w", delete=False, dir=cache_dir, suffix=".tmp")
     try:
@@ -67,7 +69,9 @@ def _limit_smiles(smiles: List[str], limit: int) -> List[str]:
 
 
 def parse_chembl_molecule(mol_json: Dict, max_phase: Optional[int]) -> Optional[str]:
-    structures = mol_json.get("molecule_structures", {}) if isinstance(mol_json, dict) else {}
+    structures = (
+        mol_json.get("molecule_structures", {}) if isinstance(mol_json, dict) else {}
+    )
     smi = structures.get("canonical_smiles")
     if smi is None:
         return None
@@ -80,7 +84,9 @@ def parse_chembl_molecule(mol_json: Dict, max_phase: Optional[int]) -> Optional[
     return smi
 
 
-def filter_chembl_activity(activity: Dict, cutoff_nm: int, allowed_types: List[str]) -> bool:
+def filter_chembl_activity(
+    activity: Dict, cutoff_nm: int, allowed_types: List[str]
+) -> bool:
     if not isinstance(activity, dict):
         return False
     stype = (activity.get("standard_type") or "").upper()
@@ -158,35 +164,54 @@ def fetch_chembl_smiles(
             session=session,
         )
         targets = targets_json.get("targets") or targets_json.get("target") or []
-        target_ids = [t.get("target_chembl_id") for t in targets if t.get("target_chembl_id")]
+        target_ids = [
+            t.get("target_chembl_id") for t in targets if t.get("target_chembl_id")
+        ]
         meta["targets"] = len(target_ids)
         for tid in target_ids:
             assays_json = _get_json(
                 f"{base}/assay",
-                {"target_chembl_id": tid, "assay_type": "B", "relationship_type": "D", "format": "json"},
+                {
+                    "target_chembl_id": tid,
+                    "assay_type": "B",
+                    "relationship_type": "D",
+                    "format": "json",
+                },
                 headers,
                 timeout,
                 retries,
                 session=session,
             )
             assays = assays_json.get("assays") or assays_json.get("assay") or []
-            assay_ids = [a.get("assay_chembl_id") for a in assays if a.get("assay_chembl_id")]
+            assay_ids = [
+                a.get("assay_chembl_id") for a in assays if a.get("assay_chembl_id")
+            ]
             meta["assays"] += len(assay_ids)
             for aid in assay_ids:
                 activities_json = _get_json(
                     f"{base}/activity",
-                    {"assay_chembl_id": aid, "standard_type__in": ",".join(activity_types), "format": "json"},
+                    {
+                        "assay_chembl_id": aid,
+                        "standard_type__in": ",".join(activity_types),
+                        "format": "json",
+                    },
                     headers,
                     timeout,
                     retries,
                     session=session,
                 )
-                activities = activities_json.get("activities") or activities_json.get("activity") or []
+                activities = (
+                    activities_json.get("activities")
+                    or activities_json.get("activity")
+                    or []
+                )
                 meta["activities"] += len(activities)
                 for act in activities:
                     if meta["molecules"] >= max_actives:
                         break
-                    if not filter_chembl_activity(act, affinity_cutoff_nm, activity_types):
+                    if not filter_chembl_activity(
+                        act, affinity_cutoff_nm, activity_types
+                    ):
                         continue
                     mol_id = act.get("molecule_chembl_id")
                     if mol_id is None:
@@ -221,7 +246,12 @@ def _parse_bindingdb_entries(entries, affinity_cutoff_nm: int) -> List[str]:
         smi = entry.get("smiles") or entry.get("LigandSMILES") or entry.get("SMILES")
         if not smi:
             continue
-        affinity = entry.get("Affinity_nM") or entry.get("affinity") or entry.get("Kd") or entry.get("Ki")
+        affinity = (
+            entry.get("Affinity_nM")
+            or entry.get("affinity")
+            or entry.get("Kd")
+            or entry.get("Ki")
+        )
         try:
             if affinity is not None and float(affinity) > float(affinity_cutoff_nm):
                 continue
@@ -277,9 +307,26 @@ def fetch_bindingdb_smiles(
         except Exception:
             return
 
-    fetch(f"{base}/rest/getLigandsByPDBs", {"pdb": pdb_id, "cutoff": affinity_cutoff_nm, "identity": 100, "response": "application/json"}, "pdb_hits")
+    fetch(
+        f"{base}/rest/getLigandsByPDBs",
+        {
+            "pdb": pdb_id,
+            "cutoff": affinity_cutoff_nm,
+            "identity": 100,
+            "response": "application/json",
+        },
+        "pdb_hits",
+    )
     if len(smiles) < max_actives:
-        fetch(f"{base}/rest/getLigandsByUniprots", {"uniprot": uniprot_id, "cutoff": affinity_cutoff_nm, "response": "application/json"}, "uniprot_hits")
+        fetch(
+            f"{base}/rest/getLigandsByUniprots",
+            {
+                "uniprot": uniprot_id,
+                "cutoff": affinity_cutoff_nm,
+                "response": "application/json",
+            },
+            "uniprot_hits",
+        )
 
     smiles = _limit_smiles(smiles, max_actives)
     save_cached_smiles(cache_dir, source, key, {"smiles": smiles, "meta": meta})
@@ -319,7 +366,14 @@ def fetch_iuphar_smiles(
     def get_targets():
         targets = []
         try:
-            tgt_json = _get_json(f"{base}/targets", {"accession": uniprot_id}, headers, timeout, retries, session=session)
+            tgt_json = _get_json(
+                f"{base}/targets",
+                {"accession": uniprot_id},
+                headers,
+                timeout,
+                retries,
+                session=session,
+            )
             if isinstance(tgt_json, list):
                 targets.extend(tgt_json)
         except Exception:
@@ -328,7 +382,14 @@ def fetch_iuphar_smiles(
             if len(targets) >= max_actives:
                 break
             try:
-                tgt_json = _get_json(f"{base}/targets", {"ecNumber": ec}, headers, timeout, retries, session=session)
+                tgt_json = _get_json(
+                    f"{base}/targets",
+                    {"ecNumber": ec},
+                    headers,
+                    timeout,
+                    retries,
+                    session=session,
+                )
                 if isinstance(tgt_json, list):
                     targets.extend(tgt_json)
             except Exception:
@@ -346,9 +407,19 @@ def fetch_iuphar_smiles(
     for tid in target_ids:
         if len(smiles) >= max_actives:
             break
-        params = {"approved": str(approved_only).lower(), "primaryTarget": str(primary_only).lower()}
+        params = {
+            "approved": str(approved_only).lower(),
+            "primaryTarget": str(primary_only).lower(),
+        }
         try:
-            interactions = _get_json(f"{base}/targets/{tid}/interactions", params, headers, timeout, retries, session=session)
+            interactions = _get_json(
+                f"{base}/targets/{tid}/interactions",
+                params,
+                headers,
+                timeout,
+                retries,
+                session=session,
+            )
         except Exception:
             continue
         if not isinstance(interactions, list):
@@ -361,7 +432,14 @@ def fetch_iuphar_smiles(
             if ligand_id is None:
                 continue
             try:
-                struct = _get_json(f"{base}/ligands/{ligand_id}/structure", {}, headers, timeout, retries, session=session)
+                struct = _get_json(
+                    f"{base}/ligands/{ligand_id}/structure",
+                    {},
+                    headers,
+                    timeout,
+                    retries,
+                    session=session,
+                )
             except Exception:
                 continue
             smi = struct.get("smiles")
@@ -404,5 +482,7 @@ def fetch_drugbank_smiles(
     if not data_dir or not data_dir.exists():
         return [], {"skipped": True, "reason": "no_data_dir"}
     # Placeholder: no local DrugBank parser implemented; skip with cache.
-    save_cached_smiles(cache_dir, source, key, {"smiles": [], "meta": {"skipped": True}})
+    save_cached_smiles(
+        cache_dir, source, key, {"smiles": [], "meta": {"skipped": True}}
+    )
     return [], {"skipped": True, "reason": "not_implemented"}

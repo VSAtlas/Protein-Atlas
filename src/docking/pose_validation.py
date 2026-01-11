@@ -6,23 +6,21 @@ import numpy as np
 
 # --- config and tunables ---
 from input_and_export_functions import load_config, validate_config
+
 _cfg = load_config("config.txt")
 validate_config(_cfg)
 
-_POSE_CLASH_THRESHOLD_A   = float(_cfg.get("POSE_CLASH_THRESHOLD_A", 2.0))
-_POSE_CLASH_TOLERANCE     = int(_cfg.get("POSE_CLASH_TOLERANCE", 3))
-_POSE_DIST_SURFACE_MAX_A  = float(_cfg.get("POSE_DIST_SURFACE_MAX_A", 8.0))
+_POSE_CLASH_THRESHOLD_A = float(_cfg.get("POSE_CLASH_THRESHOLD_A", 2.0))
+_POSE_CLASH_TOLERANCE = int(_cfg.get("POSE_CLASH_TOLERANCE", 3))
+_POSE_DIST_SURFACE_MAX_A = float(_cfg.get("POSE_DIST_SURFACE_MAX_A", 8.0))
 _POSE_DIST_CENTROID_MAX_A = float(_cfg.get("POSE_DIST_CENTROID_MAX_A", 6.0))
-_POSE_HBOND_MAX_A         = float(_cfg.get("POSE_HBOND_MAX_A", 3.5))
-_POSE_RMSD_TOL_A          = float(_cfg.get("POSE_RMSD_TOL_A", 2.0))
-_POSE_MAX_MODELS          = _cfg.get("POSE_MAX_MODELS", None)  # "", None or integer string
+_POSE_HBOND_MAX_A = float(_cfg.get("POSE_HBOND_MAX_A", 3.5))
+_POSE_RMSD_TOL_A = float(_cfg.get("POSE_RMSD_TOL_A", 2.0))
+_POSE_MAX_MODELS = _cfg.get("POSE_MAX_MODELS", None)  # "", None or integer string
 try:
     _POSE_MAX_MODELS = int(_POSE_MAX_MODELS) if str(_POSE_MAX_MODELS).strip() else None
 except Exception:
     _POSE_MAX_MODELS = None
-
-
-
 
 
 def parse_pdbqt_coordinates(pdbqt_file):
@@ -31,15 +29,21 @@ def parse_pdbqt_coordinates(pdbqt_file):
         for line in f:
             if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
                 try:
-                    x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+                    x = float(line[30:38])
+                    y = float(line[38:46])
+                    z = float(line[46:54])
                 except ValueError:
                     continue
-                elem = (line[76:78].strip() if len(line) >= 78 else line[12:16].strip()[0])
-                coords.append([x, y, z]); elements.append(elem)
+                elem = (
+                    line[76:78].strip() if len(line) >= 78 else line[12:16].strip()[0]
+                )
+                coords.append([x, y, z])
+                elements.append(elem)
     return np.array(coords), elements
 
 
 # --- Minimal readers and self-docking RMSD ---
+
 
 def parse_pdb_coordinates(pdb_file):
     """
@@ -51,14 +55,22 @@ def parse_pdb_coordinates(pdb_file):
         for line in f:
             if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
                 try:
-                    x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+                    x = float(line[30:38])
+                    y = float(line[38:46])
+                    z = float(line[46:54])
                 except ValueError:
                     continue
-                elem = (line[76:78].strip().upper() if len(line) >= 78 else line[12:16].strip()[0].upper())
+                elem = (
+                    line[76:78].strip().upper()
+                    if len(line) >= 78
+                    else line[12:16].strip()[0].upper()
+                )
                 if elem == "H":
                     continue
-                coords.append([x, y, z]); elements.append(elem)
+                coords.append([x, y, z])
+                elements.append(elem)
     return np.array(coords, dtype=float), elements
+
 
 def compute_redock_rmsd(crystal_lig_path: str, docked_pdbqt_path: str):
     """
@@ -85,6 +97,8 @@ def compute_redock_rmsd(crystal_lig_path: str, docked_pdbqt_path: str):
         return _kabsch(ref_xyz[:n], prd_xyz[:n])
     except Exception:
         return None
+
+
 def compute_self_rmsd(pdbqt_path: str):
     blocks = _split_pdbqt_models(pdbqt_path)
     if len(blocks) < 2:
@@ -98,9 +112,16 @@ def compute_self_rmsd(pdbqt_path: str):
         return None
     return _kabsch(A[:n], B[:n])
 
-def detect_hydrogen_bonds(protein_coords, protein_elements, ligand_coords, ligand_elements, max_dist=_POSE_HBOND_MAX_A):
-    donors = {'N', 'O'}
-    acceptors = {'O', 'N'}
+
+def detect_hydrogen_bonds(
+    protein_coords,
+    protein_elements,
+    ligand_coords,
+    ligand_elements,
+    max_dist=_POSE_HBOND_MAX_A,
+):
+    donors = {"N", "O"}
+    acceptors = {"O", "N"}
 
     hbonds = 0
     for lig_atom, lig_elem in zip(ligand_coords, ligand_elements):
@@ -114,6 +135,7 @@ def detect_hydrogen_bonds(protein_coords, protein_elements, ligand_coords, ligan
                 hbonds += 1
                 break
     return hbonds
+
 
 def evaluate_lipinski(smiles):
     mol = Chem.MolFromSmiles(smiles)
@@ -133,35 +155,37 @@ def evaluate_lipinski(smiles):
             "mw": mw > 500,
             "logP": logp > 5,
             "h_donors": h_donors > 5,
-            "h_acceptors": h_acceptors > 10
-        }
+            "h_acceptors": h_acceptors > 10,
+        },
     }
-from Bio.PDB import PDBParser
-import numpy as np
+
 
 def extract_surface_atoms(pdbqt_path, max_dist_from_center=12.0, center=None):
     coords, _ = parse_pdbqt_coordinates(pdbqt_path)
     if center is not None:
         center = np.array(center)
-        coords = np.array([c for c in coords if np.linalg.norm(c - center) <= max_dist_from_center])
+        coords = np.array(
+            [c for c in coords if np.linalg.norm(c - center) <= max_dist_from_center]
+        )
     return coords
 
 
 def attempt_fallback_recenter(
-    fallback_ligands: dict,             # {orig_ligand_path_norm -> pose_out_path_norm}
+    fallback_ligands: dict,  # {orig_ligand_path_norm -> pose_out_path_norm}
     receptor_pdbqt: str,
     docking_dir: str,
     stage_name: str,
     pocket_center: tuple,
     logger,
-    exclude_basenames: set = None,      # NEW
-    max_candidates: int = 5,            # try a handful
+    exclude_basenames: set = None,  # NEW
+    max_candidates: int = 5,  # try a handful
 ):
     """
     Returns (fb_pose_path, new_center, best_score, chosen_ligand_path) where chosen_ligand_path
     is the original ligand we used to propose the new center. If no center found, returns (None, None, None, None).
     """
     import os
+
     exclude_basenames = exclude_basenames or set()
 
     candidates = []
@@ -185,7 +209,7 @@ def attempt_fallback_recenter(
             CLASH_TOLERANCE=_POSE_CLASH_TOLERANCE,
             DIST_THRESHOLD_SURFACE=_fb_surface,
             DIST_THRESHOLD_CENTROID=_fb_centroid,
-            surface_atom_coords=None
+            surface_atom_coords=None,
         )
 
         dist = res.get("distance_to_pocket", float("inf"))
@@ -196,7 +220,11 @@ def attempt_fallback_recenter(
             continue
 
         # sort key: valid first, then best score (lower), then closer distance
-        score_key = (0 if valid else 1, (score if isinstance(score, (int, float)) else float("inf")), dist)
+        score_key = (
+            0 if valid else 1,
+            (score if isinstance(score, (int, float)) else float("inf")),
+            dist,
+        )
         candidates.append((score_key, lig_path, pose_path, score, dist))
 
     if not candidates:
@@ -211,12 +239,18 @@ def attempt_fallback_recenter(
         try:
             new_center = _pose_centroid_from_pdbqt(pose_path)  # helper below
         except Exception as e:
-            logger.warning(f"Fallback recenter: failed to compute centroid for {os.path.basename(pose_path)}: {e}")
+            logger.warning(
+                f"Fallback recenter: failed to compute centroid for {os.path.basename(pose_path)}: {e}"
+            )
             new_center = None
 
-        logger.info(f"Recenter candidate {tried}: {os.path.basename(lig_path)} | score={score} | dist={dist:.2f} | center={new_center}")
+        logger.info(
+            f"Recenter candidate {tried}: {os.path.basename(lig_path)} | score={score} | dist={dist:.2f} | center={new_center}"
+        )
         if new_center is not None:
-            logger.info(f"Recentered using ligand {os.path.basename(lig_path)} — proposed new center {new_center}.")
+            logger.info(
+                f"Recentered using ligand {os.path.basename(lig_path)} — proposed new center {new_center}."
+            )
             return pose_path, tuple(map(float, new_center)), score, lig_path
 
         if tried >= max_candidates:
@@ -234,13 +268,17 @@ def _pose_centroid_from_pdbqt(pdbqt_path: str):
             if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
                 # columns 31-38, 39-46, 47-54 (1-based PDB), but PDBQT is similar
                 try:
-                    x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
-                    xs.append(x); ys.append(y); zs.append(z)
+                    x = float(line[30:38])
+                    y = float(line[38:46])
+                    z = float(line[46:54])
+                    xs.append(x)
+                    ys.append(y)
+                    zs.append(z)
                 except ValueError:
                     continue
     if not xs:
         return None
-    return (sum(xs)/len(xs), sum(ys)/len(ys), sum(zs)/len(zs))
+    return (sum(xs) / len(xs), sum(ys) / len(ys), sum(zs) / len(zs))
 
 
 def validate_pose_pdbqt(
@@ -252,16 +290,13 @@ def validate_pose_pdbqt(
     DIST_THRESHOLD_SURFACE=_POSE_DIST_SURFACE_MAX_A,
     DIST_THRESHOLD_CENTROID=_POSE_DIST_CENTROID_MAX_A,
     ligand_smiles=None,
-    surface_atom_coords=None
+    surface_atom_coords=None,
 ):
     protein_coords, protein_elements = parse_pdbqt_coordinates(protein_pdbqt)
     ligand_coords, ligand_elements = parse_pdbqt_coordinates(ligand_pdbqt)
 
     if ligand_coords.size == 0:
-        return {
-            "valid": False,
-            "reason": "Ligand has no heavy atoms"
-        }
+        return {"valid": False, "reason": "Ligand has no heavy atoms"}
 
     # Step 1: Surface-based or centroid-based pocket distance
     used_fallback = False
@@ -270,7 +305,8 @@ def validate_pose_pdbqt(
 
     if surface_atom_coords is not None and len(surface_atom_coords) > 0:
         dists = np.linalg.norm(
-            ligand_coords[:, np.newaxis, :] - surface_atom_coords[np.newaxis, :, :], axis=2
+            ligand_coords[:, np.newaxis, :] - surface_atom_coords[np.newaxis, :, :],
+            axis=2,
         )
         min_dist = np.min(dists)
         distance_to_surface = float(min_dist)
@@ -281,7 +317,7 @@ def validate_pose_pdbqt(
                 "distance_to_surface": distance_to_surface,
                 "distance_to_pocket": None,
                 "clash_count": None,
-                "reason": f"Too far from pocket surface (> {DIST_THRESHOLD_SURFACE} Å)"
+                "reason": f"Too far from pocket surface (> {DIST_THRESHOLD_SURFACE} Å)",
             }
 
         distance_to_pocket = distance_to_surface
@@ -298,7 +334,7 @@ def validate_pose_pdbqt(
                 "distance_to_surface": None,
                 "distance_to_pocket": float(distance_to_pocket),
                 "clash_count": None,
-                "reason": f"Too far from pocket centroid (> {DIST_THRESHOLD_CENTROID} Å)"
+                "reason": f"Too far from pocket centroid (> {DIST_THRESHOLD_CENTROID} Å)",
             }
 
     # Step 2: Clash detection
@@ -313,13 +349,12 @@ def validate_pose_pdbqt(
             "distance_to_surface": distance_to_surface,
             "distance_to_pocket": float(distance_to_pocket),
             "clash_count": int(clash_count),
-            "reason": f"{clash_count} clashes detected (>{CLASH_TOLERANCE})"
+            "reason": f"{clash_count} clashes detected (>{CLASH_TOLERANCE})",
         }
 
     # Step 3: Hydrogen bond detection
     hbond_count = detect_hydrogen_bonds(
-        protein_coords, protein_elements,
-        ligand_coords, ligand_elements
+        protein_coords, protein_elements, ligand_coords, ligand_elements
     )
 
     # Step 4: Lipinski rule evaluation
@@ -332,14 +367,16 @@ def validate_pose_pdbqt(
         "clash_count": int(clash_count),
         "hydrogen_bonds": hbond_count,
         "lipinski": lipinski_data,
-        "reason": "Valid pose (fallback used)" if used_fallback else "Valid pose"
+        "reason": "Valid pose (fallback used)" if used_fallback else "Valid pose",
     }
+
 
 # =========================
 # RMSD pose filtering utils
 # =========================
 import re
 from typing import List, Tuple, Optional
+
 
 def _parse_vina_score_from_lines(lines: List[str]) -> Optional[float]:
     """
@@ -355,6 +392,7 @@ def _parse_vina_score_from_lines(lines: List[str]) -> Optional[float]:
             except Exception:
                 return None
     return None
+
 
 def _split_pdbqt_models(pdbqt_path: str) -> List[List[str]]:
     """
@@ -391,25 +429,33 @@ def _split_pdbqt_models(pdbqt_path: str) -> List[List[str]]:
 
     return blocks
 
+
 def _coords_from_block(block: List[str]) -> np.ndarray:
     xs, ys, zs = [], [], []
     for ln in block:
         if (ln.startswith("ATOM") or ln.startswith("HETATM")) and len(ln) >= 54:
             try:
-                x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                x = float(ln[30:38])
+                y = float(ln[38:46])
+                z = float(ln[46:54])
             except Exception:
                 parts = ln.split()
                 if len(parts) >= 8:
                     try:
-                        x = float(parts[5]); y = float(parts[6]); z = float(parts[7])
+                        x = float(parts[5])
+                        y = float(parts[6])
+                        z = float(parts[7])
                     except Exception:
                         continue
                 else:
                     continue
-            xs.append(x); ys.append(y); zs.append(z)
+            xs.append(x)
+            ys.append(y)
+            zs.append(z)
     if not xs:
-        return np.zeros((0,3), dtype=float)
+        return np.zeros((0, 3), dtype=float)
     return np.vstack([xs, ys, zs]).T.astype(float)
+
 
 def _kabsch(P: np.ndarray, Q: np.ndarray) -> float:
     """
@@ -434,7 +480,10 @@ def _kabsch(P: np.ndarray, Q: np.ndarray) -> float:
     diff = P_rot - Qc
     return float(np.sqrt((diff * diff).sum() / P.shape[0]))
 
-def cluster_models_by_rmsd(blocks: List[List[str]], rmsd_tol: float = _POSE_RMSD_TOL_A) -> List[int]:
+
+def cluster_models_by_rmsd(
+    blocks: List[List[str]], rmsd_tol: float = _POSE_RMSD_TOL_A
+) -> List[int]:
     """
     Greedy clustering: keep the first model, then keep any model whose RMSD
     to all kept models is >= rmsd_tol. Returns indices of kept models.
@@ -470,6 +519,7 @@ def cluster_models_by_rmsd(blocks: List[List[str]], rmsd_tol: float = _POSE_RMSD
 
     return kept
 
+
 def _sort_model_indices_by_score(blocks: List[List[str]]) -> List[int]:
     """
     Sort model indices ascending by score (more negative first).
@@ -484,9 +534,12 @@ def _sort_model_indices_by_score(blocks: List[List[str]]) -> List[int]:
     # sort by score (lower/more negative first), None at end
     return [i for (i, sc) in sorted(scored, key=lambda t: (t[1] is None, t[1]))]
 
-def filter_and_rewrite_poses_by_rmsd(pdbqt_path: str,
-                                     rmsd_tol: float = _POSE_RMSD_TOL_A,
-                                     max_models: Optional[int] = None) -> Tuple[int, int]:
+
+def filter_and_rewrite_poses_by_rmsd(
+    pdbqt_path: str,
+    rmsd_tol: float = _POSE_RMSD_TOL_A,
+    max_models: Optional[int] = None,
+) -> Tuple[int, int]:
     """
     In-place filter: keep only unique poses >= rmsd_tol apart (Kabsch RMSD).
     Optionally cap to top-N by score after dedup.
@@ -508,8 +561,12 @@ def filter_and_rewrite_poses_by_rmsd(pdbqt_path: str,
     # optional cap
     if max_models is None:
         max_models = _POSE_MAX_MODELS
-    if max_models is not None and len(kept_idx) > max_models:        # re-sort kept by score (ascending) and take top-N
-        kept_idx = [i for i in _sort_model_indices_by_score([blocks[j] for j in kept_idx])][:max_models]
+    if (
+        max_models is not None and len(kept_idx) > max_models
+    ):  # re-sort kept by score (ascending) and take top-N
+        kept_idx = [
+            i for i in _sort_model_indices_by_score([blocks[j] for j in kept_idx])
+        ][:max_models]
 
     # write back (preserve MODEL/ENDMDL if present)
     kept_blocks = [blocks[i] for i in kept_idx]
@@ -517,9 +574,9 @@ def filter_and_rewrite_poses_by_rmsd(pdbqt_path: str,
         for bi, blk in enumerate(kept_blocks):
             # Ensure MODEL/ENDMDL wrappers
             has_model = any(ln.startswith("MODEL") for ln in blk)
-            has_end   = any(ln.startswith("ENDMDL") for ln in blk)
+            has_end = any(ln.startswith("ENDMDL") for ln in blk)
             if not has_model:
-                f.write(f"MODEL        {bi+1}\n")
+                f.write(f"MODEL        {bi + 1}\n")
             f.writelines(blk)
             if not has_end:
                 f.write("ENDMDL\n")

@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import os
-import re
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, Optional
 
 
 def _normalize_flag_name(tok: str) -> str:
@@ -60,8 +59,8 @@ def _parse_single_from_cli(argv) -> str:
     try:
         if "--single" in argv:
             i = argv.index("--single")
-            if i + 1 < len(argv) and not argv[i+1].startswith("-"):
-                return argv[i+1]
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                return argv[i + 1]
     except Exception:
         pass
     return ""
@@ -177,7 +176,9 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
         # don't treat fast/-fast/--fast as a PDB short-form token
         if low in ("fast", "-fast", "--fast"):
             continue
-        if (tok.startswith("--") and len(tok) == 6) or (tok.startswith("-") and len(tok) == 5):
+        if (tok.startswith("--") and len(tok) == 6) or (
+            tok.startswith("-") and len(tok) == 5
+        ):
             nid = _norm_pdb_id(tok)
             if nid:
                 cli_ids.append(nid)
@@ -200,7 +201,7 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
         # Strip common suffix patterns
         lower = base.lower()
         if lower.endswith("_cleaned.pdb"):
-            core = base[:-len("_cleaned.pdb")]
+            core = base[: -len("_cleaned.pdb")]
         elif lower.endswith(".pdb"):
             core = base[:-4]
         else:

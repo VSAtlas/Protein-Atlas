@@ -1,4 +1,4 @@
- # ---pH-ensemble A→B→C orchestration ---
+# ---pH-ensemble A→B→C orchestration ---
 
 import os
 import json
@@ -22,7 +22,6 @@ elog.setLevel(logging.INFO)
 elog.propagate = False
 
 
-
 # --- minimal helpers (no external deps) ---
 def _sha1_of_file(path: str) -> str:
     h = hashlib.sha1()
@@ -31,11 +30,10 @@ def _sha1_of_file(path: str) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+
 def _ph_token(ph: float) -> str:
     # repo convention: 6.0 -> 6_0, 7.4 -> 7_4
     return str(ph).replace(".", "_")
-
-
 
 
 def _count_atoms_pdb(path: str) -> int:
@@ -44,7 +42,11 @@ def _count_atoms_pdb(path: str) -> int:
             return sum(1 for ln in fh if ln.startswith(("ATOM  ", "HETATM")))
     except Exception:
         return 0
-def _count_pocket_hydrogens(pdb_path: str, center: Tuple[float, float, float], radius: float) -> int:
+
+
+def _count_pocket_hydrogens(
+    pdb_path: str, center: Tuple[float, float, float], radius: float
+) -> int:
     cx, cy, cz = center
     r2 = radius * radius
     nH = 0
@@ -54,7 +56,9 @@ def _count_pocket_hydrogens(pdb_path: str, center: Tuple[float, float, float], r
                 if not ln.startswith(("ATOM  ", "HETATM")):
                     continue
                 try:
-                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                    x = float(ln[30:38])
+                    y = float(ln[38:46])
+                    z = float(ln[46:54])
                 except Exception:
                     continue
                 dx, dy, dz = x - cx, y - cy, z - cz
@@ -66,32 +70,54 @@ def _count_pocket_hydrogens(pdb_path: str, center: Tuple[float, float, float], r
         pass
     return nH
 
-def _pocket_name_counts(pdb_path: str, center: Tuple[float,float,float], radius: float) -> dict:
+
+def _pocket_name_counts(
+    pdb_path: str, center: Tuple[float, float, float], radius: float
+) -> dict:
     cx, cy, cz = center
-    r2 = radius*radius
-    counts = {"ASP":0,"ASH":0,"GLU":0,"GLH":0,"HIS":0,"HID":0,"HIE":0,"HIP":0,"LYS":0,"LYN":0,"CYS":0,"CYM":0,"TYR":0}
+    r2 = radius * radius
+    counts = {
+        "ASP": 0,
+        "ASH": 0,
+        "GLU": 0,
+        "GLH": 0,
+        "HIS": 0,
+        "HID": 0,
+        "HIE": 0,
+        "HIP": 0,
+        "LYS": 0,
+        "LYN": 0,
+        "CYS": 0,
+        "CYM": 0,
+        "TYR": 0,
+    }
     seen = set()
     try:
         with open(pdb_path, "r", errors="ignore") as fh:
             for ln in fh:
-                if not ln.startswith(("ATOM  ","HETATM")): continue
+                if not ln.startswith(("ATOM  ", "HETATM")):
+                    continue
                 try:
-                    x = float(ln[30:38]); y = float(ln[38:46]); z = float(ln[46:54])
+                    x = float(ln[30:38])
+                    y = float(ln[38:46])
+                    z = float(ln[46:54])
                 except Exception:
                     continue
-                dx,dy,dz = x-cx, y-cy, z-cz
-                if (dx*dx+dy*dy+dz*dz) > r2: continue
-                chain = (ln[21].strip() or " ")
+                dx, dy, dz = x - cx, y - cy, z - cz
+                if (dx * dx + dy * dy + dz * dz) > r2:
+                    continue
+                chain = ln[21].strip() or " "
                 resi = int(ln[22:26])
                 key = (chain, resi)
-                if key in seen: continue
+                if key in seen:
+                    continue
                 seen.add(key)
                 resn = ln[17:20].strip().upper()
-                if resn in counts: counts[resn] += 1
+                if resn in counts:
+                    counts[resn] += 1
     except Exception:
         pass
-    return {k:v for k,v in counts.items() if v>0}
-
+    return {k: v for k, v in counts.items() if v > 0}
 
 
 def _ph_member_job(job):
@@ -211,7 +237,7 @@ def build_ph_ensemble(
         ensemble_dir = ensemble_dir / "receptor" / "ph_ensemble"
 
     ensemble_dir.mkdir(parents=True, exist_ok=True)
-    tag_root = str(pdb_id).replace('/', '_').replace('\\', '_')
+    tag_root = str(pdb_id).replace("/", "_").replace("\\", "_")
 
     # [ADD] optional file logging toggle: env pHlogs -> config.txt pHlogs -> default False
     def _truthy(x):
@@ -222,7 +248,7 @@ def build_ph_ensemble(
         enable_file_log = _truthy(os.environ["pHlogs"])
     else:
         # very light config.txt lookup (same dir as this file)
-        cfg = (Path(__file__).resolve().parent / "config.txt")
+        cfg = Path(__file__).resolve().parent / "config.txt"
         if cfg.exists():
             for ln in cfg.read_text().splitlines():
                 if "=" in ln:
@@ -231,15 +257,24 @@ def build_ph_ensemble(
                         enable_file_log = _truthy(v)
                         break
     if enable_file_log:
-        fh = logging.FileHandler(str(ensemble_dir / "pH_ensemble.log"), mode="w", encoding="utf-8")
+        fh = logging.FileHandler(
+            str(ensemble_dir / "pH_ensemble.log"), mode="w", encoding="utf-8"
+        )
         fh.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
         # capture this module + partner modules without changing their code
-        for nm in ("ph_ensemble", "propka_wire", "automate_protein_prep", "proteinprep"):
+        for nm in (
+            "ph_ensemble",
+            "propka_wire",
+            "automate_protein_prep",
+            "proteinprep",
+        ):
             lg = logging.getLogger(nm)
             lg.addHandler(fh)
             lg.setLevel(logging.DEBUG)
             lg.propagate = False
-        elog.info("[pHlogs] enabled → %s", str((ensemble_dir / "pH_ensemble.log").resolve()))
+        elog.info(
+            "[pHlogs] enabled → %s", str((ensemble_dir / "pH_ensemble.log").resolve())
+        )
     else:
         elog.info("[pHlogs] disabled")
 
@@ -288,7 +323,10 @@ def build_ph_ensemble(
                 jobs[0][1],
             )
         elif n_ph > 1:
-            elog.info("[ph.serial] workers=1; running %d pH members without parallel executor", n_ph)
+            elog.info(
+                "[ph.serial] workers=1; running %d pH members without parallel executor",
+                n_ph,
+            )
         for job in jobs:
             results.append(_ph_member_job(job))
     else:
@@ -349,7 +387,11 @@ def build_ph_ensemble(
             _fmt_bins(pre_bins),
         )
         if _prev_pre_sha is not None:
-            elog.info("[compare.prestate] ph=%.2f same_as_prev=%s", ph, str(pre_sha == _prev_pre_sha))
+            elog.info(
+                "[compare.prestate] ph=%.2f same_as_prev=%s",
+                ph,
+                str(pre_sha == _prev_pre_sha),
+            )
         _prev_pre_sha = pre_sha
 
         elog.info("[withH.sha1] ph=%.2f sha1=%s", ph, with_sha)
@@ -362,7 +404,11 @@ def build_ph_ensemble(
             _fmt_bins(with_bins),
         )
         if _prev_with_sha is not None:
-            elog.info("[compare.withH] ph=%.2f same_as_prev=%s", ph, str(with_sha == _prev_with_sha))
+            elog.info(
+                "[compare.withH] ph=%.2f same_as_prev=%s",
+                ph,
+                str(with_sha == _prev_with_sha),
+            )
         _prev_with_sha = with_sha
 
         elog.info("[stage.C.pdbqt] ph=%.2f size=%d path=%s", ph, pdbqt_size, pdbqt_path)
@@ -412,29 +458,41 @@ def build_ph_ensemble(
 
         # target collapsed filename (multi-pH) for canonical
         collapsed_name = f"{tag_root}_pH{'+'.join(tokens)}.pdbqt"
-        collapsed_path = (Path(canonical["pdbqt"]).parent / collapsed_name)
+        collapsed_path = Path(canonical["pdbqt"]).parent / collapsed_name
 
         # rename only if there is more than one in the equivalence class
         out_pdbqt_path = Path(canonical["pdbqt"])
         if len(grp_sorted) > 1:
             # ensure we don't overwrite an existing file
-            if collapsed_path.exists() and collapsed_path.resolve() != out_pdbqt_path.resolve():
+            if (
+                collapsed_path.exists()
+                and collapsed_path.resolve() != out_pdbqt_path.resolve()
+            ):
                 # -dupN suffix
                 i = 1
                 while True:
-                    candidate = collapsed_path.with_name(f"{collapsed_path.stem}-dup{i}{collapsed_path.suffix}")
+                    candidate = collapsed_path.with_name(
+                        f"{collapsed_path.stem}-dup{i}{collapsed_path.suffix}"
+                    )
                     if not candidate.exists():
                         collapsed_path = candidate
                         break
                     i += 1
             # perform rename if needed
             if out_pdbqt_path.resolve() != collapsed_path.resolve():
-                elog.info("[dedupe.rename] %s → %s", str(out_pdbqt_path), str(collapsed_path))
+                elog.info(
+                    "[dedupe.rename] %s → %s", str(out_pdbqt_path), str(collapsed_path)
+                )
                 out_pdbqt_path.rename(collapsed_path)
                 out_pdbqt_path = collapsed_path
             # delete all artifacts for non-canonical members: .pdbqt, .withH.pdb, .prestate.pdb, .pka
             for dup in grp_sorted[1:]:
-                for key, label in (("pdbqt", "pdbqt"), ("withH", "withH"), ("prestate", "prestate"), ("pka", "pka")):
+                for key, label in (
+                    ("pdbqt", "pdbqt"),
+                    ("withH", "withH"),
+                    ("prestate", "prestate"),
+                    ("pka", "pka"),
+                ):
                     path = dup.get(key)
                     if not path:
                         continue
@@ -445,24 +503,34 @@ def build_ph_ensemble(
                     except FileNotFoundError:
                         elog.warning("[dedupe.delete.missing.%s] %s", label, str(p))
                     except Exception as e:
-                        elog.warning("[dedupe.delete.error.%s] %s (%s)", label, str(p), e)
+                        elog.warning(
+                            "[dedupe.delete.error.%s] %s (%s)", label, str(p), e
+                        )
 
-            elog.info("[dedupe.group] sha=%s phs=%s canonical=%.2f",
-                      sha[:12], ",".join(f"{p:.2f}" for p in phs), float(canonical["ph"]))
+            elog.info(
+                "[dedupe.group] sha=%s phs=%s canonical=%.2f",
+                sha[:12],
+                ",".join(f"{p:.2f}" for p in phs),
+                float(canonical["ph"]),
+            )
         else:
-            elog.info("[dedupe.group] sha=%s phs=%s (no collapse)", sha[:12], f"{phs[0]:.2f}")
+            elog.info(
+                "[dedupe.group] sha=%s phs=%s (no collapse)", sha[:12], f"{phs[0]:.2f}"
+            )
 
         # manifest entry for this group (canonical metadata + ph_equiv + final pdbqt path)
-        dedup_members.append({
-            "ph": float(canonical["ph"]),
-            "ph_equiv": phs,
-            "tag": canonical["tag"],
-            "prestate": canonical["prestate"],
-            "pka": canonical["pka"],
-            "withH": canonical["withH"],
-            "withH_sha1": canonical.get("withH_sha1", ""),
-            "pdbqt": str(out_pdbqt_path),
-        })
+        dedup_members.append(
+            {
+                "ph": float(canonical["ph"]),
+                "ph_equiv": phs,
+                "tag": canonical["tag"],
+                "prestate": canonical["prestate"],
+                "pka": canonical["pka"],
+                "withH": canonical["withH"],
+                "withH_sha1": canonical.get("withH_sha1", ""),
+                "pdbqt": str(out_pdbqt_path),
+            }
+        )
         canonical_phs.append(float(canonical["ph"]))
 
     # sort manifest by canonical pH
@@ -472,7 +540,7 @@ def build_ph_ensemble(
     manifest = {
         "pdb_id": pdb_id,
         "ensemble": canonical_phs,  # << one per group
-        "members": dedup_members  # << one per group
+        "members": dedup_members,  # << one per group
     }
 
     manifest_path = ensemble_dir / "ensemble.json"
@@ -481,40 +549,58 @@ def build_ph_ensemble(
 
     return str(manifest_path)
 
+
 # --- END: pH-ensemble A→B→C orchestration ---
-
-
-
-
-
 
 
 def main():
     ap = argparse.ArgumentParser(description="Build pH-aware receptor ensemble.")
     ap.add_argument("pdb_path", help="Input receptor PDB (ligand-free).")
     ap.add_argument("--output-root", default="processed_pdbs")
-    ap.add_argument("--force", action="store_true", help="Force re-prep of base receptor.")
-    ap.add_argument("--center", type=str, default=None,
-                    help="Binding-site center as 'x,y,z' (required if --scope=pocket).")
-    ap.add_argument("--radius", type=float, default=10.0,
-                    help="Sphere radius in Å for local titration (used when --scope=pocket).")
-    ap.add_argument("--scope", choices=["global", "pocket"], default="global",
-                    help="Renaming scope: 'global' (entire protein; default) or 'pocket' (within --radius).")
-    ap.add_argument("--ph-list", type=str, default="7.4",
-                    help="Comma-separated pH values, e.g., 5,7,9")
+    ap.add_argument(
+        "--force", action="store_true", help="Force re-prep of base receptor."
+    )
+    ap.add_argument(
+        "--center",
+        type=str,
+        default=None,
+        help="Binding-site center as 'x,y,z' (required if --scope=pocket).",
+    )
+    ap.add_argument(
+        "--radius",
+        type=float,
+        default=10.0,
+        help="Sphere radius in Å for local titration (used when --scope=pocket).",
+    )
+    ap.add_argument(
+        "--scope",
+        choices=["global", "pocket"],
+        default="global",
+        help="Renaming scope: 'global' (entire protein; default) or 'pocket' (within --radius).",
+    )
+    ap.add_argument(
+        "--ph-list",
+        type=str,
+        default="7.4",
+        help="Comma-separated pH values, e.g., 5,7,9",
+    )
     args = ap.parse_args()
 
     # Parse pH list (always required to be valid)
     try:
         ph_values = [float(x) for x in args.ph_list.split(",") if x.strip() != ""]
     except Exception:
-        raise SystemExit(f"--ph-list must be comma-separated numbers, got {args.ph_list!r}")
+        raise SystemExit(
+            f"--ph-list must be comma-separated numbers, got {args.ph_list!r}"
+        )
 
     if args.force:
         os.environ["FORCE_REPROCESS"] = "1"
 
     # Single clean step (do not edit automate_protein_prep)
-    cleaned_pdb, _receptor_pdbqt = automate_protein_prep.main(args.pdb_path, args.output_root)
+    cleaned_pdb, _receptor_pdbqt = automate_protein_prep.main(
+        args.pdb_path, args.output_root
+    )
     pdb_id = Path(args.pdb_path).stem[:4].upper()
 
     # Scope + center/radius policy
@@ -528,7 +614,13 @@ def main():
             raise SystemExit(f"--center must be 'x,y,z', got {args.center!r}")
         center_xyz = (cx, cy, cz)
         radius_eff = args.radius
-        elog.info("[ph.scope] scope=POCKET center=(%.3f,%.3f,%.3f) r=%.2f", cx, cy, cz, radius_eff)
+        elog.info(
+            "[ph.scope] scope=POCKET center=(%.3f,%.3f,%.3f) r=%.2f",
+            cx,
+            cy,
+            cz,
+            radius_eff,
+        )
     else:
         # GLOBAL: center optional; if absent, auto to origin (ignored by propka_wire in global)
         if args.center:
@@ -542,7 +634,11 @@ def main():
             center_xyz = (0.0, 0.0, 0.0)
             center_note = "auto"
         radius_eff = 1_000_000.0  # triggers GLOBAL in propka_wire (r>=1e6)
-        elog.info("[ph.scope] scope=GLOBAL center=%s r=ALL (sentinel=%.0f)", center_note, radius_eff)
+        elog.info(
+            "[ph.scope] scope=GLOBAL center=%s r=ALL (sentinel=%.0f)",
+            center_note,
+            radius_eff,
+        )
 
     # A → B → C for each pH; tags end with _0 per acceptance
     build_ph_ensemble(
@@ -552,7 +648,7 @@ def main():
         center=center_xyz,
         radius=radius_eff,
         ph_values=ph_values,
-        member_index_start=0
+        member_index_start=0,
     )
 
 

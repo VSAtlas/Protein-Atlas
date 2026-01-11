@@ -18,25 +18,78 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import subprocess
 import time
-import os, sys, json, statistics, tempfile, threading
+import os
+import json
+import tempfile
+import threading
+
 # ------------------------
 # Exclusions: common ions/solvents/cofactors to hide in "native" views
 # ------------------------
 EXCLUDE_HET_IDS = {
-    "HOH", "WAT", "NA", "K", "CL", "MG", "MN", "CA", "ZN", "FE", "CO", "CU", "NI", "MO",
-    "SO4", "PO4", "ACT", "ACE", "IPH", "FMT", "BME", "MPD", "DMS", "IPA", "IMD", "DTT",
-    "TRS", "MES", "HEP", "CIT", "TAR", "TLA", "GLY", "EDO", "GOL", "PEG",
-    "GLC", "GAL", "MAN", "NAG", "BMA", "FUC", "TRE", "BGC", "BOG",
-    "HEM", "FAD", "FMN", "NAD", "NAP", "NADH", "SAM", "SAH",
+    "HOH",
+    "WAT",
+    "NA",
+    "K",
+    "CL",
+    "MG",
+    "MN",
+    "CA",
+    "ZN",
+    "FE",
+    "CO",
+    "CU",
+    "NI",
+    "MO",
+    "SO4",
+    "PO4",
+    "ACT",
+    "ACE",
+    "IPH",
+    "FMT",
+    "BME",
+    "MPD",
+    "DMS",
+    "IPA",
+    "IMD",
+    "DTT",
+    "TRS",
+    "MES",
+    "HEP",
+    "CIT",
+    "TAR",
+    "TLA",
+    "GLY",
+    "EDO",
+    "GOL",
+    "PEG",
+    "GLC",
+    "GAL",
+    "MAN",
+    "NAG",
+    "BMA",
+    "FUC",
+    "TRE",
+    "BGC",
+    "BOG",
+    "HEM",
+    "FAD",
+    "FMN",
+    "NAD",
+    "NAP",
+    "NADH",
+    "SAM",
+    "SAH",
 }
 
 
 # >>> PATHS IMPORT START
 from path_router.path_router import make_paths
+
 # >>> PATHS IMPORT END
-from concurrent.futures import ProcessPoolExecutor, as_completed
 try:
     from input_and_export_functions import load_config, validate_config
+
     _cfg = load_config("config.txt") or {}
     try:
         validate_config(_cfg)
@@ -44,6 +97,7 @@ try:
         pass
 except Exception:
     _cfg = {}
+
 
 def _cfg_bool(name: str, *, env: str | None = None, default: bool = False) -> bool:
     v = _cfg.get(name, None)
@@ -54,6 +108,7 @@ def _cfg_bool(name: str, *, env: str | None = None, default: bool = False) -> bo
     s = str(v).strip().lower()
     return s in ("1", "true", "yes", "on")
 
+
 def _cfg_int(name: str, *, env: str | None = None, default: int = 0) -> int:
     v = _cfg.get(name, None)
     if v is None and env:
@@ -63,6 +118,7 @@ def _cfg_int(name: str, *, env: str | None = None, default: int = 0) -> int:
     except Exception:
         return default
 
+
 def _cfg_float(name: str, default: float) -> float:
     try:
         return float(_cfg.get(name, default))
@@ -71,15 +127,25 @@ def _cfg_float(name: str, default: float) -> float:
 
 
 # >>> RENDER PATHS PATCH START
-def _resolve_receptor_and_outprefix(cfg, pdb_id, variant=None, ph_token=None, tag="renders", *, receptor_kind: str = "pdbqt"):
+def _resolve_receptor_and_outprefix(
+    cfg,
+    pdb_id,
+    variant=None,
+    ph_token=None,
+    tag="renders",
+    *,
+    receptor_kind: str = "pdbqt",
+):
     p = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     if str(receptor_kind).lower() == "cleaned":
         receptor = p.receptor_cleaned_pdb(variant)
     else:
         receptor = p.receptor_pdbqt(variant, ph_token)
-    outdir   = p.docked_variant_root(variant) / tag
+    outdir = p.docked_variant_root(variant) / tag
     outdir.mkdir(parents=True, exist_ok=True)
     return p, str(receptor), outdir
+
+
 # >>> RENDER PATHS PATCH END
 
 
@@ -103,13 +169,18 @@ def _default_outprefix_name(candidates: Sequence[Optional[str]], fallback: str) 
         if stem:
             return stem
     return fallback
+
+
 _DEFER_MODE = _cfg_bool("DEFER_PYMOL", env="DEFER_PYMOL", default=False)
 _QUEUE_PATH = (
     _cfg.get("PYMOL_DEFER_QUEUE")
     or os.environ.get("PYMOL_DEFER_QUEUE")
-    or str(Path(os.environ.get("OVERALL_DIR", Path.cwd())) / "deferred_pymol_jobs.jsonl")
+    or str(
+        Path(os.environ.get("OVERALL_DIR", Path.cwd())) / "deferred_pymol_jobs.jsonl"
+    )
 )
 _Q_LOCK = threading.Lock()
+
 
 def set_defer_mode(enable: bool, queue_path: Optional[str] = None):
     """Toggle deferral globally (preferred entry point for callers)."""
@@ -118,6 +189,7 @@ def set_defer_mode(enable: bool, queue_path: Optional[str] = None):
     if queue_path:
         _QUEUE_PATH = str(queue_path)
 
+
 def _enqueue_job(kind: str, payload: dict):
     Path(_QUEUE_PATH).parent.mkdir(parents=True, exist_ok=True)
     rec = {"kind": kind, **payload}
@@ -125,6 +197,7 @@ def _enqueue_job(kind: str, payload: dict):
     with _Q_LOCK:
         with open(_QUEUE_PATH, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+
 
 def _iter_jobs(path: str):
     p = Path(path)
@@ -140,6 +213,7 @@ def _iter_jobs(path: str):
             except Exception:
                 continue
 
+
 def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2):
     qp = str(queue_path or _QUEUE_PATH)
     jobs = list(_iter_jobs(qp)) or []
@@ -147,17 +221,21 @@ def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2)
         print("[capture_pose] no deferred PyMOL jobs to replay.")
         return 0
 
-    print(f"[capture_pose] replaying {len(jobs)} deferred PyMOL jobs | workers={max_workers}")
+    print(
+        f"[capture_pose] replaying {len(jobs)} deferred PyMOL jobs | workers={max_workers}"
+    )
 
     global _DEFER_MODE
     _prev = _DEFER_MODE
     _DEFER_MODE = False
     try:
+
         def _run(job):
             k = job.get("kind")
             if k == "three":
                 return _render_three_views_with_pymol(
-                    job.get("receptor_path"), job.get("ligand_paths_and_colors", []),
+                    job.get("receptor_path"),
+                    job.get("ligand_paths_and_colors", []),
                     job.get("outprefix"),
                     cfg=job.get("cfg"),
                     pdb_id=job.get("pdb_id"),
@@ -171,7 +249,8 @@ def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2)
                 )
             elif k == "native":
                 return _render_native_on_original_pdb(
-                    job.get("original_pdb"), job.get("outprefix"),
+                    job.get("original_pdb"),
+                    job.get("outprefix"),
                     cfg=job.get("cfg"),
                     pdb_id=job.get("pdb_id"),
                     variant=job.get("variant"),
@@ -183,6 +262,7 @@ def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2)
 
         workers = max(1, int(max_workers))
         from concurrent.futures import ThreadPoolExecutor
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_run, jobs))
     finally:
@@ -195,10 +275,13 @@ def replay_deferred_jobs(queue_path: Optional[str] = None, max_workers: int = 2)
     print("[capture_pose] deferred PyMOL jobs complete.")
     return len(jobs)
 
-def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
-                            max_workers: int = 99,
-                            mode: str = "cli",
-                            slow_ms: int = 15) -> int:
+
+def replay_deferred_jobs_mp(
+    queue_path: Optional[str] = None,
+    max_workers: int = 99,
+    mode: str = "cli",
+    slow_ms: int = 15,
+) -> int:
     """
     Multi-process renderer that replays JSONL queue without sharing a PyMOL session.
     Uses a single persistent pool to avoid per-batch spawn overhead.
@@ -222,6 +305,7 @@ def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
 
     # Use a stable mapping so we can print tags with the right job
     from concurrent.futures import ProcessPoolExecutor, as_completed
+
     with ProcessPoolExecutor(max_workers=workers) as ex:
         fut2job = {ex.submit(_run_one_job_mp, job, mode): job for job in jobs}
         for fut in as_completed(fut2job):
@@ -233,8 +317,10 @@ def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
             except Exception as e:
                 ok, t_ms, err = False, 0, str(e)
             durations.append(t_ms)
-            print(f"[render-done] {kind}:{tag} t_ms={t_ms} ok={int(ok)}"
-                  + (f" err={str(err).splitlines()[0][:80]}" if err else ""))
+            print(
+                f"[render-done] {kind}:{tag} t_ms={t_ms} ok={int(ok)}"
+                + (f" err={str(err).splitlines()[0][:80]}" if err else "")
+            )
             if ok:
                 ok_count += 1
             else:
@@ -251,25 +337,27 @@ def replay_deferred_jobs_mp(queue_path: Optional[str] = None,
     if durations:
         avg = int(sum(durations) / len(durations))
         import statistics
+
         p50 = int(statistics.median(durations))
         p90 = int(sorted(durations)[max(0, int(0.9 * len(durations)) - 1)])
     else:
         avg = p50 = p90 = 0
-    print(f"[render-summary] jobs={len(jobs)} ok={ok_count} fail={fail_count} avg_ms={avg} p50={p50} p90={p90} workers_used<={workers}")
+    print(
+        f"[render-summary] jobs={len(jobs)} ok={ok_count} fail={fail_count} avg_ms={avg} p50={p50} p90={p90} workers_used<={workers}"
+    )
     return ok_count
-
-
-
 
 
 # ============================================================
 # Utilities
 # ============================================================
 
+
 def _with_pymol():
     """Return PyMOL class if available, else None with a single clear message."""
     try:
         from pymol2 import PyMOL  # noqa: F401
+
         return PyMOL
     except Exception as e:
         print(f"[capture_pose] PyMOL not available; skipping renders: {e}")
@@ -324,6 +412,7 @@ def _prefer_best_pdb(pose_path: str) -> str:
 # Selection helper used by your benchmark flow
 # ============================================================
 
+
 def pick_control_and_nearest_rdk(
     results_for_stage: Dict[str, Dict],
     raw_docked: Dict[str, str],
@@ -352,7 +441,11 @@ def pick_control_and_nearest_rdk(
         for lig, rec in results_for_stage.items():
             stem = Path(lig).stem.split("_stage")[0].lower()
             sc = rec.get("score")
-            if stem not in ctrl_set and isinstance(sc, (int, float)) and raw_docked.get(lig):
+            if (
+                stem not in ctrl_set
+                and isinstance(sc, (int, float))
+                and raw_docked.get(lig)
+            ):
                 d = abs(sc - best_ctrl_score)
                 if d < metric:
                     nearest_rdk, metric = lig, d
@@ -360,7 +453,11 @@ def pick_control_and_nearest_rdk(
         for lig, rec in results_for_stage.items():
             stem = Path(lig).stem.split("_stage")[0].lower()
             sc = rec.get("score")
-            if stem not in ctrl_set and isinstance(sc, (int, float)) and raw_docked.get(lig):
+            if (
+                stem not in ctrl_set
+                and isinstance(sc, (int, float))
+                and raw_docked.get(lig)
+            ):
                 if sc < metric:
                     nearest_rdk, metric = lig, sc
 
@@ -370,6 +467,7 @@ def pick_control_and_nearest_rdk(
 # ============================================================
 # PyMOL rendering
 # ============================================================
+
 
 def _render_three_views_with_pymol(
     receptor_path: str | None,
@@ -397,7 +495,10 @@ def _render_three_views_with_pymol(
     if label_cutoff is None:
         label_cutoff = _cfg_float("LABEL_CUTOFF_A", 5.0)
     if viewport is None:
-        viewport = ( _cfg_int("VIEWPORT_W", default=640), _cfg_int("VIEWPORT_H", default=480) )
+        viewport = (
+            _cfg_int("VIEWPORT_W", default=640),
+            _cfg_int("VIEWPORT_H", default=480),
+        )
     surface_transparency = _cfg_float("SURFACE_TRANSPARENCY", 0.30)
 
     cfg_data = cfg if cfg is not None else (_cfg or None)
@@ -409,20 +510,30 @@ def _render_three_views_with_pymol(
     if cfg_data and pdb_id:
         try:
             _paths_obj, default_receptor, outdir = _resolve_receptor_and_outprefix(
-                cfg_data, pdb_id, variant=variant, ph_token=ph_token, tag=tag, receptor_kind="cleaned"
+                cfg_data,
+                pdb_id,
+                variant=variant,
+                ph_token=ph_token,
+                tag=tag,
+                receptor_kind="cleaned",
             )
         except Exception:
             outdir = None
         else:
             router_parent = Path(default_receptor).parent
-            resolved_receptor = _normalize_candidate_path(receptor_path, router_parent) if receptor_path else None
+            resolved_receptor = (
+                _normalize_candidate_path(receptor_path, router_parent)
+                if receptor_path
+                else None
+            )
             if resolved_receptor is None:
                 resolved_receptor = Path(default_receptor).resolve()
 
             outprefix_candidate = _normalize_candidate_path(outprefix, outdir)
             if outprefix_candidate is None:
                 fallback_name = _default_outprefix_name(
-                    [lp for lp, _, _ in ligand_paths_and_colors] + [obj for _, obj, _ in ligand_paths_and_colors],
+                    [lp for lp, _, _ in ligand_paths_and_colors]
+                    + [obj for _, obj, _ in ligand_paths_and_colors],
                     fallback=f"{pdb_id}_render",
                 )
                 outprefix_candidate = (outdir / fallback_name).resolve()
@@ -446,27 +557,36 @@ def _render_three_views_with_pymol(
         return []
 
     receptor_path = str(resolved_receptor)
-    outprefix = str(resolved_outprefix) if resolved_outprefix is not None else str(outprefix or "")
+    outprefix = (
+        str(resolved_outprefix)
+        if resolved_outprefix is not None
+        else str(outprefix or "")
+    )
 
     if not outprefix:
         print("[capture_pose] Output prefix could not be resolved; skipping renders.")
         return []
 
     if _DEFER_MODE:
-        _enqueue_job("three", {
-            "receptor_path": str(receptor_path),
-            "ligand_paths_and_colors": [(str(p), str(n), str(c)) for (p, n, c) in ligand_paths_and_colors],
-            "outprefix": str(outprefix),
-            "cfg": cfg_data if cfg is not None else None,
-            "pdb_id": pdb_id,
-            "variant": variant,
-            "ph_token": ph_token,
-            "tag": tag,
-            "label_top_n_res": int(label_top_n_res),
-            "label_cutoff": float(label_cutoff),
-            "viewport": list(viewport),
-            "hide_receptor": bool(hide_receptor),
-        })
+        _enqueue_job(
+            "three",
+            {
+                "receptor_path": str(receptor_path),
+                "ligand_paths_and_colors": [
+                    (str(p), str(n), str(c)) for (p, n, c) in ligand_paths_and_colors
+                ],
+                "outprefix": str(outprefix),
+                "cfg": cfg_data if cfg is not None else None,
+                "pdb_id": pdb_id,
+                "variant": variant,
+                "ph_token": ph_token,
+                "tag": tag,
+                "label_top_n_res": int(label_top_n_res),
+                "label_cutoff": float(label_cutoff),
+                "viewport": list(viewport),
+                "hide_receptor": bool(hide_receptor),
+            },
+        )
         return
 
     PyMOL = _with_pymol()
@@ -497,7 +617,9 @@ def _render_three_views_with_pymol(
                 continue
             lig_path_eff = _prefer_best_pdb(lig_path)
             if not Path(lig_path_eff).is_file():
-                print(f"[capture_pose] missing ligand file: {lig_path_eff} (original: {lig_path})")
+                print(
+                    f"[capture_pose] missing ligand file: {lig_path_eff} (original: {lig_path})"
+                )
                 continue
 
             cmd.load(lig_path_eff, obj_name)
@@ -509,7 +631,9 @@ def _render_three_views_with_pymol(
 
         # Label nearest residues (sticks colored gray to avoid color noise)
         if lig_objects:
-            cmd.select("active_site_all", f"receptor within {label_cutoff} of ({lig_union})")
+            cmd.select(
+                "active_site_all", f"receptor within {label_cutoff} of ({lig_union})"
+            )
 
             lig_model = cmd.get_model(lig_union)
             lig_coords = [(a.coord[0], a.coord[1], a.coord[2]) for a in lig_model.atom]
@@ -521,8 +645,10 @@ def _render_three_views_with_pymol(
                 dy = y - coords[0][1]
                 dz = z - coords[0][2]
                 best = (dx * dx + dy * dy + dz * dz) ** 0.5
-                for (lx, ly, lz) in coords[1:]:
-                    dx = x - lx; dy = y - ly; dz = z - lz
+                for lx, ly, lz in coords[1:]:
+                    dx = x - lx
+                    dy = y - ly
+                    dz = z - lz
                     d = (dx * dx + dy * dy + dz * dz) ** 0.5
                     if d < best:
                         best = d
@@ -535,34 +661,45 @@ def _render_three_views_with_pymol(
                 d = _min_dist_to_lig(a.coord[0], a.coord[1], a.coord[2], lig_coords)
                 distances.append((a.model, a.chain, a.resi, a.resn, d))
 
-            top_res = sorted(distances, key=lambda t: t[4])[:label_top_n_res] if distances else []
+            top_res = (
+                sorted(distances, key=lambda t: t[4])[:label_top_n_res]
+                if distances
+                else []
+            )
             if top_res:
-                top_sel = " or ".join([f"receptor and chain {c} and resi {r}" for _, c, r, _, _ in top_res])
+                top_sel = " or ".join(
+                    [
+                        f"receptor and chain {c} and resi {r}"
+                        for _, c, r, _, _ in top_res
+                    ]
+                )
                 cmd.select("top_site", top_sel)
                 cmd.show("sticks", "top_site")
                 cmd.color("gray", "top_site")
-                cmd.label("top_site and name CA and (alt '' or alt A)", "resn + '-' + resi")
+                cmd.label(
+                    "top_site and name CA and (alt '' or alt A)", "resn + '-' + resi"
+                )
 
         # Views (unchanged performance settings)
-        focus_sel = (lig_union if lig_objects else "receptor")
+        focus_sel = lig_union if lig_objects else "receptor"
         cmd.zoom(focus_sel, 10)
         cmd.viewport(*viewport)
         cmd.set("antialias", 2)
         cmd.set("ray_opaque_background", 0)
 
-        cmd.sync(); cmd.refresh()
+        cmd.sync()
+        cmd.refresh()
         cmd.png(f"{outprefix}_front.png", ray=0)
 
-        cmd.sync(); cmd.refresh()
+        cmd.sync()
+        cmd.refresh()
         cmd.turn("y", 90)
         cmd.png(f"{outprefix}_side.png", ray=0)
 
-        cmd.sync(); cmd.refresh()
+        cmd.sync()
+        cmd.refresh()
         cmd.turn("x", 90)
         cmd.png(f"{outprefix}_top.png", ray=0)
-
-
-
 
 
 def _render_native_on_original_pdb(
@@ -590,14 +727,21 @@ def _render_native_on_original_pdb(
     if cfg_data and pdb_id:
         try:
             paths_obj, _default_receptor, outdir = _resolve_receptor_and_outprefix(
-                cfg_data, pdb_id, variant=variant, ph_token=ph_token, tag=tag, receptor_kind="cleaned"
+                cfg_data,
+                pdb_id,
+                variant=variant,
+                ph_token=ph_token,
+                tag=tag,
+                receptor_kind="cleaned",
             )
         except Exception:
             outdir = None
         else:
             resolved_outprefix = _normalize_candidate_path(outprefix, outdir)
             if resolved_outprefix is None:
-                fallback = _default_outprefix_name([original_pdb], fallback=f"{pdb_id}_native")
+                fallback = _default_outprefix_name(
+                    [original_pdb], fallback=f"{pdb_id}_native"
+                )
                 resolved_outprefix = (outdir / fallback).resolve()
             resolved_outprefix.parent.mkdir(parents=True, exist_ok=True)
 
@@ -608,7 +752,11 @@ def _render_native_on_original_pdb(
         resolved_outprefix.parent.mkdir(parents=True, exist_ok=True)
 
     if paths_obj is not None:
-        base_dirs = [paths_obj.root_pdb_dir, paths_obj.processed_root, paths_obj.input_root]
+        base_dirs = [
+            paths_obj.root_pdb_dir,
+            paths_obj.processed_root,
+            paths_obj.input_root,
+        ]
     else:
         base_dirs = []
 
@@ -623,30 +771,45 @@ def _render_native_on_original_pdb(
             if resolved_original is None:
                 resolved_original = Path(str(original_pdb)).expanduser().resolve()
 
-    outprefix_value = str(resolved_outprefix) if resolved_outprefix is not None else str(outprefix or "")
+    outprefix_value = (
+        str(resolved_outprefix)
+        if resolved_outprefix is not None
+        else str(outprefix or "")
+    )
     if not outprefix_value:
-        print("[capture_pose] Output prefix could not be resolved; skipping native render.")
+        print(
+            "[capture_pose] Output prefix could not be resolved; skipping native render."
+        )
         return
 
     if _DEFER_MODE:
-        _enqueue_job("native", {
-            "original_pdb": str(resolved_original) if resolved_original else str(original_pdb or ""),
-            "outprefix": outprefix_value,
-            "cfg": cfg_data if cfg is not None else None,
-            "pdb_id": pdb_id,
-            "variant": variant,
-            "ph_token": ph_token,
-            "tag": tag,
-            "exclude_resns": list(exclude_resns or []),
-            "viewport": list(viewport),
-        })
+        _enqueue_job(
+            "native",
+            {
+                "original_pdb": str(resolved_original)
+                if resolved_original
+                else str(original_pdb or ""),
+                "outprefix": outprefix_value,
+                "cfg": cfg_data if cfg is not None else None,
+                "pdb_id": pdb_id,
+                "variant": variant,
+                "ph_token": ph_token,
+                "tag": tag,
+                "exclude_resns": list(exclude_resns or []),
+                "viewport": list(viewport),
+            },
+        )
         return
 
     PyMOL = _with_pymol()
     if PyMOL is None:
         return
 
-    original_path = resolved_original if resolved_original is not None else (Path(str(original_pdb)).expanduser() if original_pdb else None)
+    original_path = (
+        resolved_original
+        if resolved_original is not None
+        else (Path(str(original_pdb)).expanduser() if original_pdb else None)
+    )
     if not original_path or not Path(original_path).is_file():
         print(f"[capture_pose] Original PDB missing: {original_pdb}")
         return
@@ -666,7 +829,10 @@ def _render_native_on_original_pdb(
 
         # Native ligands (keep visible & colored as before)
         excl = "+".join(sorted(set(exclude_resns or [])))
-        cmd.select("native_lig", f"(hetatm and not polymer and not solvent) and not resn {excl}")
+        cmd.select(
+            "native_lig",
+            f"(hetatm and not polymer and not solvent) and not resn {excl}",
+        )
         if cmd.count_atoms("native_lig") > 0:
             cmd.show("sticks", "native_lig")
             cmd.color("green", "native_lig")
@@ -686,12 +852,15 @@ def _render_native_on_original_pdb(
         cmd.viewport(*viewport)
         cmd.set("antialias", 2)
         cmd.set("ray_opaque_background", 0)
-        cmd.sync(); cmd.refresh()
+        cmd.sync()
+        cmd.refresh()
         cmd.png(f"{outprefix_value}_front.png", ray=0)
-        cmd.sync(); cmd.refresh()
+        cmd.sync()
+        cmd.refresh()
         cmd.turn("y", 90)
         cmd.png(f"{outprefix_value}_side.png", ray=0)
-        cmd.sync(); cmd.refresh()
+        cmd.sync()
+        cmd.refresh()
         cmd.turn("x", 90)
         cmd.png(f"{outprefix_value}_top.png", ray=0)
 
@@ -700,8 +869,8 @@ def _render_native_on_original_pdb(
 # PML writer + launch/fallback
 # ============================================================
 from pathlib import Path
-from typing import Tuple
-from string import Template
+
+
 def write_multiview_pml(
     receptor_path: str | None,
     control_path: str,
@@ -726,18 +895,29 @@ def write_multiview_pml(
     if cfg_data and pdb_id:
         try:
             _paths_obj, default_receptor, outdir = _resolve_receptor_and_outprefix(
-                cfg_data, pdb_id, variant=variant, ph_token=ph_token, tag=tag, receptor_kind="cleaned"
+                cfg_data,
+                pdb_id,
+                variant=variant,
+                ph_token=ph_token,
+                tag=tag,
+                receptor_kind="cleaned",
             )
         except Exception:
             outdir = None
         else:
-            resolved_receptor = _normalize_candidate_path(receptor_path, Path(default_receptor).parent) if receptor_path else None
+            resolved_receptor = (
+                _normalize_candidate_path(receptor_path, Path(default_receptor).parent)
+                if receptor_path
+                else None
+            )
             if resolved_receptor is None:
                 resolved_receptor = Path(default_receptor).resolve()
 
             resolved_outprefix = _normalize_candidate_path(outprefix, outdir)
             if resolved_outprefix is None:
-                fallback = _default_outprefix_name([control_path, rdk_path], fallback=f"{pdb_id}_render")
+                fallback = _default_outprefix_name(
+                    [control_path, rdk_path], fallback=f"{pdb_id}_render"
+                )
                 resolved_outprefix = (outdir / fallback).resolve()
             resolved_outprefix.parent.mkdir(parents=True, exist_ok=True)
 
@@ -758,31 +938,38 @@ def write_multiview_pml(
         out_pml = (outdir / out_pml).resolve()
     out_pml.parent.mkdir(parents=True, exist_ok=True)
 
-    receptor_path = str(resolved_receptor) if resolved_receptor is not None else str(receptor_path)
-    outprefix = str(resolved_outprefix) if resolved_outprefix is not None else str(outprefix)
+    receptor_path = (
+        str(resolved_receptor) if resolved_receptor is not None else str(receptor_path)
+    )
+    outprefix = (
+        str(resolved_outprefix) if resolved_outprefix is not None else str(outprefix)
+    )
 
     def _posix(p: str) -> str:
-        return (Path(p).resolve().as_posix() if p else "")
+        return Path(p).resolve().as_posix() if p else ""
 
     receptor_posix = _posix(receptor_path)
-    control_posix  = _posix(control_path) if control_path else ""
-    rdk_posix      = _posix(rdk_path) if rdk_path else ""
+    control_posix = _posix(control_path) if control_path else ""
+    rdk_posix = _posix(rdk_path) if rdk_path else ""
 
     opref = Path(outprefix) if outprefix else out_pml.with_suffix("")
     if not opref.is_absolute():
         opref = opref.resolve()
     outprefix = str(opref)
     out_front = (opref.with_name(opref.name + "_front")).resolve().as_posix()
-    out_side  = (opref.with_name(opref.name + "_side")).resolve().as_posix()
-    out_top   = (opref.with_name(opref.name + "_top")).resolve().as_posix()
+    out_side = (opref.with_name(opref.name + "_side")).resolve().as_posix()
+    out_top = (opref.with_name(opref.name + "_top")).resolve().as_posix()
     Path(out_front).parent.mkdir(parents=True, exist_ok=True)
 
     parts = []
-    if control_posix: parts.append("control")
-    if rdk_posix:     parts.append("rdk")
+    if control_posix:
+        parts.append("control")
+    if rdk_posix:
+        parts.append("rdk")
     lig_union = " or ".join(parts) if parts else "receptor"
 
-    tpl = Template(r"""
+    tpl = Template(
+        r"""
 reinitialize
 bg_color white
 set ray_opaque_background, off
@@ -870,22 +1057,27 @@ turn y, 90
 png $OUT_SIDE, ray=0
 turn x, 90
 png $OUT_TOP, ray=0
-""")
+"""
+    )
 
     load_control = ""
     if control_posix:
-        load_control = '\n'.join([
-            f'load {control_posix}, control',
-            'show sticks, control',
-            'color blue, control',
-        ])
+        load_control = "\n".join(
+            [
+                f"load {control_posix}, control",
+                "show sticks, control",
+                "color blue, control",
+            ]
+        )
     load_rdk = ""
     if rdk_posix:
-        load_rdk = '\n'.join([
-            f'load {rdk_posix}, rdk',
-            'show sticks, rdk',
-            'color orange, rdk',
-        ])
+        load_rdk = "\n".join(
+            [
+                f"load {rdk_posix}, rdk",
+                "show sticks, rdk",
+                "color orange, rdk",
+            ]
+        )
 
     w, h = int(viewport[0]), int(viewport[1])
     pml_text = tpl.substitute(
@@ -895,7 +1087,8 @@ png $OUT_TOP, ray=0
         LIG_UNION=lig_union,
         CUTOFF=f"{label_cutoff:.2f}",
         TOPN=str(label_top_n_res),
-        W=str(w), H=str(h),
+        W=str(w),
+        H=str(h),
         OUT_FRONT=out_front,
         OUT_SIDE=out_side,
         OUT_TOP=out_top,
@@ -904,11 +1097,17 @@ png $OUT_TOP, ray=0
     return out_pml
 
 
-def write_native_pml(original_pdb: str, outprefix: Path, exclude_resns: Sequence[str], viewport=(192,144)) -> Path:
+def write_native_pml(
+    original_pdb: str,
+    outprefix: Path,
+    exclude_resns: Sequence[str],
+    viewport=(192, 144),
+) -> Path:
     outprefix = Path(outprefix)
     outprefix.parent.mkdir(parents=True, exist_ok=True)
     excl = " ".join(sorted(set(exclude_resns or [])))
-    tpl = Template(r"""
+    tpl = Template(
+        r"""
 reinitialize
 bg_color white
 set ray_opaque_background, off
@@ -945,18 +1144,25 @@ turn y, 90
 png "$OUT_side", ray=0
 turn x, 90
 png "$OUT_top",  ray=0
-""")
+"""
+    )
     w, h = int(viewport[0]), int(viewport[1])
     pml = outprefix.with_suffix(".native.pml")
-    pml.write_text(tpl.substitute(
-        PDB=Path(original_pdb).resolve().as_posix(),
-        EXCL=",".join(exclude_resns or []),
-        W=str(w), H=str(h),
-        OUT_front=(str(outprefix) + "_front.png").replace("\\","/"),
-        OUT_side=(str(outprefix) + "_side.png").replace("\\","/"),
-        OUT_top =(str(outprefix) + "_top.png").replace("\\","/"),
-    ), encoding="utf-8")
+    pml.write_text(
+        tpl.substitute(
+            PDB=Path(original_pdb).resolve().as_posix(),
+            EXCL=",".join(exclude_resns or []),
+            W=str(w),
+            H=str(h),
+            OUT_front=(str(outprefix) + "_front.png").replace("\\", "/"),
+            OUT_side=(str(outprefix) + "_side.png").replace("\\", "/"),
+            OUT_top=(str(outprefix) + "_top.png").replace("\\", "/"),
+        ),
+        encoding="utf-8",
+    )
     return pml
+
+
 def _job_to_pml(job: dict, tmpdir: Path) -> Optional[Path]:
     kind = job.get("kind")
     if kind == "three":
@@ -988,9 +1194,11 @@ def _job_to_pml(job: dict, tmpdir: Path) -> Optional[Path]:
             original_pdb=job["original_pdb"],
             outprefix=outprefix,
             exclude_resns=job.get("exclude_resns", []),
-            viewport=tuple(job.get("viewport", (192,144))),
+            viewport=tuple(job.get("viewport", (192, 144))),
         )
     return None
+
+
 def _run_one_job_mp(job: dict, mode: str = "cli") -> tuple:
     """
     Returns: (ok:bool, t_ms:int, err:str|None)
@@ -1004,13 +1212,15 @@ def _run_one_job_mp(job: dict, mode: str = "cli") -> tuple:
                 if pml is None:
                     raise RuntimeError("unsupported job")
                 rc = render_pml_headless(pml)
-                ok = (rc == 0)
+                ok = rc == 0
         else:
             # process-local pymol2 fallback (still one job per process)
             k = job.get("kind")
             if k == "three":
                 _render_three_views_with_pymol(
-                    job.get("receptor_path"), job.get("ligand_paths_and_colors", []), job.get("outprefix"),
+                    job.get("receptor_path"),
+                    job.get("ligand_paths_and_colors", []),
+                    job.get("outprefix"),
                     cfg=job.get("cfg"),
                     pdb_id=job.get("pdb_id"),
                     variant=job.get("variant"),
@@ -1018,20 +1228,21 @@ def _run_one_job_mp(job: dict, mode: str = "cli") -> tuple:
                     tag=job.get("tag", "renders"),
                     label_top_n_res=job.get("label_top_n_res", 5),
                     label_cutoff=job.get("label_cutoff", 5.0),
-                    viewport=tuple(job.get("viewport", (192,144))),
+                    viewport=tuple(job.get("viewport", (192, 144))),
                     hide_receptor=bool(job.get("hide_receptor", False)),
                 )
                 ok = True
             elif k == "native":
                 _render_native_on_original_pdb(
-                    job.get("original_pdb"), job.get("outprefix"),
+                    job.get("original_pdb"),
+                    job.get("outprefix"),
                     cfg=job.get("cfg"),
                     pdb_id=job.get("pdb_id"),
                     variant=job.get("variant"),
                     ph_token=job.get("ph_token"),
                     tag=job.get("tag", "renders"),
                     exclude_resns=job.get("exclude_resns", []),
-                    viewport=tuple(job.get("viewport", (192,144))),
+                    viewport=tuple(job.get("viewport", (192, 144))),
                 )
                 ok = True
             else:
@@ -1042,6 +1253,7 @@ def _run_one_job_mp(job: dict, mode: str = "cli") -> tuple:
         t_ms = int((time.time() - t0) * 1000)
         return (False, t_ms, str(e))
 
+
 def launch_pymol_with_pml(pml_path: Path, pymol_exe: Optional[str] = None) -> None:
     """
     Launch PyMOL GUI with the given .pml (non-blocking).
@@ -1051,7 +1263,9 @@ def launch_pymol_with_pml(pml_path: Path, pymol_exe: Optional[str] = None) -> No
     try:
         subprocess.Popen([exe, str(pml_path)], shell=False)
     except FileNotFoundError:
-        print(f"[capture_pose] Could not find PyMOL executable '{exe}'. Open manually: {pml_path}")
+        print(
+            f"[capture_pose] Could not find PyMOL executable '{exe}'. Open manually: {pml_path}"
+        )
 
 
 def render_pml_headless(pml_path: Path, pymol_exe: Optional[str] = None) -> int:
@@ -1061,7 +1275,9 @@ def render_pml_headless(pml_path: Path, pymol_exe: Optional[str] = None) -> int:
     """
     exe = pymol_exe or "pymol"
     try:
-        import shlex, subprocess
+        import shlex
+        import subprocess
+
         pml_abs = Path(pml_path).resolve()
         cmd = [exe, "-cq", str(pml_abs)]
         print("[render-cli] " + " ".join(shlex.quote(x) for x in cmd))
@@ -1069,7 +1285,6 @@ def render_pml_headless(pml_path: Path, pymol_exe: Optional[str] = None) -> int:
     except FileNotFoundError:
         print(f"[capture_pose] PyMOL CLI not found: '{exe}'")
         return 127
-
 
 
 # ============================================================
@@ -1100,7 +1315,7 @@ def _cli_render_active_site(
       - pocket_color: str
     """
     import os
-    from typing import List, Dict
+
     try:
         from pymol import cmd
     except Exception as e:
@@ -1136,7 +1351,6 @@ def _cli_render_active_site(
     cmd.color("gray90", rec_obj)
     cmd.set("transparency", 0.30, rec_obj)
 
-
     protein_transparency = kwargs.get("protein_transparency")
     if protein_transparency is not None:
         try:
@@ -1162,7 +1376,9 @@ def _cli_render_active_site(
     # Centroid + labels (unchanged)
     cmd.select("lig_heavy_tmp", f"({lig_obj}) and not elem H")
     coords = []
-    cmd.iterate_state(1, "lig_heavy_tmp", "coords.append([x,y,z])", space={"coords": coords})
+    cmd.iterate_state(
+        1, "lig_heavy_tmp", "coords.append([x,y,z])", space={"coords": coords}
+    )
     if coords:
         cx = sum(c[0] for c in coords) / len(coords)
         cy = sum(c[1] for c in coords) / len(coords)
@@ -1182,12 +1398,15 @@ def _cli_render_active_site(
         base = os.path.join(outprefix, "top_pose")
     os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
 
-    cmd.sync(); cmd.refresh()
+    cmd.sync()
+    cmd.refresh()
     cmd.png(base + "_front.png", ray=0, width=w, height=h)
-    cmd.sync(); cmd.refresh()
+    cmd.sync()
+    cmd.refresh()
     cmd.turn("y", 90)
     cmd.png(base + "_side.png", ray=0, width=w, height=h)
-    cmd.sync(); cmd.refresh()
+    cmd.sync()
+    cmd.refresh()
     cmd.turn("x", 90)
     cmd.png(base + "_top.png", ray=0, width=w, height=h)
 
@@ -1196,7 +1415,6 @@ def _cli_render_active_site(
         cmd.delete("lig_centroid")
     except Exception:
         pass
-
 
 
 def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
@@ -1219,11 +1437,11 @@ def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
     base_palettes = {
         "okabe_ito": {
             "custom_defs": {
-                "orangeOI": [230, 159,   0],  # candidate
-                "blueOI":   [  0, 114, 178],  # reference
-                "tealOI":   [  0, 158, 115],
-                "yellowOI": [240, 228,  66],
-                "vermOI":   [213,  94,   0],
+                "orangeOI": [230, 159, 0],  # candidate
+                "blueOI": [0, 114, 178],  # reference
+                "tealOI": [0, 158, 115],
+                "yellowOI": [240, 228, 66],
+                "vermOI": [213, 94, 0],
                 "purpleOI": [204, 121, 167],
             },
             "ligand_colors": {
@@ -1234,10 +1452,18 @@ def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
     }
 
     # Did the caller request any custom color behavior?
-    wants_custom = any(k in kwargs for k in (
-        "ligand_color", "ligand_role", "color_scheme", "palette_defs",
-        "protein_color", "protein_transparency", "pocket_color"
-    ))
+    wants_custom = any(
+        k in kwargs
+        for k in (
+            "ligand_color",
+            "ligand_role",
+            "color_scheme",
+            "palette_defs",
+            "protein_color",
+            "protein_transparency",
+            "pocket_color",
+        )
+    )
 
     # Defaults that preserve current behavior
     chosen_ligand_color = "magenta"
@@ -1252,7 +1478,9 @@ def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
             chosen_ligand_color = kwargs["ligand_color"]
         # Otherwise pick from scheme if provided
         elif scheme and "ligand_colors" in scheme:
-            chosen_ligand_color = scheme["ligand_colors"].get(role, scheme["ligand_colors"].get("candidate", "magenta"))
+            chosen_ligand_color = scheme["ligand_colors"].get(
+                role, scheme["ligand_colors"].get("candidate", "magenta")
+            )
 
     # Compute output prefix if a directory is given
     outprefix = out_path_or_dir
@@ -1295,8 +1523,11 @@ def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
         return
 
     # Immediate path
-    outpath_final = (str(outprefix) if not os.path.isdir(out_path_or_dir)
-                     else str(Path(out_path_or_dir) / Path(ligand_path).stem))
+    outpath_final = (
+        str(outprefix)
+        if not os.path.isdir(out_path_or_dir)
+        else str(Path(out_path_or_dir) / Path(ligand_path).stem)
+    )
 
     appearance_kwargs = {}
     if wants_custom:
@@ -1318,7 +1549,7 @@ def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
             top_n_residues=kwargs.get("top_n_residues", 6),
             proximity_cutoff=kwargs.get("proximity_cutoff", 4.5),
             viewport=kwargs.get("viewport", (192, 144)),
-            **appearance_kwargs
+            **appearance_kwargs,
         )
     except TypeError:
         # Fallback if old signature: ignore appearance kwargs
@@ -1330,4 +1561,3 @@ def capture_pose(receptor_path, ligand_path, out_path_or_dir, **kwargs):
             proximity_cutoff=kwargs.get("proximity_cutoff", 4.5),
             viewport=kwargs.get("viewport", (192, 144)),
         )
-

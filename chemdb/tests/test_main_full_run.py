@@ -93,7 +93,9 @@ def _extract_log_path(output: str) -> Path | None:
     return None
 
 
-def _find_recent_summary(start_time: float, expected_variant: str | None) -> Path | None:
+def _find_recent_summary(
+    start_time: float, expected_variant: str | None
+) -> Path | None:
     """
     Find the newest docking_score_summary.csv under docked/<RUN_ID>/TEST that was
     written or updated after start_time.
@@ -167,7 +169,15 @@ def test_full_run_produces_summary_without_failures(
     # Keep Python unbuffered so output ordering is sane in CI
     env["PYTHONUNBUFFERED"] = "1"
 
-    cmd = [sys.executable, str(MAIN_PY), "-pdb", TEST_PDB_ID, "-fast", "--run-id", TEST_RUN_ID]
+    cmd = [
+        sys.executable,
+        str(MAIN_PY),
+        "-pdb",
+        TEST_PDB_ID,
+        "-fast",
+        "--run-id",
+        TEST_RUN_ID,
+    ]
 
     start_time = time.time()
     proc = subprocess.run(
@@ -198,7 +208,9 @@ def test_full_run_produces_summary_without_failures(
         f"{label}: non-zero exit {proc.returncode}\n"
         f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
     )
-    assert SUCCESS_SENTINEL in combined_output, f"{label}: expected success sentinel in output."
+    assert (
+        SUCCESS_SENTINEL in combined_output
+    ), f"{label}: expected success sentinel in output."
 
     # Determine expected variant layout for this scenario
     mode = env_overrides.get("APO_HOLO_MODE", "").upper()

@@ -1,12 +1,20 @@
+# ruff: noqa: E402
 import argparse
 import os
-import sys
-from pathlib import Path
-import subprocess
 import re
 import shutil
+import subprocess
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import requests
 from rdkit import Chem
@@ -17,6 +25,7 @@ from external_sources import (
     fetch_drugbank_smiles,
     fetch_iuphar_smiles,
 )
+from input_and_export_functions import load_config
 
 DEFAULT_INPUT_PDB_DIR = "/home/michael/atlas/code/protein_automation/input_pdbs"
 DEFAULT_OUT_ROOT = "../extracted_ligands/deepcoy"
@@ -26,42 +35,13 @@ CONFIG_FILE_NAME = "config.txt"
 EC_PATTERN = re.compile(r"^(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)$")
 DEFAULT_SOURCES = ["chembl", "bindingdb", "iuphar", "rcsb", "rhea"]
 SOURCE_ORDER = ["chembl", "bindingdb", "iuphar", "drugbank", "rcsb", "rhea"]
-DEFAULT_DEEPCOY_ALLOWED_ATOMS = ("C", "N", "O", "S", "F", "Cl", "Br", "I")
+DEFAULT_DEEPCOY_ALLOWED_ATOMS = ("C", "N", "O", "S", "F", "Cl", "Br", "I", "P")
 DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR = ",".join(DEFAULT_DEEPCOY_ALLOWED_ATOMS)
-
-
-def read_config_value(config_path, key):
-    try:
-        with open(config_path, "r") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                if "=" not in stripped:
-                    continue
-                k, v = stripped.split("=", 1)
-                if k.strip() != key:
-                    continue
-                value = v.strip().strip('"').strip("'")
-                return value
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
-    return None
-
-
-def read_config_int(config_path, key, default=None):
-    value = read_config_value(config_path, key)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except Exception:
-        print(f"WARNING: Invalid int for {key} in {config_path}: {value}. Using default.", file=sys.stderr)
-        return default
+DEFAULT_DEEPCOY_MODEL = Path("models/DeepCoy_DUDE_model_e09.pickle")
+DEFAULT_DEEPCOY_PHOS_MODEL = Path("models/DeepCoy_DUDE_phosphorus_model_e10.pickle")
 
 # --- 1. PDB to EC Conversion (PHASE 1) ---
+
 
 def _add_ec_candidate(target_list, value):
     if not value:
@@ -87,7 +67,11 @@ def _extract_ec_from_string(value, target_list):
 
 def extract_ec_numbers_from_polymer_entity_json(entity_data):
     ec_numbers = []
-    rcsb_entity = entity_data.get("rcsb_polymer_entity", {}) if isinstance(entity_data, dict) else {}
+    rcsb_entity = (
+        entity_data.get("rcsb_polymer_entity", {})
+        if isinstance(entity_data, dict)
+        else {}
+    )
 
     combined = rcsb_entity.get("rcsb_enzyme_class_combined", [])
     if isinstance(combined, str):
@@ -95,7 +79,11 @@ def extract_ec_numbers_from_polymer_entity_json(entity_data):
     for entry in combined or []:
         _extract_ec_from_string(entry, ec_numbers)
 
-    enzyme_class = rcsb_entity.get("rcsb_enzyme_class") or rcsb_entity.get("rcsb_enzyme_class_list") or []
+    enzyme_class = (
+        rcsb_entity.get("rcsb_enzyme_class")
+        or rcsb_entity.get("rcsb_enzyme_class_list")
+        or []
+    )
     if isinstance(enzyme_class, str):
         enzyme_class = [enzyme_class]
     for entry in enzyme_class:
@@ -119,6 +107,7 @@ def extract_ec_numbers_from_polymer_entity_json(entity_data):
     recurse(entity_data)
     return ec_numbers
 
+
 def get_uniprot_and_ec(pdb_id):
     """
     (1) Takes a PDB ID and finds the UniProt ID and EC number.
@@ -130,15 +119,21 @@ def get_uniprot_and_ec(pdb_id):
     max_entities = 8
 
     for entity_id in range(1, max_entities + 1):
-        annotation_url = f"https://data.rcsb.org/rest/v1/core/polymer_entity/{pdb_id}/{entity_id}"
+        annotation_url = (
+            f"https://data.rcsb.org/rest/v1/core/polymer_entity/{pdb_id}/{entity_id}"
+        )
         try:
-            print(f"-> Querying RCSB Annotation API for {pdb_id} (Entity {entity_id})...")
+            print(
+                f"-> Querying RCSB Annotation API for {pdb_id} (Entity {entity_id})..."
+            )
             response = requests.get(annotation_url)
             if response.status_code != 200:
                 continue
             entity_data = response.json()
 
-            identifiers = entity_data.get("rcsb_polymer_entity_container_identifiers", {})
+            identifiers = entity_data.get(
+                "rcsb_polymer_entity_container_identifiers", {}
+            )
             uniprot_ids = identifiers.get("uniprot_ids", [])
 
             if uniprot_ids and not uniprot_id:
@@ -183,13 +178,19 @@ def get_uniprot_and_ec(pdb_id):
     print(f"-> Found EC Numbers: {final_ec_list if final_ec_list else 'None'}")
 
     if not final_ec_list:
-        print("Warning: Could not find any EC numbers. Phase 2 (Metabolite collection) may be limited.")
+        print(
+            "Warning: Could not find any EC numbers. Phase 2 (Metabolite collection) may be limited."
+        )
 
     return uniprot_id, final_ec_list
 
+
 # --- 2. Collecting Actives/Metabolites (PHASE 2) ---
 
-def query_external_sources(uniprot_id, ec_numbers, pdb_id, sources, cache_dir, source_opts, max_workers=1):
+
+def query_external_sources(
+    uniprot_id, ec_numbers, pdb_id, sources, cache_dir, source_opts, max_workers=1
+):
     """
     (2) Queries external data sources for ligands/metabolites.
     Returns a list of (SMILES, source) tuples.
@@ -198,7 +199,11 @@ def query_external_sources(uniprot_id, ec_numbers, pdb_id, sources, cache_dir, s
     all_actives = []
 
     def add_active(smiles, source):
-        if smiles and isinstance(smiles, str) and not any(smiles == active[0] for active in all_actives):
+        if (
+            smiles
+            and isinstance(smiles, str)
+            and not any(smiles == active[0] for active in all_actives)
+        ):
             all_actives.append((smiles, source))
 
     def _print_meta(src, meta):
@@ -207,13 +212,21 @@ def query_external_sources(uniprot_id, ec_numbers, pdb_id, sources, cache_dir, s
         counts = meta.get("counts", {})
         cached = meta.get("cached", False)
         if src == "chembl":
-            print(f"[chembl] targets={counts.get('targets', 0)} assays={counts.get('assays', 0)} activities={counts.get('activities', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('molecules', 0) or len(all_actives)} cached={cached}")
+            print(
+                f"[chembl] targets={counts.get('targets', 0)} assays={counts.get('assays', 0)} activities={counts.get('activities', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('molecules', 0) or len(all_actives)} cached={cached}"
+            )
         elif src == "bindingdb":
-            print(f"[bindingdb] pdb_hits={counts.get('pdb_hits', 0)} uniprot_hits={counts.get('uniprot_hits', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('pdb_hits', 0) + counts.get('uniprot_hits', 0)} cached={cached}")
+            print(
+                f"[bindingdb] pdb_hits={counts.get('pdb_hits', 0)} uniprot_hits={counts.get('uniprot_hits', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('pdb_hits', 0) + counts.get('uniprot_hits', 0)} cached={cached}"
+            )
         elif src == "iuphar":
-            print(f"[iuphar] targets={counts.get('targets', 0)} interactions={counts.get('interactions', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('interactions', 0)} cached={cached}")
+            print(
+                f"[iuphar] targets={counts.get('targets', 0)} interactions={counts.get('interactions', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('interactions', 0)} cached={cached}"
+            )
         elif src == "drugbank":
-            print(f"[drugbank] smiles={len(meta.get('smiles', [])) if 'smiles' in meta else 0} info={meta}")
+            print(
+                f"[drugbank] smiles={len(meta.get('smiles', [])) if 'smiles' in meta else 0} info={meta}"
+            )
 
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -222,32 +235,52 @@ def query_external_sources(uniprot_id, ec_numbers, pdb_id, sources, cache_dir, s
 
     def run_rhea():
         local_smiles = []
-        print(f"-> Querying Rhea/ChEBI for UniProt {uniprot_id} (Metabolic reactions)...")
-        rhea_uniprot_url = f"https://www.rhea-db.org/rest/ws/reaction/uniprot/{uniprot_id}"
+        print(
+            f"-> Querying Rhea/ChEBI for UniProt {uniprot_id} (Metabolic reactions)..."
+        )
+        rhea_uniprot_url = (
+            f"https://www.rhea-db.org/rest/ws/reaction/uniprot/{uniprot_id}"
+        )
         try:
             with requests.Session() as sess:
-                rhea_response = sess.get(rhea_uniprot_url, timeout=source_opts["timeout"])
-                if rhea_response.status_code == 200 and rhea_response.text.strip().startswith("["):
+                rhea_response = sess.get(
+                    rhea_uniprot_url, timeout=source_opts["timeout"]
+                )
+                if (
+                    rhea_response.status_code == 200
+                    and rhea_response.text.strip().startswith("[")
+                ):
                     rhea_data = rhea_response.json()
                     for reaction in rhea_data:
                         for side in reaction.get("reactionSides", []):
                             for component in side.get("reactionComponents", []):
                                 chebi_id = component.get("chebi")
                                 if chebi_id:
-                                    chebi_smiles_url = (
-                                        f"https://www.ebi.ac.uk/chebi/rest/api/getCompleteEntity?chebiId={chebi_id}"
+                                    chebi_smiles_url = f"https://www.ebi.ac.uk/chebi/rest/api/getCompleteEntity?chebiId={chebi_id}"
+                                    chebi_xml_response = sess.get(
+                                        chebi_smiles_url, timeout=source_opts["timeout"]
                                     )
-                                    chebi_xml_response = sess.get(chebi_smiles_url, timeout=source_opts["timeout"])
-                                    if chebi_xml_response.status_code == 200 and "<smiles>" in chebi_xml_response.text:
+                                    if (
+                                        chebi_xml_response.status_code == 200
+                                        and "<smiles>" in chebi_xml_response.text
+                                    ):
                                         start_tag = "<smiles>"
                                         end_tag = "</smiles>"
-                                        smiles_start = chebi_xml_response.text.find(start_tag) + len(start_tag)
-                                        smiles_end = chebi_xml_response.text.find(end_tag)
-                                        smiles = chebi_xml_response.text[smiles_start:smiles_end].strip()
+                                        smiles_start = chebi_xml_response.text.find(
+                                            start_tag
+                                        ) + len(start_tag)
+                                        smiles_end = chebi_xml_response.text.find(
+                                            end_tag
+                                        )
+                                        smiles = chebi_xml_response.text[
+                                            smiles_start:smiles_end
+                                        ].strip()
                                         if smiles:
                                             local_smiles.append((smiles, "Rhea/ChEBI"))
                 else:
-                    print("-> Rhea returned an empty or non-JSON response. Skipping ChEBI extraction.")
+                    print(
+                        "-> Rhea returned an empty or non-JSON response. Skipping ChEBI extraction."
+                    )
         except Exception as e:
             print(f"Error processing Rhea/ChEBI data: {e}")
         return local_smiles, {}
@@ -316,18 +349,30 @@ def query_external_sources(uniprot_id, ec_numbers, pdb_id, sources, cache_dir, s
         ligand_url = f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id}"
         try:
             with requests.Session() as sess:
-                ligand_response = sess.get(ligand_url, timeout=source_opts["timeout"]).json()
+                ligand_response = sess.get(
+                    ligand_url, timeout=source_opts["timeout"]
+                ).json()
                 for entity in ligand_response.get("nonpolymer_entity", []):
-                    comp_id = entity.get("pdbx_nonpolymer_entity", {}).get("chem_comp_id")
+                    comp_id = entity.get("pdbx_nonpolymer_entity", {}).get(
+                        "chem_comp_id"
+                    )
                     if comp_id:
-                        chem_comp_url = f"https://data.rcsb.org/rest/v1/core/chemcomp/{comp_id}"
-                        comp_response = sess.get(chem_comp_url, timeout=source_opts["timeout"]).json()
-                        known_smiles = comp_response.get("pdbx_chem_comp_descriptor", [{}])
+                        chem_comp_url = (
+                            f"https://data.rcsb.org/rest/v1/core/chemcomp/{comp_id}"
+                        )
+                        comp_response = sess.get(
+                            chem_comp_url, timeout=source_opts["timeout"]
+                        ).json()
+                        known_smiles = comp_response.get(
+                            "pdbx_chem_comp_descriptor", [{}]
+                        )
                         for desc in known_smiles:
                             if desc.get("type") == "SMILES":
                                 smi = desc.get("descriptor")
                                 if smi:
-                                    local_smiles.append((smi, f"PDB/ChemComp/{comp_id}"))
+                                    local_smiles.append(
+                                        (smi, f"PDB/ChemComp/{comp_id}")
+                                    )
                                 break
         except Exception as e:
             print(f"Error querying RCSB ligands: {e}")
@@ -378,7 +423,9 @@ def query_external_sources(uniprot_id, ec_numbers, pdb_id, sources, cache_dir, s
     print(f"-> Found {len(all_actives)} raw active candidates from external sources.")
     return all_actives
 
+
 # --- 3. Filtering and Validation (PHASE 3) ---
+
 
 def validate_and_filter_actives(actives_list):
     """
@@ -387,7 +434,9 @@ def validate_and_filter_actives(actives_list):
     """
     print("## 3. Merging, Deduplicating, and Filtering actives...")
 
-    unique_smiles = {smiles for smiles, source in actives_list if smiles and isinstance(smiles, str)}
+    unique_smiles = {
+        smiles for smiles, source in actives_list if smiles and isinstance(smiles, str)
+    }
     valid_actives = []
 
     print(f"-> Found {len(unique_smiles)} unique SMILES strings.")
@@ -415,10 +464,14 @@ def validate_and_filter_actives(actives_list):
         except Exception:
             continue
 
-    print(f"-> Final list contains {len(valid_actives)} filtered, unique active metabolites.")
+    print(
+        f"-> Final list contains {len(valid_actives)} filtered, unique active metabolites."
+    )
     return valid_actives
 
+
 # --- 4. DeepCoy Execution (PHASE 4) ---
+
 
 def write_actives_smiles(final_actives_smiles, output_dir, label):
     """
@@ -442,7 +495,9 @@ def write_actives_smiles(final_actives_smiles, output_dir, label):
 def _parse_allowed_atom_list(raw_value: Optional[str]):
     tokens = []
     seen = set()
-    raw_value = raw_value if raw_value is not None else DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR
+    raw_value = (
+        raw_value if raw_value is not None else DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR
+    )
     for token in re.split(r"[;,\s]+", raw_value):
         cleaned = token.strip()
         if not cleaned or cleaned in seen:
@@ -478,7 +533,9 @@ def filter_actives_for_deepcoy(
     rejected_path = actives_smi_path.with_name(
         f"{actives_smi_path.stem}.rejected_by_deepcoy{actives_smi_path.suffix}"
     )
-    raw_copy_path = actives_smi_path.with_name(f"{actives_smi_path.stem}.raw{actives_smi_path.suffix}")
+    raw_copy_path = actives_smi_path.with_name(
+        f"{actives_smi_path.stem}.raw{actives_smi_path.suffix}"
+    )
 
     if not filter_enabled:
         total = 0
@@ -517,9 +574,13 @@ def filter_actives_for_deepcoy(
                 rejected_entries.append((smiles, label, "parse_fail"))
                 continue
             atom_symbols = {atom.GetSymbol() for atom in mol.GetAtoms()}
-            unsupported = sorted(sym for sym in atom_symbols if sym not in allowed_atoms_set)
+            unsupported = sorted(
+                sym for sym in atom_symbols if sym not in allowed_atoms_set
+            )
             if unsupported:
-                rejected_entries.append((smiles, label, f"unsupported_atoms:{','.join(unsupported)}"))
+                rejected_entries.append(
+                    (smiles, label, f"unsupported_atoms:{','.join(unsupported)}")
+                )
                 continue
             kept += 1
             if label:
@@ -552,7 +613,57 @@ def filter_actives_for_deepcoy(
     return total, kept, len(rejected_entries)
 
 
-def convert_smi_to_sdf(smi_path: Path, sdf_path: Path, *, require_output: bool = False) -> int:
+def copy_filter_debug_artifacts(
+    actives_smi_path: Path,
+    artifact_dir: Path,
+    run_tag: Optional[str],
+    run_log_path: Optional[Path] = None,
+) -> None:
+    if not run_tag:
+        return
+    try:
+        debug_dir = artifact_dir / "filter_debug" / run_tag
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        candidates = [
+            actives_smi_path,
+            actives_smi_path.with_name(
+                f"{actives_smi_path.stem}.raw{actives_smi_path.suffix}"
+            ),
+            actives_smi_path.with_name(
+                f"{actives_smi_path.stem}.rejected_by_deepcoy{actives_smi_path.suffix}"
+            ),
+        ]
+        copied = []
+        for path in candidates:
+            if path.exists():
+                shutil.copyfile(path, debug_dir / path.name)
+                copied.append(path.name)
+        log_line = f"[deepcoy.filter.debug] run_tag={run_tag} dir={debug_dir} copied={','.join(copied) if copied else 'none'}"
+        print(log_line)
+        _tee_run_log(run_log_path, log_line)
+    except Exception:
+        pass
+
+
+def _chunk_contains_atom(actives_lines: List[str], atom_symbol: str) -> bool:
+    for raw_line in actives_lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split(None, 1)
+        smiles = parts[0]
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            continue
+        for atom in mol.GetAtoms():
+            if atom.GetSymbol() == atom_symbol:
+                return True
+    return False
+
+
+def convert_smi_to_sdf(
+    smi_path: Path, sdf_path: Path, *, require_output: bool = False
+) -> int:
     if not smi_path.is_file():
         print(f"WARNING: SMILES file not found for SDF conversion: {smi_path}")
         if require_output:
@@ -587,7 +698,9 @@ def convert_smi_to_sdf(smi_path: Path, sdf_path: Path, *, require_output: bool =
         writer.write(mol)
         count += 1
     writer.close()
-    print(f"-> Wrote {count} decoys to SDF: {sdf_path} ({sdf_path.stat().st_size} bytes)")
+    print(
+        f"-> Wrote {count} decoys to SDF: {sdf_path} ({sdf_path.stat().st_size} bytes)"
+    )
     return count
 
 
@@ -624,6 +737,9 @@ class DeepcoyChunkPlan:
         artifact_dir: Path,
         line_count: int,
         is_chunk: bool = True,
+        model_path: Optional[Path] = None,
+        seed: Optional[int] = None,
+        dataset: Optional[str] = None,
     ):
         self.index = index
         self.actives_path = actives_path
@@ -631,6 +747,9 @@ class DeepcoyChunkPlan:
         self.artifact_dir = artifact_dir
         self.line_count = line_count
         self.is_chunk = is_chunk
+        self.model_path = model_path
+        self.seed = seed
+        self.dataset = dataset
 
 
 def build_deepcoy_env(thread_count: int) -> dict:
@@ -648,6 +767,44 @@ def build_deepcoy_env(thread_count: int) -> dict:
         env["DEEPCOY_TF_INTRA_THREADS"] = thread_val
         env["DEEPCOY_TF_INTER_THREADS"] = thread_val
     return env
+
+
+def _sanitize_run_tag(tag: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(tag))
+
+
+def build_deepcoy_run_tag(run_tag: Optional[str] = None) -> str:
+    if run_tag:
+        return _sanitize_run_tag(run_tag)
+    parts = []
+    atlas_run_id = os.environ.get("ATLAS_RUN_ID")
+    if atlas_run_id:
+        parts.append(_sanitize_run_tag(atlas_run_id))
+    parts.append(time.strftime("%Y%m%d_%H%M%S"))
+    parts.append(str(os.getpid()))
+    return "_".join([p for p in parts if p])
+
+
+def resolve_deepcoy_chunk_roots(
+    output_dir: Path,
+    artifact_dir: Path,
+    actives_smi_path: Path,
+    keep_chunks: bool,
+    run_tag: Optional[str],
+) -> Tuple[Path, Path, str]:
+    label_name = actives_smi_path.stem
+    if label_name.endswith("_actives"):
+        label_name = label_name[: -len("_actives")]
+
+    chunk_output_root = output_dir.parent / ".deepcoy_chunks" / label_name
+    chunk_artifact_root = artifact_dir / "chunks"
+
+    if keep_chunks:
+        tag = build_deepcoy_run_tag(run_tag)
+        chunk_output_root = chunk_output_root / tag
+        chunk_artifact_root = chunk_artifact_root / tag
+
+    return chunk_output_root, chunk_artifact_root, label_name
 
 
 def prepare_deepcoy_chunks(
@@ -709,6 +866,57 @@ def prepare_deepcoy_chunks(
     return actives_lines, chunk_plans
 
 
+def _assign_chunk_metadata(
+    chunk_plans,
+    phosphorus_model_path: Path,
+    default_model_path: Path,
+    base_seed: Optional[int],
+    seed_per_chunk: bool,
+    run_log_path: Optional[Path],
+):
+    for plan in chunk_plans:
+        try:
+            with plan.actives_path.open("r") as handle:
+                lines = handle.readlines()
+        except Exception:
+            lines = []
+        requires_p = _chunk_contains_atom(lines, "P")
+        model = phosphorus_model_path if requires_p else default_model_path
+        if not model.is_file():
+            raise FileNotFoundError(f"DeepCoy model not found: {model}")
+        plan.model_path = model
+        dataset = "zinc_phosphorus" if requires_p else "zinc"
+        plan.dataset = dataset
+        reason = "contains_P" if requires_p else "default"
+        log_line = f"[deepcoy.model] chunk={plan.index:03d} model={model} reason={reason} dataset={dataset}"
+        print(log_line)
+        _tee_run_log(run_log_path, log_line)
+        if base_seed is not None:
+            plan.seed = base_seed + plan.index if seed_per_chunk else base_seed
+            mode = "base+chunk_index" if seed_per_chunk else "base_only"
+            seed_line = f"[deepcoy.seed] chunk={plan.index:03d} seed={plan.seed} base={base_seed} mode={mode}"
+            print(seed_line)
+            _tee_run_log(run_log_path, seed_line)
+
+
+def assign_chunk_metadata(
+    chunk_plans,
+    phosphorus_model_path: Path,
+    default_model_path: Path,
+    base_seed: Optional[int],
+    seed_per_chunk: bool,
+    run_log_path: Optional[Path],
+):
+    _assign_chunk_metadata(
+        chunk_plans,
+        phosphorus_model_path,
+        default_model_path,
+        base_seed,
+        seed_per_chunk,
+        run_log_path,
+    )
+
+
 def merge_deepcoy_outputs(
     chunk_plans,
     merged_smi_path: Path,
@@ -735,7 +943,9 @@ def merge_deepcoy_outputs(
     merged_smi_path.write_text("\n".join(merged_lines) + ("\n" if merged_lines else ""))
 
     produced = len(merged_lines)
-    expected = total_actives * decoys_per_active if decoys_per_active is not None else None
+    expected = (
+        total_actives * decoys_per_active if decoys_per_active is not None else None
+    )
     if expected is not None and produced < expected:
         warning_line = f"[deepcoy] WARNING: DeepCoy generated {produced} decoys (expected ~{expected})."
         print(warning_line)
@@ -766,21 +976,44 @@ def run_deepcoy_workflow(
     deepcoy_chunk_size=1,
     deepcoy_threads=1,
     deepcoy_keep_chunks=False,
+    default_model_path: Optional[Path] = None,
+    phosphorus_model_path: Optional[Path] = None,
+    base_seed: Optional[int] = None,
+    seed_per_chunk: bool = False,
+    use_argmax_generation: Optional[bool] = None,
+    try_different_starting: Optional[bool] = None,
+    num_different_starting: Optional[int] = None,
+    num_samples: Optional[int] = None,
+    run_tag: Optional[str] = None,
 ):
     start_line = "## 5. Executing DeepCoy workflow..."
     print(start_line)
     _tee_run_log(run_log_path, start_line)
 
     repo_root = Path(__file__).resolve().parent
+    default_model_path = default_model_path or repo_root / DEFAULT_DEEPCOY_MODEL
+    phosphorus_model_path = (
+        phosphorus_model_path or repo_root / DEFAULT_DEEPCOY_PHOS_MODEL
+    )
     env_overrides = build_deepcoy_env(deepcoy_threads)
     _ = deepcoy_sdf_sh
 
+    keep_chunks_flag = bool(deepcoy_keep_chunks)
     use_chunking = deepcoy_workers > 1
-    label_name = actives_smi_path.stem
-    if label_name.endswith("_actives"):
-        label_name = label_name[: -len("_actives")]
-    chunk_output_root = output_dir.parent / ".deepcoy_chunks" / label_name
-    chunk_artifact_root = artifact_dir / "chunks"
+    run_tag_resolved = (
+        build_deepcoy_run_tag(run_tag)
+        if keep_chunks_flag
+        else (run_tag if run_tag else None)
+    )
+    chunk_output_root, chunk_artifact_root, label_name = resolve_deepcoy_chunk_roots(
+        output_dir, artifact_dir, actives_smi_path, keep_chunks_flag, run_tag_resolved
+    )
+    run_log_line = (
+        f"[deepcoy.run] run_tag={run_tag_resolved or '-'} "
+        f"chunk_out={chunk_output_root} chunk_art={chunk_artifact_root} keep_chunks={keep_chunks_flag}"
+    )
+    print(run_log_line)
+    _tee_run_log(run_log_path, run_log_line)
     actives_lines, chunk_plans = prepare_deepcoy_chunks(
         actives_smi_path,
         output_dir,
@@ -790,8 +1023,26 @@ def run_deepcoy_workflow(
         deepcoy_chunk_size,
         use_chunking=use_chunking,
     )
+    print(
+        f"[deepcoy.chunking] chunk_size={deepcoy_chunk_size} use_chunking={use_chunking} "
+        f"chunks={len(chunk_plans)} total_actives={len(actives_lines)}"
+    )
+    _tee_run_log(
+        run_log_path,
+        f"[deepcoy.chunking] chunk_size={deepcoy_chunk_size} use_chunking={use_chunking} "
+        f"chunks={len(chunk_plans)} total_actives={len(actives_lines)}",
+    )
+    _assign_chunk_metadata(
+        chunk_plans,
+        phosphorus_model_path,
+        default_model_path,
+        base_seed,
+        seed_per_chunk,
+        run_log_path,
+    )
 
     if not use_chunking:
+        plan_single = chunk_plans[0] if chunk_plans else None
         deepcoy_cmd = [
             str(deepcoy_run_sh),
             str(actives_smi_path),
@@ -805,8 +1056,26 @@ def run_deepcoy_workflow(
             "--deepcoy-python",
             deepcoy_python,
         ]
+        dataset = plan_single.dataset if plan_single and plan_single.dataset else "zinc"
+        deepcoy_cmd.extend(["--dataset", dataset])
         if restrict_data and int(restrict_data) > 0:
             deepcoy_cmd.extend(["--restrict-data", str(restrict_data)])
+        if plan_single and plan_single.model_path:
+            deepcoy_cmd.extend(["--restore-model", str(plan_single.model_path)])
+        if plan_single and plan_single.seed is not None:
+            deepcoy_cmd.extend(["--random-seed", str(plan_single.seed)])
+        if use_argmax_generation is not None:
+            deepcoy_cmd.extend(["--use-argmax-generation", str(use_argmax_generation)])
+        if try_different_starting is not None:
+            deepcoy_cmd.extend(
+                ["--try-different-starting", str(try_different_starting)]
+            )
+        if num_different_starting is not None:
+            deepcoy_cmd.extend(
+                ["--num-different-starting", str(num_different_starting)]
+            )
+        if num_samples is not None:
+            deepcoy_cmd.extend(["--num-samples", str(num_samples)])
         print(f"Running: {' '.join(deepcoy_cmd)}")
         env = os.environ.copy()
         env.update(env_overrides)
@@ -845,8 +1114,28 @@ def run_deepcoy_workflow(
             "--deepcoy-python",
             deepcoy_python,
         ]
+        dataset = plan.dataset or "zinc"
+        deepcoy_cmd_local.extend(["--dataset", dataset])
         if restrict_data and int(restrict_data) > 0:
             deepcoy_cmd_local.extend(["--restrict-data", str(restrict_data)])
+        if plan.model_path:
+            deepcoy_cmd_local.extend(["--restore-model", str(plan.model_path)])
+        if plan.seed is not None:
+            deepcoy_cmd_local.extend(["--random-seed", str(plan.seed)])
+        if use_argmax_generation is not None:
+            deepcoy_cmd_local.extend(
+                ["--use-argmax-generation", str(use_argmax_generation)]
+            )
+        if try_different_starting is not None:
+            deepcoy_cmd_local.extend(
+                ["--try-different-starting", str(try_different_starting)]
+            )
+        if num_different_starting is not None:
+            deepcoy_cmd_local.extend(
+                ["--num-different-starting", str(num_different_starting)]
+            )
+        if num_samples is not None:
+            deepcoy_cmd_local.extend(["--num-samples", str(num_samples)])
         print(
             f"[deepcoy] Starting chunk {plan.index:03d} ({plan.line_count} actives) -> {plan.output_dir}"
         )
@@ -871,41 +1160,73 @@ def run_deepcoy_workflow(
                 print(exc.stdout)
             if exc.stderr:
                 print(exc.stderr, file=sys.stderr)
+            if exc.returncode == 4:
+                skip_line = f"[deepcoy] Chunk {plan.index:03d} rejected by preprocessing (rc=4); skipping chunk."
+                print(skip_line)
+                _tee_run_log(run_log_path, skip_line)
+                return None
             raise
         print(f"[deepcoy] Finished chunk {plan.index:03d}")
         return plan.output_dir / "deepcoy_decoys.smi"
 
     plans_to_run = list(chunk_plans)
-    completed = []
+    successful_plans = []
+    skipped_plans = []
     if not _caches_ready() and plans_to_run:
-        print("[deepcoy] Priming DeepCoy cache with first chunk before parallel execution...")
-        completed.append(plans_to_run.pop(0))
-        _run_chunk(completed[0])
+        print(
+            "[deepcoy] Priming DeepCoy cache with first chunk before parallel execution..."
+        )
+        while plans_to_run:
+            plan = plans_to_run.pop(0)
+            result = _run_chunk(plan)
+            if result is None:
+                skipped_plans.append(plan)
+                continue
+            successful_plans.append(plan)
+            break
 
     if plans_to_run:
         concurrency = min(deepcoy_workers, len(plans_to_run))
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            future_map = {executor.submit(_run_chunk, plan): plan for plan in plans_to_run}
+            future_map = {
+                executor.submit(_run_chunk, plan): plan for plan in plans_to_run
+            }
             for future in as_completed(future_map):
                 plan = future_map[future]
                 try:
-                    future.result()
-                    completed.append(plan)
+                    result = future.result()
                 except Exception:
                     for f in future_map:
                         f.cancel()
                     raise
+                if result is None:
+                    skipped_plans.append(plan)
+                else:
+                    successful_plans.append(plan)
 
-    if not completed and chunk_plans:
-        completed.append(chunk_plans[0])
+    skipped_actives = sum(plan.line_count for plan in skipped_plans)
+    successful_actives = sum(plan.line_count for plan in successful_plans)
+    if skipped_plans:
+        warning_line = (
+            f"[deepcoy] WARNING: skipped {len(skipped_plans)} chunk(s) "
+            f"({skipped_actives} actives) due to preprocessing rc=4."
+        )
+        print(warning_line)
+        _tee_run_log(run_log_path, warning_line)
+
+    if chunk_plans and not successful_plans:
+        raise subprocess.CalledProcessError(
+            4,
+            [str(deepcoy_run_sh), "--chunked-run"],
+        )
 
     final_smi_path = output_dir / "deepcoy_decoys.smi"
     merge_deepcoy_outputs(
-        chunk_plans,
+        successful_plans,
         final_smi_path,
         decoys_per_active,
-        total_actives=len(actives_lines),
-        keep_chunks=deepcoy_keep_chunks,
+        total_actives=successful_actives,
+        keep_chunks=keep_chunks_flag,
         chunk_output_root=chunk_output_root,
         chunk_artifact_root=chunk_artifact_root,
         run_log_path=run_log_path,
@@ -913,7 +1234,9 @@ def run_deepcoy_workflow(
 
     if ensure_sdf or not skip_sdf:
         try:
-            convert_smi_to_sdf(final_smi_path, output_dir / "deepcoy_decoys.sdf", require_output=True)
+            convert_smi_to_sdf(
+                final_smi_path, output_dir / "deepcoy_decoys.sdf", require_output=True
+            )
         except Exception as exc:
             raise RuntimeError(f"Decoy SDF conversion failed: {exc}") from exc
     else:
@@ -922,21 +1245,23 @@ def run_deepcoy_workflow(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate a DeepCoy DUD-style decoy library from a target PDB.")
+        description="Generate a DeepCoy DUD-style decoy library from a target PDB."
+    )
 
     parser.add_argument("--pdb", required=True, help="PDB ID to query (required).")
     parser.add_argument(
         "--input-pdb-dir",
         default=DEFAULT_INPUT_PDB_DIR,
-        help="Directory containing input PDBs.")
+        help="Directory containing input PDBs.",
+    )
     parser.add_argument(
-        "--out-root",
-        default=DEFAULT_OUT_ROOT,
-        help="Output root for actives/decoys.")
+        "--out-root", default=DEFAULT_OUT_ROOT, help="Output root for actives/decoys."
+    )
     parser.add_argument(
         "--artifact-dir",
         default=None,
-        help="Directory for DeepCoy run artifacts (defaults to deepcoy_work/<PDB>).")
+        help="Directory for DeepCoy run artifacts (defaults to deepcoy_work/<PDB>).",
+    )
     parser.add_argument(
         "--sources",
         default="chembl,bindingdb,iuphar,rcsb,rhea",
@@ -946,79 +1271,96 @@ def parse_args():
         "--http-timeout",
         type=int,
         default=20,
-        help="HTTP timeout (seconds) for external source queries.")
+        help="HTTP timeout (seconds) for external source queries.",
+    )
     parser.add_argument(
         "--http-retries",
         type=int,
         default=2,
-        help="HTTP retries for external source queries.")
+        help="HTTP retries for external source queries.",
+    )
     parser.add_argument(
         "--max-actives-per-source",
         type=int,
         default=500,
-        help="Maximum SMILES to retain per source.")
+        help="Maximum SMILES to retain per source.",
+    )
     parser.add_argument(
         "--affinity-cutoff-nm",
         type=int,
         default=10000,
-        help="Affinity cutoff in nM for potency-filtered sources (e.g., BindingDB, ChEMBL).")
+        help="Affinity cutoff in nM for potency-filtered sources (e.g., BindingDB, ChEMBL).",
+    )
     parser.add_argument(
         "--iuphar-approved-only",
         dest="iuphar_approved_only",
         action="store_true",
-        help="Use only approved IUPHAR interactions (default).")
+        help="Use only approved IUPHAR interactions (default).",
+    )
     parser.add_argument(
         "--iuphar-include-nonapproved",
         dest="iuphar_approved_only",
         action="store_false",
-        help="Allow non-approved IUPHAR interactions.")
+        help="Allow non-approved IUPHAR interactions.",
+    )
     parser.add_argument(
         "--iuphar-primary-target-only",
         dest="iuphar_primary_only",
         action="store_true",
-        help="Use only primary targets in IUPHAR (default).")
+        help="Use only primary targets in IUPHAR (default).",
+    )
     parser.add_argument(
         "--iuphar-include-secondary-targets",
         dest="iuphar_primary_only",
         action="store_false",
-        help="Allow secondary targets in IUPHAR.")
+        help="Allow secondary targets in IUPHAR.",
+    )
     parser.add_argument(
         "--chembl-activity-types",
         default="Ki,Kd,IC50",
-        help="Comma-separated ChEMBL activity types (default: Ki,Kd,IC50).")
+        help="Comma-separated ChEMBL activity types (default: Ki,Kd,IC50).",
+    )
     parser.add_argument(
         "--chembl-max-phase",
         type=int,
         default=None,
-        help="Optional ChEMBL max_phase upper bound to bias toward approved drugs.")
+        help="Optional ChEMBL max_phase upper bound to bias toward approved drugs.",
+    )
     parser.add_argument(
         "--max-source-workers",
         type=int,
         default=1,
-        help="Max threads for parallel source queries (default 1 = sequential).")
+        help="Max threads for parallel source queries (default 1 = sequential).",
+    )
     parser.add_argument(
         "--drugbank-data-dir",
         default=None,
-        help="Path to local DrugBank structured data. If unset, DrugBank is skipped.")
+        help="Path to local DrugBank structured data. If unset, DrugBank is skipped.",
+    )
 
     run_group = parser.add_mutually_exclusive_group()
     run_group.add_argument(
         "--run-deepcoy",
         dest="run_deepcoy",
         action="store_true",
-        help="Run DeepCoy after preparing actives.")
+        help="Run DeepCoy after preparing actives.",
+    )
     run_group.add_argument(
         "--no-run-deepcoy",
         dest="run_deepcoy",
         action="store_false",
-        help="Skip DeepCoy run.")
+        help="Skip DeepCoy run.",
+    )
     run_group.add_argument(
         "--skip-deepcoy",
         dest="run_deepcoy",
         action="store_false",
-        help="Alias for --no-run-deepcoy.")
+        help="Alias for --no-run-deepcoy.",
+    )
     parser.set_defaults(run_deepcoy=True)
-    parser.set_defaults(iuphar_approved_only=True, iuphar_primary_only=True, deepcoy_filter_actives=True)
+    parser.set_defaults(
+        iuphar_approved_only=True, iuphar_primary_only=True, deepcoy_filter_actives=True
+    )
 
     parser.add_argument(
         "--deepcoy-python",
@@ -1029,51 +1371,119 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--deepcoy-run-sh",
-        default="./deepcoy_run.sh",
-        help="Path to deepcoy_run.sh.")
+        "--deepcoy-run-sh", default="./deepcoy_run.sh", help="Path to deepcoy_run.sh."
+    )
     parser.add_argument(
         "--deepcoy-sdf-sh",
         default="./deepcoy_smiles_to_sdf.sh",
-        help="Path to deepcoy_smiles_to_sdf.sh.")
+        help="Path to deepcoy_smiles_to_sdf.sh.",
+    )
     parser.add_argument(
         "--ensure-sdf",
         action="store_true",
-        help="Force SDF generation with RDKit even if --skip-sdf is set.")
+        help="Force SDF generation with RDKit even if --skip-sdf is set.",
+    )
     parser.add_argument(
         "--restrict-data",
         type=int,
         default=0,
-        help="Restrict DeepCoy data size for faster smoke tests (passed to DeepCoy).")
+        help="Restrict DeepCoy data size for faster smoke tests (passed to DeepCoy).",
+    )
 
     parser.add_argument(
         "--skip-sdf",
         action="store_true",
-        help="Skip SDF conversion step after DeepCoy.")
+        help="Skip SDF conversion step after DeepCoy.",
+    )
     parser.add_argument(
         "--decoys-per-active",
         type=int,
         default=None,
-        help="Number of decoys to generate per active (default 50, can be set via config.txt DEEPCOY_DECOYS_PER_ACTIVE).")
+        help="Number of decoys to generate per active (default 50, can be set via config.txt DEEPCOY_DECOYS_PER_ACTIVE).",
+    )
     parser.add_argument(
         "--deepcoy-workers",
         type=int,
         default=10,
-        help="Parallel DeepCoy workers (default 10).")
+        help="Parallel DeepCoy workers (default 10).",
+    )
     parser.add_argument(
         "--deepcoy-chunk-size",
         type=int,
-        default=1,
-        help="Number of actives per DeepCoy chunk (default 1).")
+        default=None,
+        help="Number of actives per DeepCoy chunk (default 1).",
+    )
     parser.add_argument(
         "--deepcoy-threads",
         type=int,
         default=1,
-        help="Threads per DeepCoy worker for BLAS/TF (default 1).")
+        help="Threads per DeepCoy worker for BLAS/TF (default 1).",
+    )
     parser.add_argument(
         "--deepcoy-keep-chunks",
+        dest="deepcoy_keep_chunks",
         action="store_true",
-        help="Keep per-chunk DeepCoy outputs instead of cleaning after merge.")
+        help="Keep per-chunk DeepCoy outputs instead of cleaning after merge.",
+    )
+    parser.add_argument(
+        "--deepcoy-no-keep-chunks",
+        dest="deepcoy_keep_chunks",
+        action="store_false",
+        help="Do not keep per-chunk DeepCoy outputs after merge.",
+    )
+    parser.set_defaults(deepcoy_keep_chunks=None)
+    parser.add_argument(
+        "--deepcoy-base-seed",
+        type=int,
+        default=None,
+        help="Base random seed for DeepCoy (overrides config).",
+    )
+    parser.add_argument(
+        "--deepcoy-seed-per-chunk",
+        action="store_true",
+        default=None,
+        help="Vary DeepCoy random seed per chunk as base+chunk_index.",
+    )
+    parser.add_argument(
+        "--deepcoy-use-argmax-generation",
+        dest="deepcoy_use_argmax_generation",
+        action="store_true",
+        help="Force DeepCoy use_argmax_generation=true (overrides config/base).",
+    )
+    parser.add_argument(
+        "--deepcoy-no-argmax-generation",
+        dest="deepcoy_use_argmax_generation",
+        action="store_false",
+        help="Force DeepCoy use_argmax_generation=false (overrides config/base).",
+    )
+    parser.add_argument(
+        "--deepcoy-try-different-starting",
+        dest="deepcoy_try_different_starting",
+        action="store_true",
+        help="Force DeepCoy try_different_starting=true (overrides config/base).",
+    )
+    parser.add_argument(
+        "--deepcoy-no-try-different-starting",
+        dest="deepcoy_try_different_starting",
+        action="store_false",
+        help="Force DeepCoy try_different_starting=false (overrides config/base).",
+    )
+    parser.add_argument(
+        "--deepcoy-num-different-starting",
+        type=int,
+        default=None,
+        help="Set DeepCoy num_different_starting (overrides config/base).",
+    )
+    parser.add_argument(
+        "--deepcoy-num-samples",
+        type=int,
+        default=None,
+        help="Set DeepCoy num_samples (overrides config/base).",
+    )
+    parser.set_defaults(
+        deepcoy_use_argmax_generation=None,
+        deepcoy_try_different_starting=None,
+    )
     parser.add_argument(
         "--deepcoy-allowed-atoms",
         default=DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR,
@@ -1091,25 +1501,26 @@ def parse_args():
     parser.add_argument(
         "--fallback-smiles",
         default=None,
-        help="Fallback SMILES to use only if no actives are found.")
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output.")
+        help="Fallback SMILES to use only if no actives are found.",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output.")
     parser.add_argument(
         "--offline",
         action="store_true",
-        help="Skip external queries; rely on fallback/cached actives.")
+        help="Skip external queries; rely on fallback/cached actives.",
+    )
     parser.add_argument(
         "--force",
         dest="force",
         action="store_true",
-        help="Force regeneration by removing existing outputs.")
+        help="Force regeneration by removing existing outputs.",
+    )
     parser.add_argument(
         "--force-deepcoy",
         dest="force_deepcoy",
         action="store_true",
-        help="Force DeepCoy generation even if outputs appear to exist.")
+        help="Force DeepCoy generation even if outputs appear to exist.",
+    )
 
     return parser.parse_args()
 
@@ -1119,8 +1530,11 @@ def main():
     repo_root = Path(__file__).resolve().parent
     project_root = repo_root.parent
     config_txt_path = project_root / CONFIG_FILE_NAME
+    cfg = load_config(config_path=str(config_txt_path), base_dir=project_root)
     atlas_run_id = os.environ.get("ATLAS_RUN_ID")
-    run_log_path = project_root / "logs" / f"main_{atlas_run_id}.log" if atlas_run_id else None
+    run_log_path = (
+        project_root / "logs" / f"main_{atlas_run_id}.log" if atlas_run_id else None
+    )
 
     pdb_id = args.pdb.upper()
     offline = bool(args.offline)
@@ -1141,20 +1555,59 @@ def main():
     deepcoy_python = (
         args.deepcoy_python
         or os.environ.get("DEEPCOY_PYTHON")
-        or read_config_value(config_txt_path, "DEEPCOY_PYTHON")
+        or cfg.get("DEEPCOY_PYTHON")
         or DEFAULT_DEEPCOY_PYTHON
     )
     decoys_per_active = (
         args.decoys_per_active
         if args.decoys_per_active is not None
-        else read_config_int(config_txt_path, "DEEPCOY_DECOYS_PER_ACTIVE", default=None)
+        else cfg.get("DEEPCOY_DECOYS_PER_ACTIVE")
     )
     if decoys_per_active is None or decoys_per_active <= 0:
         decoys_per_active = 50
     deepcoy_workers = max(1, args.deepcoy_workers)
-    deepcoy_chunk_size = max(1, args.deepcoy_chunk_size)
+    deepcoy_chunk_size = args.deepcoy_chunk_size
+    if deepcoy_chunk_size is None:
+        deepcoy_chunk_size = cfg.get("DEEPCOY_CHUNK_SIZE", 1)
+    deepcoy_chunk_size = max(1, deepcoy_chunk_size or 1)
     deepcoy_threads = max(1, args.deepcoy_threads)
-    deepcoy_keep_chunks = bool(args.deepcoy_keep_chunks)
+    deepcoy_keep_chunks = args.deepcoy_keep_chunks
+    if deepcoy_keep_chunks is None:
+        deepcoy_keep_chunks = cfg.get("DEEPCOY_KEEP_CHUNKS")
+        if deepcoy_keep_chunks is None:
+            deepcoy_keep_chunks = True
+    deepcoy_keep_chunks = bool(deepcoy_keep_chunks)
+    base_seed = args.deepcoy_base_seed
+    if base_seed is None:
+        base_seed = cfg.get("DEEPCOY_BASE_SEED", 0)
+    seed_per_chunk = (
+        args.deepcoy_seed_per_chunk
+        if args.deepcoy_seed_per_chunk is not None
+        else cfg.get("DEEPCOY_SEED_PER_CHUNK")
+    )
+    if seed_per_chunk is None:
+        seed_per_chunk = False
+    seed_per_chunk = bool(seed_per_chunk)
+    use_argmax_generation = (
+        args.deepcoy_use_argmax_generation
+        if args.deepcoy_use_argmax_generation is not None
+        else cfg.get("DEEPCOY_USE_ARGMAX_GENERATION")
+    )
+    try_different_starting = (
+        args.deepcoy_try_different_starting
+        if args.deepcoy_try_different_starting is not None
+        else cfg.get("DEEPCOY_TRY_DIFFERENT_STARTING")
+    )
+    num_different_starting = (
+        args.deepcoy_num_different_starting
+        if args.deepcoy_num_different_starting is not None
+        else cfg.get("DEEPCOY_NUM_DIFFERENT_STARTING")
+    )
+    num_samples = (
+        args.deepcoy_num_samples
+        if args.deepcoy_num_samples is not None
+        else cfg.get("DEEPCOY_NUM_SAMPLES")
+    )
     allowed_atoms_list, _ = _parse_allowed_atom_list(args.deepcoy_allowed_atoms)
     allowed_atoms_str = ",".join(allowed_atoms_list)
 
@@ -1168,9 +1621,13 @@ def main():
         "affinity_cutoff_nm": args.affinity_cutoff_nm,
         "iuphar_approved_only": args.iuphar_approved_only,
         "iuphar_primary_only": args.iuphar_primary_only,
-        "chembl_activity_types": [t.strip() for t in args.chembl_activity_types.split(",") if t.strip()],
+        "chembl_activity_types": [
+            t.strip() for t in args.chembl_activity_types.split(",") if t.strip()
+        ],
         "chembl_max_phase": args.chembl_max_phase,
-        "drugbank_data_dir": resolve_path(args.drugbank_data_dir, repo_root) if args.drugbank_data_dir else None,
+        "drugbank_data_dir": resolve_path(args.drugbank_data_dir, repo_root)
+        if args.drugbank_data_dir
+        else None,
     }
 
     if args.verbose:
@@ -1187,13 +1644,22 @@ def main():
         print(f"-> DeepCoy keep chunks: {deepcoy_keep_chunks}")
         print(f"-> DeepCoy allowed atoms: {allowed_atoms_str}")
         print(f"-> DeepCoy filter actives: {args.deepcoy_filter_actives}")
+        print(f"-> DeepCoy base seed: {base_seed}")
+        print(f"-> DeepCoy seed per chunk: {seed_per_chunk}")
+        print(f"-> DeepCoy use_argmax_generation: {use_argmax_generation}")
+        print(f"-> DeepCoy try_different_starting: {try_different_starting}")
+        print(f"-> DeepCoy num_different_starting: {num_different_starting}")
+        print(f"-> DeepCoy num_samples: {num_samples}")
         print(f"-> Artifact dir: {artifact_dir}")
         print(f"-> Sources: {sources}")
         print(f"-> Source workers: {args.max_source_workers}")
         print(f"-> Ensure SDF: {args.ensure_sdf}")
 
     if not input_pdb_dir.is_dir():
-        print(f"ERROR: input-pdb-dir does not exist or is not a directory: {input_pdb_dir}", file=sys.stderr)
+        print(
+            f"ERROR: input-pdb-dir does not exist or is not a directory: {input_pdb_dir}",
+            file=sys.stderr,
+        )
         return 2
 
     pdb_file = find_pdb_file(input_pdb_dir, pdb_id)
@@ -1217,10 +1683,15 @@ def main():
         uniprot_id, ec_numbers = get_uniprot_and_ec(pdb_id)
         if not uniprot_id:
             if fallback_smiles_cli:
-                print("WARNING: UniProt lookup failed; proceeding with fallback SMILES and UNKNOWN tag.")
+                print(
+                    "WARNING: UniProt lookup failed; proceeding with fallback SMILES and UNKNOWN tag."
+                )
                 uniprot_id, ec_numbers = "UNKNOWN", []
             else:
-                print("ERROR: Failed to retrieve UniProt ID. Cannot proceed.", file=sys.stderr)
+                print(
+                    "ERROR: Failed to retrieve UniProt ID. Cannot proceed.",
+                    file=sys.stderr,
+                )
                 return 1
 
     all_actives = []
@@ -1239,7 +1710,9 @@ def main():
     if not final_actives_smiles:
         if args.fallback_smiles:
             print("WARNING: No actives found; using fallback SMILES for smoke testing.")
-            final_actives_smiles = validate_and_filter_actives([(args.fallback_smiles, "fallback")])
+            final_actives_smiles = validate_and_filter_actives(
+                [(args.fallback_smiles, "fallback")]
+            )
 
         if not final_actives_smiles:
             print(
@@ -1249,23 +1722,55 @@ def main():
             return 3
 
     label = f"{pdb_id}_{(uniprot_id or 'UNKNOWN').split('-')[0]}"
+    run_tag = build_deepcoy_run_tag() if deepcoy_keep_chunks else None
     output_dir = out_root / label
     staging_dir = None
     work_output_dir = output_dir
+
+    def _preserve_staging(src: Path, base_dest: Path, reason: str) -> Optional[Path]:
+        if not src.exists():
+            return None
+        dest = base_dest
+        idx = 1
+        while dest.exists():
+            dest = base_dest.with_name(f"{base_dest.name}_{idx}")
+            idx += 1
+        src.rename(dest)
+        msg = f"[deepcoy.staging.preserved] path={dest} reason={reason}"
+        print(msg)
+        _tee_run_log(run_log_path, msg)
+        return dest
+
     if args.run_deepcoy:
         staging_dir = output_dir.parent / f".{label}_staging"
         if staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            if deepcoy_keep_chunks:
+                _preserve_staging(
+                    staging_dir,
+                    output_dir.parent / f".{label}_staging_prev_{run_tag or 'run'}",
+                    "existing_staging",
+                )
+            else:
+                shutil.rmtree(staging_dir, ignore_errors=True)
         work_output_dir = staging_dir
     if force and artifact_dir.exists():
         shutil.rmtree(artifact_dir, ignore_errors=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    def _cleanup_staging() -> None:
+    def _cleanup_staging(reason: str = "cleanup") -> None:
         if staging_dir and staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            if deepcoy_keep_chunks:
+                _preserve_staging(
+                    staging_dir,
+                    output_dir.parent / f".{label}_staging_failed_{run_tag or 'run'}",
+                    reason,
+                )
+            else:
+                shutil.rmtree(staging_dir, ignore_errors=True)
 
-    actives_smi_path = write_actives_smiles(final_actives_smiles, work_output_dir, label)
+    actives_smi_path = write_actives_smiles(
+        final_actives_smiles, work_output_dir, label
+    )
     try:
         _, filtered_kept, _ = filter_actives_for_deepcoy(
             actives_smi_path,
@@ -1273,17 +1778,31 @@ def main():
             filter_enabled=args.deepcoy_filter_actives,
             run_log_path=run_log_path,
         )
+        if deepcoy_keep_chunks:
+            copy_filter_debug_artifacts(
+                actives_smi_path, artifact_dir, run_tag, run_log_path=run_log_path
+            )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        if deepcoy_keep_chunks:
+            copy_filter_debug_artifacts(
+                actives_smi_path, artifact_dir, run_tag, run_log_path=run_log_path
+            )
         _cleanup_staging()
         return 1
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        if deepcoy_keep_chunks:
+            copy_filter_debug_artifacts(
+                actives_smi_path, artifact_dir, run_tag, run_log_path=run_log_path
+            )
         _cleanup_staging()
         return 1
     actives_sdf_path = work_output_dir / "deepcoy_actives.sdf"
     convert_smi_to_sdf(actives_smi_path, actives_sdf_path)
-    actives_log_line = f"[deepcoy.actives.sdf] tag={label} out={actives_sdf_path} n={filtered_kept}"
+    actives_log_line = (
+        f"[deepcoy.actives.sdf] tag={label} out={actives_sdf_path} n={filtered_kept}"
+    )
     print(actives_log_line)
     _tee_run_log(run_log_path, actives_log_line)
 
@@ -1302,7 +1821,10 @@ def main():
         _cleanup_staging()
         return 2
     if not args.skip_sdf and not deepcoy_sdf_sh.is_file():
-        print(f"ERROR: deepcoy_smiles_to_sdf.sh not found: {deepcoy_sdf_sh}", file=sys.stderr)
+        print(
+            f"ERROR: deepcoy_smiles_to_sdf.sh not found: {deepcoy_sdf_sh}",
+            file=sys.stderr,
+        )
         _cleanup_staging()
         return 2
 
@@ -1329,21 +1851,36 @@ def main():
             deepcoy_chunk_size=deepcoy_chunk_size,
             deepcoy_threads=deepcoy_threads,
             deepcoy_keep_chunks=deepcoy_keep_chunks,
+            default_model_path=repo_root / DEFAULT_DEEPCOY_MODEL,
+            phosphorus_model_path=repo_root / DEFAULT_DEEPCOY_PHOS_MODEL,
+            base_seed=base_seed,
+            seed_per_chunk=seed_per_chunk,
+            use_argmax_generation=use_argmax_generation,
+            try_different_starting=try_different_starting,
+            num_different_starting=num_different_starting,
+            num_samples=num_samples,
+            run_tag=run_tag,
         )
     except FileNotFoundError:
-        print("ERROR: DeepCoy wrapper script not found or not executable.", file=sys.stderr)
-        _cleanup_staging()
+        print(
+            "ERROR: DeepCoy wrapper script not found or not executable.",
+            file=sys.stderr,
+        )
+        _cleanup_staging("wrapper_not_found")
         return 1
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        _cleanup_staging()
+        _cleanup_staging("runtime_error")
         return 1
     except subprocess.CalledProcessError as e:
         if e.returncode == 4 and args.fallback_smiles:
-            print("WARNING: DeepCoy preprocessing rejected actives; retrying with fallback ligand.")
+            print(
+                "WARNING: DeepCoy preprocessing rejected actives; retrying with fallback ligand."
+            )
             simple_smiles = "CCN(CC)CCO"
             with actives_smi_path.open("w") as f:
                 f.write(f"{simple_smiles}\tFALLBACK\n")
+            run_tag_fallback = f"{run_tag}_fallback" if run_tag else None
             try:
                 run_deepcoy_workflow(
                     actives_smi_path,
@@ -1362,14 +1899,29 @@ def main():
                     deepcoy_chunk_size=deepcoy_chunk_size,
                     deepcoy_threads=deepcoy_threads,
                     deepcoy_keep_chunks=deepcoy_keep_chunks,
+                    default_model_path=repo_root / DEFAULT_DEEPCOY_MODEL,
+                    phosphorus_model_path=repo_root / DEFAULT_DEEPCOY_PHOS_MODEL,
+                    base_seed=base_seed,
+                    seed_per_chunk=seed_per_chunk,
+                    use_argmax_generation=use_argmax_generation,
+                    try_different_starting=try_different_starting,
+                    num_different_starting=num_different_starting,
+                    num_samples=num_samples,
+                    run_tag=run_tag_fallback,
                 )
             except subprocess.CalledProcessError as e2:
-                print(f"ERROR: DeepCoy command failed after retry with exit code {e2.returncode}.", file=sys.stderr)
-                _cleanup_staging()
+                print(
+                    f"ERROR: DeepCoy command failed after retry with exit code {e2.returncode}.",
+                    file=sys.stderr,
+                )
+                _cleanup_staging("fallback_retry_failed")
                 return e2.returncode or 1
         else:
-            print(f"ERROR: DeepCoy command failed with exit code {e.returncode}.", file=sys.stderr)
-            _cleanup_staging()
+            print(
+                f"ERROR: DeepCoy command failed with exit code {e.returncode}.",
+                file=sys.stderr,
+            )
+            _cleanup_staging("deepcoy_failed")
             return e.returncode or 1
 
     if staging_dir and staging_dir.exists():
@@ -1385,3 +1937,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+# ruff: noqa: E402

@@ -289,7 +289,8 @@ def _refresh_summary(manifest: MutableMapping[str, Any]) -> None:
         summary["total_proteins_failed"] = failed
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to refresh summary (promotion + dedupe)", exc_info=True
+            "[run-manifest] Failed to refresh summary (promotion + dedupe)",
+            exc_info=True,
         )
 
 
@@ -309,7 +310,9 @@ def _load_manifest(manifest_path: Path) -> Optional[Dict[str, Any]]:
         return data
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to load manifest path=%s", manifest_path, exc_info=True
+            "[run-manifest] Failed to load manifest path=%s",
+            manifest_path,
+            exc_info=True,
         )
         return {}
 
@@ -340,7 +343,9 @@ def _write_manifest(manifest_path: Path, manifest: Dict[str, Any]) -> None:
         tmp_path.replace(manifest_path)
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to write manifest path=%s", manifest_path, exc_info=True
+            "[run-manifest] Failed to write manifest path=%s",
+            manifest_path,
+            exc_info=True,
         )
     finally:
         try:
@@ -350,7 +355,9 @@ def _write_manifest(manifest_path: Path, manifest: Dict[str, Any]) -> None:
             pass
 
 
-def _protein_key(pdb_id: str, variant_label: Optional[str], ph_tag: Optional[str]) -> str:
+def _protein_key(
+    pdb_id: str, variant_label: Optional[str], ph_tag: Optional[str]
+) -> str:
     variant_norm = (variant_label or "legacy").strip().upper() or "LEGACY"
     ph_norm = (ph_tag or "base").strip()
     ph_token = ph_norm if ph_norm else "base"
@@ -371,7 +378,9 @@ def get_manifest_paths(cfg: Mapping[str, Any], run_id: str) -> Tuple[Path, Path]
         return manifest_dir, manifest_path
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to prepare manifest paths run_id=%s", run_id, exc_info=True
+            "[run-manifest] Failed to prepare manifest paths run_id=%s",
+            run_id,
+            exc_info=True,
         )
         fallback_dir = Path(cfg.get("OVERALL_DIR", ".")) / "manifests"
         return fallback_dir, fallback_dir / "run_manifest.yaml"
@@ -380,6 +389,7 @@ def get_manifest_paths(cfg: Mapping[str, Any], run_id: str) -> Tuple[Path, Path]
 def _git_info(repo_root: Path) -> Dict[str, Any]:
     info = {"repo": None, "branch": None, "commit": None, "dirty": None}
     try:
+
         def _run(cmd: list[str]) -> Optional[str]:
             try:
                 res = subprocess.run(
@@ -404,7 +414,9 @@ def _git_info(repo_root: Path) -> Dict[str, Any]:
         info["dirty"] = bool(dirty_output) if dirty_output is not None else None
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to gather git metadata root=%s", repo_root, exc_info=True
+            "[run-manifest] Failed to gather git metadata root=%s",
+            repo_root,
+            exc_info=True,
         )
     return info
 
@@ -545,7 +557,7 @@ def _resources_snapshot() -> Dict[str, Any]:
         page_size = os.sysconf("SC_PAGE_SIZE")
         phys_pages = os.sysconf("SC_PHYS_PAGES")
         ram_bytes = float(page_size) * float(phys_pages)
-        ram_gb = round(ram_bytes / (1024 ** 3), 2)
+        ram_gb = round(ram_bytes / (1024**3), 2)
     except Exception:
         ram_gb = None
 
@@ -560,7 +572,9 @@ def _resources_snapshot() -> Dict[str, Any]:
     return {"host": host, "n_cores": n_cores, "ram_gb": ram_gb, "gpu": gpu}
 
 
-def init_run_manifest(cfg: Mapping[str, Any], run_id: str, argv: list[str], log_path: str) -> None:
+def init_run_manifest(
+    cfg: Mapping[str, Any], run_id: str, argv: list[str], log_path: str
+) -> None:
     try:
         manifest_dir, manifest_path = get_manifest_paths(cfg, run_id)
         yaml_mod = _require_yaml()
@@ -598,8 +612,12 @@ def init_run_manifest(cfg: Mapping[str, Any], run_id: str, argv: list[str], log_
                 "log_file": str(log_path),
                 "docked_dir": str(cfg.get("DOCKED_DIR", overall_dir / "docked")),
                 "input_pdb_dir": str(cfg.get("INPUT_DIR", overall_dir / "input_pdbs")),
-                "processed_pdb_dir": str(cfg.get("OUTPUT_DIR", overall_dir / "processed_pdbs")),
-                "prepped_ligands_dir": str(cfg.get("PREPPED_LIGANDS_DIR", overall_dir / "prepped_ligands")),
+                "processed_pdb_dir": str(
+                    cfg.get("OUTPUT_DIR", overall_dir / "processed_pdbs")
+                ),
+                "prepped_ligands_dir": str(
+                    cfg.get("PREPPED_LIGANDS_DIR", overall_dir / "prepped_ligands")
+                ),
                 "config_file": "run_config.yaml",
             },
             "timing": {
@@ -626,7 +644,9 @@ def init_run_manifest(cfg: Mapping[str, Any], run_id: str, argv: list[str], log_
         _write_manifest(manifest_path, manifest)
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to initialize run manifest run_id=%s", run_id, exc_info=True
+            "[run-manifest] Failed to initialize run manifest run_id=%s",
+            run_id,
+            exc_info=True,
         )
 
 
@@ -801,7 +821,9 @@ def update_manifest_for_run_config(
 
         if "WATER_KEEP_POLICY" in cfg:
             val = _normalize_string_token(cfg.get("WATER_KEEP_POLICY"))
-            cmd["WATER_KEEP_POLICY"] = val if val is not None else cfg.get("WATER_KEEP_POLICY")
+            cmd["WATER_KEEP_POLICY"] = (
+                val if val is not None else cfg.get("WATER_KEEP_POLICY")
+            )
 
         _write_manifest(manifest_path, manifest)
     except Exception:
@@ -905,7 +927,11 @@ def update_manifest_for_protein_start(
             if not timing.get("started_at"):
                 timing["started_at"] = _utc_now_iso()
         else:
-            entry["timing"] = {"started_at": _utc_now_iso(), "finished_at": None, "wall_time_sec": None}
+            entry["timing"] = {
+                "started_at": _utc_now_iso(),
+                "finished_at": None,
+                "wall_time_sec": None,
+            }
 
         _refresh_summary(manifest)
         _write_manifest(manifest_path, manifest)
@@ -1042,7 +1068,9 @@ def update_manifest_for_protein_failure(
         )
 
 
-def emit_pocket_detection_event(cfg: Mapping[str, Any], event: PocketDetectionEvent) -> None:
+def emit_pocket_detection_event(
+    cfg: Mapping[str, Any], event: PocketDetectionEvent
+) -> None:
     """
     Append a pocket-detection event to a JSONL log for later replay by the
     main process. Best-effort only; failures are logged as warnings.
@@ -1292,7 +1320,9 @@ def update_manifest_for_pocket_detection(
         )
 
 
-def _ensure_stage_timing(stage_entry: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+def _ensure_stage_timing(
+    stage_entry: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
     timing = stage_entry.get("timing")
     if not isinstance(timing, MutableMapping):
         timing = {"started_at": None, "finished_at": None, "wall_time_sec": None}
@@ -1500,7 +1530,11 @@ def update_manifest_for_docking_stage(
             stage_entry = {
                 "status": "pending",
                 "error": None,
-                "timing": {"started_at": None, "finished_at": None, "wall_time_sec": None},
+                "timing": {
+                    "started_at": None,
+                    "finished_at": None,
+                    "wall_time_sec": None,
+                },
                 "subrun": subrun_label,
                 "stage_base_name": base_stage_name,
             }
@@ -1570,7 +1604,10 @@ def update_manifest_for_docking_stage(
 
 
 def finalize_run_manifest(
-    cfg: Mapping[str, Any], run_id: str, start_time: float, failed_entries: list[tuple[str, str, str, str, str]]
+    cfg: Mapping[str, Any],
+    run_id: str,
+    start_time: float,
+    failed_entries: list[tuple[str, str, str, str, str]],
 ) -> None:
     try:
         _, manifest_path = get_manifest_paths(cfg, run_id)
@@ -1599,5 +1636,7 @@ def finalize_run_manifest(
         _write_manifest(manifest_path, manifest)
     except Exception:
         logging.warning(
-            "[run-manifest] Failed to finalize manifest run_id=%s", run_id, exc_info=True
+            "[run-manifest] Failed to finalize manifest run_id=%s",
+            run_id,
+            exc_info=True,
         )

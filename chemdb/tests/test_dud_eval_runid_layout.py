@@ -46,11 +46,15 @@ def _make_env(tmp_path: Path) -> dict[str, str]:
         "CONFIGS_DIR",
     ):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
-    (Path(env["INPUT_DIR"]) / "1ABC.pdb").write_text("HEADER 1ABC\nEND\n", encoding="utf-8")
+    (Path(env["INPUT_DIR"]) / "1ABC.pdb").write_text(
+        "HEADER 1ABC\nEND\n", encoding="utf-8"
+    )
     return env
 
 
-def _run_dud_eval(tmp_path: Path, env: dict[str, str], extra_args: list[str]) -> subprocess.CompletedProcess:
+def _run_dud_eval(
+    tmp_path: Path, env: dict[str, str], extra_args: list[str]
+) -> subprocess.CompletedProcess:
     cmd = [
         sys.executable,
         str(DUD_EVAL),

@@ -44,7 +44,8 @@ def compute_microstate_id_from_pdbqt(pdbqt_path: Union[str, Path]) -> str:
     except Exception as e:
         logger.warning(
             "[microstate] compute_microstate_id_from_pdbqt_failed path=%s err=%s",
-            path, e,
+            path,
+            e,
         )
         return ""
 
@@ -55,7 +56,8 @@ def compute_microstate_id_from_pdbqt(pdbqt_path: Union[str, Path]) -> str:
         except Exception as e:
             logger.warning(
                 "[microstate] compute_microstate_id_from_pdbqt_readbytes_failed path=%s err=%s",
-                path, e,
+                path,
+                e,
             )
             return ""
     else:
@@ -65,7 +67,9 @@ def compute_microstate_id_from_pdbqt(pdbqt_path: Union[str, Path]) -> str:
     microstate_id = h[:16]
     logger.debug(
         "[microstate] pdbqt_id path=%s id=%s n_atom_lines=%d",
-        path.name, microstate_id, len(atom_lines),
+        path.name,
+        microstate_id,
+        len(atom_lines),
     )
     return microstate_id
 
@@ -130,7 +134,9 @@ def _collect_only_from_env_and_cli(cli_only: Optional[List[str]] = None) -> Set[
                         if norm:
                             out.add(norm)
         except Exception as e:
-            logging.warning("[test-mode] could not read LIGPREP_ONLY_FILE=%s: %s", env_file, e)
+            logging.warning(
+                "[test-mode] could not read LIGPREP_ONLY_FILE=%s: %s", env_file, e
+            )
 
     if cli_only:
         for raw in cli_only:
@@ -142,7 +148,9 @@ def _collect_only_from_env_and_cli(cli_only: Optional[List[str]] = None) -> Set[
     return out
 
 
-def load_microstate_registry(library_out_dir: Path, library_name: str) -> tuple[dict, dict]:
+def load_microstate_registry(
+    library_out_dir: Path, library_name: str
+) -> tuple[dict, dict]:
     """
     Load or initialize the microstate registry for a given library.
     Returns a dict with keys: version, library, microstates (list) and an index mapping microstate_id -> entry.
@@ -159,7 +167,9 @@ def load_microstate_registry(library_out_dir: Path, library_name: str) -> tuple[
         try:
             registry = json.loads(registry_path.read_text(encoding="utf-8"))
         except Exception as e:
-            logging.warning("[microstate] registry_load_failed path=%s err=%s", registry_path, e)
+            logging.warning(
+                "[microstate] registry_load_failed path=%s err=%s", registry_path, e
+            )
             registry = default_registry.copy()
         else:
             if registry.get("library") and registry["library"] != library_name:
@@ -191,7 +201,11 @@ def _rehydrate_microstate_registry_from_ph_pdbqts(
     if registry.get("microstates"):
         return registry
 
-    ph_dirs = [d for d in library_out_dir.iterdir() if d.is_dir() and d.name.lower().startswith("ph")]
+    ph_dirs = [
+        d
+        for d in library_out_dir.iterdir()
+        if d.is_dir() and d.name.lower().startswith("ph")
+    ]
     if not ph_dirs:
         return registry
 
@@ -236,7 +250,11 @@ def _rehydrate_microstate_registry_from_ph_pdbqts(
                         e,
                     )
 
-                entry = {"microstate_id": microstate_id, "pdbqt_path": canonical_rel, "aliases": []}
+                entry = {
+                    "microstate_id": microstate_id,
+                    "pdbqt_path": canonical_rel,
+                    "aliases": [],
+                }
                 rebuilt["microstates"].append(entry)
                 ms_index[microstate_id] = entry
 
@@ -279,7 +297,9 @@ def save_microstate_registry(library_out_dir: Path, registry: dict) -> None:
     try:
         library_name = registry.get("library") or "ligprep"
         try:
-            existing_registry, _ = load_microstate_registry(library_out_dir, library_name)
+            existing_registry, _ = load_microstate_registry(
+                library_out_dir, library_name
+            )
         except Exception:
             existing_registry = {
                 "version": registry.get("version", 1),
@@ -417,7 +437,9 @@ def _collect_expected_ligand_stems_from_library(
                     _ = fh.read()
                 continue
             else:
-                supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=False)
+                supplier = Chem.SDMolSupplier(
+                    str(sdf_path), removeHs=False, sanitize=False
+                )
 
             if supplier is None:
                 continue
@@ -444,7 +466,9 @@ def enumerate_ligands_for_docking(
 ) -> List[Path]:
     """Enumerate canonical ligand PDBQTs for docking, deduplicated at the microstate level."""
 
-    from prep_ligands.prep_ligands_bulk import prep_ligands_with_mgltools  # lazy import to avoid circular
+    from prep_ligands.prep_ligands_bulk import (
+        prep_ligands_with_mgltools,
+    )  # lazy import to avoid circular
 
     _ = cfg
     pdb_label = (pdb_id or "LIGPREP").upper()
@@ -475,9 +499,15 @@ def enumerate_ligands_for_docking(
         prepped_root = Path(prepped_root_env).resolve()
     else:
         try:
-            paths = make_paths(cfg, base_id=pdb_label, pdb_file=f"{pdb_label}.pdb") if cfg is not None else None
+            paths = (
+                make_paths(cfg, base_id=pdb_label, pdb_file=f"{pdb_label}.pdb")
+                if cfg is not None
+                else None
+            )
             prepped_root = (
-                paths.prepped_ligands_dir.parent if paths is not None else Path("prepped_ligands").resolve()
+                paths.prepped_ligands_dir.parent
+                if paths is not None
+                else Path("prepped_ligands").resolve()
             )
         except Exception:
             prepped_root = Path("prepped_ligands").resolve()
@@ -486,7 +516,9 @@ def enumerate_ligands_for_docking(
         library_out_dir = root_dir_path
         library_source = "root_dir"
     else:
-        library_out_dir = Path(out_dir_env).resolve() if out_dir_env else prepped_root / library_name
+        library_out_dir = (
+            Path(out_dir_env).resolve() if out_dir_env else prepped_root / library_name
+        )
         library_source = "config/env"
 
     registry_path = library_out_dir / "microstates.json"
@@ -509,11 +541,7 @@ def enumerate_ligands_for_docking(
                         context_phs.extend((ph - 1.0, ph, ph + 1.0))
 
                 ligand_window = sorted(
-                    {
-                        round(ph, 1)
-                        for ph in context_phs
-                        if 0.0 < ph < 15.0
-                    }
+                    {round(ph, 1) for ph in context_phs if 0.0 < ph < 15.0}
                 )
 
                 if ligand_window:
@@ -574,11 +602,17 @@ def enumerate_ligands_for_docking(
     if requested_set is not None:
         if not registry_path.exists():
             _run_microstate_prep_for_phs(requested_set)
-        registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+        registry, _microstate_index = load_microstate_registry(
+            library_out_dir, library_name
+        )
         if not (registry.get("microstates") or []):
             try:
-                registry = _rehydrate_microstate_registry_from_ph_pdbqts(library_out_dir, library_name)
-                _, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+                registry = _rehydrate_microstate_registry_from_ph_pdbqts(
+                    library_out_dir, library_name
+                )
+                _, _microstate_index = load_microstate_registry(
+                    library_out_dir, library_name
+                )
             except Exception as e:
                 logger.warning(
                     "[microstate.rebuild.skip] library=%s reason=%s", library_name, e
@@ -621,9 +655,13 @@ def enumerate_ligands_for_docking(
                 sorted(missing),
             )
             _run_microstate_prep_for_phs(missing)
-            registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+            registry, _microstate_index = load_microstate_registry(
+                library_out_dir, library_name
+            )
     else:
-        registry, _microstate_index = load_microstate_registry(library_out_dir, library_name)
+        registry, _microstate_index = load_microstate_registry(
+            library_out_dir, library_name
+        )
 
     microstate_entries = registry.get("microstates") or []
 

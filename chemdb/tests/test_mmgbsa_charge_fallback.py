@@ -21,7 +21,9 @@ def _write_file(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _setup_paths(tmp_path: Path, ligand_name: str) -> tuple[Path, Path, Path, Path, str]:
+def _setup_paths(
+    tmp_path: Path, ligand_name: str
+) -> tuple[Path, Path, Path, Path, str]:
     base = tmp_path / "post_docked" / "RUNTEST" / "TESTP" / "HOLO" / "pH7_0"
     stage_dir = "stage1"
     sdf_path = base / stage_dir / f"{ligand_name}.sdf"
@@ -37,8 +39,12 @@ def _setup_paths(tmp_path: Path, ligand_name: str) -> tuple[Path, Path, Path, Pa
     return sdf_path, mol2_path, frcmod_path, mmgbsa_dir, stage_dir
 
 
-def test_mmgbsa_bcc_sweep_then_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    sdf_path, mol2_path, frcmod_path, mmgbsa_dir, stage_dir = _setup_paths(tmp_path, "lig1")
+def test_mmgbsa_bcc_sweep_then_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sdf_path, mol2_path, frcmod_path, mmgbsa_dir, stage_dir = _setup_paths(
+        tmp_path, "lig1"
+    )
 
     monkeypatch.setattr(
         prep,
@@ -92,7 +98,9 @@ def test_mmgbsa_bcc_sweep_then_success(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert metadata["charge_method"] == "bcc"
     assert metadata["net_charge_used"] == 1
     assert metadata["low_confidence"] is True
-    assert any(attempt["nc"] == 1 and attempt["ok"] for attempt in metadata["bcc_attempts"])
+    assert any(
+        attempt["nc"] == 1 and attempt["ok"] for attempt in metadata["bcc_attempts"]
+    )
 
     log_dir = mmgbsa_dir / "logs" / stage_dir / "lig1"
     assert (log_dir / "antechamber_attempt_bcc_nc0.log").exists()
@@ -102,7 +110,9 @@ def test_mmgbsa_bcc_sweep_then_success(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 
 def test_mmgbsa_gas_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    sdf_path, mol2_path, frcmod_path, mmgbsa_dir, stage_dir = _setup_paths(tmp_path, "lig2")
+    sdf_path, mol2_path, frcmod_path, mmgbsa_dir, stage_dir = _setup_paths(
+        tmp_path, "lig2"
+    )
 
     monkeypatch.setattr(
         prep,

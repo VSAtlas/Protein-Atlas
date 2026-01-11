@@ -40,7 +40,9 @@ def bucket_from_auc(roc_auc: float) -> str:
     return "easy"
 
 
-def difficulty_from_metrics(pdb_id: str, metrics: Optional[Mapping[str, object]]) -> TargetDifficulty:
+def difficulty_from_metrics(
+    pdb_id: str, metrics: Optional[Mapping[str, object]]
+) -> TargetDifficulty:
     """
     Translate a dud_eval TargetEvaluation.metrics Series (or mapping) into TargetDifficulty.
     """
@@ -84,7 +86,9 @@ def evaluate_difficulty_for_target(
     """
     Use dud_eval.evaluate_target to compute ROC_AUC and map it to a difficulty bucket.
     """
-    from dud_eval import evaluate_target  # late import to avoid heavy deps unless needed
+    from dud_eval import (
+        evaluate_target,
+    )  # late import to avoid heavy deps unless needed
 
     out_dir = analysis_root / pdb_id
     csv_path = Path(csv_path)

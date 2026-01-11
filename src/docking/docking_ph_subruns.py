@@ -44,10 +44,16 @@ def resolve_ph_tags_and_root(
         library_for_manifest = cfg.get("LIBRARY_SUBDIR_DEFAULT")
 
     ph_tags = init_ph_tags_and_manifest(cfg, paths.pdb_id, variant_token, legacy_mode)
-    ph_tags = [str(tag).strip() for tag in ph_tags if tag is not None and str(tag).strip()]
+    ph_tags = [
+        str(tag).strip() for tag in ph_tags if tag is not None and str(tag).strip()
+    ]
     if not ph_tags:
         fallback_ph = load_ph_tags(paths.pdb_id, variant=variant_token) or []
-        ph_tags = [str(tag).strip() for tag in fallback_ph if tag is not None and str(tag).strip()]
+        ph_tags = [
+            str(tag).strip()
+            for tag in fallback_ph
+            if tag is not None and str(tag).strip()
+        ]
     if not ph_tags:
         ph_tags = ["base"]  # ensure downstream logging/manifest updates occur
 

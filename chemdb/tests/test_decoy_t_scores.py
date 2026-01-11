@@ -97,7 +97,15 @@ def test_decoy_t_scores_present_in_fast_test_mode() -> None:
     env["PYTHONUNBUFFERED"] = "1"
     env.update(MMGBSA_DISABLE_ENV)
 
-    cmd = [sys.executable, str(MAIN_PY), "-test", "-test-fda", "-fast", "--run-id", TEST_RUN_ID]
+    cmd = [
+        sys.executable,
+        str(MAIN_PY),
+        "-test",
+        "-test-fda",
+        "-fast",
+        "--run-id",
+        TEST_RUN_ID,
+    ]
     start_time = time.time()
     proc = subprocess.run(
         cmd,
@@ -128,13 +136,15 @@ def test_decoy_t_scores_present_in_fast_test_mode() -> None:
     assert SUCCESS_SENTINEL in combined_output, "Expected success sentinel in output."
 
     long_csv = _find_recent_long_csv(start_time)
-    assert long_csv is not None, "Unable to locate docking_score_long.csv from this run."
+    assert (
+        long_csv is not None
+    ), "Unable to locate docking_score_long.csv from this run."
 
     with long_csv.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        assert reader.fieldnames and "t_vs_decoys" in reader.fieldnames, (
-            f"t_vs_decoys column missing in {long_csv}"
-        )
+        assert (
+            reader.fieldnames and "t_vs_decoys" in reader.fieldnames
+        ), f"t_vs_decoys column missing in {long_csv}"
         t_values = []
         for row in reader:
             value_str = (row.get("t_vs_decoys") or "").strip()
@@ -146,6 +156,6 @@ def test_decoy_t_scores_present_in_fast_test_mode() -> None:
                 continue
 
     assert t_values, f"No T-score values recorded in {long_csv}"
-    assert any(abs(val) > 1e-9 for val in t_values), (
-        f"All T-scores were zero in {long_csv}; expected decoy comparison to produce non-zero."
-    )
+    assert any(
+        abs(val) > 1e-9 for val in t_values
+    ), f"All T-scores were zero in {long_csv}; expected decoy comparison to produce non-zero."

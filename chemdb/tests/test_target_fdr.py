@@ -76,7 +76,9 @@ def test_target_fdr(monkeypatch, tmp_path):
         },
     ]
     ph7_dir = repo_root / "post_docked" / run_id / pdb_id / variant / ph7
-    _write_rows(ph7_dir / "consensus_reranked_scorch.csv", consensus_fields, consensus_rows_ph7)
+    _write_rows(
+        ph7_dir / "consensus_reranked_scorch.csv", consensus_fields, consensus_rows_ph7
+    )
 
     dud_fields = [
         "pdb_id",
@@ -116,7 +118,9 @@ def test_target_fdr(monkeypatch, tmp_path):
         },
     ]
     ph6_dir = repo_root / "post_docked" / run_id / pdb_id / variant / ph6
-    _write_rows(ph6_dir / "consensus_reranked_scorch.csv", consensus_fields, consensus_rows_ph6)
+    _write_rows(
+        ph6_dir / "consensus_reranked_scorch.csv", consensus_fields, consensus_rows_ph6
+    )
 
     dud_rows_ph6 = [
         {
@@ -184,4 +188,6 @@ def test_target_fdr(monkeypatch, tmp_path):
     assert len(summary_rows) == 2
     summary_map = {(r["pdb_id"], r["variant"], r["ph_label"]): r for r in summary_rows}
     assert summary_map[(pdb_id, variant, ph7)]["fdr_score_field"] == "consensus_score"
-    assert summary_map[(pdb_id, variant, ph6)]["fdr_score_field"] == "consensus_score_pre"
+    assert (
+        summary_map[(pdb_id, variant, ph6)]["fdr_score_field"] == "consensus_score_pre"
+    )

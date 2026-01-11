@@ -1,10 +1,24 @@
-import os, csv, subprocess, shutil, logging, re
+import os
+import csv
+import subprocess
+import shutil
+import logging
+import re
 from installation import load_config
 from collections import defaultdict
-from logger_setup import setup_logger
 from pathlib import Path
-import hashlib
-from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
 from path_router import make_paths, expand_variants
 from run_manifest import PocketDetectionEvent, emit_pocket_detection_event
@@ -16,7 +30,6 @@ logger = logging.getLogger(__name__)
 config = load_config()
 P2RANK_DIR = config.get("P2RANK_PATH")
 import yaml
-from types import SimpleNamespace
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -220,9 +233,13 @@ def log_pre_variant_policy_breadcrumb(pdb_path: Union[str, Path]) -> None:
     logging.info(
         "[ions.breadcrumb] stage=pre_variant_policy file=%s metals=%s waters=%d simple_ions=%s other_het=%d",
         short_path,
-        _format_breadcrumb_counts(summary.get("metals", {}), _ION_BREADCRUMB_METAL_ORDER),
+        _format_breadcrumb_counts(
+            summary.get("metals", {}), _ION_BREADCRUMB_METAL_ORDER
+        ),
         int(summary.get("waters", 0) or 0),
-        _format_breadcrumb_counts(summary.get("simple_ions", {}), _ION_BREADCRUMB_SIMPLE_ORDER),
+        _format_breadcrumb_counts(
+            summary.get("simple_ions", {}), _ION_BREADCRUMB_SIMPLE_ORDER
+        ),
         int(summary.get("other_het", 0) or 0),
     )
 
@@ -250,7 +267,9 @@ def _normalize_alias_token(
     if mapped:
         return mapped
     if canonical_targets is not None and raw not in canonical_targets:
-        if raw not in _ALIAS_WARNED_KEYS and any(ch.isdigit() or ch in "+-" for ch in raw):
+        if raw not in _ALIAS_WARNED_KEYS and any(
+            ch.isdigit() or ch in "+-" for ch in raw
+        ):
             logging.debug(
                 "[aliases.alias.warn] key=%s had no mapping in retain_element_alias_map",
                 raw,
@@ -294,9 +313,13 @@ def _derive_alias_sets(
                 continue
             element_alias[key] = val
     if not element_alias:
-        element_alias = {k.upper(): v.upper() for k, v in _ION_BREADCRUMB_ALIAS_MAP.items()}
+        element_alias = {
+            k.upper(): v.upper() for k, v in _ION_BREADCRUMB_ALIAS_MAP.items()
+        }
 
-    waters = as_set(alias_cfg.get("retain_water_resnames"), section="retain_water_resnames")
+    waters = as_set(
+        alias_cfg.get("retain_water_resnames"), section="retain_water_resnames"
+    )
     cofactors = as_set(
         alias_cfg.get("retain_cofactor_resnames"), section="retain_cofactor_resnames"
     )
@@ -330,10 +353,14 @@ def _derive_alias_sets(
             cofactors = set()
             element_tokens = set()
 
-    alias_values = {str(v or "").strip().upper() for v in element_alias.values() if str(v or "").strip()}
+    alias_values = {
+        str(v or "").strip().upper()
+        for v in element_alias.values()
+        if str(v or "").strip()
+    }
     canonical_hints = set(element_tokens) | alias_values
     canonical_elem_tokens: Set[str] = set()
-    for tok in (set(element_tokens) | alias_values):
+    for tok in set(element_tokens) | alias_values:
         canonical = _normalize_alias_token(
             tok,
             element_alias,
@@ -354,7 +381,8 @@ def _derive_alias_sets(
 
 # ---  YAML loader with encoding fallbacks & punctuation cleanup ---
 def _load_aliases_yaml():
-    import yaml, unicodedata
+    import yaml
+
     global _aliases_cache
     if _aliases_cache is not None:
         return _aliases_cache
@@ -375,9 +403,16 @@ def _load_aliases_yaml():
 
         # normalize common Windows punctuation to ASCII
         repl = {
-            "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
-            "\u2013": "-", "\u2014": "-", "\u2026": "...",
-            "\u00A0": " ", "\u200B": "", "\uFEFF": "",
+            "\u2018": "'",
+            "\u2019": "'",
+            "\u201c": '"',
+            "\u201d": '"',
+            "\u2013": "-",
+            "\u2014": "-",
+            "\u2026": "...",
+            "\u00a0": " ",
+            "\u200b": "",
+            "\ufeff": "",
         }
         for k, v in repl.items():
             text = text.replace(k, v)
@@ -395,7 +430,6 @@ def _load_aliases_yaml():
         return _aliases_cache
 
 
-
 def get_atom_rules():
     """
     Return a SimpleNamespace of normalized sets/maps used by element fixing,
@@ -405,7 +439,7 @@ def get_atom_rules():
     if _rules_cache is not None:
         return _rules_cache
 
-    a  = _load_aliases_yaml() or {}
+    a = _load_aliases_yaml() or {}
     logging.info(
         "[aliases.load] source=%s keys=%d",
         ALIASES_PATH,
@@ -413,12 +447,12 @@ def get_atom_rules():
     )
     es = a.get("element_sets", {}) or {}
     ligand_sets = a.get("ligand_sets", {}) or {}
-    meeko_cfg   = a.get("meeko", {}) or {}
+    meeko_cfg = a.get("meeko", {}) or {}
 
     token_splitter = re.compile(r"[,\s]+")
 
     def _flatten(items):
-        for x in (items or []):
+        for x in items or []:
             if isinstance(x, (list, tuple, set)):
                 yield from _flatten(x)
             else:
@@ -456,11 +490,11 @@ def get_atom_rules():
         return result
 
     # element/name logic
-    peptide_like      = _as_set(es.get("peptide_like_names"))
-    one_letter        = _as_set(es.get("one_letter_elements"))
-    two_letter        = _as_set(es.get("two_letter_elements"))
-    halide_resnames   = _as_set(es.get("halide_resnames"))
-    default_element   = (es.get("default_element") or "C").upper()
+    peptide_like = _as_set(es.get("peptide_like_names"))
+    one_letter = _as_set(es.get("one_letter_elements"))
+    two_letter = _as_set(es.get("two_letter_elements"))
+    halide_resnames = _as_set(es.get("halide_resnames"))
+    default_element = (es.get("default_element") or "C").upper()
     treat_backbone_ca = bool(es.get("treat_backbone_CA_as_C", True))
 
     # AD4 types (support both top-level and nested)
@@ -510,15 +544,19 @@ def get_atom_rules():
         _format_alias_sample(canonical_elements),
     )
     if used_backcompat:
-        logging.info("[aliases.backcompat] using retain_in_receptor_resnames; split not provided")
+        logging.info(
+            "[aliases.backcompat] using retain_in_receptor_resnames; split not provided"
+        )
 
     required_metals = ["ZN", "MG", "CA", "FE", "MN", "CU", "CO", "NI", "NA", "K"]
     coverage = {tok: (tok in canonical_elements) for tok in required_metals}
     logging.info("[aliases.audit] metal_core_coverage=%s", coverage)
 
     mode_raw = (
-        os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "") or ""
-    ).strip().upper()
+        (os.environ.get("APO_HOLO_MODE") or a.get("APO_HOLO_MODE", "") or "")
+        .strip()
+        .upper()
+    )
     if mode_raw == "APO":
         policy_mode = "APO"
     elif mode_raw == "HOLO":
@@ -592,7 +630,6 @@ def get_atom_rules():
         default_element=default_element,
         treat_backbone_ca=treat_backbone_ca,
         retain_resnames=set(retain_res),
-
         # alias policy exposure
         alias_sets=alias_sets,
         waters=waters_set,
@@ -603,11 +640,9 @@ def get_atom_rules():
         elem_tokens_canonical=canonical_elements,
         policy_mode=policy_mode,
         normalize_resname=_normalize_resname_for_rules,
-
         # NEW exports used elsewhere
         nucleotide_like_resnames=sorted(nucleotide_like_resnames),
         meeko_drop_free_ions=sorted(meeko_drop_free_ions),
-
         # name/alias maps (uppercased keys/values)
         prefix_map={
             (k or "").upper(): (v or "").upper()
@@ -625,7 +660,6 @@ def get_atom_rules():
             (k or "").upper(): (v or "").upper()
             for k, v in (es.get("cation_resname_aliases") or {}).items()
         },
-
         # compatibility views for older call sites
         element_sets=compat_element_sets,
         # TODO(aliases-migration): uses legacy retain_in_receptor_resnames.
@@ -634,7 +668,20 @@ def get_atom_rules():
         legacy_retain_tokens=legacy_tokens,
     )
 
-    metals_probe = ["ZN", "HG", "MG", "FE", "MN", "CA", "CU", "CO", "NI", "NA", "K", "CL"]
+    metals_probe = [
+        "ZN",
+        "HG",
+        "MG",
+        "FE",
+        "MN",
+        "CA",
+        "CU",
+        "CO",
+        "NI",
+        "NA",
+        "K",
+        "CL",
+    ]
     includes = {tok: (tok in retain_res) for tok in metals_probe}
     detected_metals = sorted([tok for tok in retain_res if tok in metals_probe])
     logging.info(
@@ -654,9 +701,6 @@ def get_atom_rules():
         includes,
     )
     return _rules_cache
-
-
-
 
 
 def scan_helium_counts(text_or_lines) -> int:
@@ -683,6 +727,7 @@ def scan_helium_counts(text_or_lines) -> int:
             n += 1
     return n
 
+
 def rules_version() -> str:
     """
     Return a short identifier for the current YAML/alias ruleset if available,
@@ -691,7 +736,13 @@ def rules_version() -> str:
     try:
         r = get_atom_rules()
         for k in ("version", "rules_version", "hash", "source_hash"):
-            v = getattr(r, k, None) if hasattr(r, k) else r.get(k) if isinstance(r, dict) else None
+            v = (
+                getattr(r, k, None)
+                if hasattr(r, k)
+                else r.get(k)
+                if isinstance(r, dict)
+                else None
+            )
             if v:
                 return str(v)
     except Exception:
@@ -713,7 +764,7 @@ def format_pdb_atom_debug(line: str, line_no: int | None = None) -> str:
     alt = line[16] if len(line) > 16 else " "
     elem = (line[76:78] if len(line) >= 78 else "  ").strip() or "?"
     ln = f"line{line_no}" if line_no is not None else "line?"
-    return f"{ln} {chain}:{resi}{icode}:{resn} {name} alt={alt} elem={elem}  cols77-78='{(line[76:78] if len(line)>=78 else '  ')}'"
+    return f"{ln} {chain}:{resi}{icode}:{resn} {name} alt={alt} elem={elem}  cols77-78='{(line[76:78] if len(line) >= 78 else '  ')}'"
 
 
 def scan_helium_counts_with_hits(text: str, max_hits: int = 5) -> tuple[int, list[str]]:
@@ -740,7 +791,7 @@ def assert_no_helium_in_hydrogen_names(pdb_text: str) -> Tuple[str, int]:
     out: List[str] = []
     fixes = 0
     for ln in pdb_text.splitlines(True):
-        if ln.startswith(("ATOM  ","HETATM")) and len(ln) >= 78:
+        if ln.startswith(("ATOM  ", "HETATM")) and len(ln) >= 78:
             aname = ln[12:16].strip().upper()
             # ADT usually in the last whitespace token for your PDBQT; for PDB use columns 77-78
             adt_or_elem = ln.split()[-1].strip().upper()
@@ -758,7 +809,10 @@ def assert_no_helium_in_hydrogen_names(pdb_text: str) -> Tuple[str, int]:
         out.append(ln)
     return "".join(out), fixes
 
-def assert_no_helium_in_pdbqt(lines: Iterable[str], ligand_name: str) -> Tuple[List[str], int, str]:
+
+def assert_no_helium_in_pdbqt(
+    lines: Iterable[str], ligand_name: str
+) -> Tuple[List[str], int, str]:
     """
     Post-write guardrail for PDBQT:
       - If ADT='He' appears where atom NAME begins with 'H' → auto-correct to 'H', log fixes.
@@ -814,7 +868,6 @@ def _format_element_token(elem_token: str, upper: bool = True) -> str:
     return token_up[0] + token_up[1].lower()
 
 
-
 def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
     """Infer element symbol from atom/residue context using YAML-driven rules."""
     if rules is None:
@@ -825,50 +878,86 @@ def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
 
     # special atom names (e.g., OXT)
     if an in rules.special_names:
-        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                      an, rn, is_het, "special_names", rules.special_names.get(an, "?"))
+        logging.debug(
+            "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+            an,
+            rn,
+            is_het,
+            "special_names",
+            rules.special_names.get(an, "?"),
+        )
         return rules.special_names[an]
 
     # normalize residue-name aliases (e.g., IOD->I, CL- -> CL)
     if rn in rules.halide_aliases:
-        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                      an, rn, is_het, "halide_alias", rules.halide_aliases[rn])
+        logging.debug(
+            "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+            an,
+            rn,
+            is_het,
+            "halide_alias",
+            rules.halide_aliases[rn],
+        )
         rn = rules.halide_aliases[rn]
     if rn in rules.cation_aliases:
-        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                      an, rn, is_het, "cation_alias", rules.cation_aliases[rn])
+        logging.debug(
+            "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+            an,
+            rn,
+            is_het,
+            "cation_alias",
+            rules.cation_aliases[rn],
+        )
         rn = rules.cation_aliases[rn]
 
     # derive by leading functional prefix (OE1, NE2, OD1, ND2, SD, ...)
     pref = an[:2]
     if pref in rules.prefix_map:
-        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                      an, rn, is_het, "prefix_map", rules.prefix_map.get(pref, "?"))
+        logging.debug(
+            "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+            an,
+            rn,
+            is_het,
+            "prefix_map",
+            rules.prefix_map.get(pref, "?"),
+        )
         return rules.prefix_map[pref]
     # halide ions by residue name for single-atom HETATMs
     if is_het and rn in rules.halide_resnames:
-        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                      an, rn, is_het, "halide_resname", rn)
-        if rn in {"CL","BR"}:
+        logging.debug(
+            "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+            an,
+            rn,
+            is_het,
+            "halide_resname",
+            rn,
+        )
+        if rn in {"CL", "BR"}:
             return rn[0] + rn[1].lower()
         return rn  # I, F
-    
-    
-    
+
     # CA special-case (avoid backbone CA -> Calcium)
     if len(an) >= 2 and an[:2] == "CA":
         # Protein / peptide backbone CA: always treat as carbon
         if not is_het and rules.treat_backbone_ca:
             logging.debug(
                 "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                an, rn, is_het, "backbone_CA_guard", "C"
+                an,
+                rn,
+                is_het,
+                "backbone_CA_guard",
+                "C",
             )
             return "C"
         # Simple Ca2+ ions: residue names CA/CAL (pure ion residues)
         if is_het and rn in {"CA", "CAL"}:
             logging.debug(
                 "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                an, rn, is_het, "Ca_ion", "Ca"
+                an,
+                rn,
+                is_het,
+                "Ca_ion",
+                "Ca",
             )
             return "Ca"
 
@@ -884,17 +973,24 @@ def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
             if two == "CA" and rn not in {"CA", "CAL"}:
                 logging.debug(
                     "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                    an, rn, is_het, "het_CA_non_ion_guard", "C"
+                    an,
+                    rn,
+                    is_het,
+                    "het_CA_non_ion_guard",
+                    "C",
                 )
                 return "C"
 
             t = two
             logging.debug(
                 "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                an, rn, is_het, "two_letter", t[0] + t[1].lower()
+                an,
+                rn,
+                is_het,
+                "two_letter",
+                t[0] + t[1].lower(),
             )
             return t[0] + t[1].lower()
-
 
         # --- Guard: avoid mislabeling organic HET atom names like "CAK","NAA" as Ca/Na ---
         # If this is a HET but NOT a known simple ion residue, and the atom name
@@ -902,30 +998,70 @@ def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
         # one-letter element guess (C/N/...) rather than a two-letter metal.
     if is_het:
         _ion_res = {
-            "LI", "NA", "K", "RB", "CS",
-            "MG", "CA", "SR", "BA",
-            "ZN", "CU", "NI", "CO", "FE", "MN", "CD", "AL", "HG", "AG", "PB",
-            "PT", "PD", "AU", "RU", "IR", "OS"
+            "LI",
+            "NA",
+            "K",
+            "RB",
+            "CS",
+            "MG",
+            "CA",
+            "SR",
+            "BA",
+            "ZN",
+            "CU",
+            "NI",
+            "CO",
+            "FE",
+            "MN",
+            "CD",
+            "AL",
+            "HG",
+            "AG",
+            "PB",
+            "PT",
+            "PD",
+            "AU",
+            "RU",
+            "IR",
+            "OS",
         }
         if rn not in _ion_res:
             if len(an) >= 3 and an[0].isalpha() and an[1].isalpha() and an[2].isalpha():
                 c = an[0].upper()
                 if c in rules.one_letter:
-                    logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                                  an, rn, is_het, "het_three_letters_guard", c)
+                    logging.debug(
+                        "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                        an,
+                        rn,
+                        is_het,
+                        "het_three_letters_guard",
+                        c,
+                    )
                     return c
     # hydrogens (H, 1H, 2H...)
     if an.startswith("H") or (an[:1].isdigit() and len(an) >= 2 and an[1] == "H"):
-        logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                      an, rn, is_het, "hydrogen_name", "H")
+        logging.debug(
+            "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+            an,
+            rn,
+            is_het,
+            "hydrogen_name",
+            "H",
+        )
         return "H"
 
     # one-letter defaults by first alpha
     if an and an[0].isalpha():
         c = an[0].upper()
         if c in rules.one_letter:
-            logging.debug("[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
-                          an, rn, is_het, "one_letter", c)
+            logging.debug(
+                "[element] aname=%s resn=%s is_het=%s -> via=%s => %s",
+                an,
+                rn,
+                is_het,
+                "one_letter",
+                c,
+            )
             return c
 
     for ch in an:
@@ -936,16 +1072,14 @@ def derive_element(aname: str, resname: str, is_het: bool, rules=None) -> str:
     return rules.default_element
 
 
-
-
 def ensure_model_records(pdb_input_path: str, pdb_output_path: str):
-    with open(pdb_input_path, 'r') as f:
+    with open(pdb_input_path, "r") as f:
         lines = f.readlines()
 
     has_model = any(line.startswith("MODEL") for line in lines)
 
     if has_model:
-        with open(pdb_output_path, 'w') as f:
+        with open(pdb_output_path, "w") as f:
             f.writelines(lines)
         logging.info(f"MODEL record found in {pdb_input_path}. File copied unchanged.")
         return
@@ -969,22 +1103,24 @@ def ensure_model_records(pdb_input_path: str, pdb_output_path: str):
     lines.insert(atom_start_idx, "MODEL        1\n")
     lines.insert(atom_end_idx + 2, "ENDMDL\n")
 
-    with open(pdb_output_path, 'w') as f:
+    with open(pdb_output_path, "w") as f:
         f.writelines(lines)
 
-    logging.info(f"MODEL/ENDMDL added in {pdb_output_path} between lines {atom_start_idx+1} and {atom_end_idx+3}.")
+    logging.info(
+        f"MODEL/ENDMDL added in {pdb_output_path} between lines {atom_start_idx + 1} and {atom_end_idx + 3}."
+    )
 
 
 def remove_unparsable_hetatms(pdb_path):
     cleaned_lines = []
-    with open(pdb_path, 'r') as f:
+    with open(pdb_path, "r") as f:
         for line in f:
-            if line.startswith('HETATM'):
+            if line.startswith("HETATM"):
                 atom_name = line[12:16].strip()
-                if 'UNK' in atom_name or 'UNX' in line:
+                if "UNK" in atom_name or "UNX" in line:
                     continue
             cleaned_lines.append(line)
-    with open(pdb_path, 'w') as f:
+    with open(pdb_path, "w") as f:
         f.writelines(cleaned_lines)
     logging.info(f"Unparsable HETATM entries removed from {pdb_path}.")
 
@@ -993,8 +1129,10 @@ from Bio.PDB import PDBParser, PDBIO
 from Bio.PDB.PDBIO import Select
 import os
 
+
 class ElementFixer(Select):
     """Rewrite element symbols safely, with peptide-like HET awareness (YAML-driven)."""
+
     def __init__(self):
         super().__init__()
         self.rules = get_atom_rules()
@@ -1006,19 +1144,22 @@ class ElementFixer(Select):
             return False
         if not names:
             return False
-        hits = sum((n in self.rules.peptide_like) or (n[:2] in {"OE","NE","OD","ND","SD"}) for n in names)
+        hits = sum(
+            (n in self.rules.peptide_like) or (n[:2] in {"OE", "NE", "OD", "ND", "SD"})
+            for n in names
+        )
         return hits >= max(4, int(0.6 * len(names)))
 
     def get_atom_element(self, atom):
         aname = atom.get_name()
-        res   = atom.get_parent()
+        res = atom.get_parent()
         rname = getattr(res, "get_resname", lambda: "")()
 
         try:
             hetflag = res.get_id()[0] if res is not None else " "
         except Exception:
             hetflag = " "
-        is_het = (hetflag != " ")
+        is_het = hetflag != " "
 
         elem_raw = getattr(atom, "element", "")
         elem_token = _normalize_element_token(elem_raw, self.rules)
@@ -1031,14 +1172,17 @@ class ElementFixer(Select):
         else:
             el = derive_element(aname, rname, is_het, self.rules)
 
-        if aname.strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+        if aname.strip().upper().startswith("H") and str(el).strip() in {
+            "He",
+            "HE",
+            "he",
+        }:
             el = "H"
         return el
 
     def accept_atom(self, atom):
         atom.element = self.get_atom_element(atom)
         return True
-
 
 
 def fix_pdb_elements(input_path, output_path=None):
@@ -1056,29 +1200,40 @@ def fix_pdb_elements(input_path, output_path=None):
         io.save(fh, fixer)
     print(f"Saved fixed PDB to {output_path}")
 
-from Bio.PDB import PDBParser, NeighborSearch, Selection
 
-def calculate_ligand_protein_contacts(protein_pdb_path, ligand_lines, distance_cutoff=4.0):
+from Bio.PDB import NeighborSearch
+
+
+def calculate_ligand_protein_contacts(
+    protein_pdb_path, ligand_lines, distance_cutoff=4.0
+):
     parser = PDBParser(QUIET=True)
-    structure = parser.get_structure('protein', protein_pdb_path)
+    structure = parser.get_structure("protein", protein_pdb_path)
     model = structure[0]
 
     # Collect all protein atoms
-    protein_atoms = [atom for atom in model.get_atoms() if atom.get_parent().get_id()[0] == ' ']
+    protein_atoms = [
+        atom for atom in model.get_atoms() if atom.get_parent().get_id()[0] == " "
+    ]
 
     # Parse ligand atoms from lines
     ligand_atoms = []
     for line in ligand_lines:
-        if line.startswith(('HETATM', 'ATOM')):
+        if line.startswith(("HETATM", "ATOM")):
             # Simple PDB atom line parsing for coords
             x = float(line[30:38])
             y = float(line[38:46])
             z = float(line[46:54])
+
             # Create a dummy atom-like object
             class DummyAtom:
-                def __init__(self, coord): self.coord = coord
-                def get_coord(self): return self.coord
-            ligand_atoms.append(DummyAtom((x,y,z)))
+                def __init__(self, coord):
+                    self.coord = coord
+
+                def get_coord(self):
+                    return self.coord
+
+            ligand_atoms.append(DummyAtom((x, y, z)))
 
     # Use NeighborSearch to find protein atoms near ligand atoms
     ns = NeighborSearch(protein_atoms)
@@ -1090,25 +1245,29 @@ def calculate_ligand_protein_contacts(protein_pdb_path, ligand_lines, distance_c
     return contact_count
 
 
-
 def rank_ligands_by_atom_count(ligands_dict):
     return sorted(ligands_dict.items(), key=lambda item: len(item[1]), reverse=True)
+
 
 def _fix_ligand_element_columns_in_memory(lines):
     """Rewrite element cols (77–78) for HET ligands using YAML rules."""
     rules = get_atom_rules()
     out = []
     for line in lines:
-        if line.startswith(("ATOM  ","HETATM")) and len(line) >= 78:
+        if line.startswith(("ATOM  ", "HETATM")) and len(line) >= 78:
             aname = line[12:16]
-            resn  = line[17:20]
+            resn = line[17:20]
             is_het = line.startswith("HETATM")
             elem_token = _normalize_element_token(line[76:78], rules)
             if elem_token is None:
                 # Fall back only when the element column is missing or invalid.
                 el = derive_element(aname, resn, is_het, rules)
                 # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
-                if aname.strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+                if aname.strip().upper().startswith("H") and str(el).strip() in {
+                    "He",
+                    "HE",
+                    "he",
+                }:
                     el = "H"
             else:
                 el = elem_token
@@ -1121,10 +1280,6 @@ def _fix_ligand_element_columns_in_memory(lines):
     return out
 
 
-
-
-
-
 def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
     rules = get_atom_rules()
     src_path = str(src_path)
@@ -1134,16 +1289,18 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
     with open(src_path, "r", encoding="utf-8", errors="ignore") as fh:
         for line in fh:
             is_atom = line.startswith("ATOM  ")
-            is_het  = line.startswith("HETATM")
+            is_het = line.startswith("HETATM")
             if len(line) >= 78 and (is_het or (rewrite_atoms and is_atom)):
                 aname = line[12:16]
-                resn  = line[17:20]
+                resn = line[17:20]
                 elem_token = _normalize_element_token(line[76:78], rules)
                 if elem_token is None:
                     # Fall back only when the element column is missing or invalid.
                     el = derive_element(aname, resn, is_het, rules)
                     # Correct PTR-style hydrogens mislabeled as Helium (HE1/HE2 → H) without touching real metals.
-                    if str(aname).strip().upper().startswith("H") and str(el).strip() in {"He", "HE", "he"}:
+                    if str(aname).strip().upper().startswith("H") and str(
+                        el
+                    ).strip() in {"He", "HE", "he"}:
                         el = "H"
                 else:
                     el = elem_token
@@ -1159,11 +1316,11 @@ def fix_element_columns_in_file(src_path, dst_path=None, rewrite_atoms=False):
     return dst_path
 
 
-
-
 def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     os.makedirs(ligands_dir, exist_ok=True)
-    logging.info("[extract] in=%s out=%s ldir=%s", pdb_path, output_cleaned_pdb, ligands_dir)
+    logging.info(
+        "[extract] in=%s out=%s ldir=%s", pdb_path, output_cleaned_pdb, ligands_dir
+    )
 
     ligands = defaultdict(list)
     ligand_coords = []  # collect all ligand atom coords for box calculation
@@ -1171,18 +1328,22 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     retained_resnames = rules.retain_resnames  # already uppercased
     # [ions] retention counters
     metal_tokens = {"ZN", "MG", "MN", "FE", "CA", "CU", "CO", "NI", "HG"}
-    variant_label = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper() or "legacy"
+    variant_label = (
+        os.environ.get("APO_HOLO_VARIANT") or ""
+    ).strip().upper() or "legacy"
     kept_metals = 0
     stripped_metals = 0
     stripped_detail: List[str] = []
 
     # Do NOT retain common cryos/buffers: GOL/EDO/PG4/MPD/ACT/TRS/PO4/PEG → they’ll be extracted
 
-    with open(pdb_path, 'r') as infile, open(output_cleaned_pdb, 'w') as outfile:
+    with open(pdb_path, "r") as infile, open(output_cleaned_pdb, "w") as outfile:
         for line in infile:
-            if line.startswith('HETATM'):
+            if line.startswith("HETATM"):
                 resname_raw = line[17:20]
-                resname = resname_raw.strip().upper()  # normalize for set membership & filenames
+                resname = (
+                    resname_raw.strip().upper()
+                )  # normalize for set membership & filenames
                 chain = line[21]
                 resnum = line[22:26].strip()
                 elem = (line[76:78].strip() or resname).upper()
@@ -1194,10 +1355,14 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
                         z = float(line[46:54])
                         ligand_coords.append((x, y, z))
                     except ValueError:
-                        logging.warning(f"Invalid ligand coordinates in line: {line.strip()}")
+                        logging.warning(
+                            f"Invalid ligand coordinates in line: {line.strip()}"
+                        )
                     if elem in metal_tokens or resname in metal_tokens:
                         stripped_metals += 1
-                        stripped_detail.append(f"{resname}:{chain or '-'}:{resnum or '?'}")
+                        stripped_detail.append(
+                            f"{resname}:{chain or '-'}:{resnum or '?'}"
+                        )
                         logging.info(
                             "[ions.drop] reason=not_in_retain resname=%s chain=%s resSeq=%s element=%s variant=%s",
                             resname,
@@ -1215,10 +1380,11 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     for (chain, resname, resnum), lines in ligands.items():
         ligand_fname = os.path.join(ligands_dir, f"{resname}_{chain}{resnum}.pdb")
         fixed = _fix_ligand_element_columns_in_memory(lines)  # <<< ADD
-        with open(ligand_fname, 'w') as lf:
+        with open(ligand_fname, "w") as lf:
             lf.writelines(fixed)
-        logging.info(f"Saved ligand {resname} {chain}{resnum} to {ligand_fname} (elements repaired)")
-
+        logging.info(
+            f"Saved ligand {resname} {chain}{resnum} to {ligand_fname} (elements repaired)"
+        )
 
     logging.info(f"Ligands extracted and removed from {pdb_path}.")
     logging.info(
@@ -1234,12 +1400,17 @@ def extract_and_remove_ligands(pdb_path, output_cleaned_pdb, ligands_dir):
     )
     return ligands, ligand_coords
 
+
 def compute_box_from_ligand_coords(coords):
     if not coords:
         return None, None
 
     x_vals, y_vals, z_vals = zip(*coords)
-    center = (sum(x_vals)/len(x_vals), sum(y_vals)/len(y_vals), sum(z_vals)/len(z_vals))
+    center = (
+        sum(x_vals) / len(x_vals),
+        sum(y_vals) / len(y_vals),
+        sum(z_vals) / len(z_vals),
+    )
 
     buffer = 5.0
     x_range = max(x_vals) - min(x_vals) + buffer
@@ -1255,22 +1426,24 @@ def get_box_from_p2rank_csv(pdb_file):
     pdb_name = os.path.splitext(os.path.basename(pdb_file))[0]
     pred_dir = os.path.join(P2RANK_DIR, "test_output", f"predict_{pdb_name}")
     pred_file = os.path.join(pred_dir, f"{pdb_name}.pdb_predictions.csv")
-    
+
     logging.info(f"Running P2Rank for: {pdb_file}")
 
     # --- Choose P2Rank launcher deterministically (avoid PRANK-MSA on PATH) ---
     from shutil import which
 
     pr_base = None
-    pr_exe  = None
-    pr_jar  = None
+    pr_exe = None
+    pr_jar = None
 
     # Note: P2RANK_DIR is loaded from config (same value you call P2RANK_PATH in cfg)
     if P2RANK_DIR:
         cfg = P2RANK_DIR
         if os.path.isfile(cfg) and cfg.lower().endswith(".jar"):
             pr_jar = cfg
-            pr_base = os.path.dirname(os.path.dirname(cfg))  # .../bin/p2rank.jar -> install root
+            pr_base = os.path.dirname(
+                os.path.dirname(cfg)
+            )  # .../bin/p2rank.jar -> install root
             exe_candidate = os.path.join(pr_base, "bin", "prank")
             if os.path.isfile(exe_candidate):
                 pr_exe = exe_candidate
@@ -1300,22 +1473,31 @@ def get_box_from_p2rank_csv(pdb_file):
         if pr_path:
             # Heuristic guard: PRANK-MSA prints 'prank v.' and lacks 'predict' help
             try:
-                out = subprocess.run([pr_path, "-version"], capture_output=True, text=True)
+                out = subprocess.run(
+                    [pr_path, "-version"], capture_output=True, text=True
+                )
                 banner = (out.stdout + out.stderr).lower()
                 if "p2rank" in banner or "predict" in banner:
                     run_cmd = [pr_path, "predict"]
                     logging.info("P2Rank launcher: PATH prank (guarded OK)")
                 else:
-                    logging.error("Found '%s' on PATH, but it is PRANK (MSA), not P2Rank. "
-                                  "Set P2RANK_PATH to your P2Rank install dir.", pr_path)
+                    logging.error(
+                        "Found '%s' on PATH, but it is PRANK (MSA), not P2Rank. "
+                        "Set P2RANK_PATH to your P2Rank install dir.",
+                        pr_path,
+                    )
                     return None, None
             except Exception as e:
-                logging.error("Unable to validate PATH prank (%s). Set P2RANK_PATH to the P2Rank install.", e)
+                logging.error(
+                    "Unable to validate PATH prank (%s). Set P2RANK_PATH to the P2Rank install.",
+                    e,
+                )
                 return None, None
         else:
-            logging.error("P2Rank not found. Set P2RANK_PATH to the install dir (with bin/prank) or bin/p2rank.jar.")
+            logging.error(
+                "P2Rank not found. Set P2RANK_PATH to the install dir (with bin/prank) or bin/p2rank.jar."
+            )
             return None, None
-
 
     # Always write to a known output folder next to the input PDB
     out_dir = os.path.join(os.path.dirname(os.path.abspath(pdb_file)), "_p2rank")
@@ -1336,8 +1518,15 @@ def get_box_from_p2rank_csv(pdb_file):
     pred_file = os.path.join(out_dir, f"{pdb_name}.pdb_predictions.csv")
     if not os.path.isfile(pred_file):
         # legacy fallback: current working dir default
-        legacy = os.path.join("test_output", f"predict_{pdb_name}", f"{pdb_name}.pdb_predictions.csv")
-        alt = os.path.join(pr_base or "", "test_output", f"predict_{pdb_name}", f"{pdb_name}.pdb_predictions.csv")
+        legacy = os.path.join(
+            "test_output", f"predict_{pdb_name}", f"{pdb_name}.pdb_predictions.csv"
+        )
+        alt = os.path.join(
+            pr_base or "",
+            "test_output",
+            f"predict_{pdb_name}",
+            f"{pdb_name}.pdb_predictions.csv",
+        )
         for probe in (legacy, alt):
             if probe and os.path.isfile(probe):
                 pred_file = probe
@@ -1346,7 +1535,7 @@ def get_box_from_p2rank_csv(pdb_file):
     if not os.path.isfile(pred_file):
         logging.warning(f"Prediction file not created: {pred_file}")
         return None, None
-    with open(pred_file, "r", newline='') as f:
+    with open(pred_file, "r", newline="") as f:
         reader = csv.DictReader(f)
         reader.fieldnames = [field.strip() for field in reader.fieldnames]
 
@@ -1403,7 +1592,9 @@ def detect_pocket(cleaned_pdb, logger):
 
 def _default_variant(cfg):
     """Resolve a single variant preference from config/environment."""
-    mode = os.environ.get("APO_HOLO_MODE") or (cfg.get("APO_HOLO_MODE") if isinstance(cfg, dict) else None)
+    mode = os.environ.get("APO_HOLO_MODE") or (
+        cfg.get("APO_HOLO_MODE") if isinstance(cfg, dict) else None
+    )
     for v in expand_variants(mode):
         return v
     return None
@@ -1417,17 +1608,18 @@ def prepare_receptor(cfg, paths, logger):
     Returns (cleaned_pdb_path_str, receptor_pdbqt_path_str) or (None, None) on failure.
     """
     from distutils.util import strtobool
+
     variant = _default_variant(cfg)
     ph_token = None
     # >>> ACTIVE SITE PATHS PATCH START
-    variant  = (variant or None)
-    ph_token = (ph_token or None) if 'ph_token' in locals() else None
+    variant = variant or None
+    ph_token = (ph_token or None) if "ph_token" in locals() else None
 
-    receptor_cleaned   = paths.receptor_cleaned_pdb(variant)
+    receptor_cleaned = paths.receptor_cleaned_pdb(variant)
     receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
 
-    ligands_raw_dir  = paths.ligand_output_dir
-    p2rank_work_dir  = paths.work_dir / "p2rank"
+    ligands_raw_dir = paths.ligand_output_dir
+    p2rank_work_dir = paths.work_dir / "p2rank"
     pockets_json_out = p2rank_work_dir / "pockets.json"
 
     ligands_raw_dir.mkdir(parents=True, exist_ok=True)
@@ -1441,10 +1633,15 @@ def prepare_receptor(cfg, paths, logger):
         f"exists(receptor)={receptor_pdbqt_path.exists()}"
     )
 
-    if receptor_cleaned.exists() and receptor_pdbqt_path.exists() and not force_reprocess:
+    if (
+        receptor_cleaned.exists()
+        and receptor_pdbqt_path.exists()
+        and not force_reprocess
+    ):
         logger.info("Reusing existing cleaned PDB and receptor PDBQT.")
         return norm(receptor_cleaned), norm(receptor_pdbqt_path)
     import automate_protein_prep
+
     result = automate_protein_prep.main(str(paths.nolig_pdb_path))
     if not result or not isinstance(result, tuple) or len(result) != 2:
         logger.warning("Protein prep failed.")
@@ -1456,6 +1653,7 @@ def prepare_receptor(cfg, paths, logger):
     try:
         if Path(receptor_pdbqt).resolve() != receptor_pdbqt_path.resolve():
             from shutil import copy2
+
             receptor_pdbqt_path.parent.mkdir(parents=True, exist_ok=True)
             copy2(receptor_pdbqt, receptor_pdbqt_path)
             receptor_pdbqt = str(receptor_pdbqt_path)
@@ -1467,6 +1665,7 @@ def prepare_receptor(cfg, paths, logger):
 
 # ---------- high-level pipeline steps ----------
 
+
 def extract_ligands(cfg, paths, logger):
     """
     Extract and strip ligands from input PDB into clean PDB without ligands.
@@ -1477,7 +1676,9 @@ def extract_ligands(cfg, paths, logger):
         malformed_log.unlink()
 
     ligands_dict, _ = extract_and_remove_ligands(
-        str(paths.input_pdb_path), str(paths.nolig_pdb_path), str(paths.ligand_output_dir)
+        str(paths.input_pdb_path),
+        str(paths.nolig_pdb_path),
+        str(paths.ligand_output_dir),
     )
     logger.info(f"Extracted {len(ligands_dict)} ligands → {paths.ligand_output_dir}")
     return len(ligands_dict)
@@ -1485,9 +1686,11 @@ def extract_ligands(cfg, paths, logger):
 
 # ---------- small utils ----------
 
+
 def norm(p):
     """Normalize a path to forward slashes for stable logging/keys."""
     return os.path.abspath(str(p)).replace("\\", "/")
+
 
 def get_recenter_params(cfg):
     """Read early/fallback recentering knobs from config with safe defaults."""
@@ -1499,11 +1702,11 @@ def get_recenter_params(cfg):
         "ALLOW_BOX_EXPAND": bool(cfg.get("ALLOW_BOX_EXPAND", True)),
         "MAX_RECENTER_ATTEMPTS": int(cfg.get("MAX_RECENTER_ATTEMPTS", 3)),
     }
+
+
 def load_aliases():
     # back-compat shim
     return get_atom_rules()
-
-
 
 
 def _sanitize_pdb_id(stem: str) -> str:
@@ -1515,17 +1718,22 @@ def _sanitize_pdb_id(stem: str) -> str:
       3ERT_withH_fixed     -> 3ERT
     """
     import re
+
     s = stem
     # remove multiple trailing tags if present
     while True:
-        s2 = re.sub(r'(?i)(?:_(?:cleaned|nolig|withh|fixed))$', '', s)
+        s2 = re.sub(r"(?i)(?:_(?:cleaned|nolig|withh|fixed))$", "", s)
         if s2 == s:
             return s
         s = s2
+
+
 def _canon_pdb_id_from_path(pdb_path: str) -> str:
     stem = os.path.splitext(os.path.basename(pdb_path))[0]
     # Drop legacy suffixes like _nolig, _nolig_cleaned, _cleaned
-    return re.sub(r'(?i)(_nolig(_cleaned)?|_cleaned)$', '', stem).upper()
+    return re.sub(r"(?i)(_nolig(_cleaned)?|_cleaned)$", "", stem).upper()
+
+
 def main(pdb_file):
     exists = os.path.exists(pdb_file)
     size = os.path.getsize(pdb_file) if exists else -1
@@ -1547,17 +1755,16 @@ def main(pdb_file):
 
     paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
 
-
     variant = _default_variant(config)
     ph_token = None
-    variant  = (variant or None)
-    ph_token = (ph_token or None) if 'ph_token' in locals() else None
+    variant = variant or None
+    ph_token = (ph_token or None) if "ph_token" in locals() else None
 
-    receptor_cleaned   = paths.receptor_cleaned_pdb(variant)
+    receptor_cleaned = paths.receptor_cleaned_pdb(variant)
     receptor_pdbqt_path = paths.receptor_pdbqt(variant, ph_token)
 
-    ligands_raw_dir  = paths.ligand_output_dir
-    p2rank_work_dir  = paths.work_dir / "p2rank"
+    ligands_raw_dir = paths.ligand_output_dir
+    p2rank_work_dir = paths.work_dir / "p2rank"
     pockets_json_out = p2rank_work_dir / "pockets.json"
 
     logger.info(
@@ -1588,10 +1795,10 @@ def main(pdb_file):
             src_pdb_for_box = Path(pdb_file)
 
         logging.info(
-                "[activesite.main] using src_pdb_for_box=%s (exists=%s) to build %s",
-                src_pdb_for_box,
-                src_pdb_for_box.exists(),
-                temp_fixed_pdb_path,
+            "[activesite.main] using src_pdb_for_box=%s (exists=%s) to build %s",
+            src_pdb_for_box,
+            src_pdb_for_box.exists(),
+            temp_fixed_pdb_path,
         )
 
         shutil.copyfile(str(src_pdb_for_box), temp_fixed_pdb_path)
@@ -1599,9 +1806,9 @@ def main(pdb_file):
         fix_pdb_elements(str(temp_fixed_pdb_path))
 
         ligands, ligand_coords = extract_and_remove_ligands(
-                str(temp_fixed_pdb_path),
-                pdb_cleaned,
-                str(ligands_dir),
+            str(temp_fixed_pdb_path),
+            pdb_cleaned,
+            str(ligands_dir),
         )
 
         n_lig = len(ligands) if ligands else 0
@@ -1613,10 +1820,8 @@ def main(pdb_file):
             n_lig,
         )
 
-
         # Default assumption: box comes from P2Rank unless we successfully use ligand coords.
         source = "p2rank"
-
 
         if ligands:
             logger.debug(
@@ -1637,20 +1842,24 @@ def main(pdb_file):
             )
 
         if ligands:
-            logging.info(f"Ligands removed for {pdb_file}. Ranking ligands by contacts...")
+            logging.info(
+                f"Ligands removed for {pdb_file}. Ranking ligands by contacts..."
+            )
             for key, lines in ligands.items():
                 logging.info(f"Ligand {key} has {len(lines)} atoms.")
             ranked_ligands = rank_ligands_by_atom_count(ligands)
             if ranked_ligands:
                 # Select top ligand by contact count
                 top_ligand_key, top_lines = ranked_ligands[0]
-                logging.info(f"Top ligand by size: {top_ligand_key} with {len(top_lines)} atoms.")
+                logging.info(
+                    f"Top ligand by size: {top_ligand_key} with {len(top_lines)} atoms."
+                )
                 top_ligand_lines = top_lines
 
                 ligand_output_dir = str(ligands_dir)
                 os.makedirs(ligand_output_dir, exist_ok=True)
                 ligand_path = os.path.join(ligand_output_dir, f"{pdb_id}.pdb")
-                with open(ligand_path, 'w') as f:
+                with open(ligand_path, "w") as f:
                     f.writelines(ligands[top_ligand_key])
                 logging.info(f"Top ligand saved to {ligand_path}")
 
@@ -1664,10 +1873,14 @@ def main(pdb_file):
                         z = float(line[46:54])
                         top_ligand_coords.append((x, y, z))
                     except ValueError:
-                        logging.warning(f"Invalid coordinates in ligand line: {line.strip()}")
+                        logging.warning(
+                            f"Invalid coordinates in ligand line: {line.strip()}"
+                        )
 
                 if not top_ligand_coords:
-                    logging.warning("Top ligand has no valid coordinates. Falling back to P2Rank.")
+                    logging.warning(
+                        "Top ligand has no valid coordinates. Falling back to P2Rank."
+                    )
                     center, box_size = get_box_from_p2rank_csv(pdb_cleaned)
                 else:
                     center, box_size = compute_box_from_ligand_coords(top_ligand_coords)
@@ -1752,6 +1965,7 @@ def main(pdb_file):
             logging.info(f"Temporary file removed: {temp_fixed_pdb_path}")
         except OSError:
             logging.warning(f"Could not delete temp file: {temp_fixed_pdb_path}")
+
 
 # --- Canonical residue loader helpers (aliases-migration) ---
 _TOKEN_SPLIT = re.compile(r"[;\s,]+")
@@ -1842,7 +2056,6 @@ def _resolve_alias_cfg(cfg: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return _load_default_alias_cfg()
 
 
-
 # Public loaders --------------------------------------------------------------
 def load_canonical_metals(cfg: Mapping[str, Any] | None) -> Set[str]:
     cfg_map = _resolve_alias_cfg(cfg)
@@ -1857,7 +2070,9 @@ def load_canonical_metals(cfg: Mapping[str, Any] | None) -> Set[str]:
             element_sets.get("halide_resname_aliases"), canonical
         )
 
-    canonical |= _collect_alias_synonyms(cfg_map.get("retain_element_alias_map"), canonical)
+    canonical |= _collect_alias_synonyms(
+        cfg_map.get("retain_element_alias_map"), canonical
+    )
     return {token.strip().upper() for token in canonical if token.strip()}
 
 

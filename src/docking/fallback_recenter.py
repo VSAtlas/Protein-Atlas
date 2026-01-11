@@ -27,7 +27,9 @@ class BudgetGuard:
             effective_max = 300.0
 
         self.max_seconds = float(effective_max)
-        self.idle_max_seconds = float(idle_max_seconds) if idle_max_seconds is not None else None
+        self.idle_max_seconds = (
+            float(idle_max_seconds) if idle_max_seconds is not None else None
+        )
         self.log = log
         self._deadline: float = 0.0
         self._lig_cfg: Optional[str] = None
@@ -146,6 +148,7 @@ def validate_first_valid_pose(
 @dataclass
 class RecenterParams:
     """Thresholds for early/fallback recenter heuristics."""
+
     EARLY_RECENTER_RATIO: float = 0.70
     EARLY_RECENTER_MIN_EVAL: int = 10
     EARLY_RECENTER_FAR_A: float = 15.0
@@ -160,6 +163,7 @@ class GlobalCenterGuard:
     Gatekeeper for ANY global center change (early recenter, empty-stage fallback,
     CenterSelector promotions). Supports a hard 'lock' after a validated control ligand.
     """
+
     max_global_switches: int = 2
     global_switches: int = 0
     switched_this_stage: bool = False
@@ -174,7 +178,11 @@ class GlobalCenterGuard:
         True if a center change is allowed right now.
         Respects: hard lock, one-per-stage, and global cap.
         """
-        return (not self.locked) and (not self.switched_this_stage) and (self.global_switches < self.max_global_switches)
+        return (
+            (not self.locked)
+            and (not self.switched_this_stage)
+            and (self.global_switches < self.max_global_switches)
+        )
 
     def mark_switch(self) -> None:
         """Record that a center change just happened this stage."""
@@ -187,18 +195,18 @@ class GlobalCenterGuard:
 
 
 def fallback_recentering_if_empty(
-        cfg: Dict,
-        pdb_id: str,
-        stage_name: str,
-        scores: Dict[str, float],
-        raw_docked_ligands: Dict[str, str],
-        receptor_pdbqt: str,
-        center: Tuple[float, float, float],
-        box_size: Tuple[float, float, float],
-        stage1_original: List[str],
-        logger: logging.Logger,
-        guard: GlobalCenterGuard,
-        control_anchor_hit: bool
+    cfg: Dict,
+    pdb_id: str,
+    stage_name: str,
+    scores: Dict[str, float],
+    raw_docked_ligands: Dict[str, str],
+    receptor_pdbqt: str,
+    center: Tuple[float, float, float],
+    box_size: Tuple[float, float, float],
+    stage1_original: List[str],
+    logger: logging.Logger,
+    guard: GlobalCenterGuard,
+    control_anchor_hit: bool,
 ) -> Tuple[bool, Tuple[float, float, float], Tuple[float, float, float], List[str]]:
     """
     If a stage yields no valid ligands, attempt a fallback recenter and restart stage1.
@@ -208,13 +216,19 @@ def fallback_recentering_if_empty(
     if scores:
         return False, center, box_size, []
     if control_anchor_hit:
-        logger.info("Empty-stage fallback skipped: control-anchored validation present earlier.")
+        logger.info(
+            "Empty-stage fallback skipped: control-anchored validation present earlier."
+        )
         return False, center, box_size, []
     if not guard.can_switch():
-        logger.info("Empty-stage fallback skipped: global switch guard disallows further switches.")
+        logger.info(
+            "Empty-stage fallback skipped: global switch guard disallows further switches."
+        )
         return False, center, box_size, []
 
-    logger.warning(f"No valid ligands in {stage_name}. Attempting fallback recentering...")
+    logger.warning(
+        f"No valid ligands in {stage_name}. Attempting fallback recentering..."
+    )
     # >>> DOCKED PATHS PATCH START
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     # >>> DOCKED PATHS PATCH END
@@ -233,5 +247,7 @@ def fallback_recentering_if_empty(
 
     new_box = tuple(min(float(cfg.get("BOX_SIZE_MAX_A", 28.0)), s) for s in box_size)
     guard.mark_switch()  # counts as a global switch
-    logger.info("Re-running stage1 with new center after no-valid fallback. [global switch]")
+    logger.info(
+        "Re-running stage1 with new center after no-valid fallback. [global switch]"
+    )
     return True, new_center, new_box, stage1_original[:]
