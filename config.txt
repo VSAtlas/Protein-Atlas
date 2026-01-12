@@ -66,7 +66,7 @@ BABEL_DATADIR=
 
 # DeepCoy (env-local)
 DEEPCOY_PYTHON=/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python
-DEEPCOY_DECOYS_PER_ACTIVE  =  50 #sets how many actives go into each DeepCoy chunk
+DEEPCOY_DECOYS_PER_ACTIVE  =  1 #sets how many actives go into each DeepCoy chunk
 DEEPCOY_CHUNK_SIZE=1 # sets size of chunks that deepcoy parallelizes against
 DEEPCOY_BASE_SEED=0 #default seed used for deepcoy
 DEEPCOY_SEED_PER_CHUNK=true #on true a random seed is used for each chunk
@@ -295,8 +295,8 @@ CTRL_REDOCK_NMODES =9
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
 USE_GNINA = false
-USE_LEDOCK = false
-USE_DOCK6 = false
+USE_LEDOCK = true
+USE_DOCK6 = true
 USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
