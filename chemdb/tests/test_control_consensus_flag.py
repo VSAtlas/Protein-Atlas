@@ -8,10 +8,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import docking.docking as docking
-
 
 def test_select_control_engines_defaults_to_vina_only():
+    import src.docking.docking_control_redock as docking
+
     cfg = {"CONTROL_CONSENSUS": False}
     engines = docking._select_control_engines(
         cfg, use_gnina=True, use_ledock=True, use_dock6=True
@@ -20,6 +20,8 @@ def test_select_control_engines_defaults_to_vina_only():
 
 
 def test_select_control_engines_adds_engines_when_enabled():
+    import src.docking.docking_control_redock as docking
+
     cfg = {"CONTROL_CONSENSUS": True}
     engines = docking._select_control_engines(
         cfg, use_gnina=True, use_ledock=True, use_dock6=True
@@ -28,6 +30,8 @@ def test_select_control_engines_adds_engines_when_enabled():
 
 
 def test_select_control_engines_respects_disabled_capabilities():
+    import src.docking.docking_control_redock as docking
+
     cfg = {"CONTROL_CONSENSUS": True}
     engines = docking._select_control_engines(
         cfg, use_gnina=False, use_ledock=True, use_dock6=False

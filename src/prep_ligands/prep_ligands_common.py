@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from collections import defaultdict
 
-from activesite import (
+from pdb_fixer import (
     assert_no_helium_in_pdbqt,
     get_atom_rules,
     rules_version,

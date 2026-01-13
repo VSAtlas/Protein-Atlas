@@ -1,6 +1,5 @@
 import os
 import re
-import sys
 import time
 import shutil
 import subprocess
@@ -91,7 +90,11 @@ def test_control_redock_sets_method_control_for_dud_targets(tmp_path):
     start_ts = time.time()
     pdbs_arg = " ".join(PDBS_OF_INTEREST)
     cmd = [
-        sys.executable,
+        "micromamba",
+        "run",
+        "-n",
+        "docking-env",
+        "python",
         os.fspath(root / "main.py"),
         "-fast",
         "-pdbs",

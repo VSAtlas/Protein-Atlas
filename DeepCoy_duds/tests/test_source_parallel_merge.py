@@ -44,13 +44,14 @@ def test_deterministic_merge_parallel_vs_sequential(monkeypatch, tmp_path):
     sources = ["chembl", "bindingdb", "iuphar"]
     opts = make_opts()
 
-    seq = query_external_sources(
+    seq, seq_srcs, _ = query_external_sources(
         "U", [], "PDB", sources, cache_dir, opts, max_workers=1
     )
-    par = query_external_sources(
+    par, par_srcs, _ = query_external_sources(
         "U", [], "PDB", sources, cache_dir, opts, max_workers=4
     )
     assert seq == par
+    assert seq_srcs == par_srcs
     assert [s for s, _ in seq] == ["A", "B", "C", "D"]
 
 
@@ -74,11 +75,12 @@ def test_cached_source_merge_order(monkeypatch, tmp_path):
     sources = ["chembl", "bindingdb", "iuphar"]
     opts = make_opts()
 
-    seq = query_external_sources(
+    seq, seq_srcs, _ = query_external_sources(
         "U", [], "PDB", sources, cache_dir, opts, max_workers=1
     )
-    par = query_external_sources(
+    par, par_srcs, _ = query_external_sources(
         "U", [], "PDB", sources, cache_dir, opts, max_workers=2
     )
     assert seq == par
+    assert seq_srcs == par_srcs
     assert [s for s, _ in seq] == ["X", "Y"]

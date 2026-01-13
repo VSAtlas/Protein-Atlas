@@ -11,7 +11,7 @@ import logging
 import warnings
 from Bio import BiopythonWarning
 
-from activesite import (
+from pdb_fixer import (
     fix_pdb_elements,
     load_canonical_cofactors,
     load_canonical_metals,

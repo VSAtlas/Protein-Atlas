@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import argparse
+import json
 import os
 import re
 import shutil
@@ -8,7 +9,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -20,6 +21,8 @@ import requests
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from external_sources import (
+    SourceAudit,
+    _record_audit,
     fetch_bindingdb_smiles,
     fetch_chembl_smiles,
     fetch_drugbank_smiles,
@@ -35,6 +38,8 @@ CONFIG_FILE_NAME = "config.txt"
 EC_PATTERN = re.compile(r"^(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)$")
 DEFAULT_SOURCES = ["chembl", "bindingdb", "iuphar", "rcsb", "rhea"]
 SOURCE_ORDER = ["chembl", "bindingdb", "iuphar", "drugbank", "rcsb", "rhea"]
+VALID_SOURCES = set(SOURCE_ORDER)
+SOURCE_ALIASES = {"pdb_ligands": "rcsb", "pdb": "rcsb"}
 DEFAULT_DEEPCOY_ALLOWED_ATOMS = ("C", "N", "O", "S", "F", "Cl", "Br", "I", "P")
 DEFAULT_DEEPCOY_ALLOWED_ATOMS_STR = ",".join(DEFAULT_DEEPCOY_ALLOWED_ATOMS)
 DEFAULT_DEEPCOY_MODEL = Path("models/DeepCoy_DUDE_model_e09.pickle")
@@ -189,44 +194,117 @@ def get_uniprot_and_ec(pdb_id):
 
 
 def query_external_sources(
-    uniprot_id, ec_numbers, pdb_id, sources, cache_dir, source_opts, max_workers=1
+    uniprot_id,
+    ec_numbers,
+    pdb_id,
+    sources,
+    cache_dir,
+    source_opts,
+    max_workers=1,
+    run_log_path: Optional[Path] = None,
+    audit: Optional["SourceAudit"] = None,
 ):
     """
     (2) Queries external data sources for ligands/metabolites.
-    Returns a list of (SMILES, source) tuples.
+    Returns ([(SMILES, source)], smiles_to_sources, provenance_details).
     """
     print("## 2. Querying external data sources for known metabolites...")
     all_actives = []
 
+    smiles_to_sources: Dict[str, Set[str]] = {}
+    provenance_details: Dict[str, List[dict]] = {}
+
+    def add_provenance(smiles, label, detail=None):
+        if not smiles or not isinstance(smiles, str):
+            return
+        label = label or "unknown"
+        smiles_to_sources.setdefault(smiles, set()).add(label)
+        if detail:
+            provenance_details.setdefault(smiles, []).append(detail)
+
     def add_active(smiles, source):
-        if (
-            smiles
-            and isinstance(smiles, str)
-            and not any(smiles == active[0] for active in all_actives)
-        ):
+        if not smiles or not isinstance(smiles, str):
+            return
+        add_provenance(smiles, source)
+        if not any(smiles == active[0] for active in all_actives):
             all_actives.append((smiles, source))
+
+    def merge_provenance_meta(meta: Optional[dict], default_label: str):
+        if not isinstance(meta, dict):
+            return
+        prov_map = meta.get("provenance") or {}
+        if isinstance(prov_map, dict):
+            for smi, labels in prov_map.items():
+                if not isinstance(labels, list):
+                    continue
+                for lbl in labels:
+                    if lbl:
+                        add_provenance(smi, lbl, None)
+        details_map = meta.get("provenance_details") or {}
+        if isinstance(details_map, dict):
+            for smi, detail_list in details_map.items():
+                if not isinstance(detail_list, list):
+                    continue
+                for detail in detail_list:
+                    if not isinstance(detail, dict):
+                        continue
+                    label = detail.get("label") or default_label
+                    add_provenance(smi, label, detail)
 
     def _print_meta(src, meta):
         if not meta:
             return
         counts = meta.get("counts", {})
         cached = meta.get("cached", False)
+        line = None
         if src == "chembl":
-            print(
-                f"[chembl] targets={counts.get('targets', 0)} assays={counts.get('assays', 0)} activities={counts.get('activities', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('molecules', 0) or len(all_actives)} cached={cached}"
+            line = (
+                "[chembl] targets={targets} assays={assays} activities={activities} "
+                "smiles={smiles} cached={cached}"
+            ).format(
+                targets=counts.get("targets", 0),
+                assays=counts.get("assays", 0),
+                activities=counts.get("activities", 0),
+                smiles=(
+                    len(meta.get("smiles", []))
+                    if "smiles" in meta
+                    else counts.get("molecules", 0) or len(all_actives)
+                ),
+                cached=cached,
             )
         elif src == "bindingdb":
-            print(
-                f"[bindingdb] pdb_hits={counts.get('pdb_hits', 0)} uniprot_hits={counts.get('uniprot_hits', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('pdb_hits', 0) + counts.get('uniprot_hits', 0)} cached={cached}"
+            line = (
+                "[bindingdb] pdb_hits={pdb_hits} uniprot_hits={uniprot_hits} "
+                "smiles={smiles} cached={cached}"
+            ).format(
+                pdb_hits=counts.get("pdb_hits", 0),
+                uniprot_hits=counts.get("uniprot_hits", 0),
+                smiles=(
+                    len(meta.get("smiles", []))
+                    if "smiles" in meta
+                    else counts.get("pdb_hits", 0) + counts.get("uniprot_hits", 0)
+                ),
+                cached=cached,
             )
         elif src == "iuphar":
-            print(
-                f"[iuphar] targets={counts.get('targets', 0)} interactions={counts.get('interactions', 0)} smiles={len(meta.get('smiles', [])) if 'smiles' in meta else counts.get('interactions', 0)} cached={cached}"
+            line = (
+                "[iuphar] targets={targets} interactions={interactions} "
+                "smiles={smiles} cached={cached}"
+            ).format(
+                targets=counts.get("targets", 0),
+                interactions=counts.get("interactions", 0),
+                smiles=(
+                    len(meta.get("smiles", []))
+                    if "smiles" in meta
+                    else counts.get("interactions", 0)
+                ),
+                cached=cached,
             )
         elif src == "drugbank":
-            print(
-                f"[drugbank] smiles={len(meta.get('smiles', [])) if 'smiles' in meta else 0} info={meta}"
-            )
+            line = f"[drugbank] smiles={len(meta.get('smiles', [])) if 'smiles' in meta else 0} info={meta}"
+        if line:
+            print(line)
+            _tee_run_log(run_log_path, line)
 
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -246,6 +324,13 @@ def query_external_sources(
                 rhea_response = sess.get(
                     rhea_uniprot_url, timeout=source_opts["timeout"]
                 )
+                _record_audit(
+                    audit,
+                    "rhea",
+                    "rhea.uniprot_lookup",
+                    rhea_uniprot_url,
+                    response_meta={"uniprot": uniprot_id},
+                )
                 if (
                     rhea_response.status_code == 200
                     and rhea_response.text.strip().startswith("[")
@@ -259,6 +344,13 @@ def query_external_sources(
                                     chebi_smiles_url = f"https://www.ebi.ac.uk/chebi/rest/api/getCompleteEntity?chebiId={chebi_id}"
                                     chebi_xml_response = sess.get(
                                         chebi_smiles_url, timeout=source_opts["timeout"]
+                                    )
+                                    _record_audit(
+                                        audit,
+                                        "rhea",
+                                        "rhea.chebi_lookup",
+                                        chebi_smiles_url,
+                                        response_meta={"chebi_id": chebi_id},
                                     )
                                     if (
                                         chebi_xml_response.status_code == 200
@@ -276,7 +368,17 @@ def query_external_sources(
                                             smiles_start:smiles_end
                                         ].strip()
                                         if smiles:
-                                            local_smiles.append((smiles, "Rhea/ChEBI"))
+                                            label = f"Rhea/ChEBI/{chebi_id}"
+                                            local_smiles.append((smiles, label))
+                                            add_provenance(
+                                                smiles,
+                                                label,
+                                                {
+                                                    "source": "rhea",
+                                                    "chebi_id": chebi_id,
+                                                    "label": label,
+                                                },
+                                            )
                 else:
                     print(
                         "-> Rhea returned an empty or non-JSON response. Skipping ChEBI extraction."
@@ -299,6 +401,8 @@ def query_external_sources(
                 source_opts["chembl_activity_types"],
                 source_opts["chembl_max_phase"],
                 session=sess,
+                audit=audit,
+                max_pages=source_opts.get("chembl_max_pages", 5),
             )
         return [(s, "ChEMBL") for s in smiles], meta
 
@@ -314,6 +418,7 @@ def query_external_sources(
                 source_opts["max_actives_per_source"],
                 source_opts["affinity_cutoff_nm"],
                 session=sess,
+                audit=audit,
             )
         return [(s, "BindingDB") for s in smiles], meta
 
@@ -330,6 +435,7 @@ def query_external_sources(
                 source_opts["iuphar_approved_only"],
                 source_opts["iuphar_primary_only"],
                 session=sess,
+                audit=audit,
             )
         return [(s, "IUPHAR") for s in smiles], meta
 
@@ -352,6 +458,13 @@ def query_external_sources(
                 ligand_response = sess.get(
                     ligand_url, timeout=source_opts["timeout"]
                 ).json()
+                _record_audit(
+                    audit,
+                    "rcsb",
+                    "rcsb.entry",
+                    ligand_url,
+                    response_meta={"pdb_id": pdb_id},
+                )
                 for entity in ligand_response.get("nonpolymer_entity", []):
                     comp_id = entity.get("pdbx_nonpolymer_entity", {}).get(
                         "chem_comp_id"
@@ -363,6 +476,13 @@ def query_external_sources(
                         comp_response = sess.get(
                             chem_comp_url, timeout=source_opts["timeout"]
                         ).json()
+                        _record_audit(
+                            audit,
+                            "rcsb",
+                            "rcsb.chemcomp",
+                            chem_comp_url,
+                            response_meta={"chem_comp_id": comp_id},
+                        )
                         known_smiles = comp_response.get(
                             "pdbx_chem_comp_descriptor", [{}]
                         )
@@ -370,8 +490,16 @@ def query_external_sources(
                             if desc.get("type") == "SMILES":
                                 smi = desc.get("descriptor")
                                 if smi:
-                                    local_smiles.append(
-                                        (smi, f"PDB/ChemComp/{comp_id}")
+                                    label = f"PDB/ChemComp/{comp_id}"
+                                    local_smiles.append((smi, label))
+                                    add_provenance(
+                                        smi,
+                                        label,
+                                        {
+                                            "source": "rcsb",
+                                            "chem_comp_id": comp_id,
+                                            "label": label,
+                                        },
                                     )
                                 break
         except Exception as e:
@@ -405,6 +533,7 @@ def query_external_sources(
                     print(f"[{src}] error={exc}")
                     continue
                 _print_meta(src, meta)
+                merge_provenance_meta(meta, default_label=src)
                 for smi, label in results:
                     add_active(smi, label)
     else:
@@ -417,36 +546,105 @@ def query_external_sources(
                 print(f"[{src}] error={exc}")
                 continue
             _print_meta(src, meta)
+            merge_provenance_meta(meta, default_label=src)
             for smi, label in results:
                 add_active(smi, label)
 
     print(f"-> Found {len(all_actives)} raw active candidates from external sources.")
-    return all_actives
+    return all_actives, smiles_to_sources, provenance_details
 
 
 # --- 3. Filtering and Validation (PHASE 3) ---
 
 
-def validate_and_filter_actives(actives_list):
+def validate_and_filter_actives(
+    actives_list,
+    smiles_to_sources: Optional[Dict[str, Set[str]]] = None,
+    provenance_details=None,
+    *,
+    potency_cutoff_nm: Optional[float] = None,
+    potency_keep_unknown: bool = True,
+    run_log_path: Optional[Path] = None,
+):
     """
     (3) Merges, deduplicates, and filters the list of active metabolites
-        based on RDKit validation and size.
+        based on RDKit validation and size. Returns filtered smiles, source map,
+        and provenance details for kept entries.
     """
     print("## 3. Merging, Deduplicating, and Filtering actives...")
 
-    unique_smiles = {
-        smiles for smiles, source in actives_list if smiles and isinstance(smiles, str)
+    provided_sources = smiles_to_sources or {}
+    combined_sources: Dict[str, Set[str]] = {
+        smi: set(labels) for smi, labels in provided_sources.items()
     }
+    for smiles, source in actives_list:
+        if smiles and isinstance(smiles, str):
+            combined_sources.setdefault(smiles, set()).add(source or "unknown")
+
+    ordered_smiles: List[str] = []
+    for smiles, _ in actives_list:
+        if smiles and smiles not in ordered_smiles:
+            ordered_smiles.append(smiles)
+    for smiles in combined_sources.keys():
+        if smiles not in ordered_smiles:
+            ordered_smiles.append(smiles)
+
+    unique_smiles = set(ordered_smiles)
     valid_actives = []
+    kept_sources: Dict[str, Set[str]] = {}
+    kept_details: Dict[str, List[dict]] = {}
+    potency_enabled = potency_cutoff_nm is not None
+    potency_kept = 0
+    potency_drop_weak = 0
+    potency_drop_unknown = 0
+    potency_samples = []
+    MAX_POTENCY_SAMPLES = 10
 
     print(f"-> Found {len(unique_smiles)} unique SMILES strings.")
 
     EXCLUDE_SMILES = {"O", "C", "[Na+]", "[Cl-]", "[Mg+2]", "[K+]"}
 
-    for smiles in unique_smiles:
+    prov_details_map = provenance_details or {}
+
+    for smiles in ordered_smiles:
+        if potency_enabled:
+            details = (
+                prov_details_map.get(smiles, [])
+                if isinstance(prov_details_map, dict)
+                else []
+            )
+            best_nm = _extract_best_potency_nm(details)
+            if best_nm is None:
+                if not potency_keep_unknown:
+                    potency_drop_unknown += 1
+                    if len(potency_samples) < MAX_POTENCY_SAMPLES:
+                        potency_samples.append(
+                            {
+                                "smiles": smiles,
+                                "reason": "unknown_potency",
+                                "best_nm": None,
+                                "sources": sorted(combined_sources.get(smiles, [])),
+                            }
+                        )
+                    continue
+            else:
+                if potency_cutoff_nm is not None and best_nm > potency_cutoff_nm:
+                    potency_drop_weak += 1
+                    if len(potency_samples) < MAX_POTENCY_SAMPLES:
+                        potency_samples.append(
+                            {
+                                "smiles": smiles,
+                                "reason": "weak_potency",
+                                "best_nm": best_nm,
+                                "sources": sorted(combined_sources.get(smiles, [])),
+                            }
+                        )
+                    continue
+            potency_kept += 1
         if smiles in EXCLUDE_SMILES:
             continue
-
+        if smiles not in unique_smiles:
+            continue
         try:
             mol = Chem.MolFromSmiles(smiles)
             if mol is None:
@@ -460,20 +658,59 @@ def validate_and_filter_actives(actives_list):
                 continue
 
             valid_actives.append(smiles)
+            labels = combined_sources.get(smiles, {"unknown"})
+            label_set = {str(lbl) for lbl in labels if lbl} or {"unknown"}
+            kept_sources[smiles] = label_set
+            details = (
+                prov_details_map.get(smiles)
+                if isinstance(prov_details_map, dict)
+                else None
+            )
+            if details:
+                kept_details[smiles] = list(details)
 
         except Exception:
             continue
 
+    if potency_enabled:
+        summary_line = (
+            "[deepcoy.actives.potency_filter] enabled=true "
+            f"cutoff_nm={potency_cutoff_nm} keep_unknown={potency_keep_unknown} "
+            f"kept={potency_kept} drop_weak={potency_drop_weak} drop_unknown={potency_drop_unknown}"
+        )
+        print(summary_line)
+        _tee_run_log(run_log_path, summary_line)
+        if potency_samples:
+            sample_parts = []
+            for sample in potency_samples:
+                part = (
+                    f"smiles={sample.get('smiles')} "
+                    f"reason={sample.get('reason')} "
+                    f"best_nm={sample.get('best_nm')} "
+                    f"sources={','.join(sample.get('sources') or [])}"
+                )
+                sample_parts.append(part)
+            sample_line = "[deepcoy.actives.potency_filter.sample] " + " | ".join(
+                sample_parts[:MAX_POTENCY_SAMPLES]
+            )
+            print(sample_line)
+            _tee_run_log(run_log_path, sample_line)
+
     print(
         f"-> Final list contains {len(valid_actives)} filtered, unique active metabolites."
     )
-    return valid_actives
+    return valid_actives, kept_sources, kept_details
 
 
 # --- 4. DeepCoy Execution (PHASE 4) ---
 
 
-def write_actives_smiles(final_actives_smiles, output_dir, label):
+def write_actives_smiles(
+    final_actives_smiles: List[str],
+    output_dir,
+    label,
+    names: Optional[List[str]] = None,
+):
     """
     (4) Writes actives to a .smi file for DeepCoy.
     """
@@ -482,14 +719,173 @@ def write_actives_smiles(final_actives_smiles, output_dir, label):
     output_dir.mkdir(parents=True, exist_ok=True)
     actives_smi_path = output_dir / f"{label}_actives.smi"
 
+    names = names or [f"METAB_{i + 1}" for i in range(len(final_actives_smiles))]
+    if len(names) != len(final_actives_smiles):
+        names = [f"METAB_{i + 1}" for i in range(len(final_actives_smiles))]
+
     # Write the Actives SMILES file (SMILES [tab] Name)
     with actives_smi_path.open("w") as f:
-        for i, smiles in enumerate(final_actives_smiles):
-            name = f"METAB_{i + 1}"
+        for smiles, name in zip(final_actives_smiles, names):
             f.write(f"{smiles}\t{name}\n")
 
     print(f"-> Active SMILES written to: {actives_smi_path}")
-    return actives_smi_path
+    return actives_smi_path, names
+
+
+def _read_smiles_with_labels(smi_path: Path) -> List[Tuple[str, str]]:
+    entries: List[Tuple[str, str]] = []
+    if not smi_path.is_file():
+        return entries
+    with smi_path.open() as handle:
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split(None, 1)
+            smiles = parts[0]
+            label = parts[1] if len(parts) > 1 else ""
+            entries.append((label, smiles))
+    return entries
+
+
+def build_provenance_urls(details: List[Dict[str, object]]) -> List[str]:
+    urls: List[str] = []
+    seen: Set[str] = set()
+    for detail in details or []:
+        if not isinstance(detail, dict):
+            continue
+        source = str(detail.get("source") or "").lower()
+        if source == "chembl":
+            for key, tmpl in [
+                (
+                    "target_chembl_id",
+                    "https://www.ebi.ac.uk/chembl/target_report_card/{id}/",
+                ),
+                (
+                    "assay_chembl_id",
+                    "https://www.ebi.ac.uk/chembl/assay_report_card/{id}/",
+                ),
+                ("activity_chembl_id", "https://www.ebi.ac.uk/chembl/activity/{id}"),
+                (
+                    "molecule_chembl_id",
+                    "https://www.ebi.ac.uk/chembl/compound_report_card/{id}/",
+                ),
+            ]:
+                cid = detail.get(key)
+                if cid:
+                    url = tmpl.format(id=cid)
+                    if url not in seen:
+                        urls.append(url)
+                        seen.add(url)
+        elif source == "iuphar":
+            ligand_id = detail.get("ligandId") or detail.get("ligand_id")
+            if ligand_id:
+                url = f"https://www.guidetopharmacology.org/GRAC/LigandDisplayForward?ligandId={ligand_id}"
+                if url not in seen:
+                    urls.append(url)
+                    seen.add(url)
+        elif source == "bindingdb":
+            lig_id = detail.get("ligand_id")
+            if lig_id:
+                url = f"https://www.bindingdb.org/bind/chemsearch/marvin/MolStructure.jsp?monomerid={lig_id}"
+                if url not in seen:
+                    urls.append(url)
+                    seen.add(url)
+        elif source == "rcsb":
+            comp_id = detail.get("chem_comp_id")
+            if comp_id:
+                url = f"https://www.rcsb.org/chemical/{comp_id}"
+                if url not in seen:
+                    urls.append(url)
+                    seen.add(url)
+        elif source == "rhea":
+            chebi_id = detail.get("chebi_id")
+            if chebi_id:
+                url = f"https://www.ebi.ac.uk/chebi/searchId.do?chebiId={chebi_id}"
+                if url not in seen:
+                    urls.append(url)
+                    seen.add(url)
+    return urls
+
+
+def _normalize_units_to_nm(units: str) -> Optional[float]:
+    unit = str(units or "").strip().lower()
+    unit = unit.replace("µ", "u").replace("μ", "u")
+    if not unit:
+        return None
+    if unit in {"pm", "picomolar"}:
+        return 0.001
+    if unit in {"nm", "nanomolar"}:
+        return 1.0
+    if unit in {"um", "micromolar"}:
+        return 1000.0
+    if unit in {"mm", "millimolar"}:
+        return 1_000_000.0
+    return None
+
+
+def _extract_best_potency_nm(details: List[dict]) -> Optional[float]:
+    best_nm: Optional[float] = None
+    for detail in details or []:
+        if not isinstance(detail, dict):
+            continue
+        val = detail.get("standard_value")
+        if val is None:
+            val = detail.get("value")
+        try:
+            num_val = float(val)
+        except Exception:
+            continue
+        units = detail.get("standard_units") or detail.get("units")
+        mult = _normalize_units_to_nm(units)
+        if mult is None:
+            continue
+        relation = (
+            str(detail.get("standard_relation") or detail.get("relation") or "=")
+            .strip()
+            .replace(" ", "")
+        )
+        if relation in {">", ">="}:
+            continue
+        if relation not in {"", "=", "<", "<="}:
+            continue
+        candidate = num_val * mult
+        if best_nm is None or candidate < best_nm:
+            best_nm = candidate
+    return best_nm
+
+
+def write_provenance_files(
+    label: str,
+    output_dir: Path,
+    labeled_smiles: List[Tuple[str, str]],
+    smiles_to_sources: Dict[str, Set[str]],
+    provenance_details: Dict[str, List[dict]],
+) -> Tuple[Optional[Path], Optional[Path]]:
+    if not labeled_smiles:
+        return None, None
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tsv_path = output_dir / f"{label}_actives.provenance.tsv"
+    json_path = output_dir / f"{label}_actives.provenance.json"
+    records: List[Dict[str, object]] = []
+    with tsv_path.open("w") as handle:
+        handle.write("metab_id\tsmiles\tsources_joined\n")
+        for idx, (metab_id, smiles) in enumerate(labeled_smiles, start=1):
+            metab = metab_id or f"METAB_{idx}"
+            sources = sorted(smiles_to_sources.get(smiles, [])) or ["unknown"]
+            handle.write(f"{metab}\t{smiles}\t{';'.join(sources)}\n")
+            details = provenance_details.get(smiles, [])
+            records.append(
+                {
+                    "metab_id": metab,
+                    "smiles": smiles,
+                    "sources": sources,
+                    "browse_urls": build_provenance_urls(details),
+                    "details": details,
+                }
+            )
+    json_path.write_text(json.dumps(records, indent=2))
+    return tsv_path, json_path
 
 
 def _parse_allowed_atom_list(raw_value: Optional[str]):
@@ -518,6 +914,168 @@ def _tee_run_log(run_log_path: Optional[Path], line: str) -> None:
             handle.write(line.rstrip("\n") + "\n")
     except Exception:
         pass
+
+
+def write_source_audit_artifact(
+    audit: Optional["SourceAudit"], dest: Path, run_log_path: Optional[Path] = None
+) -> Optional[Path]:
+    if not audit or not getattr(audit, "enabled", False):
+        return None
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"requests": audit.as_json()}
+        dest.write_text(json.dumps(payload, indent=2))
+        line = f"[deepcoy.audit.saved] path={dest} requests={len(payload.get('requests', []))}"
+        print(line)
+        _tee_run_log(run_log_path, line)
+        return dest
+    except Exception as exc:  # pragma: no cover - defensive
+        warn_line = (
+            f"[deepcoy.audit.saved] warning=write_failed path={dest} error={exc}"
+        )
+        print(warn_line)
+        _tee_run_log(run_log_path, warn_line)
+        return None
+
+
+def _parse_sources_value(raw_value: Optional[str]) -> List[str]:
+    tokens: List[str] = []
+    if raw_value is None:
+        return tokens
+    seen = set()
+    for token in re.split(r"[;,\s]+", str(raw_value)):
+        cleaned = token.strip().lower()
+        mapped = SOURCE_ALIASES.get(cleaned, cleaned)
+        if not mapped or mapped in seen:
+            continue
+        tokens.append(mapped)
+        seen.add(mapped)
+    return tokens
+
+
+def _filter_known_sources(sources: List[str]) -> Tuple[List[str], List[str]]:
+    resolved: List[str] = []
+    unknown: List[str] = []
+    seen = set()
+    for src in sources:
+        if src not in VALID_SOURCES:
+            if src not in unknown:
+                unknown.append(src)
+            continue
+        if src in seen:
+            continue
+        resolved.append(src)
+        seen.add(src)
+    return resolved, unknown
+
+
+def resolve_sources(
+    args_sources: Optional[str],
+    cfg,
+) -> Tuple[List[str], str, str]:
+    cli_sources = _parse_sources_value(args_sources)
+    try:
+        cfg_raw_active = cfg.get("DEEPCOY_ACTIVE_SOURCES")
+        cfg_raw_legacy = cfg.get("DEEPCOY_SOURCES")
+    except Exception:
+        cfg_raw_active = None
+        cfg_raw_legacy = None
+    cfg_active_sources = (
+        _parse_sources_value(cfg_raw_active) if cfg_raw_active is not None else []
+    )
+    cfg_sources = (
+        _parse_sources_value(cfg_raw_legacy) if cfg_raw_legacy is not None else []
+    )
+
+    if cli_sources:
+        return cli_sources, "cli", args_sources if args_sources is not None else ""
+    if cfg_active_sources:
+        return cfg_active_sources, "config_active", str(cfg_raw_active)
+    if cfg_sources:
+        return cfg_sources, "config", str(cfg_raw_legacy)
+    return list(DEFAULT_SOURCES), "default", ",".join(DEFAULT_SOURCES)
+
+
+def build_source_audit_lines(
+    uniprot_id: str,
+    ec_numbers: List[str],
+    pdb_id: str,
+    source_opts,
+    sources: List[str],
+) -> List[str]:
+    chembl_types_raw = source_opts.get("chembl_activity_types") if source_opts else []
+    if isinstance(chembl_types_raw, str):
+        chembl_types = [t for t in re.split(r"[;,\s]+", chembl_types_raw) if t.strip()]
+    else:
+        chembl_types = list(chembl_types_raw or [])
+    chembl_type_param = ",".join(chembl_types)
+    cutoff = source_opts.get("affinity_cutoff_nm") if source_opts else None
+    cutoff_str = str(cutoff) if cutoff is not None else ""
+    approved_only = source_opts.get("iuphar_approved_only") if source_opts else None
+    primary_only = source_opts.get("iuphar_primary_only") if source_opts else None
+    approved_str = str(bool(approved_only)).lower()
+    primary_str = str(bool(primary_only)).lower()
+    data_dir = source_opts.get("drugbank_data_dir") if source_opts else None
+
+    lines: List[str] = []
+    for src in sources:
+        if src == "chembl":
+            base = "https://www.ebi.ac.uk/chembl/api/data"
+            lines.append(
+                f"[deepcoy.source_audit] source=chembl url={base}/target?target_components__accession={uniprot_id}&format=json"
+            )
+            lines.append(
+                "[deepcoy.source_audit] source=chembl url_template=https://www.ebi.ac.uk/chembl/api/data/assay?target_chembl_id=<TARGET_CHEMBL_ID>&assay_type=B&relationship_type=D&format=json"
+            )
+            lines.append(
+                f"[deepcoy.source_audit] source=chembl url_template=https://www.ebi.ac.uk/chembl/api/data/activity?assay_chembl_id=<ASSAY_CHEMBL_ID>&standard_type__in={chembl_type_param}&format=json"
+            )
+            lines.append(
+                "[deepcoy.source_audit] source=chembl url_template=https://www.ebi.ac.uk/chembl/api/data/molecule/<MOLECULE_CHEMBL_ID>.json"
+            )
+        elif src == "bindingdb":
+            base = "https://bindingdb.org"
+            lines.append(
+                f"[deepcoy.source_audit] source=bindingdb url={base}/rest/getLigandsByPDBs?pdb={pdb_id}&cutoff={cutoff_str}&identity=100&response=application/json"
+            )
+            lines.append(
+                f"[deepcoy.source_audit] source=bindingdb url={base}/rest/getLigandsByUniprots?uniprot={uniprot_id}&cutoff={cutoff_str}&response=application/json"
+            )
+        elif src == "iuphar":
+            base = "https://www.guidetopharmacology.org/services"
+            lines.append(
+                f"[deepcoy.source_audit] source=iuphar url={base}/targets?accession={uniprot_id}"
+            )
+            for ec in ec_numbers or []:
+                lines.append(
+                    f"[deepcoy.source_audit] source=iuphar url={base}/targets?ecNumber={ec}"
+                )
+            lines.append(
+                f"[deepcoy.source_audit] source=iuphar url_template={base}/targets/<TARGET_ID>/interactions?approved={approved_str}&primaryTarget={primary_str}"
+            )
+            lines.append(
+                f"[deepcoy.source_audit] source=iuphar url_template={base}/ligands/<LIGAND_ID>/structure"
+            )
+        elif src == "rcsb":
+            base = "https://data.rcsb.org/rest/v1/core"
+            lines.append(
+                f"[deepcoy.source_audit] source=rcsb url={base}/entry/{pdb_id}"
+            )
+            lines.append(
+                f"[deepcoy.source_audit] source=rcsb url_template={base}/chemcomp/<CHEM_COMP_ID>"
+            )
+        elif src == "rhea":
+            lines.append(
+                f"[deepcoy.source_audit] source=rhea url=https://www.rhea-db.org/rest/ws/reaction/uniprot/{uniprot_id}"
+            )
+            lines.append(
+                "[deepcoy.source_audit] source=rhea url_template=https://www.ebi.ac.uk/chebi/rest/api/getCompleteEntity?chebiId=<CHEBI_ID>"
+            )
+        elif src == "drugbank":
+            lines.append(
+                f"[deepcoy.source_audit] source=drugbank local_data_dir={data_dir or 'none'}"
+            )
+    return lines
 
 
 def filter_actives_for_deepcoy(
@@ -1264,8 +1822,11 @@ def parse_args():
     )
     parser.add_argument(
         "--sources",
-        default="chembl,bindingdb,iuphar,rcsb,rhea",
-        help="Comma-separated sources to query (default: chembl,bindingdb,iuphar,rcsb,rhea).",
+        default=None,
+        help=(
+            "Comma-separated sources to query. If omitted, uses config.txt DEEPCOY_ACTIVE_SOURCES (preferred) or DEEPCOY_SOURCES, "
+            f"else falls back to built-in default {','.join(DEFAULT_SOURCES)}."
+        ),
     )
     parser.add_argument(
         "--http-timeout",
@@ -1325,6 +1886,12 @@ def parse_args():
         type=int,
         default=None,
         help="Optional ChEMBL max_phase upper bound to bias toward approved drugs.",
+    )
+    parser.add_argument(
+        "--chembl-max-pages",
+        type=int,
+        default=5,
+        help="Maximum number of ChEMBL pages to follow for paginated endpoints (default: 5).",
     )
     parser.add_argument(
         "--max-source-workers",
@@ -1618,10 +2185,30 @@ def main():
     num_samples = args.deepcoy_num_samples
     allowed_atoms_list, _ = _parse_allowed_atom_list(args.deepcoy_allowed_atoms)
     allowed_atoms_str = ",".join(allowed_atoms_list)
+    chembl_max_pages = args.chembl_max_pages
+    cfg_chembl_pages = cfg.get("DEEPCOY_CHEMBL_MAX_PAGES")
+    if cfg_chembl_pages is not None:
+        try:
+            chembl_max_pages = int(cfg_chembl_pages)
+        except Exception:
+            chembl_max_pages = chembl_max_pages
+    chembl_max_pages = max(1, chembl_max_pages or 5)
+    potency_cutoff_nm: Optional[float] = None
+    cfg_potency_raw = cfg.get("DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM")
+    if cfg_potency_raw is not None:
+        try:
+            cutoff_str = str(cfg_potency_raw).strip()
+            potency_cutoff_nm = float(cutoff_str) if cutoff_str else None
+        except Exception:
+            potency_cutoff_nm = None
+    potency_keep_unknown = True
+    if "DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN" in cfg:
+        potency_keep_unknown = bool(cfg.get("DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN"))
 
-    sources = [s.strip().lower() for s in (args.sources or "").split(",") if s.strip()]
-    if not sources:
-        sources = DEFAULT_SOURCES
+    resolved_sources, sources_origin, raw_sources_value = resolve_sources(
+        args.sources, cfg
+    )
+    sources, unknown_sources = _filter_known_sources(resolved_sources)
     source_opts = {
         "timeout": args.http_timeout,
         "retries": args.http_retries,
@@ -1633,10 +2220,40 @@ def main():
             t.strip() for t in args.chembl_activity_types.split(",") if t.strip()
         ],
         "chembl_max_phase": args.chembl_max_phase,
+        "chembl_max_pages": chembl_max_pages,
         "drugbank_data_dir": resolve_path(args.drugbank_data_dir, repo_root)
         if args.drugbank_data_dir
         else None,
     }
+    if unknown_sources:
+        warning_line = f"[deepcoy.sources] warning=unknown_sources ignored={','.join(unknown_sources)}"
+        print(warning_line)
+        _tee_run_log(run_log_path, warning_line)
+    if not sources:
+        sources = list(DEFAULT_SOURCES)
+        fallback_line = f"[deepcoy.sources] warning=no_valid_sources_fallback resolved={','.join(sources)}"
+        print(fallback_line)
+        _tee_run_log(run_log_path, fallback_line)
+        if sources_origin != "cli":
+            sources_origin = "default"
+        if not raw_sources_value:
+            raw_sources_value = ",".join(DEFAULT_SOURCES)
+    sources_log_line = f"[deepcoy.sources] source={sources_origin} value={raw_sources_value} resolved={','.join(sources)}"
+    print(sources_log_line)
+    _tee_run_log(run_log_path, sources_log_line)
+    potency_cfg_line = (
+        "[deepcoy.actives.potency_config] "
+        f"cutoff_nm={potency_cutoff_nm if potency_cutoff_nm is not None else 'none'} "
+        f"keep_unknown={potency_keep_unknown}"
+    )
+    print(potency_cfg_line)
+    _tee_run_log(run_log_path, potency_cfg_line)
+    audit_enabled = bool(cfg.get("DEEPCOY_SOURCE_AUDIT", False))
+    try:
+        audit_max_lines = int(cfg.get("DEEPCOY_SOURCE_AUDIT_MAX_LINES", 200) or 200)
+    except Exception:
+        audit_max_lines = 200
+    audit = SourceAudit(enabled=audit_enabled, max_lines=audit_max_lines)
 
     if args.verbose:
         print(f"-> Repo root: {repo_root}")
@@ -1701,10 +2318,24 @@ def main():
                     file=sys.stderr,
                 )
                 return 1
-
-    all_actives = []
+    audit_lines = []
     if not offline:
-        all_actives = query_external_sources(
+        audit_lines = build_source_audit_lines(
+            uniprot_id or "UNKNOWN",
+            ec_numbers or [],
+            pdb_id,
+            source_opts,
+            sources,
+        )
+        for line in audit_lines:
+            print(line)
+            _tee_run_log(run_log_path, line)
+
+    all_actives: List[Tuple[str, str]] = []
+    smiles_to_sources: Dict[str, Set[str]] = {}
+    provenance_details: Dict[str, List[dict]] = {}
+    if not offline:
+        all_actives, smiles_to_sources, provenance_details = query_external_sources(
             uniprot_id,
             ec_numbers,
             pdb_id,
@@ -1712,14 +2343,40 @@ def main():
             cache_dir,
             source_opts,
             max_workers=args.max_source_workers,
+            run_log_path=run_log_path,
+            audit=audit,
         )
-    final_actives_smiles = validate_and_filter_actives(all_actives)
+    if audit and audit.enabled:
+        for line in audit.summary_lines():
+            print(line)
+            _tee_run_log(run_log_path, line)
+    (
+        final_actives_smiles,
+        smiles_to_sources,
+        provenance_details,
+    ) = validate_and_filter_actives(
+        all_actives,
+        smiles_to_sources=smiles_to_sources,
+        provenance_details=provenance_details,
+        potency_cutoff_nm=potency_cutoff_nm,
+        potency_keep_unknown=potency_keep_unknown,
+        run_log_path=run_log_path,
+    )
 
     if not final_actives_smiles:
         if args.fallback_smiles:
             print("WARNING: No actives found; using fallback SMILES for smoke testing.")
-            final_actives_smiles = validate_and_filter_actives(
-                [(args.fallback_smiles, "fallback")]
+            (
+                final_actives_smiles,
+                smiles_to_sources,
+                provenance_details,
+            ) = validate_and_filter_actives(
+                [(args.fallback_smiles, "fallback")],
+                smiles_to_sources=smiles_to_sources,
+                provenance_details=provenance_details,
+                potency_cutoff_nm=potency_cutoff_nm,
+                potency_keep_unknown=potency_keep_unknown,
+                run_log_path=run_log_path,
             )
 
         if not final_actives_smiles:
@@ -1764,6 +2421,7 @@ def main():
     if force and artifact_dir.exists():
         shutil.rmtree(artifact_dir, ignore_errors=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _cleanup_staging(reason: str = "cleanup") -> None:
         if staging_dir and staging_dir.exists():
@@ -1776,7 +2434,12 @@ def main():
             else:
                 shutil.rmtree(staging_dir, ignore_errors=True)
 
-    actives_smi_path = write_actives_smiles(
+    if audit and audit.enabled:
+        write_source_audit_artifact(
+            audit, cache_dir / "source_audit.json", run_log_path=run_log_path
+        )
+
+    actives_smi_path, _ = write_actives_smiles(
         final_actives_smiles, work_output_dir, label
     )
     try:
@@ -1806,6 +2469,23 @@ def main():
             )
         _cleanup_staging()
         return 1
+    filtered_entries = _read_smiles_with_labels(actives_smi_path)
+    filtered_sources = {
+        smi: smiles_to_sources.get(smi, {"unknown"}) for _, smi in filtered_entries
+    }
+    filtered_details = {
+        smi: provenance_details.get(smi, []) for _, smi in filtered_entries
+    }
+    prov_tsv, prov_json = write_provenance_files(
+        label, cache_dir, filtered_entries, filtered_sources, filtered_details
+    )
+    if prov_tsv:
+        prov_line = (
+            f"[deepcoy.provenance] tsv={prov_tsv} json={prov_json or 'none'} "
+            f"n={len(filtered_entries)}"
+        )
+        print(prov_line)
+        _tee_run_log(run_log_path, prov_line)
     actives_sdf_path = work_output_dir / "deepcoy_actives.sdf"
     convert_smi_to_sdf(actives_smi_path, actives_sdf_path)
     actives_log_line = (

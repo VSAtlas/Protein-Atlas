@@ -64,8 +64,8 @@ from path_router import make_paths
 from propka_wire import pdb2pqr_protonate
 
 from installation import load_config
-import activesite as _activesite_mod
-from activesite import (
+import pdb_fixer as _activesite_mod
+from pdb_fixer import (
     fix_element_columns_in_file,
     scan_helium_counts,
     assert_no_helium_in_hydrogen_names,

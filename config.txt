@@ -74,6 +74,13 @@ DEEPCOY_USE_ARGMAX_GENERATION=false
 DEEPCOY_TRY_DIFFERENT_STARTING=true #on true the starting seed starts at a different number, increases decoy diversity on true
 DEEPCOY_NUM_DIFFERENT_STARTING=5 #higher is more diverse
 DEEPCOY_KEEP_CHUNKS=true
+DEEPCOY_SOURCES=chembl,bindingdb,rcsb,rhea
+# Comma-separated actives sources for generate_dud_library.py. CLI --sources overrides.
+DEEPCOY_ACTIVE_SOURCES=chembl,bindingdb,rcsb,rhea
+DEEPCOY_SOURCE_AUDIT=true
+DEEPCOY_SOURCE_AUDIT_MAX_LINES=200
+DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM=
+DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN=true
 
 
 
@@ -295,9 +302,9 @@ CTRL_REDOCK_NMODES =9
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
 USE_GNINA = false
-USE_LEDOCK = true
-USE_DOCK6 = true
-USE_SCORCH = true
+USE_LEDOCK = false
+USE_DOCK6 = false
+USE_SCORCH = false
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
 SCORCH_TOP_FRACTION = 0.1
@@ -631,8 +638,3 @@ LOG_LEVEL_FILE = all
 LOG_LEVEL_CONSOLE = all
 LOG_TOPICS = all
 QUIET_CONSOLE = false
-DEEPCOY_DECOYS_PER_ACTIVE=1
-DEEPCOY_DECOYS_PER_ACTIVE=1
-DEEPCOY_DECOYS_PER_ACTIVE=1
-DEEPCOY_DECOYS_PER_ACTIVE=1
-DEEPCOY_DECOYS_PER_ACTIVE=50

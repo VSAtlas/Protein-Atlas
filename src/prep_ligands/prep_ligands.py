@@ -19,7 +19,7 @@ if "prep_ligands" not in sys.modules:
     pkg.__path__ = [str(SRC_DIR / "prep_ligands")]
     sys.modules["prep_ligands"] = pkg
 
-from activesite import fix_element_columns_in_file  # noqa: E402,F401
+from pdb_fixer import fix_element_columns_in_file  # noqa: E402,F401
 
 try:
     from prep_ligands.prep_ligands_bulk import (  # noqa: E402,F401

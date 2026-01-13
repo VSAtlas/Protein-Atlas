@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from installation import load_config
-from activesite import (
+from pdb_fixer import (
     load_canonical_cofactors,
     load_canonical_metals,
     load_canonical_waters,

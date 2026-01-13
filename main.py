@@ -210,7 +210,7 @@ Examples:
   python main.py --pdbs "1BN1,2OJ9" --single imatinib
 
 """
-from activesite import get_atom_rules
+from pdb_fixer import get_atom_rules
 import sys
 import logging
 import time

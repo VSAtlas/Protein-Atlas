@@ -17,9 +17,7 @@ import argparse
 from typing import Dict, List, Tuple, Optional
 import logging
 
-# >>> PATHS IMPORT START
 from .path_router import make_paths
-# >>> PATHS IMPORT END
 
 logger = logging.getLogger("context_ph")
 if not logger.handlers:
@@ -34,11 +32,23 @@ logger.setLevel(logging.INFO)
 
 def _project_root() -> str:
     here = os.path.abspath(os.path.dirname(__file__))
-    return os.path.abspath(os.path.join(here))
+
+    # Walk upward until we find the repo root that contains chemdb/context_ph_presets.json
+    cur = here
+    for _ in range(8):  # safety bound
+        candidate = os.path.join(cur, "chemdb", "context_ph_presets.json")
+        if os.path.isfile(candidate):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    # Fallback for the common layout: <repo>/src/path_router/context_ph.py
+    return os.path.abspath(os.path.join(here, "..", ".."))
 
 
 def _presets_path() -> str:
-    # chemdb/context_ph_presets.json relative to this module
     return os.path.join(_project_root(), "chemdb", "context_ph_presets.json")
 
 

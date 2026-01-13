@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from activesite import (
+from pdb_fixer import (
     assert_no_helium_in_hydrogen_names,
     fix_pdb_elements,
     fix_element_columns_in_file,

@@ -18,7 +18,6 @@ from rdkit.Chem.MolStandardize import rdMolStandardize
 from .pose_validation import compute_redock_rmsd
 from prep_ligands.library_index import LibraryIndex
 from path_router.path_router import Paths
-from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
 
 
@@ -1189,6 +1188,8 @@ def prepare_and_filter_ligands(
         allowed_roots: list[Path],
         logger: logging.Logger,
     ) -> list[Path]:
+        from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
+
         resolved_roots = _dedup_index_roots([Path(r) for r in allowed_roots if r])
         resolved_existing = [r for r in resolved_roots if r.exists()]
         logger.info(

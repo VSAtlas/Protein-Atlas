@@ -122,7 +122,7 @@ def extract_ligands_to_nolig(paths: Paths, logger: logging.Logger) -> Tuple[int,
     create/update nolig/<PDB>_nolig.pdb, and return (n_controls, control_stems).
     Compatible with multiple legacy signatures of activesite.extract_and_remove_ligands().
     """
-    from activesite import extract_and_remove_ligands  # authoritative extractor
+    from ligand_pocket import extract_and_remove_ligands  # authoritative extractor
 
     # Ensure intermediate dirs exist and clear the malformed log for a fresh run
     paths.ligand_output_dir.mkdir(parents=True, exist_ok=True)
