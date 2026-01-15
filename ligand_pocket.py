@@ -1,7 +1,10 @@
+import json
 import os
 import logging
+import re
 from collections import defaultdict
-from typing import List
+from pathlib import Path
+from typing import Dict, List, Tuple
 
 from Bio.PDB import NeighborSearch, PDBParser
 
@@ -158,3 +161,159 @@ def compute_box_from_ligand_coords(coords):
 
     box_size = (x_range, y_range, z_range)
     return center, box_size
+
+
+def parse_hetnam_map(pdb_path: str) -> dict[str, str]:
+    """
+    Parse HETNAM records into {HET_ID: concatenated_name}, uppercasing names for matching.
+    """
+    het_parts: dict[str, List[str]] = defaultdict(list)
+    try:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if not line.startswith("HETNAM"):
+                    continue
+                het_id = line[11:14].strip().upper()
+                if not het_id:
+                    continue
+                name_part = line[15:].strip()
+                if name_part:
+                    het_parts[het_id].append(name_part)
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[hetnam.parse] failed for %s err=%s", pdb_path, exc)
+        return {}
+
+    hetnam_map: dict[str, str] = {}
+    for het_id, parts in het_parts.items():
+        joined = " ".join(p.strip() for p in parts if p.strip())
+        hetnam_map[het_id] = joined.upper() if joined else ""
+    return hetnam_map
+
+
+def _coords_from_lines(lines: List[str]) -> list[Tuple[float, float, float]]:
+    coords: list[Tuple[float, float, float]] = []
+    for line in lines:
+        if not line.startswith(("HETATM", "ATOM  ")):
+            continue
+        try:
+            x = float(line[30:38])
+            y = float(line[38:46])
+            z = float(line[46:54])
+            coords.append((x, y, z))
+        except ValueError:
+            logger.warning("[pockets.json] invalid coord line skipped: %s", line.strip())
+    return coords
+
+
+def build_ligand_pockets_manifest(
+    pdb_path: str, ligands_dict: Dict[tuple, List[str]], logger=logging
+) -> dict:
+    exclusion = pdb_fixer.get_ligand_exclusion_spec()
+    hetnam_map = parse_hetnam_map(pdb_path)
+
+    exclude_ids = set(exclusion.get("exclude_het_ids", set()))
+    exclude_kw = list(exclusion.get("exclude_het_name_keywords", []))
+    solvent_res = set(exclusion.get("remove_as_solvent_resnames", set()))
+    glycan_res = set(exclusion.get("remove_as_glycan_resnames", set()))
+
+    pockets: list[dict] = []
+    excluded: list[dict] = []
+
+    stem = Path(pdb_path).stem
+    pdb_id = re.sub(r"(?i)(_nolig(_cleaned)?|_cleaned|_fixed)$", "", stem).upper()
+
+    for key, lines in ligands_dict.items():
+        chain, resname, resnum = key
+        resname_u = (resname or "").strip().upper()
+        chain_u = (chain or "").strip() or "-"
+        resnum_s = str(resnum).strip() if resnum is not None else ""
+        resnum_u = resnum_s or "?"
+        het_name_upper = hetnam_map.get(resname_u, "") or ""
+
+        reason = ""
+        if resname_u in exclude_ids:
+            reason = "resname_in_exclude_het_ids"
+        elif resname_u in solvent_res:
+            reason = "remove_as_solvent_resname"
+        elif resname_u in glycan_res:
+            reason = "remove_as_glycan_resname"
+        else:
+            for kw in sorted(exclude_kw, key=lambda x: len(str(x)), reverse=True):
+                kw_up = (kw or "").upper()
+                if kw_up and kw_up in het_name_upper:
+                    reason = f"het_name_keyword:{kw_up}"
+                    break
+
+        if reason:
+            excluded.append(
+                {
+                    "ligand_resname": resname_u,
+                    "ligand_chain": chain_u,
+                    "ligand_resnum": resnum_u,
+                    "reason": reason,
+                }
+            )
+            continue
+
+        coords = _coords_from_lines(lines)
+        if not coords:
+            logger.warning(
+                "[pockets.json] skipping ligand with no coords resname=%s chain=%s resnum=%s",
+                resname_u,
+                chain_u,
+                resnum_u,
+            )
+            continue
+
+        xs, ys, zs = zip(*coords)
+        atom_count = len(coords)
+        center = [sum(xs) / atom_count, sum(ys) / atom_count, sum(zs) / atom_count]
+        bounds = {
+            "min": [min(xs), min(ys), min(zs)],
+            "max": [max(xs), max(ys), max(zs)],
+        }
+
+        pockets.append(
+            {
+                "ligand_resname": resname_u,
+                "ligand_chain": chain_u,
+                "ligand_resnum": resnum_u,
+                "protein_chain": chain_u,
+                "het_name": het_name_upper,
+                "atom_count": atom_count,
+                "center": center,
+                "bounds": bounds,
+                "coords": [[x, y, z] for x, y, z in coords],
+            }
+        )
+
+    pocket_chains = sorted(
+        {p["protein_chain"] for p in pockets if p.get("protein_chain")}
+    )
+    return {
+        "pdb_id": pdb_id,
+        "pocket_chains": pocket_chains,
+        "pockets": pockets,
+        "excluded": excluded,
+    }
+
+
+def write_pockets_json(
+    pdb_path: str, ligands_dict: Dict[tuple, List[str]], out_path: Path, logger=logging
+) -> Path:
+    manifest = build_ligand_pockets_manifest(pdb_path, ligands_dict, logger=logger)
+
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    logger.info(
+        "[pockets.json] wrote=%s included=%d excluded=%d path=%s",
+        Path(pdb_path).name,
+        len(manifest.get("pockets", [])),
+        len(manifest.get("excluded", [])),
+        out,
+    )
+    return out

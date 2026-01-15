@@ -26,7 +26,7 @@ git push -u origin "$branch"
 
 JUST push and commit
 git add .
-git commit -m "michael 1/10/2026"
+git commit -m "michael 1/10/2026" --no-verify
 git push origin main
 
 

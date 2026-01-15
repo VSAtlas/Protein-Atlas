@@ -79,9 +79,12 @@ DEEPCOY_SOURCES=chembl,bindingdb,rcsb,rhea
 DEEPCOY_ACTIVE_SOURCES=chembl,bindingdb,rcsb,rhea
 DEEPCOY_SOURCE_AUDIT=true
 DEEPCOY_SOURCE_AUDIT_MAX_LINES=200
-DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM=
-DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN=true
-
+CHEMBL_RELATIONSHIP_TYPE_STRICT=true
+CHEMBL_FALLBACK_RELAX_RELATIONSHIP=true
+CHEMBL_FALLBACK_ACTIVITY_BY_TARGET=true
+CHEMBL_ACTIVITY_LIMIT=200
+DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM=10 #1 = 1nM, 10 = 10nM etc.
+DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN=true 
 
 
 
@@ -304,11 +307,14 @@ CTRL_REDOCK_NMODES =9
 USE_GNINA = false
 USE_LEDOCK = false
 USE_DOCK6 = false
-USE_SCORCH = false
+USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
 SCORCH_TOP_FRACTION = 0.1
 CNN_TOP_FRACTION = 0.1
+#this turns on the pocket_eval.json files 
+POCKET_EVAL=true
+
 
 
 CHAIN_PRUNE=1
@@ -429,7 +435,7 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
-TEST_MODE_ENABLE = dud+fda
+TEST_MODE_ENABLE = dud
 TEST_LIBRARY_MAP = {
     "TEST": "test_library_10",
     "TEMP": "test_library_10",
@@ -540,7 +546,7 @@ TEST_LIBRARY_MAP = {
     "3HL5": "xiap",
     "2OWB": "plk1",
     "1BN1": "cah2",
-    "1T46": "kit",
+    #"1T46": "kit",
     "2GQG": "abl1",
     "2HYY": "abl1",
     "2WGJ": "met",
@@ -627,6 +633,9 @@ TEST_LIBRARY_MAP = {
     "3TYL": "tysy",
     "5W3J": "ace",
     "6KKN": "cah2",
+    "bNJS": "bench_pur2",
+    "bOJG": "bench_mk01",
+    "bNNQ": "bench_fabp4"
 }
 
 #specify which pdb

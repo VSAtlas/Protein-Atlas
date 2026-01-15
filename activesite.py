@@ -267,6 +267,18 @@ def main(pdb_file):
             str(ligands_dir),
         )
 
+        try:
+            processed_root = getattr(paths, "root_pdb_dir", None)
+            if processed_root is None:
+                processed_root = Path(paths.work_dir).parent
+            pockets_dir = Path(processed_root) / "pockets"
+            pockets_json_out = pockets_dir / "pockets.json"
+            ligand_pocket.write_pockets_json(
+                str(src_pdb_for_box), ligands, pockets_json_out, logger
+            )
+        except Exception as exc:  # pragma: no cover - avoid blocking pocket selection
+            logger.warning("[activesite.main] pockets.json write failed: %s", exc)
+
         n_lig = len(ligands) if ligands else 0
         logger.info(
             "[activesite.main] extract_and_remove_ligands in=%s out=%s ligands_dir=%s n_ligands=%s",
@@ -276,6 +288,74 @@ def main(pdb_file):
             n_lig,
         )
 
+        pocket_eval_override = None
+        pocket_eval_meta = None
+        if config.get("POCKET_EVAL"):
+            try:
+                if not paths.nolig_pdb_path.exists() and Path(pdb_cleaned).exists():
+                    try:
+                        shutil.copyfile(pdb_cleaned, paths.nolig_pdb_path)
+                        logger.info(
+                            "[pocket-eval] copied cleaned PDB to nolig path=%s",
+                            paths.nolig_pdb_path,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[pocket-eval] nolig copy failed: %s", exc
+                        )
+                if not receptor_pdbqt_path.exists():
+                    logger.info(
+                        "[pocket-eval] receptor_missing; preparing receptor pdb=%s",
+                        pdb_id,
+                    )
+                    _, receptor_ready = prepare_receptor(config, paths, logger)
+                    if receptor_ready:
+                        receptor_pdbqt_path = Path(receptor_ready)
+                if receptor_pdbqt_path.exists():
+                    from pocket_eval import select_pocket_with_eval
+
+                    cfg_eval = dict(config)
+                    run_id = cfg_eval.get("RUN_ID") or os.environ.get("ATLAS_RUN_ID")
+                    if run_id:
+                        cfg_eval["RUN_ID"] = str(run_id)
+                    eval_result = select_pocket_with_eval(
+                        pdb_id=pdb_id,
+                        cfg=cfg_eval,
+                        logger=logger,
+                        pockets_json_path=pockets_json_out,
+                        receptor_pdbqt_path=receptor_pdbqt_path,
+                    )
+                    if eval_result:
+                        center_override = eval_result.get("center")
+                        box_override = eval_result.get("box_size")
+                        if center_override and box_override:
+                            pocket_eval_override = (
+                                center_override,
+                                box_override,
+                            )
+                            pocket_eval_meta = {
+                                "pocket_id": eval_result.get("pocket_id"),
+                                "selection_reason": eval_result.get("selection_reason"),
+                                "performance_path": eval_result.get("performance_path"),
+                            }
+                            logger.info(
+                                "[pocket-eval] selected pocket_id=%s reason=%s",
+                                pocket_eval_meta.get("pocket_id"),
+                                pocket_eval_meta.get("selection_reason"),
+                            )
+                        else:
+                            logger.warning(
+                                "[pocket-eval] missing_override center=%s box=%s",
+                                center_override,
+                                box_override,
+                            )
+                else:
+                    logger.warning(
+                        "[pocket-eval] receptor_missing; skipping pocket evaluation"
+                    )
+            except Exception as exc:
+                logger.warning("[pocket-eval] failed; fallback to default: %s", exc)
+
         center, box_size, source, _ = pocket_policy.select_pocket(
             pdb_cleaned,
             pdb_file,
@@ -283,6 +363,8 @@ def main(pdb_file):
             ligands,
             ligands_dir,
             logger,
+            override_box=pocket_eval_override,
+            override_meta=pocket_eval_meta,
         )
 
         if center and box_size:

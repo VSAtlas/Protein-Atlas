@@ -17,6 +17,7 @@ DEEPCOY_MODULE_ROOT = REPO_ROOT / "DeepCoy_duds"
 if str(DEEPCOY_MODULE_ROOT) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_MODULE_ROOT))
 
+from calibrator import uniprot_resolver  # noqa: E402
 from DeepCoy_duds import generate_dud_library  # noqa: E402
 from DeepCoy_duds.external_sources import fetch_chembl_labeled_smiles  # noqa: E402
 from DeepCoy_duds.generate_dud_library import get_uniprot_and_ec  # noqa: E402
@@ -114,8 +115,41 @@ def resolve_target(
     mapping: Dict[str, object] = {"source": "unresolved"}
     uniprot_id: Optional[str] = None
     ec_numbers: List[str] = []
-    fallback_used = False
+    chain_segments: Dict[str, Dict] = {}
+    selected_chain: Optional[str] = None
+    selected_segment: Optional[Dict] = None
+    resolver_info: Dict[str, object] = {}
 
+    try:
+        result = uniprot_resolver.resolve_chain_uniprot_segments(
+            pdb_id, write_file=True, return_info=True
+        )
+        if isinstance(result, tuple):
+            chain_segments, resolver_info = result  # type: ignore[misc]
+        else:  # pragma: no cover - defensive
+            chain_segments = result
+    except FileNotFoundError as exc:
+        resolver_info = {"error": str(exc)}
+        chain_segments = {}
+
+    selected_chain, selected_segment = uniprot_resolver.select_primary_chain(
+        chain_segments
+    )
+    if selected_segment:
+        uniprot_id = selected_segment.get("uniprot")
+
+    mapping.update(
+        {
+            "source": (selected_segment or {}).get("source", "unresolved"),
+            "chain_segments": chain_segments,
+            "selected_chain": selected_chain,
+            "selected_segment": selected_segment,
+            "dbref_count": resolver_info.get("dbref_count"),
+            "fallback_used": resolver_info.get("fallback_used"),
+        }
+    )
+
+    fallback_used = False
     try:
         original_get = generate_dud_library.requests.get
 
@@ -128,34 +162,45 @@ def resolve_target(
         with mock.patch(
             "DeepCoy_duds.generate_dud_library.requests.get", side_effect=_wrapped_get
         ):
-            uniprot_id, ec_numbers = get_uniprot_and_ec(pdb_id)
-        if uniprot_id:
+            lookup_uniprot, ec_numbers = get_uniprot_and_ec(pdb_id)
+        if not uniprot_id and lookup_uniprot:
+            uniprot_id = lookup_uniprot
             mapping["source"] = (
                 "uniprot_fallback" if fallback_used else "rcsb_polymer_entity"
             )
-            mapping["details"] = {"resolver": "get_uniprot_and_ec"}
-            mapping["ec_count"] = len(ec_numbers or [])
-            return uniprot_id, ec_numbers or [], mapping
-        else:
-            mapping["details"] = {"reason": "get_uniprot_and_ec returned no match"}
-    except Exception as exc:
+        mapping["details"] = {"resolver": "get_uniprot_and_ec"}
+    except Exception as exc:  # pragma: no cover - network fallback safety
         mapping["error"] = str(exc)
 
-    inferred_uniprot = infer_uniprot_from_deepcoy_dir(pdb_id, deepcoy_root)
-    if inferred_uniprot:
-        mapping["source"] = "deepcoy_dir_fallback"
-        mapping["details"] = {
-            "deepcoy_dir": str(deepcoy_root),
-            "inferred_from": inferred_uniprot,
-        }
-        mapping["ec_count"] = 0
-        return inferred_uniprot, [], mapping
+    if not uniprot_id:
+        inferred_uniprot = infer_uniprot_from_deepcoy_dir(pdb_id, deepcoy_root)
+        if inferred_uniprot:
+            uniprot_id = inferred_uniprot
+            mapping["source"] = "deepcoy_dir_fallback"
+            mapping["details"] = {
+                "deepcoy_dir": str(deepcoy_root),
+                "inferred_from": inferred_uniprot,
+            }
 
-    mapping["source"] = "unresolved"
-    if mapping.get("error"):
-        mapping["details"] = {"reason": mapping["error"]}
-    mapping["ec_count"] = 0
-    return None, [], mapping
+    if (
+        uniprot_id
+        and selected_chain
+        and selected_segment
+        and not selected_segment.get("uniprot")
+    ):
+        updated_segment = dict(selected_segment)
+        updated_segment["uniprot"] = uniprot_id
+        selected_segment = updated_segment
+        chain_segments[selected_chain] = updated_segment
+        mapping["selected_segment"] = updated_segment
+        mapping["chain_segments"] = chain_segments
+
+    if not uniprot_id:
+        mapping["details"] = {
+            "reason": mapping.get("error") or "no UniProt mapping resolved"
+        }
+    mapping["ec_count"] = len(ec_numbers or [])
+    return uniprot_id, ec_numbers or [], mapping
 
 
 def _write_smiles(path: Path, smiles: List[str]) -> None:
@@ -355,11 +400,22 @@ def run_calibrator_for_pdb(
     with tee_to_log(log_file):
         print(f"[calibrator.logs] run_tag={run_tag_value} log_file={log_file}")
         uniprot_id, ec_numbers, mapping = resolve_target(pdb_norm, deepcoy_root)
+        chain_segments = mapping.get("chain_segments") if isinstance(mapping, dict) else {}
+        selected_chain = mapping.get("selected_chain") if isinstance(mapping, dict) else None
+        selected_segment = mapping.get("selected_segment") or {}
+        selected_unp_start = selected_segment.get("unp_start") if isinstance(selected_segment, dict) else None
+        selected_unp_end = selected_segment.get("unp_end") if isinstance(selected_segment, dict) else None
+        selected_pdb_start = selected_segment.get("pdb_start") if isinstance(selected_segment, dict) else None
+        selected_pdb_end = selected_segment.get("pdb_end") if isinstance(selected_segment, dict) else None
+        selected_uniprot = uniprot_id or (selected_segment.get("uniprot") if isinstance(selected_segment, dict) else None)
+        primary_uniprot = selected_uniprot
         meta: Dict = {
             "pdb_id": pdb_norm,
-            "uniprot_id": uniprot_id,
+            "uniprot_id": primary_uniprot,
             "ec_numbers": ec_numbers or [],
             "mapping": mapping,
+            "selected_chain": selected_chain,
+            "selected_segment": selected_segment,
             "label_thresholds": label_thresholds,
             "activity_types": resolved_activity_types,
             "chembl_max_phase": chembl_max_phase,
@@ -369,7 +425,7 @@ def run_calibrator_for_pdb(
             "run_tag": run_tag_value,
         }
 
-        if not uniprot_id:
+        if not selected_uniprot:
             meta["status"] = "unresolved"
             meta["counts"] = {}
             meta_path = out_dir / "calibrator_meta.json"
@@ -382,6 +438,7 @@ def run_calibrator_for_pdb(
                         "log_file": str(log_file),
                         "pdb_id": pdb_norm,
                         "mapping": mapping,
+                        "selected_chain": selected_chain,
                         "status": "unresolved",
                     },
                     indent=2,
@@ -389,10 +446,10 @@ def run_calibrator_for_pdb(
             )
             return meta
 
-        _log_source_audit(uniprot_id, resolved_activity_types, chembl_max_phase)
+        _log_source_audit(selected_uniprot, resolved_activity_types, chembl_max_phase)
         fetch_impl = fetch_fn or fetch_chembl_labeled_smiles
         labels, chembl_meta = fetch_impl(
-            uniprot_id,
+            selected_uniprot,
             pdb_norm,
             cache_dir,
             timeout,
@@ -400,6 +457,8 @@ def run_calibrator_for_pdb(
             resolved_activity_types,
             chembl_max_phase,
             label_thresholds,
+            unp_start=selected_unp_start,
+            unp_end=selected_unp_end,
             debug=debug_chembl,
             debug_max_ids=debug_max_ids,
             debug_rejection_samples_max=debug_reject_samples,
@@ -427,6 +486,14 @@ def run_calibrator_for_pdb(
         _log_rejected_value_samples(telemetry)
         print(_diagnose_from_telemetry(telemetry))
 
+        selection_meta = chembl_meta.get("target_selection") or {}
+        if not selection_meta:
+            telemetry_selection = chembl_meta.get("telemetry", {}).get(
+                "target_selection", {}
+            )
+            if isinstance(telemetry_selection, dict):
+                selection_meta = telemetry_selection
+
         meta.update(
             {
                 "status": "ok" if not chembl_meta.get("error") else "error",
@@ -439,6 +506,11 @@ def run_calibrator_for_pdb(
                 "chembl_request_urls_truncated": telemetry.get(
                     "request_urls_truncated", False
                 ),
+                "selected_chain": selected_chain,
+                "selected_segment": selected_segment,
+                "selected_uniprot": primary_uniprot,
+                "selected_targets": selection_meta.get("selected_ids") or [],
+                "target_selection": selection_meta,
             }
         )
         if chembl_meta.get("error"):
@@ -449,9 +521,13 @@ def run_calibrator_for_pdb(
             "run_tag": run_tag_value,
             "log_file": str(log_file),
             "pdb_id": pdb_norm,
-            "uniprot_id": uniprot_id,
+            "uniprot_id": primary_uniprot,
             "ec_numbers": ec_numbers or [],
             "mapping": mapping,
+            "selected_chain": selected_chain,
+            "selected_segment": selected_segment,
+            "selected_targets": selection_meta.get("selected_ids") or [],
+            "target_selection": selection_meta,
             "chembl_meta": chembl_meta,
             "telemetry": telemetry,
         }

@@ -5,6 +5,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, cast
+from urllib.parse import urljoin, urlparse
 
 import requests  # type: ignore[import-untyped]
 
@@ -99,6 +100,115 @@ def _increment(skip_counts: Optional[Dict[str, int]], key: str) -> None:
     if skip_counts is None:
         return
     skip_counts[key] = skip_counts.get(key, 0) + 1
+
+
+CHEMBL_API_BASE = "https://www.ebi.ac.uk/chembl/api/data"
+DEFAULT_MPRO_KEYWORDS = ["3clpro", "main protease", "mpro", "nsp5", "3c-like"]
+
+
+def _safe_int(val: Any) -> Optional[int]:
+    if val is None:
+        return None
+    try:
+        if isinstance(val, str):
+            stripped = val.strip()
+            if not stripped:
+                return None
+            return int(stripped)
+        return int(val)
+    except Exception:
+        return None
+
+
+def _resolve_target_keywords(uniprot: str, keywords: Optional[List[str]]) -> List[str]:
+    if keywords is not None:
+        return [k.strip() for k in keywords if k and str(k).strip()]
+    if uniprot and uniprot.upper() in {"P0DTD1", "P0DTC1"}:
+        return list(DEFAULT_MPRO_KEYWORDS)
+    return []
+
+
+def _extract_component_range(component: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+    start = None
+    end = None
+    start_keys = (
+        "start_position",
+        "component_start",
+        "protein_start",
+        "seq_start",
+        "dbseq_begin",
+        "begin",
+        "start",
+    )
+    end_keys = (
+        "end_position",
+        "component_end",
+        "protein_end",
+        "seq_end",
+        "dbseq_end",
+        "end",
+    )
+    for obj in (component, _safe_dict(component.get("component"))):
+        for key in start_keys:
+            if start is None and key in obj:
+                start = _safe_int(obj.get(key))
+        for key in end_keys:
+            if end is None and key in obj:
+                end = _safe_int(obj.get(key))
+    return start, end
+
+
+def _collect_target_text_fields(target: Dict[str, Any]) -> List[Tuple[str, str]]:
+    fields: List[Tuple[str, str]] = []
+
+    def _add(val: Any, label: str) -> None:
+        if isinstance(val, str):
+            cleaned = val.strip()
+            if cleaned:
+                fields.append((label, cleaned))
+        elif isinstance(val, list):
+            for item in val:
+                if isinstance(item, str) and item.strip():
+                    fields.append((label, item.strip()))
+                elif isinstance(item, dict):
+                    name_val = item.get("synonym") or item.get("name") or item.get(
+                        "component_synonym"
+                    )
+                    if isinstance(name_val, str) and name_val.strip():
+                        fields.append((label, name_val.strip()))
+
+    _add(target.get("pref_name") or target.get("preferred_name"), "pref_name")
+    _add(target.get("target_name") or target.get("name"), "target_name")
+    _add(target.get("description"), "description")
+    _add(target.get("synonyms"), "synonyms")
+    _add(target.get("target_synonym"), "target_synonym")
+    for comp in _safe_list(target.get("target_components")):
+        comp_dict = _safe_dict(comp)
+        _add(comp_dict.get("component_synonyms"), "component_synonyms")
+        _add(comp_dict.get("target_component_synonyms"), "component_synonyms")
+        _add(comp_dict.get("synonyms"), "component_synonyms")
+    return fields
+
+
+def _score_keywords(
+    text_fields: List[Tuple[str, str]], keywords: List[str]
+) -> Tuple[int, Optional[Dict[str, str]]]:
+    score = 0
+    first_match: Optional[Dict[str, str]] = None
+    if not keywords:
+        return 0, None
+    lower_fields = [(label, text.lower()) for label, text in text_fields]
+    for kw in keywords:
+        kw_lower = kw.lower()
+        for (label, lower_text), (_, original) in zip(
+            lower_fields, text_fields
+        ):
+            if kw_lower in lower_text:
+                score += 1
+                if first_match is None:
+                    first_match = {"keyword": kw, "field": label, "text": original}
+                break
+    return score, first_match
 
 
 def _record_audit(
@@ -199,6 +309,7 @@ def _get_json_paged(
     collected: List[Any] = []
     page_metas: List[Dict[str, Any]] = []
     next_url = url
+    base_url = url
     next_params: Dict[str, Any] = dict(params or {})
     page_count = 0
 
@@ -244,11 +355,181 @@ def _get_json_paged(
         next_link = page_meta.get("next")
         if not next_link:
             break
-        next_url = next_link
+        parsed_next = urlparse(str(next_link))
+        if parsed_next.scheme:
+            next_url = str(next_link)
+        else:
+            next_url = urljoin(base_url, str(next_link))
         next_params = {}
         page_count += 1
 
     return collected, page_metas
+
+
+def select_chembl_targets_for_chain(
+    uniprot: str,
+    unp_start: Optional[int],
+    unp_end: Optional[int],
+    keywords: Optional[List[str]],
+    prefer_single_protein: bool = True,
+    audit: Optional[SourceAudit] = None,
+    *,
+    session: Optional[requests.Session] = None,
+    timeout: int = 20,
+    retries: int = 2,
+    max_pages: int = 10,
+    request_logger: Optional[Callable[[str], None]] = None,
+    return_meta: bool = False,
+) -> Any:
+    headers = {"Accept": "application/json"}
+    keywords_used = _resolve_target_keywords(uniprot, keywords)
+    params = {"target_components__accession": uniprot, "format": "json"}
+    targets, _ = _get_json_paged(
+        f"{CHEMBL_API_BASE}/target",
+        params,
+        headers,
+        timeout,
+        retries,
+        session=session,
+        item_key="targets",
+        max_pages=max_pages,
+        audit=audit,
+        source="chembl",
+        purpose="chembl.target_select",
+        request_logger=request_logger,
+    )
+    candidates = []
+    for raw in targets:
+        target_obj = _safe_dict(raw)
+        tid = target_obj.get("target_chembl_id")
+        if not tid:
+            continue
+        target_type = target_obj.get("target_type") or target_obj.get("type")
+        is_single = str(target_type or "").lower() == "single protein"
+        components = _safe_list(target_obj.get("target_components"))
+        component_count = len(components)
+        overlaps: List[int] = []
+        has_range = False
+        for comp in components:
+            comp_dict = _safe_dict(comp)
+            accession = (
+                comp_dict.get("accession")
+                or comp_dict.get("component_accession")
+                or _safe_dict(comp_dict.get("component")).get("accession")
+            )
+            if accession and str(accession).upper() == uniprot.upper():
+                start, end = _extract_component_range(comp_dict)
+                if start is not None or end is not None:
+                    has_range = True
+                if (
+                    unp_start is not None
+                    and unp_end is not None
+                    and start is not None
+                    and end is not None
+                ):
+                    overlap = min(unp_end, end) - max(unp_start, start) + 1
+                    if overlap > 0:
+                        overlaps.append(overlap)
+        overlap_score = max(overlaps) if overlaps else 0
+        text_fields = _collect_target_text_fields(target_obj)
+        keyword_score, first_match = _score_keywords(text_fields, keywords_used)
+        candidates.append(
+            {
+                "id": tid,
+                "is_single": is_single,
+                "component_count": component_count,
+                "overlap": overlap_score,
+                "has_range": has_range,
+                "keyword_score": keyword_score,
+                "first_match": first_match,
+                "target_type": target_type,
+            }
+        )
+
+    selection_mode = "metadata_fallback"
+    selected_ids: List[str] = []
+    reason = ""
+    overlap_candidates: List[Dict[str, Any]] = []
+    if unp_start is not None and unp_end is not None:
+        overlap_candidates = [c for c in candidates if c["overlap"] > 0]
+        if overlap_candidates:
+            selection_mode = "range_overlap"
+            if prefer_single_protein:
+                singles = [c for c in overlap_candidates if c["is_single"]]
+                if singles:
+                    overlap_candidates = singles
+            overlap_candidates.sort(
+                key=lambda c: (-c["overlap"], c["component_count"], c["id"])
+            )
+            top = overlap_candidates[0]
+            top_overlap = top["overlap"]
+            selected_ids = [
+                c["id"]
+                for c in overlap_candidates
+                if c["overlap"] == top_overlap
+                and (not prefer_single_protein or c["is_single"] == top["is_single"])
+            ]
+            reason = f"range_overlap={top_overlap}"
+            if len(selected_ids) > 1:
+                reason += f" ties={len(selected_ids)}"
+
+    if not selected_ids and candidates:
+        selection_mode = "metadata_fallback"
+        pool = list(candidates)
+        if prefer_single_protein:
+            single_pool = [c for c in pool if c["is_single"]]
+            if single_pool:
+                pool = single_pool
+        pool.sort(
+            key=lambda c: (
+                -c["keyword_score"],
+                0 if c["is_single"] else 1,
+                c["component_count"],
+                c["id"],
+            )
+        )
+        best = pool[0]
+        selected_ids = [best["id"]]
+        if best["keyword_score"] > 0:
+            reason = "keyword_match"
+            if best.get("first_match"):
+                fm = best["first_match"]
+                reason = f"keyword_match {fm.get('keyword')} in {fm.get('field')}"
+        elif best["is_single"]:
+            reason = "single_protein_preferred"
+        else:
+            reason = "default_first"
+
+    if not selected_ids:
+        reason = reason or "no_targets"
+
+    selection_meta = {
+        "uniprot": uniprot,
+        "unp_start": unp_start,
+        "unp_end": unp_end,
+        "keywords_used": keywords_used,
+        "mode": selection_mode,
+        "returned_count": len(targets),
+        "candidates_considered": len(candidates),
+        "selected_count": len(selected_ids),
+        "selected_ids": selected_ids,
+        "reason": reason or "unspecified",
+    }
+    if overlap_candidates:
+        selection_meta["overlap_candidates"] = {
+            c["id"]: c["overlap"] for c in overlap_candidates
+        }
+
+    print(
+        "[chembl.target_select] "
+        f"uniprot={uniprot} unp_range={unp_start}-{unp_end} "
+        f"returned={len(targets)} selected={len(selected_ids)} "
+        f"mode={selection_mode} reason={selection_meta.get('reason')}"
+    )
+
+    if return_meta:
+        return selected_ids, selection_meta
+    return selected_ids
 
 
 def _limit_smiles(smiles: List[str], limit: int) -> List[str]:
@@ -552,11 +833,19 @@ def fetch_chembl_smiles(
     affinity_cutoff_nm: int,
     activity_types: List[str],
     max_phase: Optional[int],
+    unp_start: Optional[int] = None,
+    unp_end: Optional[int] = None,
+    target_keywords: Optional[List[str]] = None,
     session: Optional[requests.Session] = None,
     audit: Optional[SourceAudit] = None,
     max_pages: int = 5,
+    relationship_type_strict: bool = True,
+    fallback_relax_relationship: bool = True,
+    fallback_activity_by_target: bool = True,
+    activity_limit: int = 200,
 ) -> Tuple[List[str], Dict]:
     source = "chembl"
+    keywords_used = _resolve_target_keywords(uniprot_id, target_keywords)
     key = {
         "source": source,
         "uniprot": uniprot_id,
@@ -566,6 +855,13 @@ def fetch_chembl_smiles(
         "cutoff": affinity_cutoff_nm,
         "max_phase": max_phase,
         "max_pages": max_pages,
+        "relationship_type_strict": relationship_type_strict,
+        "fallback_relax_relationship": fallback_relax_relationship,
+        "fallback_activity_by_target": fallback_activity_by_target,
+        "activity_limit": activity_limit,
+        "unp_start": unp_start,
+        "unp_end": unp_end,
+        "target_keywords": keywords_used,
     }
     cached = load_cached_smiles(cache_dir, source, key)
     if cached and "smiles" in cached:
@@ -573,18 +869,39 @@ def fetch_chembl_smiles(
         cached_meta = cached_meta if isinstance(cached_meta, dict) else {}
         cached_meta = dict(cached_meta)
         cached_meta["cached"] = True
+        cached_meta.setdefault("target_selection", {})
         return cached["smiles"], cached_meta
 
-    base = "https://www.ebi.ac.uk/chembl/api/data"
+    base = CHEMBL_API_BASE
     headers = {"Accept": "application/json"}
     smiles: List[str] = []
     seen_smiles: Set[str] = set()
-    meta_counts = {"targets": 0, "assays": 0, "activities": 0, "molecules": 0}
+    meta_counts = {
+        "targets": 0,
+        "targets_total": 0,
+        "assays": 0,
+        "activities": 0,
+        "molecules": 0,
+    }
     provenance: Dict[str, Set[str]] = {}
     provenance_details: Dict[str, List[Dict[str, Any]]] = {}
     sess = session or requests.Session()
     owns_session = session is None
     max_pages = max(1, int(max_pages or 1))
+    try:
+        activity_limit = int(activity_limit or 200)
+    except Exception:
+        activity_limit = 200
+    activity_limit = max(1, activity_limit)
+    if relationship_type_strict is None:
+        relationship_type_strict = True
+    if fallback_relax_relationship is None:
+        fallback_relax_relationship = True
+    if fallback_activity_by_target is None:
+        fallback_activity_by_target = True
+    relationship_type_strict = bool(relationship_type_strict)
+    fallback_relax_relationship = bool(fallback_relax_relationship)
+    fallback_activity_by_target = bool(fallback_activity_by_target)
     max_activity_items = max_actives * 5 if max_actives > 0 else None
 
     def add_provenance(smiles_val: str, label: str, detail: Optional[Dict[str, Any]]):
@@ -594,41 +911,109 @@ def fetch_chembl_smiles(
         if detail:
             provenance_details.setdefault(smiles_val, []).append(detail)
 
+    def _consume_activities(
+        activities: List[Dict[str, Any]], tid: Optional[str], aid: Optional[str]
+    ) -> None:
+        for act in activities:
+            if max_actives > 0 and len(smiles) >= max_actives:
+                return
+            if not filter_chembl_activity(act, affinity_cutoff_nm, activity_types):
+                continue
+            mol_id = act.get("molecule_chembl_id")
+            if mol_id is None:
+                continue
+            mol_url = f"{base}/molecule/{mol_id}.json"
+            mol_json = _get_json(
+                mol_url,
+                {},
+                headers,
+                timeout,
+                retries,
+                session=sess,
+            )
+            _record_audit(
+                audit,
+                source,
+                "chembl.molecule_fetch",
+                mol_url,
+                response_meta={"molecule_chembl_id": mol_id},
+            )
+            smi = parse_chembl_molecule(mol_json, max_phase)
+            if not smi or smi in seen_smiles:
+                continue
+            seen_smiles.add(smi)
+            smiles.append(smi)
+            meta_counts["molecules"] += 1
+            resolved_aid = aid or act.get("assay_chembl_id")
+            label_parts = []
+            if tid:
+                label_parts.append(f"target={tid}")
+            if resolved_aid:
+                label_parts.append(f"assay={resolved_aid}")
+            act_id = act.get("activity_chembl_id")
+            if act_id:
+                label_parts.append(f"activity={act_id}")
+            label_parts.append(f"molecule={mol_id}")
+            stype = act.get("standard_type")
+            sval = act.get("standard_value")
+            sunits = act.get("standard_units")
+            if stype:
+                type_piece = stype
+                if sval is not None:
+                    type_piece += f"={sval}{sunits or ''}"
+                label_parts.append(type_piece)
+            label = "chembl:" + ";".join(label_parts)
+            detail = {
+                "source": source,
+                "target_chembl_id": tid,
+                "assay_chembl_id": resolved_aid,
+                "activity_chembl_id": act_id,
+                "molecule_chembl_id": mol_id,
+                "standard_type": act.get("standard_type"),
+                "standard_relation": act.get("standard_relation"),
+                "standard_value": act.get("standard_value"),
+                "standard_units": act.get("standard_units"),
+                "label": label,
+            }
+            add_provenance(smi, label, detail)
+
     error_meta: Optional[Dict[str, Any]] = None
+    selection_meta: Dict[str, Any] = {}
     try:
-        target_params = {
-            "target_components__accession": uniprot_id,
-            "format": "json",
-            "limit": 200,
-        }
-        targets, _ = _get_json_paged(
-            f"{base}/target",
-            target_params,
-            headers,
-            timeout,
-            retries,
-            session=sess,
-            item_key="targets",
-            max_pages=max_pages,
+        target_ids, selection_meta = select_chembl_targets_for_chain(
+            uniprot_id,
+            unp_start,
+            unp_end,
+            keywords_used,
+            prefer_single_protein=True,
             audit=audit,
-            source=source,
-            purpose="chembl.target_search",
+            session=sess,
+            timeout=timeout,
+            retries=retries,
+            max_pages=max_pages,
+            return_meta=True,
         )
-        target_ids = []
-        for t in targets:
-            t_obj = _safe_dict(t)
-            tid = t_obj.get("target_chembl_id")
-            if tid and tid not in target_ids:
-                target_ids.append(tid)
+        meta_counts["targets_total"] = selection_meta.get("returned_count", 0)
         meta_counts["targets"] = len(target_ids)
+        if not target_ids:
+            error_meta = {
+                "error": "no targets selected",
+                "counts": meta_counts,
+                "target_selection": selection_meta,
+            }
         for tid in target_ids:
+            if max_actives > 0 and len(smiles) >= max_actives:
+                break
+            strict_assay_ids: List[str] = []
+            strict_activity_count = 0
             assay_params = {
                 "target_chembl_id": tid,
                 "assay_type": "B",
-                "relationship_type": "D",
                 "format": "json",
-                "limit": 200,
+                "limit": activity_limit,
             }
+            if relationship_type_strict:
+                assay_params["relationship_type"] = "D"
             assays, _ = _get_json_paged(
                 f"{base}/assay",
                 assay_params,
@@ -642,20 +1027,19 @@ def fetch_chembl_smiles(
                 source=source,
                 purpose="chembl.assays_for_target",
             )
-            assay_ids = []
             for a in assays:
                 assay_obj = _safe_dict(a)
                 aid = assay_obj.get("assay_chembl_id")
-                if aid and aid not in assay_ids:
-                    assay_ids.append(aid)
-            meta_counts["assays"] += len(assay_ids)
-            for aid in assay_ids:
+                if aid and aid not in strict_assay_ids:
+                    strict_assay_ids.append(aid)
+            meta_counts["assays"] += len(strict_assay_ids)
+            for aid in strict_assay_ids:
                 if max_actives > 0 and len(smiles) >= max_actives:
                     break
                 activity_params = {
                     "assay_chembl_id": aid,
                     "format": "json",
-                    "limit": 200,
+                    "limit": activity_limit,
                 }
                 if activity_types:
                     activity_params["standard_type__in"] = ",".join(activity_types)
@@ -674,75 +1058,116 @@ def fetch_chembl_smiles(
                     purpose="chembl.activities_for_assay",
                 )
                 meta_counts["activities"] += len(activities)
-                for act in activities:
+                strict_activity_count += len(activities)
+                _consume_activities(activities, tid, aid)
+                if max_actives > 0 and len(smiles) >= max_actives:
+                    break
+
+            fallback_activity_count = 0
+            if (
+                relationship_type_strict
+                and fallback_relax_relationship
+                and not strict_assay_ids
+                and not (max_actives > 0 and len(smiles) >= max_actives)
+            ):
+                print("[chembl] fallback=relax_relationship strict_assays=0")
+                fallback_assay_params = {
+                    "target_chembl_id": tid,
+                    "assay_type": "B",
+                    "format": "json",
+                    "limit": activity_limit,
+                }
+                fallback_assays, _ = _get_json_paged(
+                    f"{base}/assay",
+                    fallback_assay_params,
+                    headers,
+                    timeout,
+                    retries,
+                    session=sess,
+                    item_key="assays",
+                    max_pages=max_pages,
+                    audit=audit,
+                    source=source,
+                    purpose="chembl.assays_for_target_relaxed",
+                )
+                fallback_assay_ids: List[str] = []
+                for a in fallback_assays:
+                    assay_obj = _safe_dict(a)
+                    aid = assay_obj.get("assay_chembl_id")
+                    if aid and aid not in fallback_assay_ids:
+                        fallback_assay_ids.append(aid)
+                meta_counts["assays"] += len(fallback_assay_ids)
+                for aid in fallback_assay_ids:
                     if max_actives > 0 and len(smiles) >= max_actives:
                         break
-                    if not filter_chembl_activity(
-                        act, affinity_cutoff_nm, activity_types
-                    ):
-                        continue
-                    mol_id = act.get("molecule_chembl_id")
-                    if mol_id is None:
-                        continue
-                    mol_url = f"{base}/molecule/{mol_id}.json"
-                    mol_json = _get_json(
-                        mol_url,
-                        {},
+                    activity_params = {
+                        "assay_chembl_id": aid,
+                        "format": "json",
+                        "limit": activity_limit,
+                    }
+                    if activity_types:
+                        activity_params["standard_type__in"] = ",".join(
+                            activity_types
+                        )
+                    activities, _ = _get_json_paged(
+                        f"{base}/activity",
+                        activity_params,
                         headers,
                         timeout,
                         retries,
                         session=sess,
+                        item_key="activities",
+                        max_pages=max_pages,
+                        max_items=max_activity_items,
+                        audit=audit,
+                        source=source,
+                        purpose="chembl.activities_for_assay_relaxed",
                     )
-                    _record_audit(
-                        audit,
-                        source,
-                        "chembl.molecule_fetch",
-                        mol_url,
-                        response_meta={"molecule_chembl_id": mol_id},
-                    )
-                    smi = parse_chembl_molecule(mol_json, max_phase)
-                    if not smi or smi in seen_smiles:
-                        continue
-                    seen_smiles.add(smi)
-                    smiles.append(smi)
-                    meta_counts["molecules"] += 1
-                    label_parts = []
-                    if tid:
-                        label_parts.append(f"target={tid}")
-                    if aid:
-                        label_parts.append(f"assay={aid}")
-                    act_id = act.get("activity_chembl_id")
-                    if act_id:
-                        label_parts.append(f"activity={act_id}")
-                    label_parts.append(f"molecule={mol_id}")
-                    stype = act.get("standard_type")
-                    sval = act.get("standard_value")
-                    sunits = act.get("standard_units")
-                    if stype:
-                        type_piece = stype
-                        if sval is not None:
-                            type_piece += f"={sval}{sunits or ''}"
-                        label_parts.append(type_piece)
-                    label = "chembl:" + ";".join(label_parts)
-                    detail = {
-                        "source": source,
-                        "target_chembl_id": tid,
-                        "assay_chembl_id": aid,
-                        "activity_chembl_id": act_id,
-                        "molecule_chembl_id": mol_id,
-                        "standard_type": act.get("standard_type"),
-                        "standard_relation": act.get("standard_relation"),
-                        "standard_value": act.get("standard_value"),
-                        "standard_units": act.get("standard_units"),
-                        "label": label,
-                    }
-                    add_provenance(smi, label, detail)
+                    meta_counts["activities"] += len(activities)
+                    fallback_activity_count += len(activities)
+                    _consume_activities(activities, tid, aid)
+                    if max_actives > 0 and len(smiles) >= max_actives:
+                        break
+
+            if (
+                fallback_activity_by_target
+                and strict_activity_count == 0
+                and fallback_activity_count == 0
+                and not (max_actives > 0 and len(smiles) >= max_actives)
+            ):
+                print("[chembl] fallback=activity_by_target strict_activities=0")
+                activity_params = {
+                    "target_chembl_id": tid,
+                    "assay_type__in": "B,F",
+                    "format": "json",
+                    "limit": activity_limit,
+                }
+                if activity_types:
+                    activity_params["standard_type__in"] = ",".join(activity_types)
+                activities, _ = _get_json_paged(
+                    f"{base}/activity",
+                    activity_params,
+                    headers,
+                    timeout,
+                    retries,
+                    session=sess,
+                    item_key="activities",
+                    max_pages=max_pages,
+                    max_items=max_activity_items,
+                    audit=audit,
+                    source=source,
+                    purpose="chembl.activities_for_target",
+                )
+                meta_counts["activities"] += len(activities)
+                _consume_activities(activities, tid, None)
                 if max_actives > 0 and len(smiles) >= max_actives:
                     break
-            if max_actives > 0 and len(smiles) >= max_actives:
-                break
     except Exception as exc:
-        error_meta = {"error": str(exc), "counts": meta_counts}
+        error_meta = {
+            "error": str(exc),
+            "counts": meta_counts,
+            "target_selection": selection_meta,
+        }
     finally:
         if owns_session:
             try:
@@ -754,7 +1179,11 @@ def fetch_chembl_smiles(
         return [], error_meta
 
     smiles = _limit_smiles(smiles, max_actives)
-    result_meta: Dict[str, Any] = {"cached": False, "counts": meta_counts}
+    result_meta: Dict[str, Any] = {
+        "cached": False,
+        "counts": meta_counts,
+        "target_selection": selection_meta,
+    }
     if provenance:
         result_meta["provenance"] = _serialize_provenance_map(provenance)
     if provenance_details:
@@ -776,12 +1205,16 @@ def fetch_chembl_labeled_smiles(
     debug: bool = False,
     debug_max_ids: int = 25,
     debug_rejection_samples_max: int = 25,
+    unp_start: Optional[int] = None,
+    unp_end: Optional[int] = None,
+    target_keywords: Optional[List[str]] = None,
 ) -> Tuple[Dict[str, List[str]], Dict]:
     """
     Retrieve ChEMBL activities for a UniProt target and bucket SMILES into
     strong/weak/non binders.
     """
     source = "chembl_labeled"
+    keywords_used = _resolve_target_keywords(uniprot_id, target_keywords)
     cleaned_thresholds = {
         "pchembl_strong": float(label_thresholds.get("pchembl_strong", 7.0)),
         "pchembl_weak": float(label_thresholds.get("pchembl_weak", 5.0)),
@@ -803,6 +1236,9 @@ def fetch_chembl_labeled_smiles(
         "debug": debug,
         "debug_max_ids": debug_max_ids,
         "debug_rejection_samples_max": debug_rejection_samples_max,
+        "unp_start": unp_start,
+        "unp_end": unp_end,
+        "target_keywords": keywords_used,
     }
     cached = load_cached_smiles(cache_dir, source, key)
     if cached and "labels" in cached:
@@ -816,14 +1252,21 @@ def fetch_chembl_labeled_smiles(
             labeling.setdefault(
                 "rejected_value_threshold_samples_max", debug_rejection_samples_max
             )
+        cached_meta.setdefault("target_selection", {})
         return cached["labels"], cached_meta
 
-    base = "https://www.ebi.ac.uk/chembl/api/data"
+    base = CHEMBL_API_BASE
     headers = {"Accept": "application/json"}
     labels: Dict[str, List[str]] = {"strong": [], "weak": [], "non": []}
     label_map: Dict[str, str] = {}
     label_priority = {"non": 1, "weak": 2, "strong": 3}
-    counts = {"targets": 0, "assays": 0, "activities": 0, "molecules": 0}
+    counts = {
+        "targets": 0,
+        "targets_total": 0,
+        "assays": 0,
+        "activities": 0,
+        "molecules": 0,
+    }
     molecule_cache: Dict[str, Optional[str]] = {}
     error = None
     debug_info = _normalize_debug({})
@@ -914,56 +1357,56 @@ def fetch_chembl_labeled_smiles(
     sess = session or requests.Session()
     owns_session = session is None
 
+    selection_meta: Dict[str, Any] = {}
     try:
-        target_ids = []
-        target_params = {"target_components__accession": uniprot_id, "format": "json"}
-        for target in _chembl_paginated(
-            f"{base}/target",
-            target_params,
-            headers,
-            timeout,
-            retries,
-            "targets",
+        target_ids, selection_meta = select_chembl_targets_for_chain(
+            uniprot_id,
+            unp_start,
+            unp_end,
+            keywords_used,
+            prefer_single_protein=True,
             session=sess,
+            timeout=timeout,
+            retries=retries,
+            max_pages=50,
             request_logger=log_request_url,
-        ):
-            target_obj = _safe_dict(target)
-            if not target_obj:
-                _increment(skip_counts, "skip_payload_not_dict")
-                continue
-            tid = target_obj.get("target_chembl_id")
-            if tid and tid not in target_ids:
-                target_ids.append(tid)
-                if len(target_ids_sample) < debug_max_ids:
-                    target_ids_sample.append(tid)
+            return_meta=True,
+        )
+        telemetry["target_selection"] = selection_meta
+        counts["targets_total"] = selection_meta.get("returned_count", 0)
         counts["targets"] = len(target_ids)
 
-        assay_ids = []
-        for tid in target_ids:
-            for assay in _chembl_paginated(
-                f"{base}/assay",
-                {
-                    "target_chembl_id": tid,
-                    "assay_type": "B",
-                    "relationship_type": "D",
-                    "format": "json",
-                },
-                headers,
-                timeout,
-                retries,
-                "assays",
-                session=sess,
-                request_logger=log_request_url,
-            ):
-                assay_obj = _safe_dict(assay)
-                if not assay_obj:
-                    _increment(skip_counts, "skip_payload_not_dict")
-                    continue
-                aid = assay_obj.get("assay_chembl_id")
-                if aid and aid not in assay_ids:
-                    assay_ids.append(aid)
-                    if len(assay_ids_sample) < debug_max_ids:
-                        assay_ids_sample.append(aid)
+        assay_ids: List[str] = []
+        if target_ids:
+            for tid in target_ids:
+                if len(target_ids_sample) < debug_max_ids:
+                    target_ids_sample.append(tid)
+                for assay in _chembl_paginated(
+                    f"{base}/assay",
+                    {
+                        "target_chembl_id": tid,
+                        "assay_type": "B",
+                        "relationship_type": "D",
+                        "format": "json",
+                    },
+                    headers,
+                    timeout,
+                    retries,
+                    "assays",
+                    session=sess,
+                    request_logger=log_request_url,
+                ):
+                    assay_obj = _safe_dict(assay)
+                    if not assay_obj:
+                        _increment(skip_counts, "skip_payload_not_dict")
+                        continue
+                    aid = assay_obj.get("assay_chembl_id")
+                    if aid and aid not in assay_ids:
+                        assay_ids.append(aid)
+                        if len(assay_ids_sample) < debug_max_ids:
+                            assay_ids_sample.append(aid)
+        else:
+            error = "no targets selected"
         counts["assays"] = len(assay_ids)
 
         def assign_label(smiles: str, label: str):
@@ -1110,6 +1553,8 @@ def fetch_chembl_labeled_smiles(
         counts["molecules"] = len(label_map)
     except Exception as exc:
         error = str(exc)
+        if not selection_meta:
+            selection_meta = {"uniprot": uniprot_id, "reason": error}
     finally:
         if owns_session:
             try:
@@ -1120,6 +1565,7 @@ def fetch_chembl_labeled_smiles(
     activity_sanity["n_activities_total"] = counts.get("activities", 0)
     activity_sanity["relation_histogram"] = dict(relation_hist)
     activity_sanity["units_histogram"] = dict(units_hist)
+    telemetry["target_selection"] = selection_meta
 
     if activity_types_seen:
         debug_info["activity_types_seen_top"] = [
@@ -1134,6 +1580,7 @@ def fetch_chembl_labeled_smiles(
         "counts": {**counts, **bin_counts},
         "debug": _normalize_debug(debug_info),
         "telemetry": telemetry,
+        "target_selection": selection_meta,
     }
     if error:
         result_meta["error"] = error

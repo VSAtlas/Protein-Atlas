@@ -75,8 +75,25 @@ def test_fetch_chembl_labeled_smiles_null_safe_and_reject_samples(
             return molecule_payloads.get(mol_id)
         return {}
 
+    def fake_select(
+        uniprot,
+        unp_start,
+        unp_end,
+        keywords,
+        prefer_single_protein=True,
+        audit=None,
+        **kwargs,
+    ):
+        return ["T1"], {
+            "selected_ids": ["T1"],
+            "returned_count": 1,
+            "mode": "metadata_fallback",
+            "reason": "test",
+        }
+
     monkeypatch.setattr(es, "_chembl_paginated", fake_paginated)
     monkeypatch.setattr(es, "_get_json", fake_get_json)
+    monkeypatch.setattr(es, "select_chembl_targets_for_chain", fake_select)
 
     labels, meta = es.fetch_chembl_labeled_smiles(
         "P12345",

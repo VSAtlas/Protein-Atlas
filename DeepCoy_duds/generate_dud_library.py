@@ -203,6 +203,9 @@ def query_external_sources(
     max_workers=1,
     run_log_path: Optional[Path] = None,
     audit: Optional["SourceAudit"] = None,
+    unp_start: Optional[int] = None,
+    unp_end: Optional[int] = None,
+    target_keywords: Optional[List[str]] = None,
 ):
     """
     (2) Queries external data sources for ligands/metabolites.
@@ -400,9 +403,22 @@ def query_external_sources(
                 source_opts["affinity_cutoff_nm"],
                 source_opts["chembl_activity_types"],
                 source_opts["chembl_max_phase"],
+                unp_start=unp_start,
+                unp_end=unp_end,
+                target_keywords=target_keywords,
                 session=sess,
                 audit=audit,
                 max_pages=source_opts.get("chembl_max_pages", 5),
+                relationship_type_strict=source_opts.get(
+                    "chembl_relationship_type_strict", True
+                ),
+                fallback_relax_relationship=source_opts.get(
+                    "chembl_fallback_relax_relationship", True
+                ),
+                fallback_activity_by_target=source_opts.get(
+                    "chembl_fallback_activity_by_target", True
+                ),
+                activity_limit=source_opts.get("chembl_activity_limit", 200),
             )
         return [(s, "ChEMBL") for s in smiles], meta
 
@@ -2098,6 +2114,20 @@ def main():
     project_root = repo_root.parent
     config_txt_path = project_root / CONFIG_FILE_NAME
     cfg = load_config(config_path=str(config_txt_path), base_dir=project_root)
+
+    def _cfg_bool_value(key: str, default: bool) -> bool:
+        raw = cfg.get(key)
+        if raw is None:
+            return default
+        if isinstance(raw, bool):
+            return raw
+        raw_str = str(raw).strip().lower()
+        if raw_str in {"1", "true", "yes", "y", "on"}:
+            return True
+        if raw_str in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+
     atlas_run_id = os.environ.get("ATLAS_RUN_ID")
     run_log_path = (
         project_root / "logs" / f"main_{atlas_run_id}.log" if atlas_run_id else None
@@ -2193,6 +2223,20 @@ def main():
         except Exception:
             chembl_max_pages = chembl_max_pages
     chembl_max_pages = max(1, chembl_max_pages or 5)
+    chembl_relationship_type_strict = _cfg_bool_value(
+        "CHEMBL_RELATIONSHIP_TYPE_STRICT", True
+    )
+    chembl_fallback_relax_relationship = _cfg_bool_value(
+        "CHEMBL_FALLBACK_RELAX_RELATIONSHIP", True
+    )
+    chembl_fallback_activity_by_target = _cfg_bool_value(
+        "CHEMBL_FALLBACK_ACTIVITY_BY_TARGET", True
+    )
+    try:
+        chembl_activity_limit = int(cfg.get("CHEMBL_ACTIVITY_LIMIT", 200) or 200)
+    except Exception:
+        chembl_activity_limit = 200
+    chembl_activity_limit = max(1, chembl_activity_limit)
     potency_cutoff_nm: Optional[float] = None
     cfg_potency_raw = cfg.get("DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM")
     if cfg_potency_raw is not None:
@@ -2221,6 +2265,10 @@ def main():
         ],
         "chembl_max_phase": args.chembl_max_phase,
         "chembl_max_pages": chembl_max_pages,
+        "chembl_relationship_type_strict": chembl_relationship_type_strict,
+        "chembl_fallback_relax_relationship": chembl_fallback_relax_relationship,
+        "chembl_fallback_activity_by_target": chembl_fallback_activity_by_target,
+        "chembl_activity_limit": chembl_activity_limit,
         "drugbank_data_dir": resolve_path(args.drugbank_data_dir, repo_root)
         if args.drugbank_data_dir
         else None,
@@ -2300,24 +2348,60 @@ def main():
     if args.verbose:
         print(f"-> Found input PDB file: {pdb_file}")
 
+    chain_segments: Dict[str, Dict[str, object]] = {}
+    selected_chain = None
+    selected_segment: Optional[Dict[str, object]] = None
+    try:
+        from calibrator import uniprot_resolver as _uniprot_resolver
+
+        chain_result = _uniprot_resolver.resolve_chain_uniprot_segments(
+            pdb_id, write_file=False, return_info=True, pdb_dir=input_pdb_dir
+        )
+        if isinstance(chain_result, tuple):
+            chain_segments, _ = chain_result  # type: ignore[misc]
+        else:
+            chain_segments = chain_result
+        selected_chain, selected_segment = _uniprot_resolver.select_primary_chain(
+            chain_segments
+        )
+    except Exception as exc:
+        if args.verbose:
+            print(f"WARNING: failed to resolve chain segments via DBREF: {exc}")
+
+    selected_unp_start = (
+        selected_segment.get("unp_start") if isinstance(selected_segment, dict) else None
+    )
+    selected_unp_end = (
+        selected_segment.get("unp_end") if isinstance(selected_segment, dict) else None
+    )
+    primary_uniprot = (
+        selected_segment.get("uniprot") if isinstance(selected_segment, dict) else None
+    )
+
     fallback_smiles_cli = args.fallback_smiles
+    ec_numbers: List[str] = []
+    uniprot_lookup = None
     if offline:
         print("## Offline mode enabled: skipping UniProt/EC queries.")
-        uniprot_id, ec_numbers = "UNKNOWN", []
     else:
-        uniprot_id, ec_numbers = get_uniprot_and_ec(pdb_id)
-        if not uniprot_id:
-            if fallback_smiles_cli:
-                print(
-                    "WARNING: UniProt lookup failed; proceeding with fallback SMILES and UNKNOWN tag."
-                )
-                uniprot_id, ec_numbers = "UNKNOWN", []
-            else:
-                print(
-                    "ERROR: Failed to retrieve UniProt ID. Cannot proceed.",
-                    file=sys.stderr,
-                )
-                return 1
+        uniprot_lookup, ec_numbers = get_uniprot_and_ec(pdb_id)
+    if primary_uniprot is None and uniprot_lookup:
+        primary_uniprot = uniprot_lookup
+    uniprot_id = primary_uniprot or uniprot_lookup
+    if offline and not uniprot_id:
+        uniprot_id = "UNKNOWN"
+    if not uniprot_id:
+        if fallback_smiles_cli:
+            print(
+                "WARNING: UniProt lookup failed; proceeding with fallback SMILES and UNKNOWN tag."
+            )
+            uniprot_id, ec_numbers = "UNKNOWN", []
+        else:
+            print(
+                "ERROR: Failed to retrieve UniProt ID. Cannot proceed.",
+                file=sys.stderr,
+            )
+            return 1
     audit_lines = []
     if not offline:
         audit_lines = build_source_audit_lines(
@@ -2345,6 +2429,8 @@ def main():
             max_workers=args.max_source_workers,
             run_log_path=run_log_path,
             audit=audit,
+            unp_start=selected_unp_start,
+            unp_end=selected_unp_end,
         )
     if audit and audit.enabled:
         for line in audit.summary_lines():

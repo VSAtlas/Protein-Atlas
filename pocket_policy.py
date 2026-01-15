@@ -1,7 +1,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import ligand_pocket
 import p2rank_pocket
@@ -14,11 +14,24 @@ def select_pocket(
     ligands: Dict[Any, list[str]],
     ligands_dir,
     logger,
+    override_box: Optional[object] = None,
+    override_meta: Optional[Dict[str, Any]] = None,
 ) -> Tuple[object, object, str, dict]:
     """
     Returns (center_xyz, box_xyz, source_label, extra_metadata_dict)
     """
     source = "p2rank"
+    if override_box is not None:
+        if isinstance(override_box, dict):
+            center = override_box.get("center")
+            box_size = override_box.get("box_size")
+        else:
+            try:
+                center, box_size = override_box  # type: ignore[misc]
+            except Exception:
+                center, box_size = None, None
+        extra = dict(override_meta or {})
+        return center, box_size, "pocket_eval_override", extra
 
     if ligands:
         logger.debug(

@@ -97,7 +97,24 @@ def test_chembl_labeled_fetcher_conflict_priority(monkeypatch, tmp_path):
             return molecule_payload[chembl_id]
         raise AssertionError(f"Unexpected URL {url}")
 
+    def fake_select(
+        uniprot,
+        unp_start,
+        unp_end,
+        keywords,
+        prefer_single_protein=True,
+        audit=None,
+        **kwargs,
+    ):
+        return ["T1"], {
+            "selected_ids": ["T1"],
+            "returned_count": 1,
+            "mode": "metadata_fallback",
+            "reason": "test",
+        }
+
     monkeypatch.setattr(es, "_get_json", fake_get_json)
+    monkeypatch.setattr(es, "select_chembl_targets_for_chain", fake_select)
 
     labels, meta = es.fetch_chembl_labeled_smiles(
         "P12345",

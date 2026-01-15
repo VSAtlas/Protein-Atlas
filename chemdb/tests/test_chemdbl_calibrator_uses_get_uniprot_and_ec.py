@@ -23,6 +23,9 @@ def test_chemdbl_calibrator_uses_get_uniprot_and_ec(tmp_path, monkeypatch):
         debug=False,
         debug_max_ids=25,
         debug_rejection_samples_max=25,
+        unp_start=None,
+        unp_end=None,
+        target_keywords=None,
     ):
         cache_dir.mkdir(parents=True, exist_ok=True)
         return {"strong": ["CCO"], "weak": [], "non": []}, {

@@ -1,0 +1,10 @@
+{
+  "A": {
+    "uniprot": null,
+    "unp_start": null,
+    "unp_end": null,
+    "pdb_start": null,
+    "pdb_end": null,
+    "source": "rcsb_fallback"
+  }
+}

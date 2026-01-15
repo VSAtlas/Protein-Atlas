@@ -101,6 +101,19 @@ Test FDA library toggle:
       (default: fda_test_library_10). This is designed for quick,
       lightweight test runs.
 
+Benchmark Mode:
+  -bench, --bench
+      Enable reproducible BENCHMARK mode. This forces:
+        - Only runs on PDBs: bNJS, bOJG, bNNQ
+        - DUD test mode enabled (TEST_MODE_ENABLE=dud)
+        - Maps these PDBs to specific bench libraries (bench_pur2, etc.)
+        - Forces all engines enabled (GNINA, LEDOCK, DOCK6, SCORCH)
+        - Forces APO_HOLO_MODE=holo
+        - Forces PH_ENSEMBLE=True
+      This ensures a standardized, comparable run configuration.
+      Writes a 'bench_config.txt' snapshot to the config run dir.
+      Cannot be combined with -resume.
+
 Single-ligand mode:
   --single PATTERN
       Enable SINGLE_LIGAND mode and restrict docking to a single ligand
@@ -302,6 +315,51 @@ from postrun_hooks import (
 # Install debug wrappers for Path.mkdir and os.makedirs at import time,
 # preserving the previous behavior.
 install_debug_makedirs()
+
+
+# --- Benchmark Constants & Helpers ---
+BENCH_PDB_IDS = ["bNJS", "bOJG", "bNNQ"]
+BENCH_TEST_LIBRARY_MAP = {
+    "bNJS": "bench_pur2",
+    "bOJG": "bench_mk01",
+    "bNNQ": "bench_fabp4",
+}
+
+
+def _bench_enabled(argv: list[str]) -> bool:
+    """Check if -bench or --bench is present in arguments."""
+    return _cli_has(argv, "-bench") or _cli_has(argv, "--bench")
+
+
+def _apply_bench_overrides(cfg: ConfigDict) -> None:
+    """Force benchmark configuration settings."""
+    cfg["TEST_MODE_ENABLE"] = "dud"
+    
+    # Enable all engines
+    cfg["USE_GNINA"] = True
+    cfg["USE_LEDOCK"] = True
+    cfg["USE_DOCK6"] = True
+    cfg["USE_SCORCH"] = True
+    
+    # Force Holo + pH Ensemble
+    cfg["APO_HOLO_MODE"] = "holo"
+    cfg["PH_ENSEMBLE"] = True
+    
+    # Restrict proteins
+    cfg["SPECIFIED_PROTEINS"] = ",".join(BENCH_PDB_IDS)
+    
+    # Merge library map
+    current_map = _coerce_test_map(cfg.get("TEST_LIBRARY_MAP", {}))
+    # _coerce_test_map returns a dict-like object or dict. Ensure it's a dict.
+    if hasattr(current_map, "copy"):
+        new_map = dict(current_map)
+    else:
+        new_map = {}
+        
+    for k, v in BENCH_TEST_LIBRARY_MAP.items():
+        new_map[k] = v
+        
+    cfg["TEST_LIBRARY_MAP"] = new_map
 
 
 def _log_cfg_emit_path_check(pdb_id, receptor_path, variant, legacy):
@@ -693,9 +751,20 @@ def main() -> None:
     print("MODELLER is working with license.")
     is_resume = _cli_has(sys.argv, "-resume") or _cli_has(sys.argv, "--resume")
     cli_run_id = _cli_val(sys.argv, "--run-id") or _cli_val(sys.argv, "-run-id")
+    is_bench = _bench_enabled(sys.argv)
+
+    if is_resume and is_bench:
+        print("ERROR: -bench cannot be used with -resume", file=sys.stderr)
+        sys.exit(2)
+
     if is_resume and not cli_run_id:
         print("ERROR: -resume requires --run-id <RUN_ID>", file=sys.stderr)
         sys.exit(2)
+
+    # Force PH_ENSEMBLE env var early if bench mode to bypass env override logic later
+    if is_bench:
+        os.environ["PH_ENSEMBLE"] = "1"
+
     run_id = _resolve_run_id(sys.argv)
     argv_for_parsing = list(sys.argv)
     resume_manifest = None
@@ -706,6 +775,11 @@ def main() -> None:
     os.environ["ATLAS_LOG_FILE"] = log_path
     _tee_stdio_to(log_path)
     cfg = ConfigDict(load_inputs())
+
+    if is_bench:
+        _apply_bench_overrides(cfg)
+        logging.info("[bench] benchmark mode ENABLED. Overrides applied.")
+
     bootstrap_root_logging(cfg, log_path)
     logging.info("[probe.root] root-logger INFO now visible")
     print(f"[run] log_file={log_path} run_id={run_id}")
@@ -914,6 +988,29 @@ def main() -> None:
         reset=cfg.get("RESET_CONFIGS"),
         logger=logging.getLogger("run"),
     )
+
+    if is_bench and "CONFIG_RUN_DIR" in cfg:
+        try:
+            bench_snap_path = Path(cfg["CONFIG_RUN_DIR"]) / "bench_config.txt"
+            lines = [
+                "# Benchmark Configuration Snapshot",
+                f"TEST_MODE_ENABLE={cfg.get('TEST_MODE_ENABLE')}",
+                "USE_GNINA=true",
+                "USE_LEDOCK=true",
+                "USE_DOCK6=true",
+                "USE_SCORCH=true",
+                "APO_HOLO_MODE=holo",
+                "PH_ENSEMBLE=true",
+                f"BENCH_PDBS={cfg.get('SPECIFIED_PROTEINS')}",
+            ]
+            for k, v in BENCH_TEST_LIBRARY_MAP.items():
+                lines.append(f"TEST_LIBRARY_MAP.{k}={v}")
+            
+            bench_snap_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            logging.info("[bench] wrote snapshot config to %s", bench_snap_path)
+        except Exception:
+            logging.warning("[bench] failed to write snapshot config", exc_info=True)
+
     print(f"[cfg.run] run_id={cfg['RUN_ID']} run_dir={cfg['CONFIG_RUN_DIR']}")
     print(f"[ph.mode] PH_ENSEMBLE={cfg.get('PH_ENSEMBLE', False)}")
 

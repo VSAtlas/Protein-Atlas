@@ -150,6 +150,11 @@ def _default_runtime() -> Dict[str, Any]:
         "EARLY_RECENTER_MEDIAN_A": 10.0,
         "ALLOW_BOX_EXPAND": True,
         "MAX_RECENTER_ATTEMPTS": 3,
+        # pocket evaluation (optional)
+        "POCKET_EVAL": False,
+        "POCKET_EVAL_MAX_CALIBRATORS": 40,
+        "POCKET_EVAL_SEED": 0,
+        "POCKET_EVAL_FOLDS": 5,
         # control-centering knobs
         "CONTROL_CENTER_POLICY": "best_redock",
         "CONTROL_CENTER_CLOSE_MAX_A": 8.0,
@@ -550,6 +555,7 @@ def load_config(
         "MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2",
         "MMGBSA_LIGAND_FORCE",
         "MMGBSA_RDKit_VALIDATE",
+        "POCKET_EVAL",
     ]:
         if k in cfg:
             cfg[k] = _to_bool(cfg[k])
@@ -590,6 +596,9 @@ def load_config(
         "MMGBSA_GENERAL_ENDFRAME",
         "MMGBSA_GENERAL_INTERVAL",
         "MMGBSA_GENERAL_VERBOSE",
+        "POCKET_EVAL_MAX_CALIBRATORS",
+        "POCKET_EVAL_SEED",
+        "POCKET_EVAL_FOLDS",
     ]:
         if k in cfg:
             cfg[k] = _to_int(cfg[k], cfg[k])

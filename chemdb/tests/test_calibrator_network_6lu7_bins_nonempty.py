@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import json
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,16 @@ def test_calibrator_bins_nonempty_for_6lu7_network(tmp_path):  # noqa: ARG001
     for path in (strong_path, weak_path, non_path):
         assert path.is_file(), f"missing output file: {path}"
         assert _count_nonempty(path) > 0, f"expected non-empty file: {path}"
+
+    meta_path = out_dir / "calibrator_meta.json"
+    assert meta_path.is_file()
+    meta = json.loads(meta_path.read_text())
+    selection = meta.get("target_selection") or {}
+    selected_ids = selection.get("selected_ids") or meta.get("selected_targets") or []
+    assert len(selected_ids) == 1
+    mode = selection.get("mode")
+    assert mode in {"range_overlap", "metadata_fallback"}
+    assert selection.get("reason")
 
     log_path = REPO_ROOT / "calibrator" / "calibrator_logs" / run_tag / "6LU7.log"
     assert log_path.is_file()

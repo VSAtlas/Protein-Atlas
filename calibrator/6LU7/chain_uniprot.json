@@ -1,0 +1,11 @@
+{
+  "A": {
+    "chain": "A",
+    "uniprot": "P0DTD1",
+    "unp_start": 3264,
+    "unp_end": 3569,
+    "pdb_start": 1,
+    "pdb_end": 306,
+    "source": "dbref"
+  }
+}

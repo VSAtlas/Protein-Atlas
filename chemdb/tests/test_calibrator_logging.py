@@ -21,6 +21,9 @@ def test_calibrator_logging_and_audit(monkeypatch):
         debug=False,
         debug_max_ids=25,
         debug_rejection_samples_max=25,
+        unp_start=None,
+        unp_end=None,
+        target_keywords=None,
     ):
         assert debug is True
         return {"strong": [], "weak": [], "non": []}, {

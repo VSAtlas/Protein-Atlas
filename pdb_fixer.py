@@ -424,6 +424,69 @@ def _load_aliases_yaml():
         return _aliases_cache
 
 
+def _split_resname_tokens(values) -> set[str]:
+    """
+    Normalize a possibly nested list/str of resname tokens by splitting on
+    semicolons/whitespace and uppercasing non-empty tokens.
+    """
+    tokens: set[str] = set()
+
+    def _consume(item) -> None:
+        if item is None:
+            return
+        if isinstance(item, (list, tuple, set)):
+            for sub in item:
+                _consume(sub)
+            return
+        text = str(item)
+        for part in re.split(r"[;\s]+", text):
+            tok = part.strip()
+            if tok:
+                tokens.add(tok.upper())
+
+    _consume(values)
+    return tokens
+
+
+def get_ligand_exclusion_spec() -> dict[str, object]:
+    """
+    Return normalized ligand exclusion tokens derived from aliases.yaml for
+    pockets.json filtering. Does not alter existing atom-fixing behavior.
+    """
+    aliases_root = _load_aliases_yaml() or {}
+
+    exclude_het_ids = _split_resname_tokens(aliases_root.get("exclude_het_ids"))
+    remove_as_solvent_resnames = _split_resname_tokens(
+        aliases_root.get("remove_as_solvent_resnames")
+    )
+    remove_as_glycan_resnames = _split_resname_tokens(
+        aliases_root.get("remove_as_glycan_resnames")
+    )
+
+    name_keywords_raw = aliases_root.get("exclude_het_name_keywords") or []
+    exclude_het_name_keywords: list[str] = []
+
+    def _consume_kw(item) -> None:
+        if item is None:
+            return
+        if isinstance(item, (list, tuple, set)):
+            for sub in item:
+                _consume_kw(sub)
+            return
+        text = str(item).strip()
+        if text:
+            exclude_het_name_keywords.append(text.upper())
+
+    _consume_kw(name_keywords_raw)
+
+    return {
+        "exclude_het_ids": exclude_het_ids,
+        "exclude_het_name_keywords": exclude_het_name_keywords,
+        "remove_as_solvent_resnames": remove_as_solvent_resnames,
+        "remove_as_glycan_resnames": remove_as_glycan_resnames,
+    }
+
+
 def get_atom_rules():
     """
     Return a SimpleNamespace of normalized sets/maps used by element fixing,

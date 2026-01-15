@@ -1,0 +1,6 @@
+note currently 1t46 is not able to find the correct actives for some reason... not totally clear why ... 
+BUT the calibrator for 1t46 works well, might need to switch around some logic to use the calibrator instead of deepcoy stuff
+
+have a strength gate built into the config, not yet totally sure how strong/robust it is 
+
+calibrator is able to find tons of differently strengthed chemicals.... need to implement activesite.json to run the audit to build proper pocket qc information

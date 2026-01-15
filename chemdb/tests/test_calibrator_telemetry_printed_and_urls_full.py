@@ -22,9 +22,13 @@ def test_calibrator_telemetry_printed_and_urls_full(monkeypatch):
         activity_types,
         chembl_max_phase,
         label_thresholds,
+        session=None,
         debug=False,
         debug_max_ids=25,
         debug_rejection_samples_max=25,
+        unp_start=None,
+        unp_end=None,
+        target_keywords=None,
     ):
         telemetry = {
             "activity_sanity": {
