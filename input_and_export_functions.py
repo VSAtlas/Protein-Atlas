@@ -152,7 +152,7 @@ def _default_runtime() -> Dict[str, Any]:
         "MAX_RECENTER_ATTEMPTS": 3,
         # pocket evaluation (optional)
         "POCKET_EVAL": False,
-        "POCKET_EVAL_MAX_CALIBRATORS": 40,
+        "POCKET_EVAL_MAX_CALIBRATORS": 0,
         "POCKET_EVAL_SEED": 0,
         "POCKET_EVAL_FOLDS": 5,
         # control-centering knobs

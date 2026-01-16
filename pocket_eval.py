@@ -19,8 +19,10 @@ from calibrator.chemdbl_calibrator import (
     DEFAULT_ACTIVITY_TYPES,
     DEFAULT_CHEMBL_MAX_PHASE,
     DEFAULT_LABEL_THRESHOLDS,
+    DEFAULT_OUT_ROOT,
     DEFAULT_RETRIES,
     DEFAULT_TIMEOUT,
+    run_calibrator_for_pdb,
 )
 from calibrator.uniprot_resolver import resolve_chain_uniprot_segments, select_primary_chain
 from DeepCoy_duds.external_sources import fetch_chembl_labeled_smiles
@@ -127,6 +129,46 @@ def _write_calibrator_cache(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _load_smiles_lines(path: Path) -> List[str]:
+    if not path.exists():
+        return []
+    lines: List[str] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for raw in handle:
+                stripped = raw.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                parts = stripped.split()
+                if not parts:
+                    continue
+                lines.append(parts[0])
+    except Exception:
+        return []
+    return lines
+
+
+def _load_extracted_calibrator_labels(
+    extracted_dir: Path,
+) -> Optional[Dict[str, List[str]]]:
+    if not extracted_dir.exists():
+        return None
+    labels: Dict[str, List[str]] = {}
+    found_any = False
+    for label in ("strong", "weak", "non"):
+        smi_path = extracted_dir / f"{label}_binders.smi"
+        if smi_path.exists():
+            found_any = True
+            labels[label] = _load_smiles_lines(smi_path)
+    if not found_any:
+        return None
+    for label in ("strong", "weak", "non"):
+        labels.setdefault(label, [])
+    if not any(labels.values()):
+        return None
+    return labels
+
+
 def _smiles_hash(smiles: str) -> str:
     return hashlib.sha1(smiles.encode("utf-8")).hexdigest()[:10]
 
@@ -216,6 +258,7 @@ def get_calibration_set_for_pdb(
     dock_root = paths.docked_pdb_root() / "pocket_eval"
     dock_root.mkdir(parents=True, exist_ok=True)
     cache_path = dock_root / "calibrator_cache.json"
+    cache_dir = Path(cfg.get("CALIBRATOR_CACHE_DIR", REPO_ROOT / "calibrator" / ".cache"))
 
     cached_rows = _load_calibrator_cache(cache_path, log)
     if cached_rows:
@@ -226,6 +269,44 @@ def get_calibration_set_for_pdb(
         )
         return cached_rows
 
+    extracted_root = Path(cfg.get("LIGAND_EXTRACTED_DIR", DEFAULT_OUT_ROOT))
+    extracted_dir = extracted_root / f"{pdb_norm}_calibrator"
+    labels = _load_extracted_calibrator_labels(extracted_dir)
+    if labels is None:
+        try:
+            run_calibrator_for_pdb(
+                pdb_norm,
+                out_root=extracted_root,
+                cache_dir=cache_dir,
+                timeout=DEFAULT_TIMEOUT,
+                retries=DEFAULT_RETRIES,
+                activity_types=list(DEFAULT_ACTIVITY_TYPES),
+                chembl_max_phase=DEFAULT_CHEMBL_MAX_PHASE,
+                label_thresholds=DEFAULT_LABEL_THRESHOLDS,
+                run_tag=cfg.get("RUN_ID") or os.environ.get("ATLAS_RUN_ID"),
+            )
+        except Exception as exc:
+            log.warning(
+                "[pocket-eval] calibrator_run_failed pdb=%s err=%s", pdb_norm, exc
+            )
+        labels = _load_extracted_calibrator_labels(extracted_dir)
+
+    if labels is not None:
+        rows = _build_rows_from_labels(labels)
+        payload = {
+            "pdb_id": pdb_norm,
+            "rows": rows,
+            "labels": labels,
+            "source": "extracted_ligands",
+        }
+        _write_calibrator_cache(cache_path, payload)
+        log.info(
+            "[pocket-eval] calibrator_cache=extracted rows=%d path=%s",
+            len(rows),
+            cache_path,
+        )
+        return rows
+
     chain_map = resolve_chain_uniprot_segments(pdb_norm, write_file=False)
     _, segment = select_primary_chain(chain_map)
     uniprot_id = segment.get("uniprot") if isinstance(segment, dict) else None
@@ -235,8 +316,6 @@ def get_calibration_set_for_pdb(
 
     unp_start = segment.get("unp_start") if isinstance(segment, dict) else None
     unp_end = segment.get("unp_end") if isinstance(segment, dict) else None
-    cache_dir = Path(cfg.get("CALIBRATOR_CACHE_DIR", REPO_ROOT / "calibrator" / ".cache"))
-
     labels, chembl_meta = fetch_chembl_labeled_smiles(
         uniprot_id,
         pdb_norm,
@@ -593,22 +672,25 @@ def select_pocket_with_eval(
         _write_performance_error(perf_path, pdb_norm, reason, seed=seed, folds=folds)
         return None
 
-    strong_rows, non_rows = _limit_calibrators(
+    strong_rows_used, non_rows_used = _limit_calibrators(
         strong_rows, non_rows, max_cal, seed, log
     )
-    cal_rows_used = strong_rows + non_rows
+    cal_rows_used = strong_rows_used + non_rows_used
+    prep_rows = strong_rows + non_rows + weak_rows
     log.info(
         "[pocket-eval] calibrators strong=%d non=%d weak=%d",
-        len(strong_rows),
-        len(non_rows),
+        len(strong_rows_used),
+        len(non_rows_used),
         len(weak_rows),
     )
 
     prep_root = paths.prepped_ligands_dir.parent / f"{pdb_norm}_calibrator"
     prep_dir = prep_root
-    prepared = prepare_calibrator_ligands(cal_rows_used, prep_dir, cfg, log)
-    strong_prepped = [r for r in prepared if r.get("label") == "strong"]
-    non_prepped = [r for r in prepared if r.get("label") == "non"]
+    prepared = prepare_calibrator_ligands(prep_rows, prep_dir, cfg, log)
+    used_ids = {r["ligand_id"] for r in cal_rows_used}
+    prepared_scoring = [r for r in prepared if r.get("ligand_id") in used_ids]
+    strong_prepped = [r for r in prepared_scoring if r.get("label") == "strong"]
+    non_prepped = [r for r in prepared_scoring if r.get("label") == "non"]
     if not strong_prepped or not non_prepped:
         reason = "calibrators_prep_missing_class"
         log.warning(
@@ -665,7 +747,7 @@ def select_pocket_with_eval(
         if not cfg.get("FORCE_REPROCESS"):
             cached = _read_scores_csv(scores_path)
             if cached:
-                expected_ids = {r["ligand_id"] for r in prepared}
+                expected_ids = {r["ligand_id"] for r in prepared_scoring}
                 cached_ids = {r["ligand_id"] for r in cached}
                 if expected_ids.issubset(cached_ids):
                     scores_rows = cached
@@ -677,7 +759,7 @@ def select_pocket_with_eval(
 
         if scores_rows is None:
             scores_rows = []
-            for entry in prepared:
+            for entry in prepared_scoring:
                 ligand_id = entry["ligand_id"]
                 ligand_path = Path(entry["pdbqt_path"])
                 safe_id = _sanitize_ligand_name_for_filename(ligand_id)

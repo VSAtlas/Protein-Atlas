@@ -314,7 +314,7 @@ SCORCH_TOP_FRACTION = 0.1
 CNN_TOP_FRACTION = 0.1
 #this turns on the pocket_eval.json files 
 POCKET_EVAL=true
-
+POCKET_EVAL_MAX_CALIBRATORS=10
 
 
 CHAIN_PRUNE=1
