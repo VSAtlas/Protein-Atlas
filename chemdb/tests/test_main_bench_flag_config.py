@@ -1,7 +1,5 @@
 import sys
 import os
-import pytest
-from unittest.mock import MagicMock
 
 # Ensure we can import main from root
 sys.path.append(os.getcwd())

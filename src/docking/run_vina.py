@@ -237,6 +237,20 @@ def run_docking_task(
             _log.warning("[vina.emit] Docking failed for %s: %s", ligand_name, msg)
             failure_reason = msg
 
+        if not out_path_obj.exists():
+            msg = failure_reason or "missing_output"
+            _log.warning(
+                "[vina.emit] Docking produced no output for %s (config=%s)",
+                ligand_name,
+                config_path,
+            )
+            if write_failure_marker_flag:
+                try:
+                    write_failure_marker(out_path_obj, msg, stdout_tail, stderr_tail)
+                except Exception:
+                    pass
+            return ligand_name, None
+
         # Primary parse using project helper
         score = extract_best_score(out_path)
 

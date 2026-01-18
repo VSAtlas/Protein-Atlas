@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import random
 import re
 from pathlib import Path
@@ -31,6 +32,10 @@ from docking.run_vina import run_docking_task
 from ligand_pocket import compute_box_from_ligand_coords
 from path_router.path_router import make_paths
 from prep_ligands.prep_ligands_bulk import prep_ligands_with_mgltools
+try:
+    from rdkit import Chem  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    Chem = None
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -183,6 +188,109 @@ def _build_rows_from_labels(labels: Dict[str, List[str]]) -> List[Dict[str, Any]
     return rows
 
 
+def _filter_supported_calibrators(
+    rows: List[Dict[str, Any]], logger: logging.Logger
+) -> List[Dict[str, Any]]:
+    if Chem is None:
+        return rows
+
+    allowed = {"C", "H", "N", "O", "S", "P", "F", "CL", "BR", "I"}
+    filtered: List[Dict[str, Any]] = []
+    removed = 0
+    for row in rows:
+        smi = row.get("smiles")
+        if not smi:
+            removed += 1
+            continue
+        try:
+            mol = Chem.MolFromSmiles(str(smi))
+        except Exception:
+            mol = None
+        if mol is None:
+            removed += 1
+            continue
+        symbols = {atom.GetSymbol().upper() for atom in mol.GetAtoms()}
+        if symbols and symbols.issubset(allowed):
+            filtered.append(row)
+        else:
+            removed += 1
+
+    if removed:
+        logger.info(
+            "[pocket-eval] calibrator_filter unsupported_atoms removed=%d kept=%d",
+            removed,
+            len(filtered),
+        )
+    return filtered
+
+
+_VINA_ALLOWED_TYPES = {
+    "C",
+    "A",
+    "N",
+    "NA",
+    "O",
+    "OA",
+    "S",
+    "SA",
+    "H",
+    "HD",
+    "F",
+    "CL",
+    "BR",
+    "I",
+    "P",
+    "SI",
+    "SE",
+    "ZN",
+    "MG",
+    "CA",
+    "MN",
+    "FE",
+    "K",
+    "CU",
+    "CO",
+    "NI",
+    "AL",
+    "AG",
+    "AU",
+    "PT",
+    "LI",
+    "BA",
+    "SR",
+    "CS",
+    "RB",
+}
+
+
+def _pdbqt_has_only_vina_types(
+    pdbqt_path: Path, logger: logging.Logger
+) -> tuple[bool, Optional[str]]:
+    try:
+        with pdbqt_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for raw in handle:
+                if not raw.startswith(("ATOM", "HETATM")):
+                    continue
+                parts = raw.split()
+                if len(parts) < 3:
+                    continue
+                adt = parts[-1].strip().upper()
+                while adt and not adt[-1].isalnum():
+                    adt = adt[:-1]
+                if adt in {"NA+", "NA_", "NA"}:
+                    adt = "NA"
+                if adt and adt not in _VINA_ALLOWED_TYPES:
+                    logger.info(
+                        "[pocket-eval] calibrator_pdbqt_invalid type=%s path=%s",
+                        adt,
+                        pdbqt_path,
+                    )
+                    return False, adt
+    except Exception:
+        return False, "read_error"
+    return True, None
+
+
 def _sample_rows(
     rows: List[Dict[str, Any]], n_keep: int, rng: random.Random
 ) -> List[Dict[str, Any]]:
@@ -259,19 +367,40 @@ def get_calibration_set_for_pdb(
     dock_root.mkdir(parents=True, exist_ok=True)
     cache_path = dock_root / "calibrator_cache.json"
     cache_dir = Path(cfg.get("CALIBRATOR_CACHE_DIR", REPO_ROOT / "calibrator" / ".cache"))
+    force_calibrator = bool(cfg.get("FORCE_CALIBRATOR", False))
 
-    cached_rows = _load_calibrator_cache(cache_path, log)
-    if cached_rows:
+    cached_rows = None
+    if force_calibrator:
         log.info(
-            "[pocket-eval] calibrator_cache=hit rows=%d path=%s",
-            len(cached_rows),
-            cache_path,
+            "[pocket-eval] calibrator_cache=force_invalidate path=%s", cache_path
         )
-        return cached_rows
+        try:
+            cache_path.unlink(missing_ok=True)
+        except Exception:
+            try:
+                cache_path.unlink()
+            except Exception:
+                pass
+    else:
+        cached_rows = _load_calibrator_cache(cache_path, log)
+        if cached_rows:
+            log.info(
+                "[pocket-eval] calibrator_cache=hit rows=%d path=%s",
+                len(cached_rows),
+                cache_path,
+            )
+            return cached_rows
 
     extracted_root = Path(cfg.get("LIGAND_EXTRACTED_DIR", DEFAULT_OUT_ROOT))
     extracted_dir = extracted_root / f"{pdb_norm}_calibrator"
-    labels = _load_extracted_calibrator_labels(extracted_dir)
+    labels = None
+    if force_calibrator:
+        log.info(
+            "[pocket-eval] calibrator_extracted=force_invalidate dir=%s", extracted_dir
+        )
+        shutil.rmtree(extracted_dir, ignore_errors=True)
+    else:
+        labels = _load_extracted_calibrator_labels(extracted_dir)
     if labels is None:
         try:
             run_calibrator_for_pdb(
@@ -284,6 +413,7 @@ def get_calibration_set_for_pdb(
                 chembl_max_phase=DEFAULT_CHEMBL_MAX_PHASE,
                 label_thresholds=DEFAULT_LABEL_THRESHOLDS,
                 run_tag=cfg.get("RUN_ID") or os.environ.get("ATLAS_RUN_ID"),
+                force_refresh=force_calibrator,
             )
         except Exception as exc:
             log.warning(
@@ -327,6 +457,7 @@ def get_calibration_set_for_pdb(
         DEFAULT_LABEL_THRESHOLDS,
         unp_start=unp_start,
         unp_end=unp_end,
+        force_refresh=force_calibrator,
     )
     rows = _build_rows_from_labels(labels)
 
@@ -351,27 +482,36 @@ def prepare_calibrator_ligands(
     out_dir: Path,
     cfg: Dict[str, Any],
     logger: Optional[logging.Logger] = None,
+    inputs_dir_override: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     log = logger or _LOG
     out_dir.mkdir(parents=True, exist_ok=True)
-    inputs_dir = out_dir / "inputs"
+    inputs_dir = Path(inputs_dir_override) if inputs_dir_override else out_dir / "inputs"
     prepped_dir = out_dir
     inputs_dir.mkdir(parents=True, exist_ok=True)
     prepped_dir.mkdir(parents=True, exist_ok=True)
+    smi_path = inputs_dir / "calibrators.smi"
+    sdf_path = inputs_dir / "calibrators.sdf"
 
     force = bool(cfg.get("FORCE_REPROCESS", False))
     sorted_rows = sorted(cal_rows, key=lambda r: r["ligand_id"])
 
     pdbqt_files = sorted(prepped_dir.glob("*.pdbqt"))
-    if not force and pdbqt_files and len(pdbqt_files) >= len(sorted_rows):
+    cache_hit = bool(
+        not force and pdbqt_files and len(pdbqt_files) >= len(sorted_rows)
+    )
+    if cache_hit:
         log.info(
             "[pocket-eval] ligand_prep=cache_hit n=%d dir=%s",
             len(pdbqt_files),
             prepped_dir,
         )
+        if (not smi_path.exists()) or (not sdf_path.exists()):
+            with smi_path.open("w", encoding="utf-8") as handle:
+                for row in sorted_rows:
+                    handle.write(f"{row['smiles']} {row['ligand_id']}\n")
+            convert_smi_to_sdf(smi_path, sdf_path, require_output=True)
     else:
-        smi_path = inputs_dir / "calibrators.smi"
-        sdf_path = inputs_dir / "calibrators.sdf"
         with smi_path.open("w", encoding="utf-8") as handle:
             for row in sorted_rows:
                 handle.write(f"{row['smiles']} {row['ligand_id']}\n")
@@ -422,10 +562,23 @@ def prepare_calibrator_ligands(
             }
         )
 
+    invalid = 0
+    if prepared:
+        validated: List[Dict[str, Any]] = []
+        for row in prepared:
+            pdbqt_path = Path(row["pdbqt_path"])
+            ok, _bad = _pdbqt_has_only_vina_types(pdbqt_path, log)
+            if ok:
+                validated.append(row)
+            else:
+                invalid += 1
+        prepared = validated
+
     log.info(
-        "[pocket-eval] ligand_prep complete prepared=%d missing=%d dir=%s",
+        "[pocket-eval] ligand_prep complete prepared=%d missing=%d invalid=%d dir=%s",
         len(prepared),
         missing,
+        invalid,
         prepped_dir,
     )
     return prepared
@@ -628,6 +781,26 @@ def _write_performance_error(
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _select_calibrator_rows_for_eval_and_prep(
+    cal_rows: List[Dict[str, Any]],
+    max_total: Optional[int],
+    seed: int,
+    logger: logging.Logger,
+) -> Tuple[List[Dict[str, Any]], int]:
+    strong_rows = [r for r in cal_rows if r.get("label") == "strong"]
+    non_rows = [r for r in cal_rows if r.get("label") == "non"]
+    weak_rows = [r for r in cal_rows if r.get("label") == "weak"]
+
+    if not strong_rows or not non_rows:
+        return [], len(weak_rows)
+
+    strong_rows_used, non_rows_used = _limit_calibrators(
+        strong_rows, non_rows, max_total, seed, logger
+    )
+    rows_used = strong_rows_used + non_rows_used
+    return rows_used, len(weak_rows)
+
+
 def select_pocket_with_eval(
     *,
     pdb_id: str,
@@ -655,38 +828,46 @@ def select_pocket_with_eval(
         log.warning("[pocket-eval] no_calibrators pdb=%s", pdb_norm)
         _write_performance_error(perf_path, pdb_norm, "calibrators_empty", seed=seed, folds=folds)
         return None
+    cal_rows = _filter_supported_calibrators(cal_rows, log)
+    if not cal_rows:
+        log.warning("[pocket-eval] calibrators_filtered_empty pdb=%s", pdb_norm)
+        _write_performance_error(perf_path, pdb_norm, "calibrators_empty", seed=seed, folds=folds)
+        return None
 
-    strong_rows = [r for r in cal_rows if r.get("label") == "strong"]
-    non_rows = [r for r in cal_rows if r.get("label") == "non"]
-    weak_rows = [r for r in cal_rows if r.get("label") == "weak"]
-
-    if not strong_rows or not non_rows:
+    rows_used, weak_ignored = _select_calibrator_rows_for_eval_and_prep(
+        cal_rows, max_cal, seed, log
+    )
+    strong_used = sum(1 for r in rows_used if r.get("label") == "strong")
+    non_used = sum(1 for r in rows_used if r.get("label") == "non")
+    if not strong_used or not non_used:
         reason = "calibrators_missing_class"
         log.warning(
             "[pocket-eval] %s strong=%d non=%d weak=%d",
             reason,
-            len(strong_rows),
-            len(non_rows),
-            len(weak_rows),
+            strong_used,
+            non_used,
+            weak_ignored,
         )
         _write_performance_error(perf_path, pdb_norm, reason, seed=seed, folds=folds)
         return None
 
-    strong_rows_used, non_rows_used = _limit_calibrators(
-        strong_rows, non_rows, max_cal, seed, log
-    )
-    cal_rows_used = strong_rows_used + non_rows_used
-    prep_rows = strong_rows + non_rows + weak_rows
+    cal_rows_used = rows_used
+    prep_rows = rows_used
     log.info(
-        "[pocket-eval] calibrators strong=%d non=%d weak=%d",
-        len(strong_rows_used),
-        len(non_rows_used),
-        len(weak_rows),
+        "[pocket-eval] calibrators used strong=%d non=%d weak_ignored=%d",
+        strong_used,
+        non_used,
+        weak_ignored,
     )
 
     prep_root = paths.prepped_ligands_dir.parent / f"{pdb_norm}_calibrator"
     prep_dir = prep_root
-    prepared = prepare_calibrator_ligands(prep_rows, prep_dir, cfg, log)
+    extracted_root = Path(cfg.get("LIGAND_EXTRACTED_DIR", DEFAULT_OUT_ROOT))
+    extracted_dir = extracted_root / f"{pdb_norm}_calibrator"
+    extracted_dir.mkdir(parents=True, exist_ok=True)
+    prepared = prepare_calibrator_ligands(
+        prep_rows, prep_dir, cfg, log, inputs_dir_override=extracted_dir
+    )
     used_ids = {r["ligand_id"] for r in cal_rows_used}
     prepared_scoring = [r for r in prepared if r.get("ligand_id") in used_ids]
     strong_prepped = [r for r in prepared_scoring if r.get("label") == "strong"]

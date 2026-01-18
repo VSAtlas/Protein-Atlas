@@ -101,6 +101,11 @@ Test FDA library toggle:
       (default: fda_test_library_10). This is designed for quick,
       lightweight test runs.
 
+Calibrator refresh:
+  --force-calibrator, -force-calibrator
+      Force regenerating calibrator ligands/labels by clearing any cached
+      calibrator artifacts before pocket evaluation.
+
 Benchmark Mode:
   -bench, --bench
       Enable reproducible BENCHMARK mode. This forces:
@@ -1118,6 +1123,18 @@ def main() -> None:
     apply_deepcoy_cli_overrides(cfg, argv_for_parsing)
     if cfg["FAST_MODE"]:
         print("[config] FAST_MODE effective=True (exhaustiveness=1)")
+
+    force_calibrator = _cli_has(argv_for_parsing, "--force-calibrator") or _cli_has(
+        argv_for_parsing, "-force-calibrator"
+    )
+    cfg_force_raw = cfg.get("FORCE_CALIBRATOR", False)
+    try:
+        cfg_force_bool = _to_bool(cfg_force_raw)
+    except Exception:
+        cfg_force_bool = bool(cfg_force_raw)
+    cfg["FORCE_CALIBRATOR"] = bool(force_calibrator or cfg_force_bool)
+    if cfg["FORCE_CALIBRATOR"]:
+        logging.info("[calibrator.force] enabled=true")
 
     # --- Control consensus (multi-engine control docking) -------------
     cfg.setdefault("CONTROL_CONSENSUS", False)

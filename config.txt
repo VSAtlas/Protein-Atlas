@@ -67,6 +67,7 @@ BABEL_DATADIR=
 # DeepCoy (env-local)
 DEEPCOY_PYTHON=/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python
 DEEPCOY_DECOYS_PER_ACTIVE  =  1 #sets how many actives go into each DeepCoy chunk
+ACTIVES_MAX = 50 #sets the max amount of actives used 	
 DEEPCOY_CHUNK_SIZE=1 # sets size of chunks that deepcoy parallelizes against
 DEEPCOY_BASE_SEED=0 #default seed used for deepcoy
 DEEPCOY_SEED_PER_CHUNK=true #on true a random seed is used for each chunk
@@ -313,7 +314,7 @@ CNN_WEIGHT = 0
 SCORCH_TOP_FRACTION = 0.1
 CNN_TOP_FRACTION = 0.1
 #this turns on the pocket_eval.json files 
-POCKET_EVAL=true
+POCKET_EVAL=false
 POCKET_EVAL_MAX_CALIBRATORS=10
 
 

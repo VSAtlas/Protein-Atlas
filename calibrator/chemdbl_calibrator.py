@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+import shutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -384,10 +385,13 @@ def run_calibrator_for_pdb(
     debug_chembl: bool = False,
     debug_max_ids: int = 25,
     debug_reject_samples: int = 25,
+    force_refresh: bool = False,
     fetch_fn=None,
 ) -> Dict:
     pdb_norm = pdb_id.upper()
     out_dir = Path(out_root) / f"{pdb_norm}_calibrator"
+    if force_refresh and out_dir.exists():
+        shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -448,6 +452,15 @@ def run_calibrator_for_pdb(
 
         _log_source_audit(selected_uniprot, resolved_activity_types, chembl_max_phase)
         fetch_impl = fetch_fn or fetch_chembl_labeled_smiles
+        fetch_kwargs = {
+            "unp_start": selected_unp_start,
+            "unp_end": selected_unp_end,
+            "debug": debug_chembl,
+            "debug_max_ids": debug_max_ids,
+            "debug_rejection_samples_max": debug_reject_samples,
+        }
+        if force_refresh:
+            fetch_kwargs["force_refresh"] = True
         labels, chembl_meta = fetch_impl(
             selected_uniprot,
             pdb_norm,
@@ -457,11 +470,7 @@ def run_calibrator_for_pdb(
             resolved_activity_types,
             chembl_max_phase,
             label_thresholds,
-            unp_start=selected_unp_start,
-            unp_end=selected_unp_end,
-            debug=debug_chembl,
-            debug_max_ids=debug_max_ids,
-            debug_rejection_samples_max=debug_reject_samples,
+            **fetch_kwargs,
         )
         bin_counts = {k: len(v) for k, v in labels.items()}
         chembl_counts = chembl_meta.get("counts", {})

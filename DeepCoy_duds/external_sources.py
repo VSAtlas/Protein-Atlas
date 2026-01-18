@@ -1208,6 +1208,7 @@ def fetch_chembl_labeled_smiles(
     unp_start: Optional[int] = None,
     unp_end: Optional[int] = None,
     target_keywords: Optional[List[str]] = None,
+    force_refresh: bool = False,
 ) -> Tuple[Dict[str, List[str]], Dict]:
     """
     Retrieve ChEMBL activities for a UniProt target and bucket SMILES into
@@ -1240,7 +1241,9 @@ def fetch_chembl_labeled_smiles(
         "unp_end": unp_end,
         "target_keywords": keywords_used,
     }
-    cached = load_cached_smiles(cache_dir, source, key)
+    cached = None
+    if not force_refresh:
+        cached = load_cached_smiles(cache_dir, source, key)
     if cached and "labels" in cached:
         cached_meta = cached.get("meta", {})
         cached_meta["cached"] = True

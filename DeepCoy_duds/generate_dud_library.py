@@ -2448,6 +2448,25 @@ def main():
         potency_keep_unknown=potency_keep_unknown,
         run_log_path=run_log_path,
     )
+    actives_max = None
+    actives_max_raw = cfg.get("ACTIVES_MAX")
+    if actives_max_raw is not None:
+        try:
+            raw_str = str(actives_max_raw).strip()
+            actives_max = int(raw_str) if raw_str else None
+        except Exception:
+            actives_max = None
+    if actives_max is not None and actives_max > 0:
+        before_count = len(final_actives_smiles)
+        if before_count > actives_max:
+            final_actives_smiles = final_actives_smiles[:actives_max]
+        after_count = len(final_actives_smiles)
+        cap_line = (
+            f"[deepcoy.actives.cap] max={actives_max} before={before_count} "
+            f"after={after_count}"
+        )
+        print(cap_line)
+        _tee_run_log(run_log_path, cap_line)
 
     if not final_actives_smiles:
         if args.fallback_smiles:
