@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ from .docking_ligands import (
     _count_heavy_atoms_from_pdbqt,
     prepare_and_filter_ligands,
 )
+from .library_mode import _parse_test_libraries_value
 
 
 @dataclass
@@ -94,70 +96,69 @@ def resolve_center_box_for_ph(
     return ctx.center, ctx.box_size, source
 
 
-def subruns_for_test_mode(test_mode: str) -> List[SubrunSpec]:
+def _sanitize_token(token: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(token))
+    cleaned = cleaned.strip("_")
+    return cleaned or "custom"
+
+
+def subruns_for_tokens(tokens: list[str]) -> List[SubrunSpec]:
     """
     Return a list of subrun descriptors with keys:
-      - run_mode: None | "dud" | "fda" | "hmdb"
+      - run_mode: token string (reserved or custom)
       - csv_prefix: str
       - stage_name_prefix: str
     """
-    if test_mode in (None, "", "off", "dud"):
-        return [
+    if not tokens:
+        return [SubrunSpec(run_mode=None, csv_prefix="", stage_name_prefix="")]
+
+    reserved = {"fda", "dud", "hmdb"}
+    has_custom = any(token not in reserved for token in tokens)
+    if has_custom:
+        ordered_tokens = tokens
+    else:
+        ordered_tokens = [tok for tok in ("dud", "hmdb", "fda") if tok in tokens]
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for token in ordered_tokens:
+        if token not in seen:
+            seen.add(token)
+            deduped.append(token)
+
+    subruns: list[SubrunSpec] = []
+    is_dud_only = len(deduped) == 1 and deduped[0] == "dud"
+    for token in deduped:
+        if token == "fda":
+            prefix = ""
+        elif token == "dud":
+            prefix = "" if is_dud_only else "dud_"
+        elif token == "hmdb":
+            prefix = "hmdb_"
+        else:
+            prefix = f"{_sanitize_token(token)}_"
+        subruns.append(
             SubrunSpec(
-                run_mode=None,
-                csv_prefix="",
-                stage_name_prefix="",
+                run_mode=token,
+                csv_prefix=prefix,
+                stage_name_prefix=prefix,
             )
-        ]
-    if test_mode == "fda":
-        return [
-            SubrunSpec(
-                run_mode="fda",
-                csv_prefix="",
-                stage_name_prefix="",
-            )
-        ]
-    if test_mode == "fda+dud":
-        return [
-            SubrunSpec(run_mode="dud", csv_prefix="dud_", stage_name_prefix="dud_"),
-            SubrunSpec(run_mode="fda", csv_prefix="", stage_name_prefix=""),
-        ]
-    if test_mode == "hmdb":
-        return [
-            SubrunSpec(run_mode="hmdb", csv_prefix="hmdb_", stage_name_prefix="hmdb_"),
-        ]
-    if test_mode == "hmdb+dud":
-        return [
-            SubrunSpec(run_mode="hmdb", csv_prefix="hmdb_", stage_name_prefix="hmdb_"),
-            SubrunSpec(run_mode="dud", csv_prefix="dud_", stage_name_prefix="dud_"),
-        ]
-    if test_mode == "hmdb+fda":
-        return [
-            SubrunSpec(run_mode="hmdb", csv_prefix="hmdb_", stage_name_prefix="hmdb_"),
-            SubrunSpec(run_mode="fda", csv_prefix="", stage_name_prefix=""),
-        ]
-    if test_mode == "fda+dud+hmdb":
-        return [
-            SubrunSpec(run_mode="dud", csv_prefix="dud_", stage_name_prefix="dud_"),
-            SubrunSpec(run_mode="hmdb", csv_prefix="hmdb_", stage_name_prefix="hmdb_"),
-            SubrunSpec(run_mode="fda", csv_prefix="", stage_name_prefix=""),
-        ]
-    return [
-        SubrunSpec(
-            run_mode=None,
-            csv_prefix="",
-            stage_name_prefix="",
         )
-    ]
+    return subruns
+
+
+def subruns_for_test_mode(test_mode: str) -> List[SubrunSpec]:
+    tokens = _parse_test_libraries_value(test_mode)
+    return subruns_for_tokens(tokens)
 
 
 def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -> None:
     """
     Run the existing ligands + multi-stage docking pipeline once,
     but parameterized by:
-      - run_mode: None | "dud" | "fda" | "hmdb"
-      - csv_prefix: "" or "dud_" or "hmdb_"
-      - stage_name_prefix: "" or "dud_" or "hmdb_"
+      - run_mode: token string (reserved or custom)
+      - csv_prefix: "" or "<token>_"
+      - stage_name_prefix: "" or "<token>_"
     """
     cfg = ctx.cfg
     paths = ctx.paths

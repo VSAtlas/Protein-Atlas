@@ -22,10 +22,8 @@ from .docking_ledock import (
     run_ledock_for_stage,
     write_ledock_scores_csv,
 )
-from .docking_ligands import (
-    _resolve_test_mode,
-    compute_stage_membership_from_scores,
-)
+from .docking_ligands import compute_stage_membership_from_scores
+from .library_mode import parse_test_libraries
 from .docking_subrun_selection import _use_dock6, _use_ledock
 from .docking_utils import (
     _fingerprint_stage,
@@ -819,11 +817,12 @@ def finalize_ph_subrun(
 
     # --- Annotations ---
     try:
-        test_mode_now = _resolve_test_mode(cfg)
+        tokens_now = parse_test_libraries(cfg)
     except Exception:
-        test_mode_now = None
+        tokens_now = []
+    has_dud = "dud" in tokens_now
 
-    if run_mode == "fda" and test_mode_now in ("fda+dud", "fda+dud+hmdb"):
+    if run_mode == "fda" and has_dud:
         try:
             annotate_fda_long_csv_with_t_scores_vs_decoys(
                 cfg,
@@ -934,9 +933,7 @@ def finalize_ph_subrun(
 
     # --- Difficulty & Audit ---
     difficulty_info = None
-    should_eval_difficulty = False
-    if test_mode_now:
-        should_eval_difficulty = "dud" in str(test_mode_now).lower()
+    should_eval_difficulty = has_dud
     if should_eval_difficulty and run_mode not in (None, "dud"):
         should_eval_difficulty = False
 

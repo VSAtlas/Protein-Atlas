@@ -15,6 +15,13 @@ from rdkit import Chem
 from rdkit.Chem import FilterCatalog, rdFMCS, rdMolAlign
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
+from .library_mode import (
+    _coerce_test_map,
+    _parse_test_libraries_value,
+    compute_allowed_library_roots,
+    is_truthy,
+    parse_test_libraries,
+)
 from .pose_validation import compute_redock_rmsd
 from prep_ligands.library_index import LibraryIndex
 from path_router.path_router import Paths
@@ -24,6 +31,8 @@ from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
 def ensure_deepcoy_decoy_sdfs(
     cfg: Dict, pdb_id: str, logger: logging.Logger
 ) -> Optional[Path]:
+    if not is_truthy(cfg, "USE_DEEPCOY", default=True):
+        return None
     enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
     if enabled not in {"on", "true", "1", "yes"}:
         return None
@@ -228,6 +237,8 @@ def ensure_deepcoy_decoy_sdfs(
 def ensure_deepcoy_decoy_pdbqts(
     cfg: Dict, pdb_id: str, logger: logging.Logger, *, run_mode: Optional[str] = None
 ) -> Optional[Path]:
+    if not is_truthy(cfg, "USE_DEEPCOY", default=True):
+        return None
     enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
     if enabled not in {"on", "true", "1", "yes"}:
         return None
@@ -413,16 +424,23 @@ def ensure_deepcoy_decoy_pdbqts(
 def _maybe_set_deepcoy_as_dud_library(
     cfg: Dict,
     pdb_id: str,
-    effective_mode: str,
+    effective_tokens: list[str],
     prepped_dir: Optional[Path],
     logger: logging.Logger,
 ) -> None:
-    allowed_modes = {"dud", "fda+dud", "hmdb+dud", "fda+dud+hmdb"}
-    if effective_mode not in allowed_modes:
+    mode_label = "+".join(effective_tokens)
+    if "dud" not in effective_tokens:
         logger.debug(
             "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=mode_not_dud",
             pdb_id.upper(),
-            effective_mode,
+            mode_label,
+        )
+        return
+    if not is_truthy(cfg, "USE_DEEPCOY", default=True):
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=use_deepcoy_off",
+            pdb_id.upper(),
+            mode_label,
         )
         return
     if str(cfg.get("DEEPCOY_USE_AS_DUD_LIBRARY", "on")).strip().lower() not in {
@@ -434,21 +452,21 @@ def _maybe_set_deepcoy_as_dud_library(
         logger.debug(
             "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=feature_disabled",
             pdb_id.upper(),
-            effective_mode,
+            mode_label,
         )
         return
     if prepped_dir is None:
         logger.debug(
             "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_prepped_dir",
             pdb_id.upper(),
-            effective_mode,
+            mode_label,
         )
         return
     if not prepped_dir.exists():
         logger.debug(
             "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=missing_dir dir=%s",
             pdb_id.upper(),
-            effective_mode,
+            mode_label,
             prepped_dir,
         )
         return
@@ -456,7 +474,7 @@ def _maybe_set_deepcoy_as_dud_library(
         logger.debug(
             "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_pdbqt dir=%s",
             pdb_id.upper(),
-            effective_mode,
+            mode_label,
             prepped_dir,
         )
         return
@@ -471,7 +489,7 @@ def _maybe_set_deepcoy_as_dud_library(
         logger.warning(
             "[deepcoy.dud-map] pdb=%s mode=%s action=reset reason=map_not_dict",
             key,
-            effective_mode,
+            mode_label,
         )
         test_map = {}
         cfg["TEST_LIBRARY_MAP"] = test_map
@@ -479,7 +497,7 @@ def _maybe_set_deepcoy_as_dud_library(
         logger.warning(
             "[deepcoy.dud-map] pdb=%s mode=%s action=reset reason=canonical_not_dict",
             key,
-            effective_mode,
+            mode_label,
         )
         canonical = {}
         cfg["_TEST_LIBRARY_CANONICAL"] = canonical
@@ -496,7 +514,7 @@ def _maybe_set_deepcoy_as_dud_library(
             logger.debug(
                 "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
                 key,
-                effective_mode,
+                mode_label,
                 existing,
             )
             return
@@ -509,7 +527,7 @@ def _maybe_set_deepcoy_as_dud_library(
             logger.info(
                 "[deepcoy.dud-map] pdb=%s mode=%s action=update existing=%s new=%s reason=%s",
                 key,
-                effective_mode,
+                mode_label,
                 existing,
                 mapped_subdir,
                 "force" if force_map else "missing_or_empty",
@@ -518,7 +536,7 @@ def _maybe_set_deepcoy_as_dud_library(
             logger.debug(
                 "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
                 key,
-                effective_mode,
+                mode_label,
                 existing,
             )
             return
@@ -528,7 +546,7 @@ def _maybe_set_deepcoy_as_dud_library(
     logger.info(
         "[deepcoy.dud-map] pdb=%s mode=%s mapped_subdir=%s",
         key,
-        effective_mode,
+        mode_label,
         mapped_subdir,
     )
 
@@ -557,22 +575,6 @@ def _selection_schedule(docking_mode: str, n_stages: Optional[int]) -> List[floa
     elif len(sched) > n_stages:
         sched = sched[:n_stages]
     return sched
-
-
-def _is_pytest_context(cfg: dict) -> bool:
-    """
-    Detect pytest-driven runs so we can swap HMDB roots for lightweight fixtures.
-    """
-    try:
-        selection_mode = str(cfg.get("PDB_SELECTION_MODE", "")).strip().lower()
-    except Exception:
-        selection_mode = ""
-    env_selection = str(os.environ.get("PDB_SELECTION_MODE", "")).strip().lower()
-    return (
-        "pytest" in os.environ.get("PYTEST_CURRENT_TEST", "")
-        or selection_mode == "test_library_map"
-        or env_selection == "test_library_map"
-    )
 
 
 def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None):
@@ -839,103 +841,42 @@ params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
 pains_catalog = FilterCatalog.FilterCatalog(params)
 
 
-def _coerce_test_map(m) -> Dict[str, str]:
-    import json as _json
-    import ast as _ast
-
-    if isinstance(m, dict):
-        return {str(k).upper(): str(v) for k, v in m.items()}
-    s = str(m).strip()
-    if not s:
-        return {}
-    parsed = None
-    try:
-        parsed = _json.loads(s)
-    except Exception:
-        try:
-            parsed = _ast.literal_eval(s)
-        except Exception:
-            parsed = {}
-    return {
-        str(k).upper(): str(v)
-        for k, v in (parsed if isinstance(parsed, dict) else {}).items()
-    }
-
-
 def _resolve_test_mode(cfg) -> str:
     """
-    Normalize TEST_MODE_ENABLE to one of:
-      "off", "dud", "fda", "fda+dud", "hmdb", "hmdb+dud", "hmdb+fda", "fda+dud+hmdb".
-
-    Accepts:
-      - Booleans / bool-like strings for backwards compatibility:
-          True  / "true" / "yes" / "on" / "1"  -> "fda+dud"
-          False / "false" / "no"  / "off" / "0" / "" / None -> "off"
-      - Explicit string modes (case-insensitive, tolerant of "_" / "+" / "-"):
-          "off"                 -> "off"
-          "dud"                 -> "dud"
-          "fda"                 -> "fda"
-          "fda+dud"/"both"      -> "fda+dud"
-          "hmdb"                -> "hmdb"
-          "hmdb+dud"            -> "hmdb+dud"
-          "hmdb+fda"            -> "hmdb+fda"
-          "fda+dud+hmdb"        -> "fda+dud+hmdb"
-
-    Any unrecognized string logs a warning and falls back to "off".
+    Compatibility helper: return legacy mode strings for reserved-only configs,
+    or a "+"-joined token string when custom library tokens are used.
     """
-    # env has priority over config
-    raw = os.environ.get("TEST_MODE_ENABLE", cfg.get("TEST_MODE_ENABLE", "off"))
-
+    raw = (
+        os.environ.get("TEST_MODE_ENABLE")
+        if "TEST_MODE_ENABLE" in os.environ
+        else cfg.get("TEST_MODE_ENABLE", "off")
+    )
     if isinstance(raw, bool):
-        return "fda+dud" if raw else "off"
-
+        if not raw:
+            return "off"
     s = str(raw).strip()
-    if not s:
+    if not s or s.lower() in {"", "0", "false", "no", "off", "none", "null"}:
         return "off"
 
-    s_lower = s.lower()
-    if s_lower in ("", "0", "false", "no", "off", "none", "null"):
-        return "off"
-    if s_lower in ("true", "yes", "on", "1"):
-        return "fda+dud"
-
-    direct_aliases = {
-        "fda": "fda",
-        "both": "fda+dud",
-        "fda_dud": "fda+dud",
-        "fda+dud": "fda+dud",
-        "dud+fda": "fda+dud",
-    }
-    if s_lower in direct_aliases:
-        return direct_aliases[s_lower]
-
-    normalized = (
-        s_lower.replace("_", "+").replace("-", "+").replace(" ", "").replace("only", "")
-    ).strip("+")
-    if normalized in direct_aliases:
-        return direct_aliases[normalized]
-
-    tokens = [tok for tok in normalized.split("+") if tok and tok != "and"]
-    token_set = set(tokens)
-    if token_set == {"dud"}:
-        return "dud"
-    if token_set == {"fda"}:
-        return "fda"
-    if token_set == {"hmdb"}:
-        return "hmdb"
-    if token_set == {"fda", "dud"}:
-        return "fda+dud"
-    if token_set == {"hmdb", "dud"}:
-        return "hmdb+dud"
-    if token_set == {"hmdb", "fda"}:
-        return "hmdb+fda"
-    if token_set == {"fda", "dud", "hmdb"}:
-        return "fda+dud+hmdb"
-    if normalized in ("fdaadud", "fdaanddud"):
-        return "fda+dud"
-
-    print(f"[test-mode] WARNING: Unknown TEST_MODE_ENABLE={raw!r}; treating as 'off'.")
-    return "off"
+    tokens = parse_test_libraries(cfg)
+    reserved = {"dud", "fda", "hmdb"}
+    if tokens and all(tok in reserved for tok in tokens):
+        token_set = set(tokens)
+        if token_set == {"dud"}:
+            return "dud"
+        if token_set == {"fda"}:
+            return "fda"
+        if token_set == {"hmdb"}:
+            return "hmdb"
+        if token_set == {"dud", "fda"}:
+            return "fda+dud"
+        if token_set == {"hmdb", "dud"}:
+            return "hmdb+dud"
+        if token_set == {"hmdb", "fda"}:
+            return "hmdb+fda"
+        if token_set == {"dud", "fda", "hmdb"}:
+            return "fda+dud+hmdb"
+    return "+".join(tokens) if tokens else "off"
 
 
 def _dedup_index_roots(seq: list[Path]) -> list[Path]:
@@ -963,127 +904,18 @@ def _lib_roots_for_pdb(
     *,
     test_mode_override: Optional[str] = None,
 ) -> tuple[list[Path], list[Path]]:
-    extra_dirs = str(cfg.get("LIBRARY_EXTRA_DIRS", "")).strip()
-    extra_paths: list[Path] = []
-    if extra_dirs:
-        for d in extra_dirs.split(";"):
-            d = d.strip()
-            if not d:
-                continue
-            p = Path(d)
-            if p.exists():
-                extra_paths.append(p)
-
-    subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
-    hmdb_subdir_raw = str(cfg.get("HMDB_LIBRARY_SUBDIR", "hmdb"))
-    hmdb_test_subdir = str(cfg.get("HMDB_TEST_LIBRARY_SUBDIR", "hmdb_test_library_10"))
-    test_mode = test_mode_override or _resolve_test_mode(cfg)
-    pytest_mode = _is_pytest_context(cfg)
-    hmdb_use_test = pytest_mode and ("hmdb" in str(test_mode))
-    hmdb_subdir = hmdb_test_subdir if hmdb_use_test else hmdb_subdir_raw
-
-    maybe_map = cfg.get("TEST_LIBRARY_MAP", {})
-    test_map: Dict[str, str] = {}
-    test_map = _coerce_test_map(maybe_map)
-    logger.info(
-        f"[lib-roots.map] raw_type={type(maybe_map).__name__} keys={len(test_map)}"
+    del paths
+    tokens_override = (
+        _parse_test_libraries_value(test_mode_override)
+        if test_mode_override is not None
+        else None
     )
-    mapped_value = (test_map or {}).get(pdb_id)
-
-    base_root = Path(
-        cfg.get("OUTPUT_LIGANDS_DIR")
-        or cfg.get("PREPPED_LIGANDS_ROOT")
-        or "prepped_ligands"
-    )
-
-    if hmdb_use_test and hmdb_subdir != hmdb_subdir_raw:
-        logger.info(
-            "[ligands.hmdb-test] test_mode=%s pytest=%s subdir=%s raw=%s",
-            test_mode,
-            pytest_mode,
-            hmdb_subdir,
-            hmdb_subdir_raw,
-        )
-
-    hmdb_root = base_root / hmdb_subdir
-    dud_root = (base_root / mapped_value) if mapped_value else None
-
-    need_dud_map = test_mode in ("dud", "fda+dud", "hmdb+dud", "fda+dud+hmdb")
-    if need_dud_map and not mapped_value:
-        logger.warning(
-            "[test-mode] PDB %s missing from TEST_LIBRARY_MAP; using default library=%s",
-            pdb_id,
-            subdir_default,
-        )
-    dud_roots: list[Path] = []
-    if dud_root:
-        dud_roots = [dud_root]
-    elif need_dud_map:
-        dud_roots = [base_root / subdir_default]
-
-    roots_for_mode: list[Path]
-    if test_mode == "off":
-        roots_for_mode = [base_root / subdir_default]
-    elif test_mode == "dud":
-        roots_for_mode = dud_roots or [base_root / subdir_default]
-    elif test_mode == "fda+dud":
-        roots_for_mode = (
-            dud_roots + [base_root / subdir_default]
-            if dud_roots
-            else [base_root / subdir_default]
-        )
-    elif test_mode == "hmdb":
-        roots_for_mode = [hmdb_root]
-    elif test_mode == "hmdb+dud":
-        roots_for_mode = [hmdb_root] + (dud_roots or [base_root / subdir_default])
-    elif test_mode == "hmdb+fda":
-        roots_for_mode = [hmdb_root, base_root / subdir_default]
-    elif test_mode == "fda+dud+hmdb":
-        if dud_roots:
-            roots_for_mode = dud_roots + [hmdb_root, base_root / subdir_default]
-        else:
-            roots_for_mode = [hmdb_root, base_root / subdir_default]
-    else:
-        roots_for_mode = [base_root / subdir_default]
-
-    deduped_roots = _dedup_index_roots(roots_for_mode)
-    allowed_noncontrol_roots: list[Path] = []
-    for r in deduped_roots:
-        if r.exists():
-            allowed_noncontrol_roots.append(r)
-        else:
-            logger.warning("[ligands.test-roots] missing=%s", r)
-
-    extra_paths_cfg: list[str] = cfg.get("EXTRA_LIGAND_ROOTS", []) or []
-    for d in extra_paths_cfg:
-        p = Path(d)
-        if p.exists():
-            allowed_noncontrol_roots.append(p)
-        else:
-            logger.warning("[ligands.extra-roots] missing=%s", p)
-
-    allowed_noncontrol_roots.extend(extra_paths)
-    allowed_noncontrol_roots = _dedup_index_roots(allowed_noncontrol_roots)
-
-    logger.info(
-        "[ligands.allowed-roots] test_mode=%s pdb=%s roots=%d",
-        test_mode,
+    allowed_noncontrol_roots = compute_allowed_library_roots(
+        cfg,
         pdb_id,
-        len(allowed_noncontrol_roots),
+        logger,
+        tokens_override=tokens_override,
     )
-    cfg["_ALLOWED_NONCONTROL_ROOTS"] = [str(p) for p in allowed_noncontrol_roots]
-
-    primary_root_str = (
-        str(allowed_noncontrol_roots[0]) if allowed_noncontrol_roots else None
-    )
-    logger.info(
-        "[ph_ligand.roots] test_mode=%s pdb=%s ph_root=%s noncontrol_roots=%s",
-        test_mode,
-        pdb_id,
-        primary_root_str,
-        cfg.get("_ALLOWED_NONCONTROL_ROOTS"),
-    )
-    cfg["_TEST_MODE_EFFECTIVE"] = test_mode
     return [], allowed_noncontrol_roots
 
 
@@ -1096,52 +928,53 @@ def prepare_and_filter_ligands(
 ) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
     """
     Gathers candidate ligands, keeps existing validation/PAINS logic, and
-    filters the *non-control* pool to allowed library roots:
-
-      - TEST_MODE_ENABLE="off"      -> OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
-      - TEST_MODE_ENABLE="dud"      -> OUTPUT_LIGANDS_DIR/<mapped_subdir>
-      - TEST_MODE_ENABLE="fda+dud"  -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
-      - TEST_MODE_ENABLE="hmdb"     -> OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR>
-      - TEST_MODE_ENABLE="hmdb+dud" -> OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR> + OUTPUT_LIGANDS_DIR/<mapped_subdir>
-      - TEST_MODE_ENABLE="hmdb+fda" -> OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
-      - TEST_MODE_ENABLE="fda+dud+hmdb" -> OUTPUT_LIGANDS_DIR/<mapped_subdir> + OUTPUT_LIGANDS_DIR/<HMDB_LIBRARY_SUBDIR> + OUTPUT_LIGANDS_DIR/<LIBRARY_SUBDIR_DEFAULT>
+    filters the *non-control* pool to allowed library roots derived from
+    TEST_MODE_ENABLE tokens.
 
     run_mode:
-      - None: preserve TEST_MODE_ENABLE semantics (off / dud / fda+dud / hmdb / combinations)
-      - "dud": force DUD-only by using the mapped subdir only
-      - "fda": force FDA-only by using the default library only
-      - "hmdb": force HMDB-only by using HMDB_LIBRARY_SUBDIR only
+      - None: use parsed TEST_MODE_ENABLE tokens
+      - "<token>": treat run_mode as a single token subrun (reserved or custom)
 
     Controls are *never* filtered out here.
     LIBRARY_EXTRA_DIRS remain included (unchanged).
     """
-    overall_mode = _resolve_test_mode(cfg)
-    if run_mode == "dud":
-        effective_mode = "dud"
-    elif run_mode == "fda":
-        effective_mode = "off"
-    elif run_mode == "hmdb":
-        effective_mode = "hmdb"
-    else:
-        effective_mode = overall_mode
+    overall_tokens = parse_test_libraries(cfg)
+    effective_tokens = overall_tokens
+    if run_mode is not None:
+        token = str(run_mode).strip()
+        if token:
+            lowered = token.lower()
+            if lowered in {"default", "off", "none", "null"}:
+                lowered = "fda"
+            effective_tokens = [lowered]
 
     deepcoy_prepped_dir: Optional[Path] = None
-    try:
-        deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(
-            cfg, paths.pdb_id, logger, run_mode=run_mode
-        )
-    except Exception as exc:
-        logger.warning("[deepcoy.autogen] pdb=%s error=%s", paths.pdb_id, exc)
-        if str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
-            "on",
-            "true",
-            "1",
-            "yes",
-        }:
-            raise
+    use_deepcoy = is_truthy(cfg, "USE_DEEPCOY", default=True)
+    deepcoy_sdf_on = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
+    deepcoy_pdbqt_on = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_PDBQT", "on")).strip().lower()
+    should_try_deepcoy = (
+        use_deepcoy
+        and "dud" in effective_tokens
+        and deepcoy_sdf_on in {"on", "true", "1", "yes"}
+        and deepcoy_pdbqt_on in {"on", "true", "1", "yes"}
+    )
+    if should_try_deepcoy:
+        try:
+            deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(
+                cfg, paths.pdb_id, logger, run_mode=run_mode
+            )
+        except Exception as exc:
+            logger.warning("[deepcoy.autogen] pdb=%s error=%s", paths.pdb_id, exc)
+            if str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+                "on",
+                "true",
+                "1",
+                "yes",
+            }:
+                raise
 
     _maybe_set_deepcoy_as_dud_library(
-        cfg, paths.pdb_id, effective_mode, deepcoy_prepped_dir, logger
+        cfg, paths.pdb_id, effective_tokens, deepcoy_prepped_dir, logger
     )
 
     # Keep existing prep step for extracted controls (harmless if nothing to do)
@@ -1151,12 +984,11 @@ def prepare_and_filter_ligands(
         prepped_ligands_dir=paths.prepped_ligands_dir,
     )
 
-    _control_roots, allowed_noncontrol_roots = _lib_roots_for_pdb(
+    allowed_noncontrol_roots = compute_allowed_library_roots(
         cfg,
         paths.pdb_id.upper(),
-        paths,
         logger,
-        test_mode_override=effective_mode,
+        tokens_override=effective_tokens,
     )
     per_index_roots: list[Path] = []
     if paths.prepped_ligands_dir:

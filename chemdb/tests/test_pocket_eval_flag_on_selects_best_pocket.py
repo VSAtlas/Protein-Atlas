@@ -154,6 +154,24 @@ def test_pocket_eval_flag_on_selects_best_pocket(tmp_path: Path) -> None:
     _run_main(run_id, env)
 
     assert perf_path.is_file(), "pocket_performance.json missing when POCKET_EVAL=true"
+    assignments_path = dock_root / "pocket_assignments.json"
+    sorted_path = dock_root / "pocket_performance_sorted.json"
+    assert assignments_path.is_file(), "pocket_assignments.json missing"
+    assert sorted_path.is_file(), "pocket_performance_sorted.json missing"
+    assignments_payload = json.loads(assignments_path.read_text(encoding="utf-8"))
+    assert isinstance(assignments_payload.get("selected_pockets"), list)
+    assert isinstance(assignments_payload.get("multi_pocket_detected"), bool)
+    assert assignments_payload.get("assignment_mode")
+    sorted_payload = json.loads(sorted_path.read_text(encoding="utf-8"))
+    assert isinstance(sorted_payload.get("selected_pockets"), list)
+    assert sorted_payload.get("decision_reason")
+    sorted_pockets = sorted_payload.get("pockets")
+    assert isinstance(sorted_pockets, list)
+    assert sorted_pockets
+    for entry in sorted_pockets:
+        assert entry.get("pocket_id")
+        assert isinstance(entry.get("unsorted_metrics"), dict)
+        assert isinstance(entry.get("sorted_metrics"), dict)
     perf = json.loads(perf_path.read_text(encoding="utf-8"))
     perf_pockets = perf.get("pockets") or []
     assert perf_pockets, "No pockets recorded in pocket_performance.json"

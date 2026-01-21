@@ -15,7 +15,7 @@ from .docking_controls import (
     _resolve_ph_scope,
 )
 
-from .docking_ligands import _lib_roots_for_pdb
+from .library_mode import compute_allowed_library_roots
 from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 
 # NOTE: `automate_protein_prep` is imported inside prepare_receptor itself.
@@ -362,8 +362,8 @@ def prepare_receptor(
                             ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                             ",".join(f"{p:.1f}" for p in ligand_ph_values),
                         )
-                        _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(
-                            cfg, paths.pdb_id.upper(), paths, logger
+                        noncontrol_roots = compute_allowed_library_roots(
+                            cfg, paths.pdb_id.upper(), logger
                         )
                         ph_ligand_root = (
                             noncontrol_roots[0] if noncontrol_roots else None
@@ -497,8 +497,8 @@ def prepare_receptor(
                     ",".join(f"{p:.1f}" for p in sorted(context_ph_values)),
                     ",".join(f"{p:.1f}" for p in ligand_ph_values),
                 )
-                _ctrl_roots, noncontrol_roots = _lib_roots_for_pdb(
-                    cfg, paths.pdb_id.upper(), paths, logger
+                noncontrol_roots = compute_allowed_library_roots(
+                    cfg, paths.pdb_id.upper(), logger
                 )
                 ph_ligand_root = noncontrol_roots[0] if noncontrol_roots else None
 

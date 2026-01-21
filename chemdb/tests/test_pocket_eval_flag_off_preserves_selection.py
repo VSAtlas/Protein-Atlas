@@ -119,6 +119,15 @@ def test_pocket_eval_flag_off_preserves_selection(tmp_path: Path) -> None:
     assert (
         not perf_path.exists()
     ), "pocket_performance.json should not be created when POCKET_EVAL=false"
+    dock_root = perf_path.parent
+    assignments_path = dock_root / "pocket_assignments.json"
+    sorted_path = dock_root / "pocket_performance_sorted.json"
+    assert (
+        not assignments_path.exists()
+    ), "pocket_assignments.json should not be created when POCKET_EVAL=false"
+    assert (
+        not sorted_path.exists()
+    ), "pocket_performance_sorted.json should not be created when POCKET_EVAL=false"
     pockets_json_path = POCKETS_DIR / "pockets.json"
     assert pockets_json_path.is_file(), "pockets.json missing for POCKET_EVAL=false test"
     _ = json.loads(pockets_json_path.read_text(encoding="utf-8"))

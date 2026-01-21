@@ -38,9 +38,8 @@ from apo_holo_mode import resolve_apo_holo_mode  # noqa: E402
 from docking.docking_ligands import (  # noqa: E402
     _coerce_test_map,
     _is_under_ph_subdir,
-    _lib_roots_for_pdb,
-    _resolve_test_mode,
 )
+from docking.library_mode import compute_allowed_library_roots  # noqa: E402
 from input_and_export_functions import load_inputs  # noqa: E402
 from path_router import docked_dir, load_ph_tags, make_paths  # noqa: E402
 from docking.ph_ensemble_docking import enumerate_ligands_for_ph_context  # noqa: E402
@@ -242,12 +241,10 @@ def enumerate_ph_ligands_for_test_pdb(
         ph_label = ph_tags[0] if ph_tags else None
         paths = make_paths(cfg, base_id=chosen, pdb_file=f"{chosen}.pdb")
         logger = logging.getLogger("test.ph_ligands")
-        _, noncontrol_roots = _lib_roots_for_pdb(
+        noncontrol_roots = compute_allowed_library_roots(
             cfg,
             chosen.upper(),
-            paths,
             logger,
-            test_mode_override=_resolve_test_mode(cfg),
         )
         ph_root = None
         if noncontrol_roots:

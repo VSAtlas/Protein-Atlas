@@ -34,13 +34,14 @@ from .docking_ligands import (
     compute_rmsd,
     validate_ligand,
 )
+from .library_mode import parse_test_libraries
 from .docking_ph_ensemble_phase import _phase5_ph_ensemble_global
 from .docking_receptor_phases import _phase2_to4_receptor_and_center
 from .docking_stage_runner import RetryManager, run_one_stage, _map_reason_to_category
 from .docking_subruns import (
     ProteinDockingContext,
     SubrunSpec,
-    subruns_for_test_mode,
+    subruns_for_tokens,
     run_ligand_pipeline_subrun,
 )
 from .docking_utils import norm
@@ -321,13 +322,13 @@ def _phase6_to8_ligands_and_docking(
         control_lookup=control_lookup,
     )
 
-    test_mode = _resolve_test_mode(cfg)
-    subruns: List[SubrunSpec] = subruns_for_test_mode(test_mode)
+    tokens = parse_test_libraries(cfg)
+    subruns: List[SubrunSpec] = subruns_for_tokens(tokens)
 
     for sub in subruns:
         logger.info(
-            "[subrun] mode=%s run_mode=%r csv_prefix=%r stage_prefix=%r",
-            test_mode,
+            "[subrun] tokens=%s run_mode=%r csv_prefix=%r stage_prefix=%r",
+            "+".join(tokens),
             sub.run_mode,
             sub.csv_prefix,
             sub.stage_name_prefix,

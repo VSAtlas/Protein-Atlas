@@ -6,7 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_ligands import _count_heavy_atoms_from_pdbqt, _lib_roots_for_pdb
+from .docking_ligands import _count_heavy_atoms_from_pdbqt
+from .library_mode import compute_allowed_library_roots
 from input_and_export_functions import _to_bool
 from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 from single_ligand_index import (
@@ -106,18 +107,19 @@ def resolve_single_ligand_or_prepare(
                 )
                 logger.info(f"[single.ph_ligand] Using ligand window {ligand_window}")
 
-                if run_mode in {"dud", "hmdb"}:
-                    ph_override_single = run_mode
-                elif run_mode == "fda":
-                    ph_override_single = "off"
-                else:
-                    ph_override_single = None
-                _, noncontrol_roots_single = _lib_roots_for_pdb(
+                tokens_override: Optional[list[str]] = None
+                if run_mode is not None:
+                    token = str(run_mode).strip()
+                    if token:
+                        lowered = token.lower()
+                        if lowered in {"default", "off", "none", "null"}:
+                            lowered = "fda"
+                        tokens_override = [lowered]
+                noncontrol_roots_single = compute_allowed_library_roots(
                     cfg,
                     paths.pdb_id.upper(),
-                    paths,
                     logger,
-                    test_mode_override=ph_override_single,
+                    tokens_override=tokens_override,
                 )
                 ph_root_path = (
                     noncontrol_roots_single[0] if noncontrol_roots_single else None

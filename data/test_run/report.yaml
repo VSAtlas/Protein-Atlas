@@ -1,5 +1,5 @@
 run_id: test_run
-generated_at: '2026-01-16T03:44:02.997314Z'
+generated_at: '2026-01-20T23:50:33.836430Z'
 sources:
   master_rows_csv: data/test_run/master_rows.csv
   manifest_yaml: manifests/test_run/run_manifest.yaml
@@ -28,9 +28,9 @@ targets:
           sigma: null
           n: null
         scorch:
-          mu: null
-          sigma: null
-          n: null
+          mu: 0.00120848
+          sigma: 0.000550871
+          n: 3
       fdr_stats:
         score_field: consensus_score
         n_decoys: 5

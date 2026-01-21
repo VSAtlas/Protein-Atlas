@@ -283,7 +283,7 @@ from cli.run_context import (
     ConfigDict,
 )
 from docking.docking_vina import emit_vina_config as _emit_vina_config_impl
-from docking.docking_ligands import _coerce_test_map, _resolve_test_mode
+from docking.library_mode import _coerce_test_map, parse_test_libraries
 from docking.docking import process_one_protein
 from path_router.path_router import (
     make_paths,
@@ -1310,18 +1310,17 @@ def main() -> None:
         )
 
     # --- Test-mode protein filter: keep only PDBs listed in TEST_LIBRARY_MAP ---
-    test_mode = _resolve_test_mode(cfg)
-    if test_mode != "off":
-        raw_map = cfg.get("TEST_LIBRARY_MAP", {})
-        test_map = _coerce_test_map(raw_map)
-        try:
-            cfg["_TEST_LIBRARY_CANONICAL"] = {
-                str(k).upper(): str(v)
-                for k, v in getattr(test_map, "items", lambda: [])()
-            }
-        except Exception:
-            cfg["_TEST_LIBRARY_CANONICAL"] = {}
+    tokens = parse_test_libraries(cfg)
+    raw_map = cfg.get("TEST_LIBRARY_MAP", {})
+    test_map = _coerce_test_map(raw_map)
+    try:
+        cfg["_TEST_LIBRARY_CANONICAL"] = {
+            str(k).upper(): str(v) for k, v in getattr(test_map, "items", lambda: [])()
+        }
+    except Exception:
+        cfg["_TEST_LIBRARY_CANONICAL"] = {}
 
+    if "dud" in tokens:
         # Normalize all TEST_LIBRARY_MAP keys to canonical 4-char uppercase PDB IDs.
         # This makes matching robust to case and minor suffix differences.
         test_keys = set()
@@ -1349,7 +1348,7 @@ def main() -> None:
 
             if skipped:
                 print(
-                    f"[test-mode] Enabled mode={test_mode}; restricting to "
+                    f"[test-mode] Enabled tokens={'+'.join(tokens)}; restricting to "
                     f"{len(kept)} PDBs from TEST_LIBRARY_MAP keys"
                     + (" (plus specified proteins)." if specified_keys else ".")
                 )
@@ -1361,8 +1360,6 @@ def main() -> None:
             print(
                 "[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied."
             )
-    else:
-        cfg["_TEST_LIBRARY_CANONICAL"] = {}
 
     print("Working directory:", os.getcwd())
     print("Loaded config keys:", list(cfg.keys()))

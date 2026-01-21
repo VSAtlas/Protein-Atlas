@@ -21,6 +21,7 @@ def _parse_force_deepcoy_flag(argv: Sequence[str]) -> bool:
 
 
 def apply_deepcoy_defaults(cfg: Dict[str, str]) -> None:
+    cfg.setdefault("USE_DEEPCOY", "on")
     cfg.setdefault(
         "DEEPCOY_DUDS_DIR", "/home/michael/atlas/code/protein_automation/DeepCoy_duds"
     )

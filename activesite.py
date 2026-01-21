@@ -343,6 +343,33 @@ def main(pdb_file):
                                 pocket_eval_meta.get("pocket_id"),
                                 pocket_eval_meta.get("selection_reason"),
                             )
+                            try:
+                                from analysis.pocket_second_pass import run_second_pass
+
+                                second = run_second_pass(
+                                    Path(pocket_eval_meta["performance_path"]),
+                                    logger=logger,
+                                )
+                                pocket_eval_meta["second_pass"] = {
+                                    "multi_pocket_detected": second.get(
+                                        "multi_pocket_detected"
+                                    ),
+                                    "decision_reason": second.get("decision_reason"),
+                                    "selected_pockets": second.get("selected_pockets"),
+                                    "paths": second.get("paths"),
+                                }
+                                paths_info = second.get("paths") or {}
+                                logger.info(
+                                    "[pocket-second-pass] wrote assignments=%s perf_sorted=%s selected=%s multi=%s",
+                                    paths_info.get("assignments"),
+                                    paths_info.get("performance_sorted"),
+                                    second.get("selected_pockets"),
+                                    second.get("multi_pocket_detected"),
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "[pocket-second-pass] failed: %s", exc
+                                )
                         else:
                             logger.warning(
                                 "[pocket-eval] missing_override center=%s box=%s",

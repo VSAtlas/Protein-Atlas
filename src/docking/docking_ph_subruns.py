@@ -4,11 +4,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_ligands import (
-    _count_heavy_atoms_from_pdbqt,
-    _lib_roots_for_pdb,
-    _resolve_test_mode,
-)
+from .docking_ligands import _count_heavy_atoms_from_pdbqt
+from .library_mode import compute_allowed_library_roots, parse_test_libraries
 from path_router.path_router import Paths, load_ph_tags
 from .ph_ensemble_docking import (
     enumerate_ligands_for_ph_context,
@@ -34,8 +31,8 @@ def resolve_ph_tags_and_root(
     manifest_run_id = cfg.get("RUN_ID")
     library_for_manifest = None
     try:
-        mode_for_manifest = _resolve_test_mode(cfg)
-        if mode_for_manifest != "off":
+        tokens_for_manifest = parse_test_libraries(cfg)
+        if "dud" in tokens_for_manifest:
             lib_map = cfg.get("_TEST_LIBRARY_CANONICAL", {}) or {}
             library_for_manifest = lib_map.get(paths.pdb_id.upper())
         if not library_for_manifest:
@@ -67,21 +64,23 @@ def resolve_ph_tags_and_root(
         # Here we return empty list, caller checks.
         pass
 
-    if run_mode in {"dud", "hmdb"}:
-        ph_test_mode_override = run_mode
-    elif run_mode == "fda":
-        ph_test_mode_override = "off"
-    else:
-        ph_test_mode_override = None
+    tokens_override: Optional[list[str]] = None
+    if run_mode is not None:
+        token = str(run_mode).strip()
+        if token:
+            lowered = token.lower()
+            if lowered in {"default", "off", "none", "null"}:
+                lowered = "fda"
+            tokens_override = [lowered]
 
-    _ctrl_roots_ph, noncontrol_roots_ph = _lib_roots_for_pdb(
+    noncontrol_roots_ph = compute_allowed_library_roots(
         cfg,
         paths.pdb_id.upper(),
-        paths,
         logger,
-        test_mode_override=ph_test_mode_override,
+        tokens_override=tokens_override,
     )
     ph_ligand_root = noncontrol_roots_ph[0] if noncontrol_roots_ph else None
+    ph_test_mode_override = "+".join(tokens_override) if tokens_override else None
 
     logger.info(
         "[subrun.ph] run_mode=%s ph_tags=%s ph_ligand_root=%s override=%s",
