@@ -283,6 +283,7 @@ from cli.run_context import (
     ConfigDict,
 )
 from docking.docking_vina import emit_vina_config as _emit_vina_config_impl
+from docking.docking_ligands import _resolve_test_mode
 from docking.library_mode import _coerce_test_map, parse_test_libraries
 from docking.docking import process_one_protein
 from path_router.path_router import (
@@ -1311,6 +1312,7 @@ def main() -> None:
 
     # --- Test-mode protein filter: keep only PDBs listed in TEST_LIBRARY_MAP ---
     tokens = parse_test_libraries(cfg)
+    test_mode = _resolve_test_mode(cfg)
     raw_map = cfg.get("TEST_LIBRARY_MAP", {})
     test_map = _coerce_test_map(raw_map)
     try:
@@ -1468,7 +1470,7 @@ def main() -> None:
                 try:
                     library_name = None
                     try:
-                        if test_mode != "off":
+                        if "dud" in tokens:
                             lib_map = (
                                 cfg_for_pdb.get("_TEST_LIBRARY_CANONICAL", {}) or {}
                             )

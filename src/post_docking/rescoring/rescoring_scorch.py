@@ -36,43 +36,107 @@ SCORCH_ENV: str = "scorch-env"
 SCORCH_ROOT: Path | None = None
 SCORCH_TOP_FRACTION_DEFAULT = 0.15
 SCORCH_TOP_FRACTION_KEY = "SCORCH_TOP_FRACTION"
-DUD_STAGE_DIRS = ("dud_stage1", "dud_stage2", "dud_stage3")
-GNINA_DUD_STAGE_DIRS = ("gnina_dud_stage1", "gnina_dud_stage2", "gnina_dud_stage3")
-GNINA_DUD_STAGE_DIRS_LEGACY = (
-    "dud_gnina_stage1",
-    "dud_gnina_stage2",
-    "dud_gnina_stage3",
-)
-DOCK6_DUD_STAGE_DIRS = ("dock6_dud_stage1", "dock6_dud_stage2", "dock6_dud_stage3")
-DOCK6_DUD_STAGE_DIRS_LEGACY = (
-    "dud_dock6_stage1",
-    "dud_dock6_stage2",
-    "dud_dock6_stage3",
-)
-LEDOCK_DUD_STAGE_DIRS = ("ledock_dud_stage1", "ledock_dud_stage2", "ledock_dud_stage3")
-LEDOCK_DUD_STAGE_DIRS_LEGACY = (
-    "dud_ledock_stage1",
-    "dud_ledock_stage2",
-    "dud_ledock_stage3",
-)
-DUD_POST_STAGE_DIRS = ("dud_ledock_pdbqt", "dud_dock6_pdbqt")
-VINA_STAGE_DIRS = ("stage1", "stage2", "stage3") + DUD_STAGE_DIRS
-GNINA_STAGE_DIRS = (
-    ("gnina_stage1", "gnina_stage2", "gnina_stage3")
-    + GNINA_DUD_STAGE_DIRS
-    + GNINA_DUD_STAGE_DIRS_LEGACY
-)
-DOCK6_STAGE_DIRS = (
-    ("dock6_stage1", "dock6_stage2", "dock6_stage3")
-    + DOCK6_DUD_STAGE_DIRS
-    + DOCK6_DUD_STAGE_DIRS_LEGACY
-)
-LEDOCK_STAGE_DIRS = (
-    ("ledock_stage1", "ledock_stage2", "ledock_stage3")
-    + LEDOCK_DUD_STAGE_DIRS
-    + LEDOCK_DUD_STAGE_DIRS_LEGACY
-)
-POST_STAGE_DIRS = ("ledock_pdbqt", "dock6_pdbqt") + DUD_POST_STAGE_DIRS
+DECOY_PREFIX_KEY = "DECOY_PREFIX"
+DUD_PREFIX_KEY = "DUD_PREFIX"
+DECOY_PREFIX_DEFAULT = "dud"
+DECOY_PREFIX_VALUE = DECOY_PREFIX_DEFAULT
+
+VINA_STAGE_DIRS_BASE = ("stage1", "stage2", "stage3")
+GNINA_STAGE_DIRS_BASE = ("gnina_stage1", "gnina_stage2", "gnina_stage3")
+DOCK6_STAGE_DIRS_BASE = ("dock6_stage1", "dock6_stage2", "dock6_stage3")
+LEDOCK_STAGE_DIRS_BASE = ("ledock_stage1", "ledock_stage2", "ledock_stage3")
+POST_STAGE_DIRS_BASE = ("ledock_pdbqt", "dock6_pdbqt")
+
+
+def _decoy_prefix_value() -> str:
+    return DECOY_PREFIX_VALUE or DECOY_PREFIX_DEFAULT
+
+
+def _normalize_decoy_prefix(value: Optional[object]) -> str:
+    prefix = str(value).strip() if value is not None else ""
+    return prefix if prefix else DECOY_PREFIX_DEFAULT
+
+
+def _resolve_decoy_prefix_from_config(cfg: Dict[str, object]) -> str:
+    if DECOY_PREFIX_KEY in cfg:
+        raw = str(cfg.get(DECOY_PREFIX_KEY, "")).strip()
+        if raw:
+            return _normalize_decoy_prefix(cfg.get(DECOY_PREFIX_KEY))
+        return DECOY_PREFIX_DEFAULT
+    if DUD_PREFIX_KEY in cfg:
+        raw = str(cfg.get(DUD_PREFIX_KEY, "")).strip()
+        if raw:
+            return _normalize_decoy_prefix(cfg.get(DUD_PREFIX_KEY))
+    return DECOY_PREFIX_DEFAULT
+
+
+def _set_decoy_prefix(
+    value: Optional[object], logger: Optional[logging.Logger] = None
+) -> str:
+    global DECOY_PREFIX_VALUE
+    DECOY_PREFIX_VALUE = _normalize_decoy_prefix(value)
+    if logger:
+        logger.info("[scorch.preflight] decoy_prefix=%s", DECOY_PREFIX_VALUE)
+    return DECOY_PREFIX_VALUE
+
+
+def _decoy_stage_dirs(order: Sequence[int]) -> Tuple[str, ...]:
+    prefix = _decoy_prefix_value()
+    return tuple(f"{prefix}_stage{stage}" for stage in order)
+
+
+def _decoy_engine_stage_dirs(engine: str, order: Sequence[int]) -> Tuple[str, ...]:
+    prefix = _decoy_prefix_value()
+    return tuple(f"{engine}_{prefix}_stage{stage}" for stage in order)
+
+
+def _decoy_engine_stage_dirs_legacy(engine: str, order: Sequence[int]) -> Tuple[str, ...]:
+    prefix = _decoy_prefix_value()
+    return tuple(f"{prefix}_{engine}_stage{stage}" for stage in order)
+
+
+def _decoy_engine_stage_dirs_all(engine: str) -> Tuple[str, ...]:
+    order = (1, 2, 3)
+    return _decoy_engine_stage_dirs(engine, order) + _decoy_engine_stage_dirs_legacy(
+        engine, order
+    )
+
+
+def _decoy_post_stage_dirs() -> Tuple[str, ...]:
+    prefix = _decoy_prefix_value()
+    return (f"{prefix}_ledock_pdbqt", f"{prefix}_dock6_pdbqt")
+
+
+def _vina_stage_dirs() -> Tuple[str, ...]:
+    return VINA_STAGE_DIRS_BASE + _decoy_stage_dirs((1, 2, 3))
+
+
+def _gnina_stage_dirs() -> Tuple[str, ...]:
+    return (
+        GNINA_STAGE_DIRS_BASE
+        + _decoy_engine_stage_dirs("gnina", (1, 2, 3))
+        + _decoy_engine_stage_dirs_legacy("gnina", (1, 2, 3))
+    )
+
+
+def _dock6_stage_dirs() -> Tuple[str, ...]:
+    return (
+        DOCK6_STAGE_DIRS_BASE
+        + _decoy_engine_stage_dirs("dock6", (1, 2, 3))
+        + _decoy_engine_stage_dirs_legacy("dock6", (1, 2, 3))
+    )
+
+
+def _ledock_stage_dirs() -> Tuple[str, ...]:
+    return (
+        LEDOCK_STAGE_DIRS_BASE
+        + _decoy_engine_stage_dirs("ledock", (1, 2, 3))
+        + _decoy_engine_stage_dirs_legacy("ledock", (1, 2, 3))
+    )
+
+
+def _post_stage_dirs() -> Tuple[str, ...]:
+    return POST_STAGE_DIRS_BASE + _decoy_post_stage_dirs()
 
 
 @dataclass(frozen=True)
@@ -85,7 +149,7 @@ class StageSpec:
 def discover_stage3_roots(variant_root: Path) -> Dict[str, Path]:
     roots: Dict[str, Path] = {}
     fda = variant_root / "stage3"
-    dud = variant_root / "dud_stage3"
+    dud = variant_root / f"{_decoy_prefix_value()}_stage3"
     if fda.exists():
         roots["fda"] = fda
     if dud.exists():
@@ -154,20 +218,28 @@ def stage_dir_candidates(
         return (
             ("stage3", "stage2", "stage1")
             if mode_norm != "dud"
-            else ("dud_stage3", "dud_stage2", "dud_stage1")
+            else _decoy_stage_dirs((3, 2, 1))
         )
     if src == "gnina":
         if mode_norm != "dud":
             return ("gnina_stage3", "gnina_stage2", "gnina_stage1")
-        return _prefer_existing(root, GNINA_DUD_STAGE_DIRS, GNINA_DUD_STAGE_DIRS_LEGACY)
+        primary = _decoy_engine_stage_dirs("gnina", (3, 2, 1))
+        legacy = _decoy_engine_stage_dirs_legacy("gnina", (3, 2, 1))
+        return _prefer_existing(root, primary, legacy)
     if src == "dock6":
         if mode_norm != "dud":
             return ("dock6_pdbqt",)
-        return _prefer_existing(root, ("dud_dock6_pdbqt",), ("dud_dock6_pdbqt",))
+        prefix = _decoy_prefix_value()
+        return _prefer_existing(
+            root, (f"{prefix}_dock6_pdbqt",), (f"{prefix}_dock6_pdbqt",)
+        )
     if src == "ledock":
         if mode_norm != "dud":
             return ("ledock_pdbqt",)
-        return _prefer_existing(root, ("dud_ledock_pdbqt",), ("dud_ledock_pdbqt",))
+        prefix = _decoy_prefix_value()
+        return _prefer_existing(
+            root, (f"{prefix}_ledock_pdbqt",), (f"{prefix}_ledock_pdbqt",)
+        )
     return ()
 
 
@@ -246,6 +318,8 @@ def _preflight(logger: logging.Logger) -> bool:
         )
         return False
 
+    _set_decoy_prefix(_resolve_decoy_prefix_from_config(cfg), logger)
+
     script_cfg = cfg.get("SCORCH_SCRIPT")
     env_cfg = cfg.get("SCORCH_ENV")
 
@@ -291,7 +365,10 @@ def _collect_combo_from_rel(parts: Sequence[str]) -> Optional[Tuple[str, str, st
 def discover_combos(run_root: Path, post_root: Path) -> Set[Tuple[str, str, str]]:
     combos: Set[Tuple[str, str, str]] = set()
     for stage in (
-        VINA_STAGE_DIRS + GNINA_STAGE_DIRS + DOCK6_STAGE_DIRS + LEDOCK_STAGE_DIRS
+        _vina_stage_dirs()
+        + _gnina_stage_dirs()
+        + _dock6_stage_dirs()
+        + _ledock_stage_dirs()
     ):
         for path in run_root.rglob(stage):
             try:
@@ -302,7 +379,7 @@ def discover_combos(run_root: Path, post_root: Path) -> Set[Tuple[str, str, str]
             if combo:
                 combos.add(combo)
 
-    for stage_dir in POST_STAGE_DIRS:
+    for stage_dir in _post_stage_dirs():
         for path in post_root.rglob(stage_dir):
             try:
                 rel = path.relative_to(post_root).parts
@@ -348,16 +425,18 @@ def _collect_stage_pdbqts(ph_root: Path, stage_dir: str) -> List[Path]:
 def _pose_base_from_path(p: Path) -> str:
     stem = p.stem
     stem = stem.replace(".sanitized", "")
-    stem = re.sub(r"(_dud_gnina_stage\d+)$", "", stem)
-    stem = re.sub(r"(_gnina_dud_stage\d+)$", "", stem)
-    stem = re.sub(r"(_dock6_dud_stage\d+)$", "", stem)
-    stem = re.sub(r"(_dud_dock6_stage\d+)$", "", stem)
-    stem = re.sub(r"(_dud_stage\d+)$", "", stem)
-    stem = re.sub(r"(__dud_ledock_stage\d+)$", "", stem)
-    stem = re.sub(r"(__dud_dock6_stage\d+)$", "", stem)
+    prefix = re.escape(_decoy_prefix_value())
+    stem = re.sub(rf"(_gnina_{prefix}_stage\d+)$", "", stem)
+    stem = re.sub(rf"(_{prefix}_gnina_stage\d+)$", "", stem)
+    stem = re.sub(rf"(_dock6_{prefix}_stage\d+)$", "", stem)
+    stem = re.sub(rf"(_{prefix}_dock6_stage\d+)$", "", stem)
+    stem = re.sub(rf"(_{prefix}_stage\d+)$", "", stem)
+    stem = re.sub(rf"(__{prefix}_ledock_stage\d+)$", "", stem)
+    stem = re.sub(rf"(__ledock_{prefix}_stage\d+)$", "", stem)
+    stem = re.sub(rf"(__{prefix}_dock6_stage\d+)$", "", stem)
+    stem = re.sub(rf"(__dock6_{prefix}_stage\d+)$", "", stem)
     stem = re.sub(r"(__ledock_stage\d+)$", "", stem)
     stem = re.sub(r"(__dock6_stage\d+)$", "", stem)
-    stem = re.sub(r"(__dock6_dud_stage\d+)$", "", stem)
     stem = re.sub(r"(_gnina_stage\d+)$", "", stem)
     stem = re.sub(r"(_stage\d+)$", "", stem)
     stem = re.sub(r"\.(mol2|pdbqt)$", "", stem, flags=re.IGNORECASE)
@@ -765,38 +844,41 @@ def _score_csv_for_spec(
     pdb_id, variant, ph = combo
     combo_root = run_root / pdb_id / variant / ph
     dud = run_mode == "dud"
+    prefix = _decoy_prefix_value()
     higher_is_better = False
 
     if spec.source == "vina":
         summary = combo_root / (
-            "dud_docking_score_summary.csv" if dud else "docking_score_summary.csv"
+            f"{prefix}_docking_score_summary.csv"
+            if dud
+            else "docking_score_summary.csv"
         )
         long_csv = combo_root / (
-            "dud_docking_score_long.csv" if dud else "docking_score_long.csv"
+            f"{prefix}_docking_score_long.csv" if dud else "docking_score_long.csv"
         )
         if summary.exists():
-            cols = [
-                f"{'dud_' if dud else ''}stage3",
-                f"{'dud_' if dud else ''}stage2",
-                f"{'dud_' if dud else ''}stage1",
-            ]
+            cols = (
+                [f"{prefix}_stage3", f"{prefix}_stage2", f"{prefix}_stage1"]
+                if dud
+                else ["stage3", "stage2", "stage1"]
+            )
             return summary, cols, higher_is_better
         return long_csv, ["score"], higher_is_better
 
     if spec.source == "gnina":
         summary = combo_root / (
-            "dud_gnina_docking_score_summary.csv"
+            f"{prefix}_gnina_docking_score_summary.csv"
             if dud
             else "gnina_docking_score_summary.csv"
         )
         long_csv = combo_root / (
-            "dud_gnina_docking_score_long.csv"
+            f"{prefix}_gnina_docking_score_long.csv"
             if dud
             else "gnina_docking_score_long.csv"
         )
         if summary.exists():
-            prefix = "gnina_dud_stage" if dud else "gnina_stage"
-            cols = [f"{prefix}3", f"{prefix}2", f"{prefix}1"]
+            stage_prefix = f"gnina_{prefix}_stage" if dud else "gnina_stage"
+            cols = [f"{stage_prefix}3", f"{stage_prefix}2", f"{stage_prefix}1"]
             return summary, cols, higher_is_better
         return (
             long_csv,
@@ -806,41 +888,41 @@ def _score_csv_for_spec(
 
     if spec.source == "ledock":
         summary = combo_root / (
-            "dud_ledock_docking_score_summary.csv"
+            f"{prefix}_ledock_docking_score_summary.csv"
             if dud
             else "ledock_docking_score_summary.csv"
         )
         long_csv = combo_root / (
-            "dud_ledock_docking_score_long.csv"
+            f"{prefix}_ledock_docking_score_long.csv"
             if dud
             else "ledock_docking_score_long.csv"
         )
         if summary.exists():
-            cols = [
-                f"{'dud_' if dud else ''}stage3",
-                f"{'dud_' if dud else ''}stage2",
-                f"{'dud_' if dud else ''}stage1",
-            ]
+            cols = (
+                [f"{prefix}_stage3", f"{prefix}_stage2", f"{prefix}_stage1"]
+                if dud
+                else ["stage3", "stage2", "stage1"]
+            )
             return summary, cols, higher_is_better
         return long_csv, ["ledock_best_score_kcal"], higher_is_better
 
     if spec.source == "dock6":
         summary = combo_root / (
-            "dud_dock6_docking_score_summary.csv"
+            f"{prefix}_dock6_docking_score_summary.csv"
             if dud
             else "dock6_docking_score_summary.csv"
         )
         long_csv = combo_root / (
-            "dud_dock6_docking_score_long.csv"
+            f"{prefix}_dock6_docking_score_long.csv"
             if dud
             else "dock6_docking_score_long.csv"
         )
         if summary.exists():
-            cols = [
-                f"{'dud_' if dud else ''}stage3",
-                f"{'dud_' if dud else ''}stage2",
-                f"{'dud_' if dud else ''}stage1",
-            ]
+            cols = (
+                [f"{prefix}_stage3", f"{prefix}_stage2", f"{prefix}_stage1"]
+                if dud
+                else ["stage3", "stage2", "stage1"]
+            )
             return summary, cols, higher_is_better
         return long_csv, ["dock6_grid_score"], higher_is_better
 
@@ -990,6 +1072,13 @@ def _prep_missing(
     def _dir_empty(path: Path) -> bool:
         return not path.exists() or not any(path.glob("*.pdbqt"))
 
+    prefix = _decoy_prefix_value()
+    ledock_decoy_dirs = _decoy_engine_stage_dirs_all("ledock")
+    dock6_decoy_dirs = _decoy_engine_stage_dirs_all("dock6")
+    decoy_ledock_pdbqt = f"{prefix}_ledock_pdbqt"
+    decoy_dock6_pdbqt = f"{prefix}_dock6_pdbqt"
+    decoy_ledock_score = f"{prefix}_ledock_docking_score_long.csv"
+
     if combos:
         for pdb_id, variant, ph in combos:
             combo_run = run_root / pdb_id / variant / ph
@@ -997,20 +1086,20 @@ def _prep_missing(
                 return True
             if _dir_empty(post_root / pdb_id / variant / ph / "dock6_pdbqt"):
                 return True
-            if any(
-                (combo_run / d).exists()
-                for d in LEDOCK_DUD_STAGE_DIRS + LEDOCK_DUD_STAGE_DIRS_LEGACY
-            ):
-                if _dir_empty(post_root / pdb_id / variant / ph / "dud_ledock_pdbqt"):
+            if any((combo_run / d).exists() for d in ledock_decoy_dirs):
+                if _dir_empty(
+                    post_root / pdb_id / variant / ph / decoy_ledock_pdbqt
+                ):
                     return True
-            if (combo_run / "dud_ledock_docking_score_long.csv").exists():
-                if _dir_empty(post_root / pdb_id / variant / ph / "dud_ledock_pdbqt"):
+            if (combo_run / decoy_ledock_score).exists():
+                if _dir_empty(
+                    post_root / pdb_id / variant / ph / decoy_ledock_pdbqt
+                ):
                     return True
-            if any(
-                (combo_run / d).exists()
-                for d in DOCK6_DUD_STAGE_DIRS + DOCK6_DUD_STAGE_DIRS_LEGACY
-            ):
-                if _dir_empty(post_root / pdb_id / variant / ph / "dud_dock6_pdbqt"):
+            if any((combo_run / d).exists() for d in dock6_decoy_dirs):
+                if _dir_empty(
+                    post_root / pdb_id / variant / ph / decoy_dock6_pdbqt
+                ):
                     return True
         return False
     # Fallback: look for any prepared ligands at all
@@ -1171,7 +1260,10 @@ def _score_stage(
 ) -> Tuple[bool, Optional[Path]]:
     pdb_id, variant, ph = combo
     combo_post_root = post_root / pdb_id / variant / ph
-    output_name = spec.output_name if run_mode == "fda" else f"dud_{spec.output_name}"
+    prefix = _decoy_prefix_value()
+    output_name = (
+        spec.output_name if run_mode == "fda" else f"{prefix}_{spec.output_name}"
+    )
     out_path = combo_post_root / output_name
     combo_post_root.mkdir(parents=True, exist_ok=True)
 
@@ -1306,7 +1398,7 @@ def _score_stage(
             return False, None
     else:
         if score_csv is None:
-            score_prefix = "dud_" if run_mode == "dud" else ""
+            score_prefix = f"{prefix}_" if run_mode == "dud" else ""
             score_csv = (
                 run_root
                 / pdb_id
@@ -1472,11 +1564,14 @@ def _aggregate_combo(
 ) -> Optional[Path]:
     pdb_id, variant, ph = combo
     combo_dir = post_root / pdb_id / variant / ph
+    prefix = _decoy_prefix_value()
     rows: List[Dict[str, str]] = []
     fields: List[str] = []
 
     for spec in specs:
-        csv_name = spec.output_name if run_mode == "fda" else f"dud_{spec.output_name}"
+        csv_name = (
+            spec.output_name if run_mode == "fda" else f"{prefix}_{spec.output_name}"
+        )
         csv_path = combo_dir / csv_name
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             continue
@@ -2036,6 +2131,7 @@ def main() -> int:
                         exc,
                     )
 
+    decoy_prefix = _decoy_prefix_value()
     for combo in sorted(combos_with_tasks):
         modes = combo_modes.get(combo, {"fda"})
         fda_all = None
@@ -2044,7 +2140,7 @@ def main() -> int:
             out_name = (
                 "scorch_scores_all.csv"
                 if mode == "fda"
-                else "dud_scorch_scores_all.csv"
+                else f"{decoy_prefix}_scorch_scores_all.csv"
             )
             agg_path = _aggregate_combo(
                 post_run_root, specs, combo, logger, run_mode=mode, output_name=out_name
@@ -2060,7 +2156,7 @@ def main() -> int:
                 alt = (
                     "scorch_scores_all.csv"
                     if mode == "fda"
-                    else "dud_scorch_scores_all.csv"
+                    else f"{decoy_prefix}_scorch_scores_all.csv"
                 )
                 candidate = post_run_root / combo[0] / combo[1] / combo[2] / alt
                 if candidate.exists():
@@ -2091,6 +2187,7 @@ def main() -> int:
                         out_csv,
                         logger,
                         overwrite=args.overwrite,
+                        decoy_prefix=decoy_prefix,
                     )
             except Exception as exc:
                 logger.warning(

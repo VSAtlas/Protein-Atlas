@@ -7,11 +7,24 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
-from analysis.manifest_utils import extract_pocket, load_run_manifest
+
+try:
+    from analysis.manifest_utils import extract_pocket, load_run_manifest
+except ModuleNotFoundError:
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    SRC_ROOT = REPO_ROOT / "src"
+    if str(SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(SRC_ROOT))
+    from analysis.manifest_utils import extract_pocket, load_run_manifest
 
 # Try to import canonical_ligand_base from rescore_reranker
 try:
-    from rescore_reranker import canonical_ligand_base
+    try:
+        from post_docking.rescoring.rescore_reranker import canonical_ligand_base
+    except ImportError:
+        from rescore_reranker import canonical_ligand_base
 except ImportError:
     # Fallback if import fails (should not happen if rescore_reranker is in path)
     def canonical_ligand_base(lig: str) -> str:
@@ -34,6 +47,9 @@ except ImportError:
 
 
 COMPONENT = "[master-export]"
+DECOY_PREFIX_KEY = "DECOY_PREFIX"
+DUD_PREFIX_KEY = "DUD_PREFIX"
+DECOY_PREFIX_DEFAULT = "dud"
 _DECOY_RE = re.compile(r"\bdecoys?_", re.IGNORECASE)
 MIN_DECOYS_FOR_FDR = 200
 MIN_UNIQUE_DECOY_SCORES = 10
@@ -54,11 +70,74 @@ def _read_csv_rows(path: Path) -> List[Dict[str, str]]:
         return []
 
 
-def _is_decoy_file(filename: str) -> bool:
-    return _DECOY_RE.search(filename or "") is not None
+def _strip_quotes(value: str) -> str:
+    stripped = str(value or "").strip()
+    if (
+        len(stripped) >= 2
+        and stripped[0] == stripped[-1]
+        and stripped[0] in ("'", '"')
+    ):
+        return stripped[1:-1].strip()
+    return stripped
 
 
-def _row_is_decoy(row: Dict[str, Any]) -> bool:
+def _read_decoy_prefix_from_file(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    decoy_value = None
+    dud_value = None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, raw_value = stripped.split("=", 1)
+                key = key.strip()
+                value = _strip_quotes(raw_value)
+                if not value:
+                    continue
+                if key == DECOY_PREFIX_KEY:
+                    decoy_value = value
+                elif key == DUD_PREFIX_KEY:
+                    dud_value = value
+    except Exception:
+        return None
+    return decoy_value or dud_value
+
+
+def _resolve_decoy_prefix(
+    repo_root: Path, run_id: str, cli_value: Optional[str] = None
+) -> str:
+    if cli_value is not None:
+        candidate = _strip_quotes(str(cli_value))
+        if candidate:
+            return candidate
+
+    candidates = [
+        repo_root / "data" / run_id / "config.txt",
+        repo_root / "data" / run_id / "config_snapshot.txt",
+        repo_root / "manifests" / run_id / "config.txt",
+        repo_root / "config.txt",
+    ]
+    for path in candidates:
+        value = _read_decoy_prefix_from_file(path)
+        if value:
+            return value
+    return DECOY_PREFIX_DEFAULT
+
+
+def _is_decoy_file(filename: str, decoy_prefix: str) -> bool:
+    name = str(filename or "")
+    if _DECOY_RE.search(name):
+        return True
+    prefix = str(decoy_prefix or "").strip().lower()
+    if not prefix:
+        return False
+    return name.lower().startswith(f"{prefix}_")
+
+
+def _row_is_decoy(row: Dict[str, Any], decoy_prefix: str) -> bool:
     library = str(row.get("library", "")).strip().upper()
     if library == "DECOY":
         return True
@@ -71,7 +150,32 @@ def _row_is_decoy(row: Dict[str, Any]) -> bool:
         lig_name = Path(str(ligand_file)).name
     except Exception:
         lig_name = str(ligand_file)
-    return _is_decoy_file(lig_name)
+    return _is_decoy_file(lig_name, decoy_prefix)
+
+
+def _canonical_ligand_base_with_prefix(lig: str, decoy_prefix: str) -> str:
+    base = canonical_ligand_base(lig)
+    prefix = re.escape(str(decoy_prefix or "").strip())
+    if prefix:
+        for pattern in (
+            rf"(_{prefix}_gnina_stage\d+)$",
+            rf"(_gnina_{prefix}_stage\d+)$",
+            rf"(_dock6_{prefix}_stage\d+)$",
+            rf"(_{prefix}_dock6_stage\d+)$",
+            rf"(_{prefix}_stage\d+)$",
+            rf"(__{prefix}_ledock_stage\d+)$",
+            rf"(__ledock_{prefix}_stage\d+)$",
+            rf"(__{prefix}_dock6_stage\d+)$",
+            rf"(__dock6_{prefix}_stage\d+)$",
+        ):
+            base = re.sub(pattern, "", base)
+    base = re.sub(r"(__ledock_stage\d+)$", "", base)
+    base = re.sub(r"(__dock6_stage\d+)$", "", base)
+    base = re.sub(r"(_gnina_stage\d+)$", "", base)
+    base = re.sub(r"(_stage\d+)$", "", base)
+    base = base.replace("__", "_")
+    base = re.sub(r"_+$", "", base)
+    return base
 
 
 def _choose_fdr_score_field(
@@ -104,20 +208,26 @@ def _choose_fdr_score_field(
 
 
 def _get_decoy_scores_for_combo(
-    combo_dir: Path, fallback_rows: List[Dict[str, Any]], min_decoys: int = 1
+    combo_dir: Path,
+    fallback_rows: List[Dict[str, Any]],
+    min_decoys: int = 1,
+    decoy_prefix: str = DECOY_PREFIX_DEFAULT,
 ) -> Tuple[Optional[str], List[float], bool, Dict[str, List[float]]]:
-    dud_path = combo_dir / "dud_consensus_reranked_scorch.csv"
+    primary_path = combo_dir / f"{decoy_prefix}_consensus_reranked_scorch.csv"
+    legacy_path = combo_dir / "dud_consensus_reranked_scorch.csv"
     fallback_used = False
     decoy_rows: List[Dict[str, Any]] = []
-    if dud_path.exists():
-        decoy_rows = _read_csv_rows(dud_path)
+    if primary_path.exists() and primary_path.stat().st_size > 0:
+        decoy_rows = _read_csv_rows(primary_path)
+    if not decoy_rows and legacy_path.exists() and legacy_path.stat().st_size > 0:
+        decoy_rows = _read_csv_rows(legacy_path)
     if not decoy_rows:
         fallback_used = True
         decoy_rows = fallback_rows
-    decoys_only = [r for r in decoy_rows if _row_is_decoy(r)]
+    decoys_only = [r for r in decoy_rows if _row_is_decoy(r, decoy_prefix)]
     if not decoys_only:
         fallback_used = True
-        decoys_only = [r for r in fallback_rows if _row_is_decoy(r)]
+        decoys_only = [r for r in fallback_rows if _row_is_decoy(r, decoy_prefix)]
     scores_by_field: Dict[str, List[float]] = {}
     for field_name in ("consensus_score", "consensus_score_pre"):
         vals: List[float] = []
@@ -187,7 +297,7 @@ def _get_pocket_info(
 
 
 def _load_posebusters_map(
-    post_root: Path, run_id: str
+    post_root: Path, run_id: str, decoy_prefix: str = DECOY_PREFIX_DEFAULT
 ) -> Dict[Tuple[str, str, str, str], Tuple[str, str]]:
     # Returns {(pdb, variant, ph, ligand_base): (pose_valid_any, reason_top)}
     # Note: Using ligand_base for join stability.
@@ -225,7 +335,9 @@ def _load_posebusters_map(
             lig_file = row.get("ligand_file", "")
             if not lig_file:
                 continue
-            base = canonical_ligand_base(Path(lig_file).stem)
+            base = _canonical_ligand_base_with_prefix(
+                Path(lig_file).stem, decoy_prefix
+            )
             if not base:
                 continue
             ligand_groups.setdefault(base, []).append(row)
@@ -254,19 +366,30 @@ def _load_posebusters_map(
     return pb_map
 
 
-def _find_dud_eval_tsv(run_id: str, repo_root: Path) -> Optional[Path]:
-    base = repo_root / "analysis" / "dud_eval" / run_id
-    if not base.exists():
-        return None
+def _find_dud_eval_tsv(
+    run_id: str, repo_root: Path, decoy_prefix: str = DECOY_PREFIX_DEFAULT
+) -> Optional[Path]:
+    preferred = repo_root / "analysis" / f"{decoy_prefix}_eval" / run_id
+    legacy = repo_root / "analysis" / "dud_eval" / run_id
+    bases: List[Path] = []
+    if preferred == legacy:
+        bases = [preferred]
+    elif preferred.exists():
+        bases = [preferred, legacy]
+    else:
+        bases = [legacy]
 
     patterns = [
         f"consensus_reranked_scorch_summary_*{run_id}*.tsv",
         f"consensus_summary_*{run_id}*.tsv",
     ]
-    for pattern in patterns:
-        matches = sorted(base.rglob(pattern))
-        if matches:
-            return matches[0]
+    for base in bases:
+        if not base.exists():
+            continue
+        for pattern in patterns:
+            matches = sorted(base.rglob(pattern))
+            if matches:
+                return matches[0]
     return None
 
 
@@ -287,11 +410,14 @@ def _metric_with_default(
 
 
 def _parse_dud_eval_summary(
-    run_id: str, repo_root: Path, logger: logging.Logger
+    run_id: str,
+    repo_root: Path,
+    logger: logging.Logger,
+    decoy_prefix: str = DECOY_PREFIX_DEFAULT,
 ) -> Dict[Tuple[str, str, str], Dict[str, str]]:
     # Returns {(pdb_id, variant, ph): {metrics...}}
     metrics_map: Dict[Tuple[str, str, str], Dict[str, str]] = {}
-    summary_path = _find_dud_eval_tsv(run_id, repo_root)
+    summary_path = _find_dud_eval_tsv(run_id, repo_root, decoy_prefix)
     if not summary_path:
         logger.info(
             "%s action=dud_eval_summary status=missing run_id=%s", COMPONENT, run_id
@@ -393,11 +519,14 @@ def main() -> int:
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--decoy-prefix", default=None)
     args = parser.parse_args()
 
     logger = _configure_logging(args.verbose)
     repo_root = Path(args.repo_root).resolve()
     run_id = args.run_id
+    decoy_prefix = _resolve_decoy_prefix(repo_root, run_id, args.decoy_prefix)
+    logger.info("%s action=preflight decoy_prefix=%s", COMPONENT, decoy_prefix)
 
     post_root = repo_root / "post_docked"
     processed_root = repo_root / "processed_pdbs"
@@ -424,8 +553,8 @@ def main() -> int:
 
     # Load metadata sources
     manifest, _manifest_path = load_run_manifest(repo_root, run_id)
-    pb_map = _load_posebusters_map(post_root, run_id)
-    dud_map = _parse_dud_eval_summary(run_id, repo_root, logger)
+    pb_map = _load_posebusters_map(post_root, run_id, decoy_prefix)
+    dud_map = _parse_dud_eval_summary(run_id, repo_root, logger, decoy_prefix)
     control_caches: Dict[str, Set[str]] = {}
 
     master_rows: List[Dict[str, Any]] = []
@@ -500,10 +629,12 @@ def main() -> int:
             if not lig_file:
                 continue
             lig_file_name = Path(lig_file).name
-            base = canonical_ligand_base(Path(lig_file_name).stem)
+            base = _canonical_ligand_base_with_prefix(
+                Path(lig_file_name).stem, decoy_prefix
+            )
 
             # Decoy/Control
-            is_decoy = _is_decoy_file(lig_file_name)
+            is_decoy = _row_is_decoy(row, decoy_prefix)
             is_control = base in controls
 
             # Pose Validity
@@ -621,14 +752,22 @@ def main() -> int:
     fdr_summary_rows: List[Dict[str, Any]] = []
     for (pdb_id, variant, ph), indices in combo_indices.items():
         combo_dir = post_root / run_id / pdb_id / variant / ph
-        dud_path = combo_dir / "dud_consensus_reranked_scorch.csv"
+        primary_decoy_path = (
+            combo_dir / f"{decoy_prefix}_consensus_reranked_scorch.csv"
+        )
+        legacy_decoy_path = combo_dir / "dud_consensus_reranked_scorch.csv"
         fallback_rows = [master_rows[i] for i in indices]
         (
             field,
             decoy_scores,
             used_fallback,
             _decoy_scores_by_field,
-        ) = _get_decoy_scores_for_combo(combo_dir, fallback_rows, MIN_DECOYS_FOR_FDR)
+        ) = _get_decoy_scores_for_combo(
+            combo_dir,
+            fallback_rows,
+            MIN_DECOYS_FOR_FDR,
+            decoy_prefix=decoy_prefix,
+        )
         n_decoys = len(decoy_scores)
         unique_scores = len(set(decoy_scores))
         reliable = (
@@ -636,20 +775,27 @@ def main() -> int:
         )
 
         if used_fallback:
+            log_path = (
+                primary_decoy_path
+                if primary_decoy_path.exists()
+                else legacy_decoy_path
+            )
             logger.warning(
                 "%s action=fdr_decoy_fallback pdb=%s variant=%s ph=%s path=%s reason=%s",
                 COMPONENT,
                 pdb_id,
                 variant,
                 ph,
-                dud_path,
-                "missing_or_empty" if not dud_path.exists() else "no_decoys_found",
+                log_path,
+                "missing_or_empty" if not log_path.exists() else "no_decoys_found",
             )
 
         field_for_rows = field or "consensus_score"
 
         non_decoy_indices = [
-            idx for idx in indices if not _row_is_decoy(master_rows[idx])
+            idx
+            for idx in indices
+            if not _row_is_decoy(master_rows[idx], decoy_prefix)
         ]
         for idx in non_decoy_indices:
             master_rows[idx]["fdr_score_field"] = field_for_rows

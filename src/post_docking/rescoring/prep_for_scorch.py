@@ -13,23 +13,88 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from input_and_export_functions import load_config
+except ModuleNotFoundError:
+    REPO_ROOT = Path(__file__).resolve().parents[3]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from input_and_export_functions import load_config
+
 
 LEDOCK_STAGE_DIRS = {"ledock_stage1", "ledock_stage2", "ledock_stage3"}
-LEDOCK_DUD_STAGE_DIRS = {"ledock_dud_stage1", "ledock_dud_stage2", "ledock_dud_stage3"}
-LEDOCK_DUD_STAGE_DIRS_LEGACY = {
-    "dud_ledock_stage1",
-    "dud_ledock_stage2",
-    "dud_ledock_stage3",
-}
 DOCK6_STAGE_DIRS = {"dock6_stage1", "dock6_stage2", "dock6_stage3"}
-DOCK6_DUD_STAGE_DIRS = {"dock6_dud_stage1", "dock6_dud_stage2", "dock6_dud_stage3"}
-DOCK6_DUD_STAGE_DIRS_LEGACY = {
-    "dud_dock6_stage1",
-    "dud_dock6_stage2",
-    "dud_dock6_stage3",
-}
+DECOY_PREFIX_KEY = "DECOY_PREFIX"
+DUD_PREFIX_KEY = "DUD_PREFIX"
+DECOY_PREFIX_DEFAULT = "dud"
+DECOY_PREFIX_VALUE = DECOY_PREFIX_DEFAULT
 COMPONENT = "[prep-for-scorch]"
 EXAMPLE_LIMIT = 8
+
+
+def _decoy_prefix_value() -> str:
+    return DECOY_PREFIX_VALUE or DECOY_PREFIX_DEFAULT
+
+
+def _normalize_decoy_prefix(value: Optional[object]) -> str:
+    prefix = str(value or "").strip().strip('"').strip("'")
+    return prefix if prefix else DECOY_PREFIX_DEFAULT
+
+
+def _resolve_decoy_prefix_from_config(cfg: Dict[str, object]) -> str:
+    if DECOY_PREFIX_KEY in cfg:
+        raw = str(cfg.get(DECOY_PREFIX_KEY, "")).strip()
+        if raw:
+            return _normalize_decoy_prefix(cfg.get(DECOY_PREFIX_KEY))
+        return DECOY_PREFIX_DEFAULT
+    if DUD_PREFIX_KEY in cfg:
+        raw = str(cfg.get(DUD_PREFIX_KEY, "")).strip()
+        if raw:
+            return _normalize_decoy_prefix(cfg.get(DUD_PREFIX_KEY))
+    return DECOY_PREFIX_DEFAULT
+
+
+def _set_decoy_prefix(
+    value: Optional[object], logger: Optional[logging.Logger] = None
+) -> str:
+    global DECOY_PREFIX_VALUE
+    DECOY_PREFIX_VALUE = _normalize_decoy_prefix(value)
+    if logger:
+        logger.info("%s action=preflight decoy_prefix=%s", COMPONENT, DECOY_PREFIX_VALUE)
+    return DECOY_PREFIX_VALUE
+
+
+def _resolve_decoy_prefix(
+    repo_root: Path, cli_value: Optional[str], logger: logging.Logger
+) -> str:
+    if cli_value:
+        return _normalize_decoy_prefix(cli_value)
+    try:
+        cfg = load_config(config_path=str(repo_root / "config.txt"), base_dir=repo_root)
+    except Exception as exc:
+        logger.warning(
+            "%s action=preflight status=degraded reason=config_load_failed error=%s",
+            COMPONENT,
+            exc,
+        )
+        cfg = {}
+    return _resolve_decoy_prefix_from_config(cfg)
+
+
+def _decoy_stage_dirs(prefix: str, engine: str) -> set[str]:
+    return {
+        f"{engine}_{prefix}_stage1",
+        f"{engine}_{prefix}_stage2",
+        f"{engine}_{prefix}_stage3",
+    }
+
+
+def _decoy_stage_dirs_legacy(prefix: str, engine: str) -> set[str]:
+    return {
+        f"{prefix}_{engine}_stage1",
+        f"{prefix}_{engine}_stage2",
+        f"{prefix}_{engine}_stage3",
+    }
 
 
 @dataclass(frozen=True)
@@ -88,6 +153,11 @@ def parse_args() -> argparse.Namespace:
         help="Re-run conversions even if outputs already exist",
     )
     parser.add_argument(
+        "--decoy-prefix",
+        default=None,
+        help="Override decoy prefix (default: config DECOY_PREFIX or DUD_PREFIX)",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -140,11 +210,20 @@ def _pose_base_from_name(name: str) -> str:
     stem = name
     stem = re.sub(r"\.(pdbqt|mol2|dok)$", "", stem, flags=re.IGNORECASE)
     stem = stem.replace(".sanitized", "")
-    stem = re.sub(r"(_gnina_dud_stage\d+)$", "", stem)
-    stem = re.sub(r"(_dud_gnina_stage\d+)$", "", stem)
-    stem = re.sub(r"(_dock6_dud_stage\d+)$", "", stem)
-    stem = re.sub(r"(_dud_dock6_stage\d+)$", "", stem)
-    stem = re.sub(r"(_dud_stage\d+)$", "", stem)
+    prefixes = {_decoy_prefix_value()}
+    if "dud" not in prefixes:
+        prefixes.add("dud")
+    for prefix in prefixes:
+        esc = re.escape(prefix)
+        stem = re.sub(rf"(_gnina_{esc}_stage\d+)$", "", stem)
+        stem = re.sub(rf"(_{esc}_gnina_stage\d+)$", "", stem)
+        stem = re.sub(rf"(_dock6_{esc}_stage\d+)$", "", stem)
+        stem = re.sub(rf"(_{esc}_dock6_stage\d+)$", "", stem)
+        stem = re.sub(rf"(_{esc}_stage\d+)$", "", stem)
+        stem = re.sub(rf"(__{esc}_ledock_stage\d+)$", "", stem)
+        stem = re.sub(rf"(__ledock_{esc}_stage\d+)$", "", stem)
+        stem = re.sub(rf"(__{esc}_dock6_stage\d+)$", "", stem)
+        stem = re.sub(rf"(__dock6_{esc}_stage\d+)$", "", stem)
     stem = re.sub(r"(__ledock_stage\d+)$", "", stem)
     stem = re.sub(r"(__dock6_stage\d+)$", "", stem)
     stem = re.sub(r"(_gnina_stage\d+)$", "", stem)
@@ -205,6 +284,19 @@ def _load_decoy_bases(
 def discover_tasks(
     run_root: Path, post_run_root: Path, logger: logging.Logger
 ) -> Tuple[List[LedockTask], List[Dock6Task], List[LedockTask], List[Dock6Task]]:
+    prefix = _decoy_prefix_value()
+    prefixes = {prefix}
+    if prefix.lower() != "dud":
+        prefixes.add("dud")
+    ledock_decoy_dirs: set[str] = set()
+    ledock_decoy_legacy_dirs: set[str] = set()
+    dock6_decoy_dirs: set[str] = set()
+    dock6_decoy_legacy_dirs: set[str] = set()
+    for value in prefixes:
+        ledock_decoy_dirs |= _decoy_stage_dirs(value, "ledock")
+        ledock_decoy_legacy_dirs |= _decoy_stage_dirs_legacy(value, "ledock")
+        dock6_decoy_dirs |= _decoy_stage_dirs(value, "dock6")
+        dock6_decoy_legacy_dirs |= _decoy_stage_dirs_legacy(value, "dock6")
     ledock_tasks: List[LedockTask] = []
     dock6_tasks: List[Dock6Task] = []
     ledock_dud_tasks: List[LedockTask] = []
@@ -215,16 +307,15 @@ def discover_tasks(
         stage_parts = _find_stage_parts(
             dok_path,
             run_root,
-            LEDOCK_STAGE_DIRS | LEDOCK_DUD_STAGE_DIRS | LEDOCK_DUD_STAGE_DIRS_LEGACY,
+            LEDOCK_STAGE_DIRS | ledock_decoy_dirs | ledock_decoy_legacy_dirs,
         )
         if not stage_parts:
             continue
         pdb_id, variant, ph, stage_dir = stage_parts
-        if (
-            stage_dir in LEDOCK_DUD_STAGE_DIRS
-            or stage_dir in LEDOCK_DUD_STAGE_DIRS_LEGACY
-        ):
-            output_dir = post_run_root / pdb_id / variant / ph / "dud_ledock_pdbqt"
+        if stage_dir in ledock_decoy_dirs or stage_dir in ledock_decoy_legacy_dirs:
+            output_dir = (
+                post_run_root / pdb_id / variant / ph / f"{prefix}_ledock_pdbqt"
+            )
             ledock_dud_tasks.append(
                 LedockTask(
                     input_path=dok_path,
@@ -253,16 +344,15 @@ def discover_tasks(
         stage_parts = _find_stage_parts(
             mol2_path,
             run_root,
-            DOCK6_STAGE_DIRS | DOCK6_DUD_STAGE_DIRS | DOCK6_DUD_STAGE_DIRS_LEGACY,
+            DOCK6_STAGE_DIRS | dock6_decoy_dirs | dock6_decoy_legacy_dirs,
         )
         if not stage_parts:
             continue
         pdb_id, variant, ph, stage_dir = stage_parts
-        if (
-            stage_dir in DOCK6_DUD_STAGE_DIRS
-            or stage_dir in DOCK6_DUD_STAGE_DIRS_LEGACY
-        ):
-            output_dir = post_run_root / pdb_id / variant / ph / "dud_dock6_pdbqt"
+        if stage_dir in dock6_decoy_dirs or stage_dir in dock6_decoy_legacy_dirs:
+            output_dir = (
+                post_run_root / pdb_id / variant / ph / f"{prefix}_dock6_pdbqt"
+            )
             dock6_dud_tasks.append(
                 Dock6Task(
                     input_path=mol2_path, output_dir=output_dir, stage_dir=stage_dir
@@ -276,7 +366,12 @@ def discover_tasks(
                 )
             )
 
-    dud_score_csvs = list(run_root.rglob("dud_ledock_docking_score_long.csv"))
+    decoy_score_names = {f"{prefix}_ledock_docking_score_long.csv"}
+    if prefix.lower() != "dud":
+        decoy_score_names.add("dud_ledock_docking_score_long.csv")
+    dud_score_csvs: List[Path] = []
+    for name in decoy_score_names:
+        dud_score_csvs.extend(run_root.rglob(name))
     dud_bases_by_combo = _load_decoy_bases(dud_score_csvs, run_root, logger)
     if dud_bases_by_combo:
         for task in ledock_tasks:
@@ -295,7 +390,7 @@ def discover_tasks(
                         / task.pdb
                         / task.variant
                         / task.ph
-                        / "dud_ledock_pdbqt",
+                        / f"{prefix}_ledock_pdbqt",
                         stage_dir=task.stage_dir,
                         pdb=task.pdb,
                         variant=task.variant,
@@ -810,7 +905,10 @@ def run_pose_bust_conversion(
 
 def _cleanup_residual_mol2(post_run_root: Path, logger: logging.Logger) -> None:
     residuals = list(post_run_root.rglob("dock6_pdbqt/*.mol2"))
-    residuals += list(post_run_root.rglob("dud_dock6_pdbqt/*.mol2"))
+    prefix = _decoy_prefix_value()
+    residuals += list(post_run_root.rglob(f"{prefix}_dock6_pdbqt/*.mol2"))
+    if prefix.lower() != "dud":
+        residuals += list(post_run_root.rglob("dud_dock6_pdbqt/*.mol2"))
     if not residuals:
         return
     for path in residuals:
@@ -829,13 +927,19 @@ def _migrate_dock6_pdbqt_names(
     if not overwrite or not post_run_root.exists():
         return
 
+    prefix = _decoy_prefix_value()
+    decoy_dirs = [f"{prefix}_dock6_pdbqt"]
+    if prefix.lower() != "dud":
+        decoy_dirs.append("dud_dock6_pdbqt")
+
     renamed = 0
     overwritten = 0
     skipped = 0
     failed = 0
-    for path in list(post_run_root.rglob("dock6_pdbqt/*.pdbqt")) + list(
-        post_run_root.rglob("dud_dock6_pdbqt/*.pdbqt")
-    ):
+    dock6_paths = list(post_run_root.rglob("dock6_pdbqt/*.pdbqt"))
+    for decoy_dir in decoy_dirs:
+        dock6_paths.extend(post_run_root.rglob(f"{decoy_dir}/*.pdbqt"))
+    for path in dock6_paths:
         if ".mol2__dock6_stage" not in path.name.lower():
             continue
         new_name = re.sub(
@@ -989,6 +1093,8 @@ def main() -> int:
     args = parse_args()
     logger = configure_logging()
     repo_root, docked_root, post_docked_root = resolve_roots(args)
+    decoy_prefix = _resolve_decoy_prefix(repo_root, args.decoy_prefix, logger)
+    _set_decoy_prefix(decoy_prefix, logger)
 
     if not _ensure_obabel(logger):
         return 1
@@ -1046,7 +1152,7 @@ def main() -> int:
         args.overwrite,
         max(1, args.workers),
         logger,
-        "dud_ledock",
+        f"{decoy_prefix}_ledock",
     )
     (
         ledock_converted,

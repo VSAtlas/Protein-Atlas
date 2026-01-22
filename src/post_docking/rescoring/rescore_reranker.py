@@ -12,13 +12,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from input_and_export_functions import load_config
+try:
+    from input_and_export_functions import load_config
+except ModuleNotFoundError:
+    REPO_ROOT = Path(__file__).resolve().parents[3]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from input_and_export_functions import load_config
 
 COMPONENT = "[rescore-reranker]"
 SCORCH_WEIGHT_DEFAULT = 0.65
 CNN_WEIGHT_DEFAULT = 0.35
 SCORCH_WEIGHT_KEY = "SCORCH_WEIGHT"
 CNN_WEIGHT_KEY = "CNN_WEIGHT"
+DECOY_PREFIX_KEY = "DECOY_PREFIX"
+DUD_PREFIX_KEY = "DUD_PREFIX"
+DECOY_PREFIX_DEFAULT = "dud"
+DECOY_PREFIX_VALUE = DECOY_PREFIX_DEFAULT
 NUMERIC_PRIORITY = [
     "consensus_score",
     "consensus_score_pre",
@@ -60,6 +70,53 @@ TEXT_PRIORITY = [
 _DECOY_RE = re.compile(r"\bdecoys?_", re.IGNORECASE)
 
 
+def _decoy_prefix_value() -> str:
+    return DECOY_PREFIX_VALUE or DECOY_PREFIX_DEFAULT
+
+
+def _normalize_decoy_prefix(value: Optional[object]) -> str:
+    prefix = str(value or "").strip().strip('"').strip("'")
+    return prefix if prefix else DECOY_PREFIX_DEFAULT
+
+
+def _resolve_decoy_prefix_from_config(cfg: Dict[str, Any]) -> str:
+    if DECOY_PREFIX_KEY in cfg:
+        raw = str(cfg.get(DECOY_PREFIX_KEY, "")).strip()
+        if raw:
+            return _normalize_decoy_prefix(cfg.get(DECOY_PREFIX_KEY))
+        return DECOY_PREFIX_DEFAULT
+    if DUD_PREFIX_KEY in cfg:
+        raw = str(cfg.get(DUD_PREFIX_KEY, "")).strip()
+        if raw:
+            return _normalize_decoy_prefix(cfg.get(DUD_PREFIX_KEY))
+    return DECOY_PREFIX_DEFAULT
+
+
+def _set_decoy_prefix(
+    value: Optional[object], logger: Optional[logging.Logger] = None
+) -> str:
+    global DECOY_PREFIX_VALUE
+    DECOY_PREFIX_VALUE = _normalize_decoy_prefix(value)
+    if logger:
+        logger.info("%s action=preflight decoy_prefix=%s", COMPONENT, DECOY_PREFIX_VALUE)
+    return DECOY_PREFIX_VALUE
+
+
+def _starts_with_decoy_prefix(text: str) -> bool:
+    prefix = _decoy_prefix_value().lower()
+    if not prefix:
+        return False
+    return str(text or "").strip().lower().startswith(f"{prefix}_")
+
+
+def _is_decoy_scorch_path(path: Path, prefix: str) -> bool:
+    name = path.name.lower()
+    prefix_lower = prefix.lower()
+    if name.startswith(f"{prefix_lower}_"):
+        return True
+    return prefix_lower != "dud" and name.startswith("dud_")
+
+
 def _as_float(x: Any) -> Optional[float]:
     try:
         if x is None:
@@ -73,11 +130,11 @@ def _as_float(x: Any) -> Optional[float]:
 
 
 def is_decoy_id(s: str) -> bool:
-    return bool(_DECOY_RE.search(s or ""))
+    return bool(_DECOY_RE.search(s or "")) or _starts_with_decoy_prefix(s)
 
 
 def is_decoy_like(text: str) -> bool:
-    return bool(_DECOY_RE.search(text or ""))
+    return bool(_DECOY_RE.search(text or "")) or _starts_with_decoy_prefix(text)
 
 
 def _parse_weight(
@@ -102,7 +159,10 @@ def _parse_weight(
         return default
 
 
-def _load_blend_weights(repo_root: Path, logger: logging.Logger) -> Tuple[float, float]:
+def _load_blend_weights(
+    repo_root: Path, logger: logging.Logger
+) -> Tuple[float, float, str]:
+    cfg: Dict[str, Any] = {}
     try:
         cfg = load_config(config_path=str(repo_root / "config.txt"), base_dir=repo_root)
     except Exception as exc:
@@ -111,16 +171,18 @@ def _load_blend_weights(repo_root: Path, logger: logging.Logger) -> Tuple[float,
             COMPONENT,
             exc,
         )
-        return SCORCH_WEIGHT_DEFAULT, CNN_WEIGHT_DEFAULT
+        cfg = {}
     scorch_weight = _parse_weight(cfg, SCORCH_WEIGHT_KEY, SCORCH_WEIGHT_DEFAULT, logger)
     cnn_weight = _parse_weight(cfg, CNN_WEIGHT_KEY, CNN_WEIGHT_DEFAULT, logger)
+    decoy_prefix = _resolve_decoy_prefix_from_config(cfg)
+    _set_decoy_prefix(decoy_prefix, logger)
     logger.info(
         "%s action=preflight status=ok scorch_weight=%.3f cnn_weight=%.3f",
         COMPONENT,
         scorch_weight,
         cnn_weight,
     )
-    return scorch_weight, cnn_weight
+    return scorch_weight, cnn_weight, decoy_prefix
 
 
 def _norm_engine(x: Any) -> str:
@@ -148,12 +210,20 @@ def _consensus_ligand_base(lig: str) -> str:
 def _scorch_ligand_base(lig_id: str) -> str:
     s = str(lig_id or "").strip()
     s = s.replace(".sanitized", "")
-    s = re.sub(r"(_dud_gnina_stage\d+)$", "", s)
-    s = re.sub(r"(_gnina_dud_stage\d+)$", "", s)
-    s = re.sub(r"(_dock6_dud_stage\d+)$", "", s)
-    s = re.sub(r"(_dud_dock6_stage\d+)$", "", s)
-    s = re.sub(r"(_dud_stage\d+)$", "", s)
-    s = re.sub(r"(__dock6_dud_stage\d+)$", "", s)
+    prefixes = {_decoy_prefix_value()}
+    if "dud" not in prefixes:
+        prefixes.add("dud")
+    for prefix in prefixes:
+        esc = re.escape(prefix)
+        s = re.sub(rf"(_{esc}_gnina_stage\d+)$", "", s)
+        s = re.sub(rf"(_gnina_{esc}_stage\d+)$", "", s)
+        s = re.sub(rf"(_dock6_{esc}_stage\d+)$", "", s)
+        s = re.sub(rf"(_{esc}_dock6_stage\d+)$", "", s)
+        s = re.sub(rf"(_{esc}_stage\d+)$", "", s)
+        s = re.sub(rf"(__{esc}_dock6_stage\d+)$", "", s)
+        s = re.sub(rf"(__dock6_{esc}_stage\d+)$", "", s)
+        s = re.sub(rf"(__{esc}_ledock_stage\d+)$", "", s)
+        s = re.sub(rf"(__ledock_{esc}_stage\d+)$", "", s)
     s = re.sub(r"(__ledock_stage\d+)$", "", s)
     s = re.sub(r"(__dock6_stage\d+)$", "", s)
     s = re.sub(r"(_gnina_stage\d+)$", "", s)
@@ -469,6 +539,7 @@ def rerank_consensus_with_scorch(
     overwrite: bool = False,
     scorch_weight: float = SCORCH_WEIGHT_DEFAULT,
     cnn_weight: float = CNN_WEIGHT_DEFAULT,
+    decoy_prefix: Optional[str] = None,
 ) -> bool:
     if out_csv.exists() and out_csv.stat().st_size > 0 and not overwrite:
         logger.info("%s action=skip reason=exists out=%s", COMPONENT, str(out_csv))
@@ -482,15 +553,24 @@ def rerank_consensus_with_scorch(
         )
         return False
     degraded = False
+    prefix = _normalize_decoy_prefix(
+        decoy_prefix if decoy_prefix is not None else _decoy_prefix_value()
+    )
+    if decoy_prefix is not None:
+        _set_decoy_prefix(prefix)
     if isinstance(scorch_csvs, Path):
         scorch_paths = [scorch_csvs]
     else:
         scorch_paths = list(scorch_csvs)
 
     if len(scorch_paths) == 1 and scorch_paths[0].name == "scorch_scores_all.csv":
-        dud_candidate = scorch_paths[0].with_name("dud_scorch_scores_all.csv")
-        if dud_candidate.exists():
-            scorch_paths.append(dud_candidate)
+        decoy_candidate = scorch_paths[0].with_name(f"{prefix}_scorch_scores_all.csv")
+        if decoy_candidate.exists():
+            scorch_paths.append(decoy_candidate)
+        if prefix.lower() != "dud":
+            legacy_candidate = scorch_paths[0].with_name("dud_scorch_scores_all.csv")
+            if legacy_candidate.exists() and legacy_candidate not in scorch_paths:
+                scorch_paths.append(legacy_candidate)
 
     sc_rows_all: List[Dict[str, str]] = []
     counts: Dict[str, int] = {"fda": 0, "dud": 0}
@@ -514,7 +594,7 @@ def rerank_consensus_with_scorch(
                 exc,
             )
             continue
-        mode_hint = "dud" if path.name.startswith("dud_") else "fda"
+        mode_hint = "dud" if _is_decoy_scorch_path(path, prefix) else "fda"
         for row in rows:
             if not row.get("run_mode"):
                 row["run_mode"] = mode_hint
@@ -815,7 +895,8 @@ def rerank_consensus_with_scorch(
             enriched[i]["consensus_rank"] = str(rank)
 
     dud_rows_for_stats = [row for row in enriched if _is_dud_row(row)]
-    dud_consensus_csv = out_csv.with_name("dud_consensus_reranked_scorch.csv")
+    decoy_consensus_csv = out_csv.with_name(f"{prefix}_consensus_reranked_scorch.csv")
+    legacy_decoy_consensus_csv = out_csv.with_name("dud_consensus_reranked_scorch.csv")
     decoy_scores: List[float] = []
     mu_decoy: Optional[float] = None
     sigma_decoy: Optional[float] = None
@@ -1048,9 +1129,9 @@ def rerank_consensus_with_scorch(
 
     _write_csv(out_csv, sorted_rows, out_fields)
     dud_rows = [row for row in sorted_rows if _is_dud_row(row)]
-    _write_csv(
-        out_csv.with_name("dud_consensus_reranked_scorch.csv"), dud_rows, out_fields
-    )
+    _write_csv(decoy_consensus_csv, dud_rows, out_fields)
+    if prefix.lower() != "dud" and decoy_consensus_csv != legacy_decoy_consensus_csv:
+        _write_csv(legacy_decoy_consensus_csv, dud_rows, out_fields)
 
     meta = [
         f"# run_id={str(cons_rows[0].get('run_id', '')).strip()}\n",
@@ -1087,15 +1168,14 @@ def rerank_consensus_with_scorch(
         and sigma_decoy > 0
     ):
         consensus_stats_path = out_csv.with_name("consensus_decoy_stats.json")
+        decoy_csv_value = str(decoy_consensus_csv) if decoy_consensus_csv else None
         payload = {
             "n_decoys": len(decoy_scores),
             "mu_decoy": mu_decoy,
             "sigma_decoy": sigma_decoy,
             "source": consensus_source,
-            "dud_consensus_csv": str(dud_consensus_csv) if dud_consensus_csv else None,
-            "dud_consensus_reranked_csv": str(dud_consensus_csv)
-            if dud_consensus_csv
-            else None,
+            "dud_consensus_csv": decoy_csv_value,
+            "dud_consensus_reranked_csv": decoy_csv_value,
             "regular_consensus_csv": str(consensus_csv),
         }
         try:
@@ -1128,7 +1208,10 @@ def rerank_run(
     *,
     scorch_weight: float = SCORCH_WEIGHT_DEFAULT,
     cnn_weight: float = CNN_WEIGHT_DEFAULT,
+    decoy_prefix: str = DECOY_PREFIX_DEFAULT,
 ) -> int:
+    prefix = _normalize_decoy_prefix(decoy_prefix)
+    _set_decoy_prefix(prefix)
     post_root = repo_root / "post_docked" / run_id
     dock_root = repo_root / "docked" / run_id
     if not post_root.exists():
@@ -1147,8 +1230,13 @@ def rerank_run(
         return 1
 
     scorch_paths = list(post_root.glob("**/scorch_scores_all.csv"))
-    dud_paths = list(post_root.glob("**/dud_scorch_scores_all.csv"))
-    combo_dirs = {p.parent for p in scorch_paths + dud_paths}
+    decoy_paths = list(post_root.glob(f"**/{prefix}_scorch_scores_all.csv"))
+    legacy_dud_paths = (
+        list(post_root.glob("**/dud_scorch_scores_all.csv"))
+        if prefix.lower() != "dud"
+        else []
+    )
+    combo_dirs = {p.parent for p in scorch_paths + decoy_paths + legacy_dud_paths}
     if not combo_dirs:
         logger.warning(
             "%s action=discover status=skip reason=no_scorch_scores path=%s",
@@ -1182,11 +1270,14 @@ def rerank_run(
             out_csv = combo_dir / "consensus_reranked_scorch.csv"
             scorch_inputs: List[Path] = []
             fda_csv = combo_dir / "scorch_scores_all.csv"
-            dud_csv = combo_dir / "dud_scorch_scores_all.csv"
+            decoy_csv = combo_dir / f"{prefix}_scorch_scores_all.csv"
+            legacy_dud_csv = combo_dir / "dud_scorch_scores_all.csv"
             if fda_csv.exists():
                 scorch_inputs.append(fda_csv)
-            if dud_csv.exists():
-                scorch_inputs.append(dud_csv)
+            if decoy_csv.exists():
+                scorch_inputs.append(decoy_csv)
+            elif prefix.lower() != "dud" and legacy_dud_csv.exists():
+                scorch_inputs.append(legacy_dud_csv)
             if not scorch_inputs:
                 logger.warning(
                     "%s action=skip reason=missing_scorch pdb=%s variant=%s ph=%s dir=%s",
@@ -1206,6 +1297,7 @@ def rerank_run(
                 overwrite=overwrite,
                 scorch_weight=scorch_weight,
                 cnn_weight=cnn_weight,
+                decoy_prefix=prefix,
             ):
                 ok += 1
             else:
@@ -1243,7 +1335,7 @@ def main() -> int:
 
     logger = _configure_logging(args.verbose)
     repo_root = Path(args.repo_root).resolve()
-    scorch_weight, cnn_weight = _load_blend_weights(repo_root, logger)
+    scorch_weight, cnn_weight, decoy_prefix = _load_blend_weights(repo_root, logger)
     return rerank_run(
         args.run_id,
         repo_root,
@@ -1251,6 +1343,7 @@ def main() -> int:
         logger,
         scorch_weight=scorch_weight,
         cnn_weight=cnn_weight,
+        decoy_prefix=decoy_prefix,
     )
 
 

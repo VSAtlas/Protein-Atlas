@@ -8,9 +8,22 @@ import sys
 import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from analysis.manifest_utils import extract_pocket, load_run_manifest
+
+try:
+    from analysis.manifest_utils import extract_pocket, load_run_manifest
+except ModuleNotFoundError:
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    SRC_ROOT = REPO_ROOT / "src"
+    if str(SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(SRC_ROOT))
+    from analysis.manifest_utils import extract_pocket, load_run_manifest
 
 COMPONENT = "[run-report]"
+DECOY_PREFIX_KEY = "DECOY_PREFIX"
+DUD_PREFIX_KEY = "DUD_PREFIX"
+DECOY_PREFIX_DEFAULT = "dud"
 MIN_DECOYS_FOR_FDR = 200
 MIN_UNIQUE_DECOY_SCORES = 10
 
@@ -19,6 +32,63 @@ def _configure_logging(verbose: bool) -> logging.Logger:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
     return logging.getLogger("run-report")
+
+
+def _strip_quotes(value: str) -> str:
+    stripped = str(value or "").strip()
+    if (
+        len(stripped) >= 2
+        and stripped[0] == stripped[-1]
+        and stripped[0] in ("'", '"')
+    ):
+        return stripped[1:-1].strip()
+    return stripped
+
+
+def _read_decoy_prefix_from_file(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    decoy_value = None
+    dud_value = None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, raw_value = stripped.split("=", 1)
+                key = key.strip()
+                value = _strip_quotes(raw_value)
+                if not value:
+                    continue
+                if key == DECOY_PREFIX_KEY:
+                    decoy_value = value
+                elif key == DUD_PREFIX_KEY:
+                    dud_value = value
+    except Exception:
+        return None
+    return decoy_value or dud_value
+
+
+def _resolve_decoy_prefix(
+    repo_root: Path, run_id: str, cli_value: Optional[str] = None
+) -> str:
+    if cli_value is not None:
+        candidate = _strip_quotes(str(cli_value))
+        if candidate:
+            return candidate
+
+    candidates = [
+        repo_root / "data" / run_id / "config.txt",
+        repo_root / "data" / run_id / "config_snapshot.txt",
+        repo_root / "manifests" / run_id / "config.txt",
+        repo_root / "config.txt",
+    ]
+    for path in candidates:
+        value = _read_decoy_prefix_from_file(path)
+        if value:
+            return value
+    return DECOY_PREFIX_DEFAULT
 
 
 def _as_float(x: Any) -> Optional[float]:
@@ -63,14 +133,20 @@ def _pick_repeated_value(
 
 
 def _load_scorch_stats(
-    repo_root: Path, run_id: str, pdb_id: str, variant: str, ph: str
+    repo_root: Path,
+    run_id: str,
+    pdb_id: str,
+    variant: str,
+    ph: str,
+    decoy_prefix: str = DECOY_PREFIX_DEFAULT,
 ) -> Dict[str, Optional[Any]]:
     stats = {"mu": None, "sigma": None, "n": None}
     combo_dir = repo_root / "post_docked" / run_id / pdb_id / variant / ph
 
     candidates = [
-        combo_dir / "scorch_scores_all.csv",
+        combo_dir / f"{decoy_prefix}_scorch_scores_all.csv",
         combo_dir / "dud_scorch_scores_all.csv",
+        combo_dir / "scorch_scores_all.csv",
     ]
 
     for path in candidates:
@@ -198,7 +274,12 @@ def _resolve_manifest_pocket(
     }
 
 
-def build_report(run_id: str, repo_root: Path, top_n: int = 5) -> Dict[str, Any]:
+def build_report(
+    run_id: str,
+    repo_root: Path,
+    top_n: int = 5,
+    decoy_prefix: str = DECOY_PREFIX_DEFAULT,
+) -> Dict[str, Any]:
     master_csv = repo_root / "data" / run_id / "master_rows.csv"
     if not master_csv.exists():
         raise FileNotFoundError(f"Master CSV not found: {master_csv}")
@@ -349,7 +430,14 @@ def build_report(run_id: str, repo_root: Path, top_n: int = 5) -> Dict[str, Any]
                             group_rows, "blend_n_decoys", is_int=True
                         ),
                     },
-                    "scorch": _load_scorch_stats(repo_root, run_id, pdb, variant, ph),
+                    "scorch": _load_scorch_stats(
+                        repo_root,
+                        run_id,
+                        pdb,
+                        variant,
+                        ph,
+                        decoy_prefix=decoy_prefix,
+                    ),
                 },
                 "fdr_stats": fdr_stats if fdr_stats else None,
             },
@@ -394,11 +482,14 @@ def main() -> int:
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--decoy-prefix", default=None)
     args = parser.parse_args()
 
     logger = _configure_logging(args.verbose)
     repo_root = Path(args.repo_root).resolve()
     run_id = args.run_id
+    decoy_prefix = _resolve_decoy_prefix(repo_root, run_id, args.decoy_prefix)
+    logger.info("%s action=preflight decoy_prefix=%s", COMPONENT, decoy_prefix)
 
     out_path = repo_root / "data" / run_id / "report.yaml"
     if out_path.exists() and not args.overwrite:
@@ -406,7 +497,7 @@ def main() -> int:
         return 0
 
     try:
-        report = build_report(run_id, repo_root)
+        report = build_report(run_id, repo_root, decoy_prefix=decoy_prefix)
         write_yaml(report, out_path)
         logger.info("%s action=write status=ok path=%s", COMPONENT, out_path)
     except Exception as e:
