@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 LOGGER = logging.getLogger("manifest-utils")
 CANONICAL_MANIFEST_NAME = "run_manifest.yaml"

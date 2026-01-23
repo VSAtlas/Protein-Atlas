@@ -3,12 +3,18 @@ import argparse
 import csv
 import logging
 import math
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
+    from analysis.fda_name_map import (
+        resolve_ligand_display_name,
+        resolve_mapping_csv_path,
+        try_load_fda_index,
+    )
     from analysis.manifest_utils import extract_pocket, load_run_manifest
 except ModuleNotFoundError:
     REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +23,11 @@ except ModuleNotFoundError:
     SRC_ROOT = REPO_ROOT / "src"
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
+    from analysis.fda_name_map import (
+        resolve_ligand_display_name,
+        resolve_mapping_csv_path,
+        try_load_fda_index,
+    )
     from analysis.manifest_utils import extract_pocket, load_run_manifest
 
 # Try to import canonical_ligand_base from rescore_reranker
@@ -53,6 +64,17 @@ DECOY_PREFIX_DEFAULT = "dud"
 _DECOY_RE = re.compile(r"\bdecoys?_", re.IGNORECASE)
 MIN_DECOYS_FOR_FDR = 200
 MIN_UNIQUE_DECOY_SCORES = 10
+_TEST_MODE_OFF_VALUES = {"", "0", "false", "no", "off", "none", "null"}
+_TEST_MODE_ON_VALUES = {"true", "yes", "on", "1"}
+_TEST_MODE_BOTH_VALUES = {
+    "both",
+    "fda_dud",
+    "dud_fda",
+    "fda+dud",
+    "dud+fda",
+    "fda-dud",
+    "dud-fda",
+}
 
 
 def _configure_logging(verbose: bool) -> logging.Logger:
@@ -125,6 +147,140 @@ def _resolve_decoy_prefix(
         if value:
             return value
     return DECOY_PREFIX_DEFAULT
+
+
+def _read_test_mode_from_file(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, raw_value = stripped.split("=", 1)
+                if key.strip() != "TEST_MODE_ENABLE":
+                    continue
+                return _strip_quotes(raw_value)
+    except Exception:
+        return None
+    return None
+
+
+def _parse_test_mode_value(raw: object) -> List[str]:
+    if isinstance(raw, bool):
+        return ["dud", "fda"] if raw else ["fda"]
+    s = str(raw).strip()
+    if not s:
+        return ["fda"]
+    lowered = s.lower()
+    if lowered in _TEST_MODE_OFF_VALUES:
+        return ["fda"]
+    if lowered in _TEST_MODE_ON_VALUES:
+        return ["dud", "fda"]
+    if lowered == "default":
+        return ["fda"]
+    if lowered in _TEST_MODE_BOTH_VALUES:
+        return ["dud", "fda"]
+
+    tokens = [tok for tok in re.split(r"[+,\s]+", lowered) if tok]
+    normalized: List[str] = []
+    for tok in tokens:
+        if tok in {"and", "off", "none", "null"}:
+            continue
+        if tok == "default":
+            tok = "fda"
+        normalized.append(tok)
+    if not normalized:
+        return ["fda"]
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    for tok in normalized:
+        if tok not in seen:
+            seen.add(tok)
+            deduped.append(tok)
+    return deduped
+
+
+def _resolve_test_mode_tokens(repo_root: Path, run_id: str) -> List[str]:
+    env_raw = os.environ.get("TEST_MODE_ENABLE")
+    if env_raw is not None:
+        return _parse_test_mode_value(env_raw)
+    candidates = [
+        repo_root / "data" / run_id / "config.txt",
+        repo_root / "data" / run_id / "config_snapshot.txt",
+        repo_root / "manifests" / run_id / "config.txt",
+        repo_root / "config.txt",
+    ]
+    for path in candidates:
+        raw = _read_test_mode_from_file(path)
+        if raw is not None:
+            return _parse_test_mode_value(raw)
+    return ["fda"]
+
+
+def _infer_decoy_prefix_from_tokens(
+    decoy_prefix: str, tokens: List[str]
+) -> str:
+    if decoy_prefix and decoy_prefix != DECOY_PREFIX_DEFAULT:
+        return decoy_prefix
+    if "dud" in tokens:
+        return "dud"
+    for tok in tokens:
+        if "dud" in tok:
+            return tok
+    return decoy_prefix
+
+
+def _sanitize_token(token: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(token))
+    cleaned = cleaned.strip("_")
+    return cleaned or "custom"
+
+
+def _discover_consensus_files(
+    run_root: Path, tokens: List[str], decoy_prefix: str, logger: logging.Logger
+) -> List[Path]:
+    library_tokens = [tok for tok in tokens if tok not in {"dud", decoy_prefix}]
+    if not library_tokens:
+        library_tokens = ["fda"]
+
+    patterns: List[str] = []
+    for tok in library_tokens:
+        if tok == "fda":
+            patterns.append("consensus_reranked_scorch.csv")
+        else:
+            prefix = _sanitize_token(tok)
+            patterns.append(f"{prefix}_consensus_reranked_scorch.csv")
+
+    found: List[Path] = []
+    for pattern in patterns:
+        found.extend(run_root.rglob(pattern))
+
+    if not found and "consensus_reranked_scorch.csv" not in patterns:
+        found.extend(run_root.rglob("consensus_reranked_scorch.csv"))
+
+    filtered: List[Path] = []
+    decoy_names = {
+        f"{decoy_prefix}_consensus_reranked_scorch.csv",
+        "dud_consensus_reranked_scorch.csv",
+    }
+    for path in found:
+        if path.name in decoy_names:
+            continue
+        filtered.append(path)
+
+    deduped: Dict[str, Path] = {}
+    for path in filtered:
+        deduped[str(path)] = path
+    ordered = [deduped[key] for key in sorted(deduped.keys())]
+    logger.info(
+        "%s action=discover patterns=%s files=%d",
+        COMPONENT,
+        ",".join(patterns),
+        len(ordered),
+    )
+    return ordered
 
 
 def _is_decoy_file(filename: str, decoy_prefix: str) -> bool:
@@ -276,6 +432,30 @@ def _get_pocket_info(
         "box_z": "",
     }
     pocket = extract_pocket(manifest, pdb_id, variant, ph)
+    if (
+        manifest
+        and pocket.get("method") is None
+        and pocket.get("center") is None
+        and pocket.get("box") is None
+    ):
+        proteins = manifest.get("proteins", {}) or {}
+        entry = proteins.get(pdb_id) or proteins.get(pdb_id.upper())
+        if isinstance(entry, dict):
+            details = entry.get("stages", {}).get("pocket_detection", {}).get(
+                "details", {}
+            )
+            pocket = {
+                "method": details.get("method") or details.get("pocket_method"),
+                "center": details.get("center")
+                or [
+                    details.get("center_x"),
+                    details.get("center_y"),
+                    details.get("center_z"),
+                ],
+                "box": details.get("box")
+                or details.get("box_size")
+                or [details.get("box_x"), details.get("box_y"), details.get("box_z")],
+            }
     method = pocket.get("method")
     center = pocket.get("center")
     box = pocket.get("box")
@@ -382,6 +562,8 @@ def _find_dud_eval_tsv(
     patterns = [
         f"consensus_reranked_scorch_summary_*{run_id}*.tsv",
         f"consensus_summary_*{run_id}*.tsv",
+        f"consensus_reranked_scorch_summary_*{run_id}*_pretty.txt",
+        f"consensus_summary_*{run_id}*_pretty.txt",
     ]
     for base in bases:
         if not base.exists():
@@ -391,6 +573,63 @@ def _find_dud_eval_tsv(
             if matches:
                 return matches[0]
     return None
+
+
+def _parse_dud_eval_pretty(
+    summary_path: Path, run_id: str, logger: logging.Logger
+) -> Dict[Tuple[str, str, str], Dict[str, str]]:
+    metrics_map: Dict[Tuple[str, str, str], Dict[str, str]] = {}
+    try:
+        with summary_path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception as exc:
+        logger.warning(
+            "%s action=dud_eval_pretty status=read_failed path=%s error=%s",
+            COMPONENT,
+            summary_path,
+            exc,
+        )
+        return metrics_map
+
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) < 6:
+            continue
+        if parts[0].lower().startswith("header"):
+            continue
+        variant = parts[0].strip().upper()
+        ph = parts[1].strip()
+        row_run = parts[2].strip()
+        pdb_id = parts[3].strip().upper()
+        if row_run and row_run != run_id:
+            continue
+        nums: List[float] = []
+        rest: List[str] = []
+        for tok in parts[4:]:
+            try:
+                nums.append(float(tok))
+            except Exception:
+                rest.append(tok)
+        if not nums:
+            continue
+        roc_auc_adj = nums[0] if len(nums) >= 1 else 0.0
+        roc_auc = nums[1] if len(nums) >= 2 else roc_auc_adj
+        ef1 = nums[3] if len(nums) >= 4 else 0.0
+        status_reason = " ".join(rest).strip()
+        metrics_map[(pdb_id, variant, ph)] = {
+            "ef1": f"{ef1}",
+            "roc_auc": f"{roc_auc}",
+            "roc_auc_adj": f"{roc_auc_adj}",
+            "dud_eval_status_reason": status_reason,
+        }
+
+    logger.info(
+        "%s action=dud_eval_pretty status=loaded path=%s rows=%d",
+        COMPONENT,
+        summary_path,
+        len(metrics_map),
+    )
+    return metrics_map
 
 
 def _metric_with_default(
@@ -423,6 +662,8 @@ def _parse_dud_eval_summary(
             "%s action=dud_eval_summary status=missing run_id=%s", COMPONENT, run_id
         )
         return metrics_map
+    if summary_path.suffix.lower() == ".txt":
+        return _parse_dud_eval_pretty(summary_path, run_id, logger)
 
     try:
         with summary_path.open("r", encoding="utf-8") as f:
@@ -520,13 +761,34 @@ def main() -> int:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--decoy-prefix", default=None)
+    parser.add_argument("--fda-mapping-csv", default=None)
     args = parser.parse_args()
 
     logger = _configure_logging(args.verbose)
     repo_root = Path(args.repo_root).resolve()
     run_id = args.run_id
     decoy_prefix = _resolve_decoy_prefix(repo_root, run_id, args.decoy_prefix)
-    logger.info("%s action=preflight decoy_prefix=%s", COMPONENT, decoy_prefix)
+    tokens = _resolve_test_mode_tokens(repo_root, run_id)
+    decoy_prefix = _infer_decoy_prefix_from_tokens(decoy_prefix, tokens)
+    logger.info(
+        "%s action=preflight decoy_prefix=%s tokens=%s",
+        COMPONENT,
+        decoy_prefix,
+        ",".join(tokens),
+    )
+
+    mapping_csv = resolve_mapping_csv_path(
+        repo_root, run_id, cli_value=args.fda_mapping_csv
+    )
+    fda_index = try_load_fda_index(mapping_csv)
+    if mapping_csv is None:
+        logger.warning(
+            "%s action=fda_mapping status=missing run_id=%s", COMPONENT, run_id
+        )
+    elif fda_index is None:
+        logger.warning(
+            "%s action=fda_mapping status=load_failed path=%s", COMPONENT, mapping_csv
+        )
 
     post_root = repo_root / "post_docked"
     processed_root = repo_root / "processed_pdbs"
@@ -539,12 +801,8 @@ def main() -> int:
         return 0
 
     # Discovery
-    consensus_files = list((post_root / run_id).rglob("consensus_reranked_scorch.csv"))
-    logger.info(
-        "%s action=discover count=%d path_pattern=%s",
-        COMPONENT,
-        len(consensus_files),
-        f"post_docked/{run_id}/**/consensus_reranked_scorch.csv",
+    consensus_files = _discover_consensus_files(
+        post_root / run_id, tokens, decoy_prefix, logger
     )
 
     if not consensus_files:
@@ -632,6 +890,13 @@ def main() -> int:
             base = _canonical_ligand_base_with_prefix(
                 Path(lig_file_name).stem, decoy_prefix
             )
+            ligand_display = base
+            if fda_index is not None:
+                ligand_display = resolve_ligand_display_name(
+                    base, lig_file_name, fda_index
+                )
+            if not ligand_display:
+                ligand_display = base
 
             # Decoy/Control
             is_decoy = _row_is_decoy(row, decoy_prefix)
@@ -661,33 +926,18 @@ def main() -> int:
             t_selected = ""
             t_source = ""
 
-            valid_bool = pb_valid == "1"
-
-            if valid_bool and t_stage2:
+            if t_stage2:
                 t_selected = t_stage2
                 t_source = "stage2"
             elif t_stage1:
-                t_selected = t_stage1
-                t_source = "stage1"
-            elif t_stage2:
-                # Fallback if valid is false but stage2 exists? Spec says "if pose_valid_any==1 use stage2 else stage1"
-                # So if invalid, use stage1.
-                t_selected = t_stage2  # Wait, if invalid, we fallback to stage1.
-                t_source = "stage2"  # Correction below
-
-            # Correct logic:
-            # if pose_valid_any==1, use t_stage2
-            # else use t_stage1 (or blank)
-            if valid_bool:
-                t_selected = t_stage2
-                t_source = "stage2"
-            else:
                 t_selected = t_stage1
                 t_source = "stage1"
 
             if not t_selected:
                 t_selected = ""
                 t_source = ""
+            elif pb_valid == "0":
+                t_source = f"{t_source}_pose_invalid"
 
             # Construct Master Row
             new_row = {
@@ -700,6 +950,7 @@ def main() -> int:
                 "ligand": row.get("ligand", ""),
                 "ligand_file": lig_file_name,
                 "ligand_base": base,
+                "ligand_display": ligand_display,
                 "is_decoy": 1 if is_decoy else 0,
                 "is_control": 1 if is_control else 0,
                 "pose_valid_any": pb_valid,
@@ -921,6 +1172,7 @@ def main() -> int:
         "ligand",
         "ligand_file",
         "ligand_base",
+        "ligand_display",
         "is_decoy",
         "is_control",
         "pose_valid_any",

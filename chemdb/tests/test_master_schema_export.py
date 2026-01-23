@@ -180,8 +180,8 @@ def test_master_export(mock_run_env):
     assert fda["is_decoy"] == "0"
     assert fda["pose_valid_any"] == "0"
     assert fda["pose_invalid_reason_top"] == "Clash"
-    assert fda["t_selected"] == "1.8"  # Stage 1 because invalid (t_pre=1.8)
-    assert fda["t_selected_source"] == "stage1"
+    assert fda["t_selected"] == "2.5"  # Stage 2 preferred even if invalid
+    assert fda["t_selected_source"] == "stage2_pose_invalid"
 
     # Check Decoy
     decoy = next(

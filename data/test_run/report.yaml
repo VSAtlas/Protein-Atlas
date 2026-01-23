@@ -1,5 +1,5 @@
 run_id: test_run
-generated_at: '2026-01-20T23:50:33.836430Z'
+generated_at: '2026-01-23T18:32:15.893821Z'
 sources:
   master_rows_csv: data/test_run/master_rows.csv
   manifest_yaml: manifests/test_run/run_manifest.yaml
@@ -44,32 +44,12 @@ targets:
       method: null
       center: null
       box: null
-    top5_ligands:
-    - ligand_base: LIG_A301
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: LIG_A301
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: TEST
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: TEST
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: decoys_test_library_10_00001_ms_5a31e6cfa451a79e
-      t_selected: null
-      t_selected_source: null
-      is_control: false
-      is_decoy: true
+    top5_ligands: []
+    top_ligands_extended: []
+    notable_ligands: []
+    highlights:
+    - query: imatinib
+      found: false
   TEST|HOLO|pH7_0:
     qc:
       ef1: 0.0
@@ -90,9 +70,9 @@ targets:
           sigma: null
           n: null
         scorch:
-          mu: 0.00325689
-          sigma: 0.00426441
-          n: 4
+          mu: 0.000502941
+          sigma: 0.000207191
+          n: 3
       fdr_stats:
         score_field: consensus_score
         n_decoys: 5
@@ -103,75 +83,20 @@ targets:
         unique_decoy_scores: 5
         reliable: false
     pocket:
-      method: control
+      method: fallback_no_controls
       center:
       - 4.833
       - 1.833
       - 3.633
       box:
-      - 24.0
-      - 24.0
-      - 24.0
-    top5_ligands:
-    - ligand_base: LIG_A301
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: LIG_A301
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: TEST
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: TEST
-      t_selected: null
-      t_selected_source: null
-      is_control: true
-      is_decoy: false
-    - ligand_base: decoys_test_library_10_00001_ms_5a31e6cfa451a79e
-      t_selected: null
-      t_selected_source: null
-      is_control: false
-      is_decoy: true
-ligands:
-  LIG_A301:
-    targets_in_top5:
-    - target: TEST|APO|pH7_0
-      t_selected: null
-      t_selected_source: null
-    - target: TEST|APO|pH7_0
-      t_selected: null
-      t_selected_source: null
-    - target: TEST|HOLO|pH7_0
-      t_selected: null
-      t_selected_source: null
-    - target: TEST|HOLO|pH7_0
-      t_selected: null
-      t_selected_source: null
-  TEST:
-    targets_in_top5:
-    - target: TEST|APO|pH7_0
-      t_selected: null
-      t_selected_source: null
-    - target: TEST|APO|pH7_0
-      t_selected: null
-      t_selected_source: null
-    - target: TEST|HOLO|pH7_0
-      t_selected: null
-      t_selected_source: null
-    - target: TEST|HOLO|pH7_0
-      t_selected: null
-      t_selected_source: null
-  decoys_test_library_10_00001_ms_5a31e6cfa451a79e:
-    targets_in_top5:
-    - target: TEST|APO|pH7_0
-      t_selected: null
-      t_selected_source: null
-    - target: TEST|HOLO|pH7_0
-      t_selected: null
-      t_selected_source: null
+      - 7.1
+      - 6.0
+      - 7.2
+    top5_ligands: []
+    top_ligands_extended: []
+    notable_ligands: []
+    highlights:
+    - query: imatinib
+      found: false
+ligands: {}
+multi_target_hits: []

@@ -1,36 +1,59 @@
 # metabolite_resolver.py
 from __future__ import annotations
 import csv
+import logging
 import os
 import re
-import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from typing import Mapping, Sequence
+
+    def load_config(path: str) -> Dict[str, Any]: ...
+    def validate_config(cfg: Dict[str, Any]) -> None: ...
+else:
+    from input_and_export_functions import load_config, validate_config
+
+Chem: Any
+Descriptors: Any
+MurckoScaffold: Any
+AllChem: Any
+rdMolDescriptors: Any
 try:
-    from rdkit import Chem
-    from rdkit.Chem import rdMolDescriptors as Descriptors
-    from rdkit.Chem.Scaffolds import MurckoScaffold
-    from rdkit.Chem import AllChem, rdMolDescriptors
+    from rdkit import Chem as _Chem
+    from rdkit.Chem import rdMolDescriptors as _Descriptors
+    from rdkit.Chem.Scaffolds import MurckoScaffold as _MurckoScaffold
+    from rdkit.Chem import AllChem as _AllChem, rdMolDescriptors as _rdMolDescriptors
 except Exception:  # RDKit optional; name-based still works
     Chem = MurckoScaffold = AllChem = rdMolDescriptors = Descriptors = None
+else:
+    Chem = _Chem
+    Descriptors = _Descriptors
+    MurckoScaffold = _MurckoScaffold
+    AllChem = _AllChem
+    rdMolDescriptors = _rdMolDescriptors
 
 log = logging.getLogger("metabolite_resolver")
-# --- config & optional chemdb aliases ---
-from input_and_export_functions import load_config, validate_config
 
 _cfg = load_config("config.txt")
 validate_config(_cfg)
 
 # optional chemdb data: prefer external alias/rule tables if available
-try:
-    from chemdb.chem_alias_db import PARENT_ALIASES as _EXT_PARENT_ALIASES
-except Exception:
-    _EXT_PARENT_ALIASES = None
-try:
-    from chemdb.chem_alias_db import NAME_RULES as _EXT_NAME_RULES
-except Exception:
-    _EXT_NAME_RULES = None
+if TYPE_CHECKING:
+    _EXT_PARENT_ALIASES: Optional[Mapping[str, str]] = None
+    _EXT_NAME_RULES: Optional[Sequence[Tuple[Any, str]]] = None
+else:
+    try:
+        import chemdb.chem_alias_db as _chem_alias_db
+    except Exception:
+        _chem_alias_db = None
+    _EXT_PARENT_ALIASES = (
+        getattr(_chem_alias_db, "PARENT_ALIASES", None) if _chem_alias_db else None
+    )
+    _EXT_NAME_RULES = (
+        getattr(_chem_alias_db, "NAME_RULES", None) if _chem_alias_db else None
+    )
 
 # RDKit fingerprint params (keep current defaults)
 _METABO_FP_RADIUS = int(_cfg.get("METABO_FINGERPRINT_RADIUS", 2))
@@ -47,6 +70,7 @@ _USE_SCAFFOLD = str(_cfg.get("METABO_USE_SCAFFOLD_MATCH", "true")).lower() in (
 # --------------------------
 _WS = re.compile(r"\s+")
 _PUNC = re.compile(r"[-_/\\,;:\|\[\]\(\)\{\}\.\+\*'\"]+")
+_RDK_RE = re.compile(r"rdk[_-]?(\d+)", re.IGNORECASE)
 
 
 def _norm(s: Optional[str]) -> str:
@@ -60,6 +84,15 @@ def _norm(s: Optional[str]) -> str:
 
 def _tokenize(s: str) -> List[str]:
     return [t for t in re.split(r"[^a-z0-9\+]+", (s or "").lower()) if t]
+
+
+def _extract_rdk_id(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    match = _RDK_RE.search(str(value))
+    if not match:
+        return None
+    return f"rdk_{match.group(1).zfill(7)}"
 
 
 # --------------------------
@@ -119,14 +152,69 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
                         return row[a]
                 return None
 
-            rdk_id = pick("rdk_id", "rdkid", "id", "ligand_id") or ""
-            name = pick("drug", "name", "preferred_name") or rdk_id or "unknown"
-            syns_raw = pick("synonyms", "alias", "alts") or ""
+            def collect(*alts):
+                values = []
+                for a in alts:
+                    if a in row and row[a]:
+                        values.append(row[a])
+                return values
+
+            scheme = pick("scheme") or ""
+            rdk_id = _extract_rdk_id(pick("rdk_id", "rdkid", "ligand_id") or "")
+            if not rdk_id:
+                rdk_id = _extract_rdk_id(pick("path", "sdf_title", "remark_name") or "")
+            if not rdk_id and str(scheme).strip().lower() == "rdk":
+                file_num = pick("file_num")
+                if file_num is not None and str(file_num).strip():
+                    try:
+                        rdk_id = f"rdk_{int(float(str(file_num))):07d}"
+                    except ValueError:
+                        rdk_id = None
+            if not rdk_id:
+                raw_id = pick("id")
+                rdk_id = _extract_rdk_id(raw_id) or (raw_id or "")
+
+            name = (
+                pick(
+                    "rxnorm_generic_name",
+                    "drugcentral_generic_name",
+                    "generic_name",
+                    "pubchem_name",
+                    "pubchem_record_title",
+                    "display_name",
+                    "drug",
+                    "name",
+                    "preferred_name",
+                    "remark_name",
+                    "sdf_title",
+                )
+                or rdk_id
+                or "unknown"
+            )
+            syn_fields = []
+            syn_fields.extend(collect("synonyms", "alias", "alts", "pubchem_synonyms"))
+            syn_fields.extend(collect("display_name"))
+            syn_fields.extend(
+                collect("brand_names", "rxnorm_brand_names", "drugcentral_brand_names")
+            )
+            syn_fields.extend(
+                collect("generic_name", "rxnorm_generic_name", "drugcentral_generic_name")
+            )
+            syn_fields.extend(
+                collect("pubchem_name", "pubchem_record_title", "remark_name", "sdf_title")
+            )
+            path_val = pick("path")
+            if path_val:
+                base = os.path.basename(str(path_val))
+                stem = os.path.splitext(base)[0]
+                if stem:
+                    syn_fields.append(stem)
+            syns_raw = "|".join(str(s) for s in syn_fields if s)
             smiles = pick("smiles", "smile", "smiles_rdkit")
             inchikey = pick("inchikey", "inchi_key", "ikey")
             synonyms = [s.strip() for s in re.split(r"[|,;]", syns_raw) if s.strip()]
             if rdk_id:
-                idx.add(DrugRec(rdk_id, name, synonyms, smiles, inchikey))
+                idx.add(DrugRec(rdk_id, str(name), synonyms, smiles, inchikey))
     log.info(
         "Loaded FDA library: %d entries (names=%d, scaffolds=%d, inchikeyFB=%d)",
         len(idx.id_to_rec),
@@ -202,8 +290,8 @@ def _propose_parent_names(metabolite_like: str) -> List[str]:
 # RDKit helpers (optional)
 # --------------------------
 def _largest_fragment(m: Chem.Mol) -> Chem.Mol:
-    frags = Chem.GetMolFrags(m, asMols=True, sanitizeFrags=False)
-    frags = sorted(frags, key=lambda x: x.GetNumAtoms(), reverse=True)
+    frags = list(Chem.GetMolFrags(m, asMols=True, sanitizeFrags=False))
+    frags.sort(key=lambda x: x.GetNumAtoms(), reverse=True)
     return frags[0]
 
 
@@ -239,7 +327,6 @@ def ensure_parent_drugs_for_controls(
     If any looks like a metabolite, try to locate the parent drug in the FDA library.
     Returns a (deduped) list of rdk_ids to add to your whitelist.
     """
-    added: List[str] = []
     candidates: List[Tuple[str, float]] = []  # (rdk_id, score)
     raw_files = []
     if os.path.isdir(ligands_raw_dir):

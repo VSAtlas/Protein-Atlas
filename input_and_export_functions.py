@@ -143,6 +143,7 @@ def _default_runtime() -> Dict[str, Any]:
         "FORCE_REPROCESS": False,
         "DOCKING_MODE": "discovery",
         "QUIET_CONSOLE": False,
+        "FILTER_INVALID": False,
         # docking/recenter knobs
         "EARLY_RECENTER_RATIO": 0.70,
         "EARLY_RECENTER_MIN_EVAL": 10,
@@ -526,6 +527,7 @@ def load_config(
         "FORCE_REPROCESS",
         "ALLOW_BOX_EXPAND",
         "QUIET_CONSOLE",
+        "FILTER_INVALID",
         "USE_MEEKO",
         "USE_DOCK6",
         "use_dock6",

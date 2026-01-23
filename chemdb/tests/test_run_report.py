@@ -260,7 +260,7 @@ def test_report_generation(mock_report_env):
     t2_key = "T2|V1|P1"
     t2 = report["targets"][t2_key]
     assert t2["qc"]["n_decoys"] == 2
-    assert len(t2["top5_ligands"]) == 3  # Only 3 rows
+    assert len(t2["top5_ligands"]) == 1  # Only non-decoy rows are rankable
 
     # Decoy Stats T2
     ds2 = t2["qc"]["decoy_stats"]

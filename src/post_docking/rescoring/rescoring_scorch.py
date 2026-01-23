@@ -5,6 +5,7 @@ import csv
 import hashlib
 import logging
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -40,6 +41,18 @@ DECOY_PREFIX_KEY = "DECOY_PREFIX"
 DUD_PREFIX_KEY = "DUD_PREFIX"
 DECOY_PREFIX_DEFAULT = "dud"
 DECOY_PREFIX_VALUE = DECOY_PREFIX_DEFAULT
+
+_TEST_MODE_OFF_VALUES = {"", "0", "false", "no", "off", "none", "null"}
+_TEST_MODE_ON_VALUES = {"true", "yes", "on", "1"}
+_TEST_MODE_BOTH_VALUES = {
+    "both",
+    "fda_dud",
+    "dud_fda",
+    "fda+dud",
+    "dud+fda",
+    "fda-dud",
+    "dud-fda",
+}
 
 VINA_STAGE_DIRS_BASE = ("stage1", "stage2", "stage3")
 GNINA_STAGE_DIRS_BASE = ("gnina_stage1", "gnina_stage2", "gnina_stage3")
@@ -78,6 +91,93 @@ def _set_decoy_prefix(
     if logger:
         logger.info("[scorch.preflight] decoy_prefix=%s", DECOY_PREFIX_VALUE)
     return DECOY_PREFIX_VALUE
+
+
+def _parse_test_mode_value(raw: object) -> list[str]:
+    if isinstance(raw, bool):
+        return ["dud", "fda"] if raw else ["fda"]
+
+    s = str(raw).strip()
+    if not s:
+        return ["fda"]
+    lowered = s.lower()
+    if lowered in _TEST_MODE_OFF_VALUES:
+        return ["fda"]
+    if lowered in _TEST_MODE_ON_VALUES:
+        return ["dud", "fda"]
+    if lowered == "default":
+        return ["fda"]
+    if lowered in _TEST_MODE_BOTH_VALUES:
+        return ["dud", "fda"]
+
+    tokens = [tok for tok in re.split(r"[+,\s]+", lowered) if tok]
+    normalized: list[str] = []
+    for tok in tokens:
+        if tok in {"and", "off", "none", "null"}:
+            continue
+        if tok == "default":
+            tok = "fda"
+        normalized.append(tok)
+
+    if not normalized:
+        return ["fda"]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for tok in normalized:
+        if tok not in seen:
+            seen.add(tok)
+            deduped.append(tok)
+    return deduped
+
+
+def _parse_test_mode_tokens(cfg: Dict[str, object]) -> list[str]:
+    raw = (
+        os.environ.get("TEST_MODE_ENABLE")
+        if "TEST_MODE_ENABLE" in os.environ
+        else cfg.get("TEST_MODE_ENABLE", "off")
+    )
+    return _parse_test_mode_value(raw)
+
+
+def _resolve_decoy_prefix_override(args: argparse.Namespace) -> Optional[str]:
+    if getattr(args, "decoy_prefix", None):
+        return _normalize_decoy_prefix(args.decoy_prefix)
+    env_value = os.environ.get(DECOY_PREFIX_KEY) or os.environ.get(DUD_PREFIX_KEY)
+    if env_value is None:
+        return None
+    if not str(env_value).strip():
+        return None
+    return _normalize_decoy_prefix(env_value)
+
+
+def _decoy_prefixes_from_test_mode(
+    cfg: Dict[str, object], override: Optional[str]
+) -> list[str]:
+    if override:
+        return [_normalize_decoy_prefix(override)]
+
+    tokens = _parse_test_mode_tokens(cfg)
+    fallback_prefix = _resolve_decoy_prefix_from_config(cfg)
+    prefixes: list[str] = []
+    for tok in tokens:
+        if tok == "fda":
+            continue
+        if tok == "dud":
+            prefixes.append(fallback_prefix)
+        else:
+            prefixes.append(_normalize_decoy_prefix(tok))
+
+    if not prefixes:
+        prefixes = [_normalize_decoy_prefix(fallback_prefix)]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for prefix in prefixes:
+        if prefix not in seen:
+            seen.add(prefix)
+            deduped.append(prefix)
+    return deduped
 
 
 def _decoy_stage_dirs(order: Sequence[int]) -> Tuple[str, ...]:
@@ -278,6 +378,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip automatic pose_bust / prep_for_scorch repair steps",
     )
+    parser.add_argument(
+        "--decoy-prefix",
+        default=None,
+        help="Override decoy prefix (disables TEST_MODE_ENABLE-driven multi-prefix)",
+    )
     return parser.parse_args()
 
 
@@ -299,7 +404,7 @@ def _resolve_roots(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path]:
     return repo_root, docked_root, post_docked_root, processed_root
 
 
-def _preflight(logger: logging.Logger) -> bool:
+def _preflight(cfg: Dict[str, object], logger: logging.Logger) -> bool:
     global SCORCH_SCRIPT, SCORCH_ENV, SCORCH_ROOT
 
     if shutil.which("micromamba") is None:
@@ -307,18 +412,6 @@ def _preflight(logger: logging.Logger) -> bool:
             "%s action=preflight status=failed reason=missing_micromamba", COMPONENT
         )
         return False
-
-    try:
-        cfg = load_config()
-    except Exception as exc:
-        logger.error(
-            "%s action=preflight status=failed reason=config_load_error error=%s",
-            COMPONENT,
-            exc,
-        )
-        return False
-
-    _set_decoy_prefix(_resolve_decoy_prefix_from_config(cfg), logger)
 
     script_cfg = cfg.get("SCORCH_SCRIPT")
     env_cfg = cfg.get("SCORCH_ENV")
@@ -1130,7 +1223,11 @@ def _run_pose_bust(
 
 
 def _run_prep_for_scorch(
-    run_id: str, repo_root: Path, overwrite: bool, logger: logging.Logger
+    run_id: str,
+    repo_root: Path,
+    overwrite: bool,
+    logger: logging.Logger,
+    decoy_prefix: Optional[str] = None,
 ) -> bool:
     cmd = [
         sys.executable,
@@ -1138,6 +1235,8 @@ def _run_prep_for_scorch(
         "--run-id",
         run_id,
     ]
+    if decoy_prefix:
+        cmd.extend(["--decoy-prefix", str(decoy_prefix)])
     if overwrite:
         cmd.append("--overwrite")
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -1828,7 +1927,7 @@ def main() -> int:
         )
         return 0
 
-    if not _preflight(logger):
+    if not _preflight(cfg, logger):
         return 1
 
     repo_root, docked_root, post_root, processed_root = _resolve_roots(args)
@@ -1849,252 +1948,277 @@ def main() -> int:
         StageSpec("dock6", "dock6_pdbqt", "scorch_scores_dock6.csv"),
     ]
 
-    combos = discover_combos(run_root, post_run_root)
-    logger.info("%s action=discover status=ok combos=%d", COMPONENT, len(combos))
-
-    if not args.skip_autofix:
-        if _posebusters_missing(post_run_root, combos):
-            _run_pose_bust(args.run_id, repo_root, args.overwrite, logger)
-        if _prep_missing(run_root, post_run_root, combos):
-            _run_prep_for_scorch(args.run_id, repo_root, args.overwrite, logger)
-
-    combos = discover_combos(run_root, post_run_root)
-    if not combos:
-        logger.warning(
-            "%s action=discover status=skip reason=no_combos run_id=%s",
+    override_prefix = _resolve_decoy_prefix_override(args)
+    decoy_prefixes = _decoy_prefixes_from_test_mode(cfg, override_prefix)
+    if override_prefix:
+        logger.info(
+            "%s action=decoy_prefixes source=override prefixes=%s",
             COMPONENT,
-            args.run_id,
+            ",".join(decoy_prefixes),
         )
-        return 0
+    else:
+        tokens = _parse_test_mode_tokens(cfg)
+        logger.info(
+            "%s action=decoy_prefixes source=test_mode tokens=%s prefixes=%s",
+            COMPONENT,
+            ",".join(tokens),
+            ",".join(decoy_prefixes),
+        )
 
-    tasks: List[
-        Tuple[
-            StageSpec,
-            Tuple[str, str, str],
-            Path,
-            Set[str],
-            Set[str],
-            str,
-            Optional[Sequence[str]],
-            Optional[Path],
-        ]
-    ] = []
-    skipped_missing_receptor = 0
-    skipped_missing_consensus = 0
-    combos_with_tasks: Set[Tuple[str, str, str]] = set()
-    combo_modes: Dict[Tuple[str, str, str], Set[str]] = {}
-    control_cache: Dict[str, Set[str]] = {}
-    for combo in sorted(combos):
-        pdb_id, variant, ph = combo
-        receptor = (
-            processed_root
-            / pdb_id
-            / variant
-            / "receptor"
-            / "ph_ensemble"
-            / f"{pdb_id}_{ph}.pdbqt"
+    ran_pose_bust = False
+    any_failed = False
+
+    for idx, decoy_prefix in enumerate(decoy_prefixes):
+        _set_decoy_prefix(decoy_prefix, logger)
+        combos = discover_combos(run_root, post_run_root)
+        logger.info(
+            "%s action=discover status=ok combos=%d decoy_prefix=%s",
+            COMPONENT,
+            len(combos),
+            decoy_prefix,
         )
-        if not receptor.exists():
-            logger.error(
-                "%s action=score status=skip reason=missing_receptor pdb_id=%s variant=%s ph=%s receptor=%s",
-                COMPONENT,
-                pdb_id,
-                variant,
-                ph,
-                receptor,
-            )
-            skipped_missing_receptor += 1
-            continue
-        consensus_csv = (
-            run_root / pdb_id / variant / ph / "consensus_docking_scores.csv"
-        )
-        if pdb_id not in control_cache:
-            control_cache[pdb_id] = _load_control_bases(processed_root, pdb_id, logger)
-        if not consensus_csv.exists() or consensus_csv.stat().st_size == 0:
+
+        if not args.skip_autofix:
+            if not ran_pose_bust and _posebusters_missing(post_run_root, combos):
+                _run_pose_bust(args.run_id, repo_root, args.overwrite, logger)
+                ran_pose_bust = True
+            if _prep_missing(run_root, post_run_root, combos):
+                _run_prep_for_scorch(
+                    args.run_id,
+                    repo_root,
+                    args.overwrite,
+                    logger,
+                    decoy_prefix=decoy_prefix,
+                )
+
+        combos = discover_combos(run_root, post_run_root)
+        if not combos:
             logger.warning(
-                "%s action=select status=skip reason=missing_consensus pdb_id=%s variant=%s ph=%s path=%s",
+                "%s action=discover status=skip reason=no_combos run_id=%s decoy_prefix=%s",
                 COMPONENT,
-                pdb_id,
-                variant,
-                ph,
-                consensus_csv,
+                args.run_id,
+                decoy_prefix,
             )
-            skipped_missing_consensus += 1
             continue
-        mode_dirs = _discover_mode_dirs(combo, run_root, post_run_root, specs, logger)
-        if mode_dirs["dud"]:
-            logger.info(
-                "[scorch.run] mode=dud stage_root=%s n_allowed=%d",
-                mode_dirs["dud"][0],
-                len(control_cache[pdb_id]),
+
+        include_fda = override_prefix is not None or idx == 0
+        tasks: List[
+            Tuple[
+                StageSpec,
+                Tuple[str, str, str],
+                Path,
+                Set[str],
+                Set[str],
+                str,
+                Optional[Sequence[str]],
+                Optional[Path],
+            ]
+        ] = []
+        skipped_missing_receptor = 0
+        skipped_missing_consensus = 0
+        combos_with_tasks: Set[Tuple[str, str, str]] = set()
+        combo_modes: Dict[Tuple[str, str, str], Set[str]] = {}
+        control_cache: Dict[str, Set[str]] = {}
+        for combo in sorted(combos):
+            pdb_id, variant, ph = combo
+            receptor = (
+                processed_root
+                / pdb_id
+                / variant
+                / "receptor"
+                / "ph_ensemble"
+                / f"{pdb_id}_{ph}.pdbqt"
             )
-            for spec in specs:
-                if spec.source in {"vina", "gnina"}:
-                    stage_root = run_root / pdb_id / variant / ph
-                else:
-                    stage_root = post_run_root / pdb_id / variant / ph
-                stage_dirs_override: Sequence[str] = stage_dir_candidates(
-                    spec.source, "dud", stage_root
-                )
-                score_csv, score_cols, higher_is_better = _score_csv_for_spec(
-                    run_root, combo, spec, "dud"
-                )
-                allowed_bases, n_pool, k, controls_total = (
-                    _select_top_bases_from_score_csv(
-                        score_csv if score_csv is not None else Path(""),
-                        top_fraction,
-                        control_cache[pdb_id],
-                        higher_is_better=higher_is_better,
-                        logger=logger,
-                        score_cols=score_cols,
-                    )
-                    if score_csv is not None
-                    else (set(control_cache[pdb_id]), 0, 0, len(control_cache[pdb_id]))
-                )
-                logger.info(
-                    "[select.pool] mode=dud engine=%s n_controls=%d n_pool=%d k=%d",
-                    spec.source,
-                    controls_total,
-                    n_pool,
-                    k,
-                )
-                logger.info(
-                    "[select.allowed] mode=dud engine=%s score_csv=%s n_candidates=%d n_allowed=%d",
-                    spec.source,
-                    score_csv if score_csv is not None else "None",
-                    n_pool,
-                    len(allowed_bases),
-                )
-                logger.info(
-                    "%s action=select source=%s run_mode=dud pdb_id=%s variant=%s ph=%s score_csv=%s n_candidates=%d k=%d controls=%d allowed_total=%d",
+            if not receptor.exists():
+                logger.error(
+                    "%s action=score status=skip reason=missing_receptor pdb_id=%s variant=%s ph=%s receptor=%s",
                     COMPONENT,
-                    spec.source,
                     pdb_id,
                     variant,
                     ph,
-                    score_csv if score_csv is not None else "None",
-                    n_pool,
-                    k,
-                    controls_total,
-                    len(allowed_bases),
+                    receptor,
                 )
-                tasks.append(
-                    (
-                        spec,
-                        combo,
-                        receptor,
-                        allowed_bases,
-                        control_cache[pdb_id],
-                        "dud",
-                        stage_dirs_override,
-                        score_csv,
-                    )
-                )
-            combo_modes.setdefault(combo, set()).add("dud")
-        if mode_dirs["fda"]:
-            logger.info(
-                "[scorch.run] mode=fda stage_root=%s n_allowed=%d",
-                mode_dirs["fda"][0],
-                len(control_cache[pdb_id]),
+                skipped_missing_receptor += 1
+                continue
+            consensus_csv = (
+                run_root / pdb_id / variant / ph / "consensus_docking_scores.csv"
             )
-            for spec in specs:
-                score_csv, score_cols, higher_is_better = _score_csv_for_spec(
-                    run_root, combo, spec, "fda"
+            if pdb_id not in control_cache:
+                control_cache[pdb_id] = _load_control_bases(
+                    processed_root, pdb_id, logger
                 )
-                allowed_bases, n_pool, k, controls_total = (
-                    _select_top_bases_from_score_csv(
-                        score_csv if score_csv is not None else Path(""),
-                        top_fraction,
-                        control_cache[pdb_id],
-                        higher_is_better=higher_is_better,
-                        logger=logger,
-                        score_cols=score_cols,
-                    )
-                    if score_csv is not None
-                    else (set(control_cache[pdb_id]), 0, 0, len(control_cache[pdb_id]))
-                )
-                logger.info(
-                    "[select.pool] mode=fda engine=%s n_controls=%d n_pool=%d k=%d",
-                    spec.source,
-                    controls_total,
-                    n_pool,
-                    k,
-                )
-                logger.info(
-                    "[select.allowed] mode=fda engine=%s score_csv=%s n_candidates=%d n_allowed=%d",
-                    spec.source,
-                    score_csv if score_csv is not None else "None",
-                    n_pool,
-                    len(allowed_bases),
-                )
-                logger.info(
-                    "%s action=select source=%s run_mode=fda pdb_id=%s variant=%s ph=%s score_csv=%s n_candidates=%d k=%d controls=%d allowed_total=%d",
+            if not consensus_csv.exists() or consensus_csv.stat().st_size == 0:
+                logger.warning(
+                    "%s action=select status=skip reason=missing_consensus pdb_id=%s variant=%s ph=%s path=%s",
                     COMPONENT,
-                    spec.source,
                     pdb_id,
                     variant,
                     ph,
-                    score_csv if score_csv is not None else "None",
-                    n_pool,
-                    k,
-                    controls_total,
-                    len(allowed_bases),
+                    consensus_csv,
                 )
-                tasks.append(
-                    (
-                        spec,
-                        combo,
-                        receptor,
-                        allowed_bases,
-                        control_cache[pdb_id],
-                        "fda",
-                        None,
-                        score_csv,
+                skipped_missing_consensus += 1
+                continue
+            mode_dirs = _discover_mode_dirs(combo, run_root, post_run_root, specs, logger)
+            if mode_dirs["dud"]:
+                logger.info(
+                    "[scorch.run] mode=dud stage_root=%s n_allowed=%d",
+                    mode_dirs["dud"][0],
+                    len(control_cache[pdb_id]),
+                )
+                for spec in specs:
+                    if spec.source in {"vina", "gnina"}:
+                        stage_root = run_root / pdb_id / variant / ph
+                    else:
+                        stage_root = post_run_root / pdb_id / variant / ph
+                    stage_dirs_override: Sequence[str] = stage_dir_candidates(
+                        spec.source, "dud", stage_root
                     )
+                    score_csv, score_cols, higher_is_better = _score_csv_for_spec(
+                        run_root, combo, spec, "dud"
+                    )
+                    allowed_bases, n_pool, k, controls_total = (
+                        _select_top_bases_from_score_csv(
+                            score_csv if score_csv is not None else Path(""),
+                            top_fraction,
+                            control_cache[pdb_id],
+                            higher_is_better=higher_is_better,
+                            logger=logger,
+                            score_cols=score_cols,
+                        )
+                        if score_csv is not None
+                        else (
+                            set(control_cache[pdb_id]),
+                            0,
+                            0,
+                            len(control_cache[pdb_id]),
+                        )
+                    )
+                    logger.info(
+                        "[select.pool] mode=dud engine=%s n_controls=%d n_pool=%d k=%d",
+                        spec.source,
+                        controls_total,
+                        n_pool,
+                        k,
+                    )
+                    logger.info(
+                        "[select.allowed] mode=dud engine=%s score_csv=%s n_candidates=%d n_allowed=%d",
+                        spec.source,
+                        score_csv if score_csv is not None else "None",
+                        n_pool,
+                        len(allowed_bases),
+                    )
+                    logger.info(
+                        "%s action=select source=%s run_mode=dud pdb_id=%s variant=%s ph=%s score_csv=%s n_candidates=%d k=%d controls=%d allowed_total=%d",
+                        COMPONENT,
+                        spec.source,
+                        pdb_id,
+                        variant,
+                        ph,
+                        score_csv if score_csv is not None else "None",
+                        n_pool,
+                        k,
+                        controls_total,
+                        len(allowed_bases),
+                    )
+                    tasks.append(
+                        (
+                            spec,
+                            combo,
+                            receptor,
+                            allowed_bases,
+                            control_cache[pdb_id],
+                            "dud",
+                            stage_dirs_override,
+                            score_csv,
+                        )
+                    )
+                combo_modes.setdefault(combo, set()).add("dud")
+            if include_fda and mode_dirs["fda"]:
+                logger.info(
+                    "[scorch.run] mode=fda stage_root=%s n_allowed=%d",
+                    mode_dirs["fda"][0],
+                    len(control_cache[pdb_id]),
                 )
-            combo_modes.setdefault(combo, set()).add("fda")
-        combos_with_tasks.add(combo)
+                for spec in specs:
+                    score_csv, score_cols, higher_is_better = _score_csv_for_spec(
+                        run_root, combo, spec, "fda"
+                    )
+                    allowed_bases, n_pool, k, controls_total = (
+                        _select_top_bases_from_score_csv(
+                            score_csv if score_csv is not None else Path(""),
+                            top_fraction,
+                            control_cache[pdb_id],
+                            higher_is_better=higher_is_better,
+                            logger=logger,
+                            score_cols=score_cols,
+                        )
+                        if score_csv is not None
+                        else (
+                            set(control_cache[pdb_id]),
+                            0,
+                            0,
+                            len(control_cache[pdb_id]),
+                        )
+                    )
+                    logger.info(
+                        "[select.pool] mode=fda engine=%s n_controls=%d n_pool=%d k=%d",
+                        spec.source,
+                        controls_total,
+                        n_pool,
+                        k,
+                    )
+                    logger.info(
+                        "[select.allowed] mode=fda engine=%s score_csv=%s n_candidates=%d n_allowed=%d",
+                        spec.source,
+                        score_csv if score_csv is not None else "None",
+                        n_pool,
+                        len(allowed_bases),
+                    )
+                    logger.info(
+                        "%s action=select source=%s run_mode=fda pdb_id=%s variant=%s ph=%s score_csv=%s n_candidates=%d k=%d controls=%d allowed_total=%d",
+                        COMPONENT,
+                        spec.source,
+                        pdb_id,
+                        variant,
+                        ph,
+                        score_csv if score_csv is not None else "None",
+                        n_pool,
+                        k,
+                        controls_total,
+                        len(allowed_bases),
+                    )
+                    tasks.append(
+                        (
+                            spec,
+                            combo,
+                            receptor,
+                            allowed_bases,
+                            control_cache[pdb_id],
+                            "fda",
+                            None,
+                            score_csv,
+                        )
+                    )
+                combo_modes.setdefault(combo, set()).add("fda")
+            combos_with_tasks.add(combo)
 
-    total_jobs = len(tasks)
-    completed = 0
-    failed_jobs = 0
-    combos_attempted = len(combos_with_tasks)
+        total_jobs = len(tasks)
+        completed = 0
+        failed_jobs = 0
+        combos_attempted = len(combos_with_tasks)
 
-    if args.jobs <= 1:
-        for (
-            spec,
-            combo,
-            receptor,
-            allowed_bases,
-            control_bases,
-            run_mode,
-            stage_dirs_override,
-            score_csv,
-        ) in tasks:
-            ok, _ = _score_stage(
+        if args.jobs <= 1:
+            for (
                 spec,
                 combo,
-                run_root,
-                post_run_root,
                 receptor,
-                args.threads,
-                args.overwrite,
-                logger,
                 allowed_bases,
-                control_bases=control_bases,
-                run_mode=run_mode,
-                stage_dirs_override=stage_dirs_override,
-                score_csv=score_csv,
-            )
-            if ok:
-                completed += 1
-            else:
-                failed_jobs += 1
-    else:
-        with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
-            future_map = {
-                pool.submit(
-                    _score_stage,
+                control_bases,
+                run_mode,
+                stage_dirs_override,
+                score_csv,
+            ) in tasks:
+                ok, _ = _score_stage(
                     spec,
                     combo,
                     run_root,
@@ -2104,120 +2228,168 @@ def main() -> int:
                     args.overwrite,
                     logger,
                     allowed_bases,
-                    control_bases,
-                    run_mode,
-                    stage_dirs_override,
-                    score_csv,
-                ): (spec, combo, run_mode)
-                for spec, combo, receptor, allowed_bases, control_bases, run_mode, stage_dirs_override, score_csv in tasks
-            }
-            for future in as_completed(future_map):
-                try:
-                    ok, _ = future.result()
-                    if ok:
-                        completed += 1
-                    else:
-                        failed_jobs += 1
-                except Exception as exc:  # defensive
+                    control_bases=control_bases,
+                    run_mode=run_mode,
+                    stage_dirs_override=stage_dirs_override,
+                    score_csv=score_csv,
+                )
+                if ok:
+                    completed += 1
+                else:
                     failed_jobs += 1
-                    spec, combo, run_mode = future_map[future]
-                    logger.error(
-                        "%s action=score status=failed reason=worker_exception source=%s stage=%s combo=%s run_mode=%s error=%s",
-                        COMPONENT,
-                        spec.source,
-                        spec.stage_dir,
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+                future_map = {
+                    pool.submit(
+                        _score_stage,
+                        spec,
                         combo,
+                        run_root,
+                        post_run_root,
+                        receptor,
+                        args.threads,
+                        args.overwrite,
+                        logger,
+                        allowed_bases,
+                        control_bases,
                         run_mode,
-                        exc,
-                    )
+                        stage_dirs_override,
+                        score_csv,
+                    ): (spec, combo, run_mode)
+                    for spec, combo, receptor, allowed_bases, control_bases, run_mode, stage_dirs_override, score_csv in tasks
+                }
+                for future in as_completed(future_map):
+                    try:
+                        ok, _ = future.result()
+                        if ok:
+                            completed += 1
+                        else:
+                            failed_jobs += 1
+                    except Exception as exc:  # defensive
+                        failed_jobs += 1
+                        spec, combo, run_mode = future_map[future]
+                        logger.error(
+                            "%s action=score status=failed reason=worker_exception source=%s stage=%s combo=%s run_mode=%s error=%s",
+                            COMPONENT,
+                            spec.source,
+                            spec.stage_dir,
+                            combo,
+                            run_mode,
+                            exc,
+                        )
 
-    decoy_prefix = _decoy_prefix_value()
-    for combo in sorted(combos_with_tasks):
-        modes = combo_modes.get(combo, {"fda"})
-        fda_all = None
-        dud_all = None
-        for mode in sorted(modes):
-            out_name = (
-                "scorch_scores_all.csv"
-                if mode == "fda"
-                else f"{decoy_prefix}_scorch_scores_all.csv"
-            )
-            agg_path = _aggregate_combo(
-                post_run_root, specs, combo, logger, run_mode=mode, output_name=out_name
-            )
-            if mode == "fda":
-                fda_all = agg_path
-            elif mode == "dud":
-                dud_all = agg_path
-        chosen_all = fda_all
-        if chosen_all is None:
-            # fall back to any mode we aggregated
+        prefix_value = _decoy_prefix_value()
+        for combo in sorted(combos_with_tasks):
+            modes = combo_modes.get(combo, {"fda"})
+            fda_all = None
+            dud_all = None
             for mode in sorted(modes):
-                alt = (
+                out_name = (
                     "scorch_scores_all.csv"
                     if mode == "fda"
-                    else f"{decoy_prefix}_scorch_scores_all.csv"
+                    else f"{prefix_value}_scorch_scores_all.csv"
                 )
-                candidate = post_run_root / combo[0] / combo[1] / combo[2] / alt
+                agg_path = _aggregate_combo(
+                    post_run_root,
+                    specs,
+                    combo,
+                    logger,
+                    run_mode=mode,
+                    output_name=out_name,
+                )
+                if mode == "fda":
+                    fda_all = agg_path
+                elif mode == "dud":
+                    dud_all = agg_path
+            if fda_all is None:
+                candidate = (
+                    post_run_root / combo[0] / combo[1] / combo[2] / "scorch_scores_all.csv"
+                )
                 if candidate.exists():
-                    chosen_all = candidate
-                    break
-        if chosen_all and rerank_consensus_with_scorch and find_consensus_csv:
-            try:
-                pdb_id, variant, ph = combo
-                dock_combo_dir = run_root / pdb_id / variant / ph
-                consensus_csv = find_consensus_csv(dock_combo_dir)
-                if not consensus_csv:
+                    fda_all = candidate
+            if dud_all is None:
+                candidate = (
+                    post_run_root
+                    / combo[0]
+                    / combo[1]
+                    / combo[2]
+                    / f"{prefix_value}_scorch_scores_all.csv"
+                )
+                if candidate.exists():
+                    dud_all = candidate
+            chosen_all = fda_all
+            if chosen_all is None:
+                # fall back to any mode we aggregated
+                for mode in sorted(modes):
+                    alt = (
+                        "scorch_scores_all.csv"
+                        if mode == "fda"
+                        else f"{prefix_value}_scorch_scores_all.csv"
+                    )
+                    candidate = post_run_root / combo[0] / combo[1] / combo[2] / alt
+                    if candidate.exists():
+                        chosen_all = candidate
+                        break
+            if chosen_all and rerank_consensus_with_scorch and find_consensus_csv:
+                try:
+                    pdb_id, variant, ph = combo
+                    dock_combo_dir = run_root / pdb_id / variant / ph
+                    consensus_csv = find_consensus_csv(dock_combo_dir)
+                    if not consensus_csv:
+                        logger.warning(
+                            "%s action=rerank status=skip reason=missing_consensus pdb_id=%s variant=%s ph=%s dock_dir=%s",
+                            COMPONENT,
+                            pdb_id,
+                            variant,
+                            ph,
+                            dock_combo_dir,
+                        )
+                    else:
+                        out_csv = chosen_all.parent / "consensus_reranked_scorch.csv"
+                        scorch_inputs = [p for p in (fda_all, dud_all) if p is not None]
+                        if not scorch_inputs:
+                            scorch_inputs = [chosen_all]
+                        rerank_consensus_with_scorch(
+                            consensus_csv,
+                            scorch_inputs,
+                            out_csv,
+                            logger,
+                            overwrite=args.overwrite,
+                            decoy_prefix=prefix_value,
+                        )
+                except Exception as exc:
                     logger.warning(
-                        "%s action=rerank status=skip reason=missing_consensus pdb_id=%s variant=%s ph=%s dock_dir=%s",
+                        "%s action=rerank status=skip reason=exception combo=%s error=%s",
                         COMPONENT,
-                        pdb_id,
-                        variant,
-                        ph,
-                        dock_combo_dir,
+                        combo,
+                        exc,
                     )
-                else:
-                    out_csv = chosen_all.parent / "consensus_reranked_scorch.csv"
-                    scorch_inputs = [p for p in (fda_all, dud_all) if p is not None]
-                    if not scorch_inputs:
-                        scorch_inputs = [chosen_all]
-                    rerank_consensus_with_scorch(
-                        consensus_csv,
-                        scorch_inputs,
-                        out_csv,
-                        logger,
-                        overwrite=args.overwrite,
-                        decoy_prefix=decoy_prefix,
-                    )
-            except Exception as exc:
+            if fda_all and dud_all:
+                annotate_scorch_t_scores(fda_all, dud_all, logger)
+            elif chosen_all and not rerank_consensus_with_scorch:
                 logger.warning(
-                    "%s action=rerank status=skip reason=exception combo=%s error=%s",
+                    "%s action=rerank status=skip reason=reranker_import_failed combo=%s",
                     COMPONENT,
                     combo,
-                    exc,
                 )
-        if fda_all and dud_all:
-            annotate_scorch_t_scores(fda_all, dud_all, logger)
-        elif chosen_all and not rerank_consensus_with_scorch:
-            logger.warning(
-                "%s action=rerank status=skip reason=reranker_import_failed combo=%s",
-                COMPONENT,
-                combo,
-            )
 
-    logger.info(
-        "%s action=summary status=%s combos=%d combos_attempted=%d total_jobs=%d completed=%d failed=%d missing_receptor=%d missing_consensus=%d",
-        COMPONENT,
-        "ok" if failed_jobs == 0 else "failed",
-        len(combos),
-        combos_attempted,
-        total_jobs,
-        completed,
-        failed_jobs,
-        skipped_missing_receptor,
-        skipped_missing_consensus,
-    )
-    return 0 if failed_jobs == 0 else 1
+        logger.info(
+            "%s action=summary status=%s combos=%d combos_attempted=%d total_jobs=%d completed=%d failed=%d missing_receptor=%d missing_consensus=%d decoy_prefix=%s",
+            COMPONENT,
+            "ok" if failed_jobs == 0 else "failed",
+            len(combos),
+            combos_attempted,
+            total_jobs,
+            completed,
+            failed_jobs,
+            skipped_missing_receptor,
+            skipped_missing_consensus,
+            prefix_value,
+        )
+        if failed_jobs != 0:
+            any_failed = True
+
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":
