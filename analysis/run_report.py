@@ -185,6 +185,66 @@ def _resolve_filter_invalid(repo_root: Path, run_id: str) -> Optional[bool]:
     return None
 
 
+def _parse_report_limit(raw: object) -> Optional[int]:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw >= 0 else None
+    value = _strip_quotes(str(raw or "")).strip()
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        try:
+            parsed_float = float(value)
+        except ValueError:
+            return None
+        if not math.isfinite(parsed_float) or parsed_float < 0:
+            return None
+        if not float(parsed_float).is_integer():
+            return None
+        parsed = int(parsed_float)
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _read_report_limit_from_file(path: Path, key: str) -> Optional[int]:
+    if not path.exists():
+        return None
+    key_norm = key.strip().lower()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                k, raw_value = stripped.split("=", 1)
+                if k.strip().lower() != key_norm:
+                    continue
+                parsed = _parse_report_limit(raw_value)
+                if parsed is not None:
+                    return parsed
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_report_limit(repo_root: Path, run_id: str, key: str) -> Optional[int]:
+    candidates = [
+        repo_root / "data" / run_id / "config.txt",
+        repo_root / "data" / run_id / "config_snapshot.txt",
+        repo_root / "manifests" / run_id / "config.txt",
+        repo_root / "config.txt",
+    ]
+    for path in candidates:
+        parsed = _read_report_limit_from_file(path, key)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _parse_test_mode_value(raw: object) -> List[str]:
     if isinstance(raw, bool):
         return ["dud", "fda"] if raw else ["fda"]
@@ -291,6 +351,26 @@ def _norm_text(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _is_iupac_like(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    length = len(value)
+    if length < 25:
+        return False
+    digits = sum(ch.isdigit() for ch in value)
+    punct = sum(1 for ch in value if not ch.isalnum() and not ch.isspace())
+    if length >= 50:
+        return True
+    if length >= 35 and (punct / length) >= 0.12:
+        return True
+    if length >= 35 and (digits / length) >= 0.2:
+        return True
+    if length >= 30 and punct >= 6 and (digits / length) >= 0.1:
+        return True
+    return False
+
+
 def _parse_highlight_queries(value: Optional[str]) -> List[str]:
     if not value:
         return []
@@ -351,6 +431,14 @@ def _resolve_ligand_display(
     if has_ligand_display:
         display = _clean_text(row.get("ligand_display"))
         if display:
+            if not _is_iupac_like(display):
+                return display
+            if fda_index is not None:
+                alt = _clean_text(resolve_ligand_display_name(base, lig_file, fda_index))
+                if alt and not _is_iupac_like(alt):
+                    return alt
+            if base and not _is_iupac_like(base):
+                return base
             return display
     if fda_index is not None:
         display = _clean_text(resolve_ligand_display_name(base, lig_file, fda_index))
@@ -1398,7 +1486,7 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--decoy-prefix", default=None)
     parser.add_argument("--top-n", type=int, default=5)
-    parser.add_argument("--extended-top-n", type=int, default=15)
+    parser.add_argument("--extended-top-n", type=int, default=5)
     parser.add_argument("--notable-pct", type=float, default=0.01)
     parser.add_argument("--notable-max", type=int, default=25)
     parser.add_argument("--fda-mapping-csv", default=None)
@@ -1464,6 +1552,19 @@ def main() -> int:
     if filter_invalid is None:
         filter_invalid = False
 
+    top_n = args.top_n
+    extended_top_n = args.extended_top_n
+    if "--top-n" not in sys.argv:
+        cfg_top_n = _resolve_report_limit(repo_root, run_id, "REPORT_TOP_N")
+        if cfg_top_n is not None:
+            top_n = cfg_top_n
+    if "--extended-top-n" not in sys.argv:
+        cfg_extended = _resolve_report_limit(
+            repo_root, run_id, "REPORT_EXTENDED_TOP_N"
+        )
+        if cfg_extended is not None:
+            extended_top_n = cfg_extended
+
     out_path = repo_root / "data" / run_id / "report.yaml"
     if out_path.exists() and not args.overwrite:
         logger.info("%s action=skip reason=exists path=%s", COMPONENT, out_path)
@@ -1473,8 +1574,8 @@ def main() -> int:
         report = build_report(
             run_id,
             repo_root,
-            top_n=args.top_n,
-            extended_top_n=args.extended_top_n,
+            top_n=top_n,
+            extended_top_n=extended_top_n,
             notable_pct=notable_pct,
             notable_max=args.notable_max,
             decoy_prefix=decoy_prefix,

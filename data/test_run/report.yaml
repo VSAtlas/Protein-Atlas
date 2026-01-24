@@ -1,5 +1,5 @@
 run_id: test_run
-generated_at: '2026-01-23T18:32:15.893821Z'
+generated_at: '2026-01-24T00:42:54.408037Z'
 sources:
   master_rows_csv: data/test_run/master_rows.csv
   manifest_yaml: manifests/test_run/run_manifest.yaml
@@ -50,6 +50,8 @@ targets:
     highlights:
     - query: imatinib
       found: false
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
   TEST|HOLO|pH7_0:
     qc:
       ef1: 0.0
@@ -98,5 +100,7 @@ targets:
     highlights:
     - query: imatinib
       found: false
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
 ligands: {}
 multi_target_hits: []

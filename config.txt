@@ -304,9 +304,9 @@ CTRL_REDOCK_NMODES =9
 # GNINA follow-up docking toggle:
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
-USE_GNINA = false
-USE_LEDOCK = false
-USE_DOCK6 = false
+USE_GNINA = true
+USE_LEDOCK = true
+USE_DOCK6 = true
 USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
@@ -429,6 +429,17 @@ POLYPHARM_SELECTION_PCTS=1.0,0.15,0.10
 PERCENT_SEARCHED=0.1
 USE_DENDROGRAM=false
 FILTER_INVALID=false
+REPORT_TOP_N=5
+REPORT_EXTENDED_TOP_N=5
+# Heatmap color scale (absolute t_selected)
+HEATMAP_SCALE_MIN=-3
+HEATMAP_SCALE_MID=0
+HEATMAP_SCALE_MID2=1
+HEATMAP_SCALE_MAX=2
+HEATMAP_COLOR_MIN=black
+HEATMAP_COLOR_MID=green
+HEATMAP_COLOR_MID2=orange
+HEATMAP_COLOR_MAX=red
 
 # --- Single-ligand (optional) ---
 SINGLE_LIGAND = 
@@ -440,7 +451,7 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
-TEST_MODE_ENABLE = fda_dud+fda
+TEST_MODE_ENABLE = test_library_10+dud
 DUD_PREFIX=fda_dud
 TEST_LIBRARY_MAP = {
     "TEST": "test_library_10",
@@ -653,3 +664,5 @@ LOG_LEVEL_FILE = all
 LOG_LEVEL_CONSOLE = all
 LOG_TOPICS = all
 QUIET_CONSOLE = false
+DEEPCOY_DECOYS_PER_ACTIVE=1
+DEEPCOY_DECOYS_PER_ACTIVE=1

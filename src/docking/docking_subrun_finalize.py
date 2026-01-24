@@ -823,11 +823,28 @@ def finalize_ph_subrun(
     has_dud = "dud" in tokens_now
 
     if run_mode == "fda" and has_dud:
+        decoy_csv_prefix = "dud_"
+        try:
+            from .docking_subruns import subruns_for_tokens
+
+            for subrun in subruns_for_tokens(tokens_now):
+                if subrun.run_mode == "dud":
+                    decoy_csv_prefix = subrun.csv_prefix
+                    break
+        except Exception as e:
+            logger.warning(
+                "[t-score.warn] pdb_id=%s ph=%s reason=decoy_prefix_lookup_failed error=%s",
+                paths.pdb_id,
+                ph_label if ph_label else "base",
+                e,
+            )
         try:
             annotate_fda_long_csv_with_t_scores_vs_decoys(
                 cfg,
                 paths.pdb_id,
                 ph_label=ph_label,
+                csv_prefix=csv_prefix,
+                decoy_csv_prefix=decoy_csv_prefix,
                 logger=logger,
             )
         except Exception as e:
@@ -842,6 +859,8 @@ def finalize_ph_subrun(
                 cfg,
                 paths.pdb_id,
                 ph_label=ph_label,
+                csv_prefix=csv_prefix,
+                decoy_csv_prefix=decoy_csv_prefix,
                 logger=logger,
             )
         except Exception as e:
@@ -856,6 +875,8 @@ def finalize_ph_subrun(
                 cfg,
                 paths.pdb_id,
                 ph_label=ph_label,
+                csv_prefix=csv_prefix,
+                decoy_csv_prefix=decoy_csv_prefix,
                 logger=logger,
             )
         except Exception as e:
@@ -875,6 +896,7 @@ def finalize_ph_subrun(
             variant_env=variant_env,
             variant_label=variant_label,
             csv_prefix=csv_prefix,
+            run_mode=run_mode,
             logger=logger,
         )
     except Exception:

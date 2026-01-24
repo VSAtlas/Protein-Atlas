@@ -632,14 +632,13 @@ def run_dock6_for_stage(
     )
     if output_root is not None:
         dock_dest = dock_root
-    elif stage_key == "stage1":
-        dock_dest = dock_root / "dock6_stage1"
-    elif stage_key == "stage2":
-        dock_dest = dock_root / "dock6_stage2"
-    elif stage_key == "stage3":
-        dock_dest = dock_root / "dock6_stage3"
     else:
-        dock_dest = dock_root / f"dock6_{stage_key}"
+        stage_dir_name = (
+            f"dock6_{stage_name}"
+            if stage_name
+            else f"dock6_{stage_key or 'stage'}"
+        )
+        dock_dest = dock_root / stage_dir_name
     dock_dest.mkdir(parents=True, exist_ok=True)
 
     for fname in all_artifacts:
@@ -687,7 +686,7 @@ def write_dock6_scores_csv(
                 stage_dict[lig_key] = ""
         flat[stage_name] = stage_dict
 
-    summary_path = dock_dir / "dock6_docking_score_summary.csv"
+    summary_path = dock_dir / f"{csv_prefix}dock6_docking_score_summary.csv"
     write_score_summary_to_csv(
         flat,
         output_path=summary_path,

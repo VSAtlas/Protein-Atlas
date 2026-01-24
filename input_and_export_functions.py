@@ -934,14 +934,17 @@ def annotate_fda_long_csv_with_t_scores_vs_decoys(
     cfg: Dict[str, Any],
     pdb_id: str,
     ph_label: Optional[str] = None,
+    *,
+    csv_prefix: str = "",
+    decoy_csv_prefix: str = "dud_",
     logger=None,
 ) -> Optional[str]:
     """
     Post-processing helper used by docking.py when TEST_MODE_ENABLE includes DUD
     and we are running the FDA subrun.
 
-    It reads dud_docking_score_long.csv to compute mean/std of best decoy scores,
-    then annotates docking_score_long.csv for FDA ligands with a t_vs_decoys column.
+    It reads <decoy_prefix>docking_score_long.csv to compute mean/std of best decoy scores,
+    then annotates <csv_prefix>docking_score_long.csv for FDA ligands with a t_vs_decoys column.
 
     Returns the path to the updated FDA long CSV, or None if skipped.
     """
@@ -961,8 +964,8 @@ def annotate_fda_long_csv_with_t_scores_vs_decoys(
     ph_token = (ph_label or "").strip() or None
     variant_root = Path(paths.docked_variant_root(var, ph_token))
 
-    dud_csv = variant_root / "dud_docking_score_long.csv"
-    fda_csv = variant_root / "docking_score_long.csv"
+    dud_csv = variant_root / f"{decoy_csv_prefix}docking_score_long.csv"
+    fda_csv = variant_root / f"{csv_prefix}docking_score_long.csv"
 
     if not dud_csv.exists() or not fda_csv.exists():
         if logger:

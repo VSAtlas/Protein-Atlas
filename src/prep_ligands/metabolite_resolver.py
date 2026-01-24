@@ -71,6 +71,17 @@ _USE_SCAFFOLD = str(_cfg.get("METABO_USE_SCAFFOLD_MATCH", "true")).lower() in (
 _WS = re.compile(r"\s+")
 _PUNC = re.compile(r"[-_/\\,;:\|\[\]\(\)\{\}\.\+\*'\"]+")
 _RDK_RE = re.compile(r"rdk[_-]?(\d+)", re.IGNORECASE)
+_BAD_SYNONYM_PREFIXES = (
+    "CHEMBL",
+    "CID",
+    "UNII",
+    "SCHEMBL",
+    "CHEBI",
+    "ZINC",
+    "PUBCHEM",
+    "NCI",
+    "NSC",
+)
 
 
 def _norm(s: Optional[str]) -> str:
@@ -93,6 +104,123 @@ def _extract_rdk_id(value: Optional[str]) -> Optional[str]:
     if not match:
         return None
     return f"rdk_{match.group(1).zfill(7)}"
+
+
+def _row_value(row: Dict[str, Any], key: str) -> str:
+    value = row.get(key)
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return ""
+    return text
+
+
+def _pick_first(row: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = _row_value(row, key)
+        if value:
+            return value
+    return ""
+
+
+def _collect_values(row: Dict[str, Any], *keys: str) -> List[str]:
+    values = []
+    for key in keys:
+        value = _row_value(row, key)
+        if value:
+            values.append(value)
+    return values
+
+
+def _digit_ratio(text: str) -> float:
+    if not text:
+        return 1.0
+    digits = sum(ch.isdigit() for ch in text)
+    return digits / len(text)
+
+
+def _is_registry_like(text: str) -> bool:
+    if not text:
+        return False
+    upper = text.strip().upper()
+    for prefix in _BAD_SYNONYM_PREFIXES:
+        if upper.startswith(prefix):
+            return True
+    if re.match(r"^\d{2,7}-\d{2}-\d$", text.strip()):
+        return True
+    return False
+
+
+def _is_iupac_like(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    length = len(value)
+    if length < 25:
+        return False
+    digits = sum(ch.isdigit() for ch in value)
+    punct = sum(1 for ch in value if not ch.isalnum() and not ch.isspace())
+    if length >= 50:
+        return True
+    if length >= 35 and (punct / length) >= 0.12:
+        return True
+    if length >= 35 and (digits / length) >= 0.2:
+        return True
+    if length >= 30 and punct >= 6 and (digits / length) >= 0.1:
+        return True
+    return False
+
+
+def _choose_pubchem_synonym(raw: str) -> str:
+    if not raw:
+        return ""
+    for part in raw.split(";"):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        if len(candidate) > 32:
+            continue
+        if not re.search(r"[A-Za-z]", candidate):
+            continue
+        if _digit_ratio(candidate) > 0.4:
+            continue
+        if _is_registry_like(candidate):
+            continue
+        if _is_iupac_like(candidate):
+            continue
+        return candidate
+    return ""
+
+
+def _select_preferred_name(row: Dict[str, Any], rdk_id: str) -> str:
+    name = _pick_first(
+        row,
+        "rxnorm_generic_name",
+        "drugcentral_generic_name",
+        "generic_name",
+        "display_name",
+        "pubchem_record_title",
+        "pubchem_name",
+        "pubchem_iupac_name",
+        "remark_name",
+        "sdf_title",
+    )
+    if not name:
+        return rdk_id or "unknown"
+
+    if _is_iupac_like(name):
+        record_title = _pick_first(row, "pubchem_record_title")
+        if record_title and not _is_iupac_like(record_title):
+            return record_title
+        display_name = _pick_first(row, "display_name")
+        if display_name and not _is_iupac_like(display_name):
+            return display_name
+        synonym = _choose_pubchem_synonym(_pick_first(row, "pubchem_synonyms"))
+        if synonym:
+            return synonym
+
+    return name
 
 
 # --------------------------
@@ -145,73 +273,63 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
     with open(mapping_csv, newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
-
-            def pick(*alts):
-                for a in alts:
-                    if a in row and row[a]:
-                        return row[a]
-                return None
-
-            def collect(*alts):
-                values = []
-                for a in alts:
-                    if a in row and row[a]:
-                        values.append(row[a])
-                return values
-
-            scheme = pick("scheme") or ""
-            rdk_id = _extract_rdk_id(pick("rdk_id", "rdkid", "ligand_id") or "")
+            scheme = _pick_first(row, "scheme")
+            rdk_id = _extract_rdk_id(
+                _pick_first(row, "rdk_id", "rdkid", "ligand_id")
+            )
             if not rdk_id:
-                rdk_id = _extract_rdk_id(pick("path", "sdf_title", "remark_name") or "")
+                rdk_id = _extract_rdk_id(
+                    _pick_first(row, "path", "sdf_title", "remark_name")
+                )
             if not rdk_id and str(scheme).strip().lower() == "rdk":
-                file_num = pick("file_num")
-                if file_num is not None and str(file_num).strip():
+                file_num = _pick_first(row, "file_num")
+                if file_num:
                     try:
                         rdk_id = f"rdk_{int(float(str(file_num))):07d}"
                     except ValueError:
                         rdk_id = None
             if not rdk_id:
-                raw_id = pick("id")
+                raw_id = _pick_first(row, "id")
                 rdk_id = _extract_rdk_id(raw_id) or (raw_id or "")
 
-            name = (
-                pick(
+            name = _select_preferred_name(row, rdk_id)
+            syn_fields = []
+            syn_fields.extend(
+                _collect_values(row, "synonyms", "alias", "alts", "pubchem_synonyms")
+            )
+            syn_fields.extend(_collect_values(row, "display_name"))
+            syn_fields.extend(
+                _collect_values(
+                    row, "brand_names", "rxnorm_brand_names", "drugcentral_brand_names"
+                )
+            )
+            syn_fields.extend(
+                _collect_values(
+                    row,
+                    "generic_name",
                     "rxnorm_generic_name",
                     "drugcentral_generic_name",
-                    "generic_name",
+                )
+            )
+            syn_fields.extend(
+                _collect_values(
+                    row,
                     "pubchem_name",
                     "pubchem_record_title",
-                    "display_name",
-                    "drug",
-                    "name",
-                    "preferred_name",
+                    "pubchem_iupac_name",
                     "remark_name",
                     "sdf_title",
                 )
-                or rdk_id
-                or "unknown"
             )
-            syn_fields = []
-            syn_fields.extend(collect("synonyms", "alias", "alts", "pubchem_synonyms"))
-            syn_fields.extend(collect("display_name"))
-            syn_fields.extend(
-                collect("brand_names", "rxnorm_brand_names", "drugcentral_brand_names")
-            )
-            syn_fields.extend(
-                collect("generic_name", "rxnorm_generic_name", "drugcentral_generic_name")
-            )
-            syn_fields.extend(
-                collect("pubchem_name", "pubchem_record_title", "remark_name", "sdf_title")
-            )
-            path_val = pick("path")
+            path_val = _pick_first(row, "path")
             if path_val:
                 base = os.path.basename(str(path_val))
                 stem = os.path.splitext(base)[0]
                 if stem:
                     syn_fields.append(stem)
             syns_raw = "|".join(str(s) for s in syn_fields if s)
-            smiles = pick("smiles", "smile", "smiles_rdkit")
-            inchikey = pick("inchikey", "inchi_key", "ikey")
+            smiles = _pick_first(row, "smiles", "smile", "smiles_rdkit")
+            inchikey = _pick_first(row, "inchikey", "inchi_key", "ikey")
             synonyms = [s.strip() for s in re.split(r"[|,;]", syns_raw) if s.strip()]
             if rdk_id:
                 idx.add(DrugRec(rdk_id, str(name), synonyms, smiles, inchikey))

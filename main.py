@@ -119,6 +119,16 @@ Benchmark Mode:
       Writes a 'bench_config.txt' snapshot to the config run dir.
       Cannot be combined with -resume.
 
+Benchmark Mode 2:
+  -bench2, --bench2
+      Enable benchmark mode using the same PDBs, DUD test mode, and
+      bench library mapping as -bench, but with Vina + SCORCH only:
+        - Forces GNINA/LEDOCK/DOCK6 disabled; SCORCH enabled
+        - Forces APO_HOLO_MODE=holo
+        - Forces PH_ENSEMBLE=True
+      Writes a 'bench2_config.txt' snapshot to the config run dir.
+      Cannot be combined with -resume or -bench.
+
 Single-ligand mode:
   --single PATTERN
       Enable SINGLE_LIGAND mode and restrict docking to a single ligand
@@ -337,6 +347,11 @@ def _bench_enabled(argv: list[str]) -> bool:
     return _cli_has(argv, "-bench") or _cli_has(argv, "--bench")
 
 
+def _bench2_enabled(argv: list[str]) -> bool:
+    """Check if -bench2 or --bench2 is present in arguments."""
+    return _cli_has(argv, "-bench2") or _cli_has(argv, "--bench2")
+
+
 def _apply_bench_overrides(cfg: ConfigDict) -> None:
     """Force benchmark configuration settings."""
     cfg["TEST_MODE_ENABLE"] = "dud"
@@ -366,6 +381,15 @@ def _apply_bench_overrides(cfg: ConfigDict) -> None:
         new_map[k] = v
         
     cfg["TEST_LIBRARY_MAP"] = new_map
+
+
+def _apply_bench2_overrides(cfg: ConfigDict) -> None:
+    """Force benchmark2 configuration settings (Vina + SCORCH only)."""
+    _apply_bench_overrides(cfg)
+    cfg["USE_GNINA"] = False
+    cfg["USE_LEDOCK"] = False
+    cfg["USE_DOCK6"] = False
+    cfg["USE_SCORCH"] = True
 
 
 def _log_cfg_emit_path_check(pdb_id, receptor_path, variant, legacy):
@@ -758,9 +782,18 @@ def main() -> None:
     is_resume = _cli_has(sys.argv, "-resume") or _cli_has(sys.argv, "--resume")
     cli_run_id = _cli_val(sys.argv, "--run-id") or _cli_val(sys.argv, "-run-id")
     is_bench = _bench_enabled(sys.argv)
+    is_bench2 = _bench2_enabled(sys.argv)
+
+    if is_bench and is_bench2:
+        print("ERROR: -bench and -bench2 cannot be combined", file=sys.stderr)
+        sys.exit(2)
 
     if is_resume and is_bench:
         print("ERROR: -bench cannot be used with -resume", file=sys.stderr)
+        sys.exit(2)
+
+    if is_resume and is_bench2:
+        print("ERROR: -bench2 cannot be used with -resume", file=sys.stderr)
         sys.exit(2)
 
     if is_resume and not cli_run_id:
@@ -768,7 +801,7 @@ def main() -> None:
         sys.exit(2)
 
     # Force PH_ENSEMBLE env var early if bench mode to bypass env override logic later
-    if is_bench:
+    if is_bench or is_bench2:
         os.environ["PH_ENSEMBLE"] = "1"
 
     run_id = _resolve_run_id(sys.argv)
@@ -785,6 +818,9 @@ def main() -> None:
     if is_bench:
         _apply_bench_overrides(cfg)
         logging.info("[bench] benchmark mode ENABLED. Overrides applied.")
+    elif is_bench2:
+        _apply_bench2_overrides(cfg)
+        logging.info("[bench2] benchmark2 mode ENABLED. Overrides applied (vina + scorch).")
 
     bootstrap_root_logging(cfg, log_path)
     logging.info("[probe.root] root-logger INFO now visible")
@@ -1016,6 +1052,28 @@ def main() -> None:
             logging.info("[bench] wrote snapshot config to %s", bench_snap_path)
         except Exception:
             logging.warning("[bench] failed to write snapshot config", exc_info=True)
+
+    if is_bench2 and "CONFIG_RUN_DIR" in cfg:
+        try:
+            bench2_snap_path = Path(cfg["CONFIG_RUN_DIR"]) / "bench2_config.txt"
+            lines = [
+                "# Benchmark2 Configuration Snapshot",
+                f"TEST_MODE_ENABLE={cfg.get('TEST_MODE_ENABLE')}",
+                "USE_GNINA=false",
+                "USE_LEDOCK=false",
+                "USE_DOCK6=false",
+                "USE_SCORCH=true",
+                "APO_HOLO_MODE=holo",
+                "PH_ENSEMBLE=true",
+                f"BENCH_PDBS={cfg.get('SPECIFIED_PROTEINS')}",
+            ]
+            for k, v in BENCH_TEST_LIBRARY_MAP.items():
+                lines.append(f"TEST_LIBRARY_MAP.{k}={v}")
+
+            bench2_snap_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            logging.info("[bench2] wrote snapshot config to %s", bench2_snap_path)
+        except Exception:
+            logging.warning("[bench2] failed to write snapshot config", exc_info=True)
 
     print(f"[cfg.run] run_id={cfg['RUN_ID']} run_dir={cfg['CONFIG_RUN_DIR']}")
     print(f"[ph.mode] PH_ENSEMBLE={cfg.get('PH_ENSEMBLE', False)}")

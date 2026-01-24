@@ -44,6 +44,9 @@ def annotate_ledock_fda_long_csv_with_t_scores_vs_decoys(
     cfg: Dict[str, Any],
     pdb_id: str,
     ph_label: Optional[str] = None,
+    *,
+    csv_prefix: str = "",
+    decoy_csv_prefix: str = "dud_",
     logger=None,
 ) -> Optional[str]:
     """
@@ -54,8 +57,8 @@ def annotate_ledock_fda_long_csv_with_t_scores_vs_decoys(
     ph_token = (ph_label or "").strip() or None
     variant_root = Path(paths.docked_variant_root(var, ph_token))
 
-    dud_csv = variant_root / "dud_ledock_docking_score_long.csv"
-    fda_csv = variant_root / "ledock_docking_score_long.csv"
+    dud_csv = variant_root / f"{decoy_csv_prefix}ledock_docking_score_long.csv"
+    fda_csv = variant_root / f"{csv_prefix}ledock_docking_score_long.csv"
 
     if not dud_csv.exists() or not fda_csv.exists():
         if logger:
@@ -488,14 +491,13 @@ def run_ledock_for_stage(
     )
     if output_root is not None:
         dok_dest = dock_root
-    elif stage_key == "stage1":
-        dok_dest = dock_root / "ledock_stage1"
-    elif stage_key == "stage2":
-        dok_dest = dock_root / "ledock_stage2"
-    elif stage_key == "stage3":
-        dok_dest = dock_root / "ledock_stage3"
     else:
-        dok_dest = dock_root / f"ledock_{stage_name}"
+        stage_dir_name = (
+            f"ledock_{stage_name}"
+            if stage_name
+            else f"ledock_{stage_key or 'stage'}"
+        )
+        dok_dest = dock_root / stage_dir_name
     stage_dir = dok_dest
     stage_dir.mkdir(parents=True, exist_ok=True)
 
@@ -862,7 +864,7 @@ def write_ledock_scores_csv(
     """
     Emit LeDock score CSVs:
 
-    - Wide summary: ledock_docking_score_summary.csv
+    - Wide summary: <prefix>ledock_docking_score_summary.csv
         One row per ligand, one column per LeDock stage.
         Cell values are best LeDock energies (kcal/mol), formatted to 2 decimals.
 
@@ -895,7 +897,7 @@ def write_ledock_scores_csv(
     variant_value = variant_env
     include_variant = bool(variant_value)
 
-    summary_name = "ledock_docking_score_summary.csv"
+    summary_name = f"{csv_prefix}ledock_docking_score_summary.csv"
     long_name = f"{csv_prefix}ledock_docking_score_long.csv"
 
     csv_out_wide = str(dock_dir / summary_name)

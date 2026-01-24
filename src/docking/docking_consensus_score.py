@@ -347,6 +347,7 @@ def compute_consensus_for_variant_ph(
     variant_env: Optional[str],
     variant_label: str,
     csv_prefix: str,
+    run_mode: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
 ) -> Optional[Path]:
     log = logger or logging.getLogger(__name__)
@@ -356,10 +357,6 @@ def compute_consensus_for_variant_ph(
     gnina_csv = variant_root / f"{csv_prefix}gnina_docking_score_long.csv"
     ledock_csv = variant_root / f"{csv_prefix}ledock_docking_score_long.csv"
     dock6_csv = variant_root / f"{csv_prefix}dock6_docking_score_long.csv"
-    decoy_vina_csv = variant_root / f"{csv_prefix}dud_docking_score_long.csv"
-    decoy_gnina_csv = variant_root / f"{csv_prefix}dud_gnina_docking_score_long.csv"
-    decoy_ledock_csv = variant_root / f"{csv_prefix}dud_ledock_docking_score_long.csv"
-    decoy_dock6_csv = variant_root / f"{csv_prefix}dud_dock6_docking_score_long.csv"
 
     if not vina_csv.exists():
         log.info("[consensus.skip] reason=missing_vina_csv path=%s", str(vina_csv))
@@ -379,55 +376,14 @@ def compute_consensus_for_variant_ph(
                 seen.add(lig_id)
                 ligand_ids.append(lig_id)
                 display_name_by_id[lig_id] = lig
-    include_decoys_raw = cfg.get("CONSENSUS_INCLUDE_DECOYS")
-    if include_decoys_raw is None:
-        include_decoys_raw = cfg.get("consensus_include_decoys")
-    include_decoys = (
-        True if include_decoys_raw is None else _to_bool_flag(include_decoys_raw)
-    )
-    fda_prefixes = _library_prefixes(cfg, "FDA_LIGAND_PREFIXES", FDA_PREFIX_DEFAULTS)
-    decoy_prefixes = _library_prefixes(
-        cfg, "DECOY_LIGAND_PREFIXES", DECOY_PREFIX_DEFAULTS
-    )
-
-    if include_decoys:
-        _collect_ligands_from_csv(
-            decoy_vina_csv,
-            ligand_ids,
-            display_name_by_id,
-            seen,
-            log,
-            label="vina_decoys",
-        )
-        _collect_ligands_from_csv(
-            decoy_gnina_csv,
-            ligand_ids,
-            display_name_by_id,
-            seen,
-            log,
-            label="gnina_decoys",
-        )
-        _collect_ligands_from_csv(
-            decoy_ledock_csv,
-            ligand_ids,
-            display_name_by_id,
-            seen,
-            log,
-            label="ledock_decoys",
-        )
-        _collect_ligands_from_csv(
-            decoy_dock6_csv,
-            ligand_ids,
-            display_name_by_id,
-            seen,
-            log,
-            label="dock6_decoys",
-        )
     if not ligand_ids:
         log.warning("[consensus.skip] reason=no_ligands path=%s", str(vina_csv))
         return None
 
     run_id = cfg.get("RUN_ID", "")
+    effective_run_mode = (
+        run_mode if run_mode else ("fda" if csv_prefix == "" else csv_prefix.rstrip("_"))
+    )
 
     vina_scores = _load_best_scores_per_ligand(
         vina_csv,
@@ -474,91 +430,6 @@ def compute_consensus_for_variant_ph(
             valid_key=None,
             higher_is_better=False,
             logger=log,
-        )
-
-    if include_decoys:
-        decoy_vina_scores = _load_best_scores_per_ligand(
-            decoy_vina_csv,
-            value_key="score",
-            valid_key="valid",
-            higher_is_better=False,
-            logger=log,
-        )
-        vina_scores = _merge_scores(
-            vina_scores,
-            decoy_vina_scores,
-            higher_is_better=False,
-            logger=log,
-            label="vina_decoys",
-        )
-
-        decoy_gnina_energy_scores = _load_best_scores_per_ligand(
-            decoy_gnina_csv,
-            value_key="gnina_minimized_affinity_kcal",
-            valid_key="valid",
-            higher_is_better=False,
-            logger=log,
-        )
-        gnina_energy_scores = _merge_scores(
-            gnina_energy_scores,
-            decoy_gnina_energy_scores,
-            higher_is_better=False,
-            logger=log,
-            label="gnina_energy_decoys",
-        )
-        decoy_cnn_key = _detect_cnn_key(decoy_gnina_csv)
-        if decoy_cnn_key:
-            decoy_cnn_scores = _load_best_scores_per_ligand(
-                decoy_gnina_csv,
-                value_key=decoy_cnn_key,
-                valid_key="valid",
-                higher_is_better=True,
-                logger=log,
-            )
-            cnn_scores = _merge_scores(
-                cnn_scores,
-                decoy_cnn_scores,
-                higher_is_better=True,
-                logger=log,
-                label="gnina_cnn_decoys",
-            )
-
-        decoy_ledock_scores = _load_best_scores_per_ligand(
-            decoy_ledock_csv,
-            value_key="ledock_best_score_kcal",
-            valid_key=None,
-            higher_is_better=False,
-            logger=log,
-        )
-        ledock_scores = _merge_scores(
-            ledock_scores,
-            decoy_ledock_scores,
-            higher_is_better=False,
-            logger=log,
-            label="ledock_decoys",
-        )
-
-        decoy_dock6_scores = _load_best_scores_per_ligand(
-            decoy_dock6_csv,
-            value_key="dock6_best_score_kcal",
-            valid_key=None,
-            higher_is_better=False,
-            logger=log,
-        )
-        if not decoy_dock6_scores and decoy_dock6_csv.exists():
-            decoy_dock6_scores = _load_best_scores_per_ligand(
-                decoy_dock6_csv,
-                value_key="dock6_grid_score",
-                valid_key=None,
-                higher_is_better=False,
-                logger=log,
-            )
-        dock6_scores = _merge_scores(
-            dock6_scores,
-            decoy_dock6_scores,
-            higher_is_better=False,
-            logger=log,
-            label="dock6_decoys",
         )
 
     p_vina = _percentiles_from_scores(ligand_ids, vina_scores, higher_is_better=False)
@@ -653,15 +524,15 @@ def compute_consensus_for_variant_ph(
             cnn_scores,
         )
         ligand_display = display_name_by_id.get(lig, lig)
-        library = _infer_library(ligand_display, fda_prefixes, decoy_prefixes)
         out_rows.append(
             {
                 "run_id": run_id,
+                "run_mode": effective_run_mode,
                 "pdb_id": paths.pdb_id,
                 "variant": variant_label,
                 "ph_label": ph_label or "",
                 "ligand": ligand_display,
-                "library": library,
+                "library": effective_run_mode,
                 "consensus_score": consensus_score,
                 "p_energy": p_energy.get(lig, 0.0),
                 "p_ledock": p_ledock.get(lig, 0.0),
@@ -720,7 +591,7 @@ def compute_consensus_for_variant_ph(
             ph_label or "",
         )
 
-    out_path = variant_root / "consensus_docking_scores.csv"
+    out_path = variant_root / f"{csv_prefix}consensus_docking_scores.csv"
     if out_rows:
         fieldnames = list(out_rows[0].keys())
         with out_path.open("w", newline="", encoding="utf-8") as f:

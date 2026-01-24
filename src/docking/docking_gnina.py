@@ -90,20 +90,23 @@ def annotate_gnina_fda_long_csv_with_t_scores_vs_decoys(
     cfg: Dict[str, Any],
     pdb_id: str,
     ph_label: Optional[str] = None,
+    *,
+    csv_prefix: str = "",
+    decoy_csv_prefix: str = "dud_",
     logger=None,
 ) -> Optional[str]:
     """
     Mirror the Vina T-score annotation, but using GNINA long CSVs:
-      - dud_gnina_docking_score_long.csv provides decoy stats (higher-is-better).
-      - gnina_docking_score_long.csv gets annotated with gnina_t_vs_decoys.
+      - <decoy_prefix>gnina_docking_score_long.csv provides decoy stats (higher-is-better).
+      - <csv_prefix>gnina_docking_score_long.csv gets annotated with gnina_t_vs_decoys.
     """
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
     ph_token = (ph_label or "").strip() or None
     variant_root = Path(paths.docked_variant_root(var, ph_token))
 
-    dud_csv = variant_root / "dud_gnina_docking_score_long.csv"
-    fda_csv = variant_root / "gnina_docking_score_long.csv"
+    dud_csv = variant_root / f"{decoy_csv_prefix}gnina_docking_score_long.csv"
+    fda_csv = variant_root / f"{csv_prefix}gnina_docking_score_long.csv"
 
     if not dud_csv.exists() or not fda_csv.exists():
         if logger:
@@ -545,7 +548,7 @@ def write_gnina_scores_csv(
     variant_value = variant_env
     include_variant = bool(variant_value)
 
-    summary_name = "gnina_docking_score_summary.csv"
+    summary_name = f"{csv_prefix}gnina_docking_score_summary.csv"
     long_name = f"{csv_prefix}gnina_docking_score_long.csv"
     csv_out_wide = str(dock_dir / summary_name)
 

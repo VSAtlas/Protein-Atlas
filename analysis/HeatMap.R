@@ -73,8 +73,52 @@ parse_bool <- function(value, default_value = TRUE) {
   default_value
 }
 
+parse_num <- function(value, default_value) {
+  if (is.null(value)) {
+    return(default_value)
+  }
+  v <- suppressWarnings(as.numeric(trimws(value)))
+  if (is.na(v)) {
+    return(default_value)
+  }
+  v
+}
+
+read_color <- function(value, default_value) {
+  if (is.null(value)) {
+    return(default_value)
+  }
+  v <- trimws(value)
+  if (!nzchar(v)) {
+    return(default_value)
+  }
+  v
+}
+
 config_path <- file.path(repo_root, "config.txt")
 use_dendrogram <- parse_bool(read_config_value(config_path, "USE_DENDROGRAM"), TRUE)
+
+scale_min <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MIN"), -3)
+scale_mid <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MID"), 0)
+scale_max <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MAX"), 3)
+if (!(scale_min < scale_mid && scale_mid < scale_max)) {
+  scale_min <- -3
+  scale_mid <- 0
+  scale_max <- 3
+}
+
+scale_mid2 <- parse_num(
+  read_config_value(config_path, "HEATMAP_SCALE_MID2"),
+  (scale_mid + scale_max) / 2
+)
+if (!(scale_mid < scale_mid2 && scale_mid2 < scale_max)) {
+  scale_mid2 <- (scale_mid + scale_max) / 2
+}
+
+color_low <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MIN"), "green")
+color_mid <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MID"), "black")
+color_mid2 <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MID2"), "orange")
+color_high <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MAX"), "red")
 
 input_path <- NULL
 if (!is.null(opts[["in"]]) && nzchar(opts[["in"]])) {
@@ -195,6 +239,43 @@ if (nrow(mat) == 0 || ncol(mat) == 0) {
   stop("Heatmap matrix is empty after filtering")
 }
 
+total_steps <- 100L
+span_low <- max(scale_mid - scale_min, 0)
+span_mid <- max(scale_mid2 - scale_mid, 0)
+span_high <- max(scale_max - scale_mid2, 0)
+total_span <- span_low + span_mid + span_high
+if (total_span <= 0) {
+  span_low <- 1
+  span_mid <- 1
+  span_high <- 1
+  total_span <- 3
+}
+n_low <- max(1, round(total_steps * span_low / total_span))
+n_mid <- max(1, round(total_steps * span_mid / total_span))
+n_high <- total_steps - n_low - n_mid
+if (n_high < 1) {
+  n_high <- 1
+  if (n_mid > 1) {
+    n_mid <- n_mid - 1
+  } else if (n_low > 1) {
+    n_low <- n_low - 1
+  }
+}
+
+breaks_low <- seq(scale_min, scale_mid, length.out = n_low + 1)
+breaks_mid <- seq(scale_mid, scale_mid2, length.out = n_mid + 1)
+breaks_high <- seq(scale_mid2, scale_max, length.out = n_high + 1)
+heatmap_breaks <- c(breaks_low, breaks_mid[-1], breaks_high[-1])
+heatmap_colors <- c(
+  colorRampPalette(c(color_low, color_mid))(n_low),
+  colorRampPalette(c(color_mid, color_mid2))(n_mid),
+  colorRampPalette(c(color_mid2, color_high))(n_high)
+)
+
+mat_plot <- mat
+finite_mask <- is.finite(mat_plot)
+mat_plot[finite_mask] <- pmin(pmax(mat_plot[finite_mask], scale_min), scale_max)
+
 cluster_rows <- FALSE
 cluster_cols <- FALSE
 if (use_dendrogram) {
@@ -215,11 +296,12 @@ plot_title <- if (use_dendrogram) {
 dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
 png(out_path, width = 1600, height = 2000)
 pheatmap(
-  mat,
+  mat_plot,
   cluster_rows = cluster_rows,
   cluster_cols = cluster_cols,
   scale = "none",
-  color = colorRampPalette(c("green", "black", "red"))(100),
+  color = heatmap_colors,
+  breaks = heatmap_breaks,
   na_col = "white",
   main = plot_title
 )
