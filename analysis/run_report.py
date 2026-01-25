@@ -18,6 +18,7 @@ try:
         resolve_mapping_csv_path,
         try_load_fda_index,
     )
+    from analysis.heatmap_html import render_interactive_heatmap_html
     from analysis.manifest_utils import extract_pocket, load_run_manifest
 except ModuleNotFoundError:
     REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ except ModuleNotFoundError:
         resolve_mapping_csv_path,
         try_load_fda_index,
     )
+    from analysis.heatmap_html import render_interactive_heatmap_html
     from analysis.manifest_utils import extract_pocket, load_run_manifest
 
 COMPONENT = "[run-report]"
@@ -1253,11 +1255,30 @@ def _write_html_report(
             "</tr>"
         )
 
+    heatmap_section = ""
+    heatmap_csv = repo_root / "data" / run_id / "heatmap_input.csv"
+    master_csv = repo_root / "data" / run_id / "master_rows.csv"
+    heatmap_source = None
+    if heatmap_csv.exists():
+        heatmap_source = heatmap_csv
+    elif master_csv.exists():
+        heatmap_source = master_csv
+    if heatmap_source is not None:
+        try:
+            heatmap_section = (
+                "<h2>Heatmap</h2>"
+                f"{render_interactive_heatmap_html(repo_root, run_id, heatmap_source)}"
+            )
+        except Exception as exc:
+            heatmap_section = (
+                "<h2>Heatmap</h2>"
+                f"<div class=\"meta\">Heatmap unavailable: {html.escape(str(exc))}</div>"
+            )
+
     links = []
     report_yaml = repo_root / "data" / run_id / "report.yaml"
     if report_yaml.exists():
         links.append(f"<li><a href=\"{html.escape(str(report_yaml))}\">report.yaml</a></li>")
-    heatmap_csv = repo_root / "data" / run_id / "heatmap_input.csv"
     if heatmap_csv.exists():
         links.append(
             f"<li><a href=\"{html.escape(str(heatmap_csv))}\">heatmap_input.csv</a></li>"
@@ -1316,6 +1337,8 @@ def _write_html_report(
       {''.join(multi_rows)}
     </tbody>
   </table>
+
+  {heatmap_section}
 
   <h2>Artifacts</h2>
   <ul>

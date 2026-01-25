@@ -1,5 +1,5 @@
 run_id: test_run
-generated_at: '2026-01-24T00:42:54.408037Z'
+generated_at: '2026-01-24T04:26:08.948325Z'
 sources:
   master_rows_csv: data/test_run/master_rows.csv
   manifest_yaml: manifests/test_run/run_manifest.yaml
