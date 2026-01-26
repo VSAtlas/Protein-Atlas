@@ -1,0 +1,382 @@
+{
+  "created_at": "2026-01-26T00:36:38.879925+00:00",
+  "data": {
+    "candidates": [
+      {
+        "coverage": 1.0,
+        "has_ligand": true,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4DCH",
+        "resolution": 1.79,
+        "unp_end": 465,
+        "unp_start": 1
+      },
+      {
+        "coverage": 0.996,
+        "has_ligand": true,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4LC9",
+        "resolution": 3.4,
+        "unp_end": 465,
+        "unp_start": 3
+      },
+      {
+        "coverage": 0.985,
+        "has_ligand": true,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "6E0I",
+        "resolution": 1.9,
+        "unp_end": 458,
+        "unp_start": 1
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3F9M",
+        "resolution": 1.5,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4NO7",
+        "resolution": 1.7,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3VEV",
+        "resolution": 1.8,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3VF6",
+        "resolution": 1.86,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3IDH",
+        "resolution": 2.14,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3FGU",
+        "resolution": 2.15,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3S41",
+        "resolution": 2.18,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3QIC",
+        "resolution": 2.2,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4DHY",
+        "resolution": 2.38,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.976,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3ID8",
+        "resolution": 2.4,
+        "unp_end": 465,
+        "unp_start": 12
+      },
+      {
+        "coverage": 0.97,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4IXC",
+        "resolution": 2.0,
+        "unp_end": 465,
+        "unp_start": 15
+      },
+      {
+        "coverage": 0.97,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4IWV",
+        "resolution": 2.1,
+        "unp_end": 465,
+        "unp_start": 15
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4ISE",
+        "resolution": 1.78,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3IMX",
+        "resolution": 2.0,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "5V4X",
+        "resolution": 2.08,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4ISF",
+        "resolution": 2.09,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3H1V",
+        "resolution": 2.11,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3A0I",
+        "resolution": 2.2,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3VEY",
+        "resolution": 2.25,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4RCH",
+        "resolution": 2.3,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "1V4S",
+        "resolution": 2.3,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "5V4W",
+        "resolution": 2.39,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "7T78",
+        "resolution": 2.4,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "7T78",
+        "resolution": 2.4,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "7T79",
+        "resolution": 2.4,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "7T79",
+        "resolution": 2.4,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3GOI",
+        "resolution": 2.52,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4MLE",
+        "resolution": 2.6,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4ISG",
+        "resolution": 2.65,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3FR0",
+        "resolution": 2.7,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4L3Q",
+        "resolution": 2.7,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "4MLH",
+        "resolution": 2.9,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.968,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "1V4T",
+        "resolution": 3.4,
+        "unp_end": 465,
+        "unp_start": 16
+      },
+      {
+        "coverage": 0.959,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "6E0E",
+        "resolution": 2.7,
+        "unp_end": 461,
+        "unp_start": 16
+      }
+    ],
+    "snapshot_at": "2026-01-26T00:36:38.879871+00:00"
+  },
+  "request": {
+    "uniprot": "P35557"
+  },
+  "schema_version": 1
+}

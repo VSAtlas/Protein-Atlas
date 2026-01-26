@@ -1,0 +1,212 @@
+{
+  "created_at": "2026-01-26T00:37:41.556697+00:00",
+  "data": {
+    "candidates": [
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5K",
+        "resolution": 12.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5K",
+        "resolution": 12.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5K",
+        "resolution": 12.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5K",
+        "resolution": 12.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5K",
+        "resolution": 12.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "5IJN",
+        "resolution": 21.4,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "5IJN",
+        "resolution": 21.4,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "5IJN",
+        "resolution": 21.4,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "5IJN",
+        "resolution": 21.4,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "5IJO",
+        "resolution": 21.4,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "5IJO",
+        "resolution": 21.4,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7PER",
+        "resolution": 35.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7PER",
+        "resolution": 35.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7PER",
+        "resolution": 35.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7PER",
+        "resolution": 35.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5J",
+        "resolution": 50.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5J",
+        "resolution": 50.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5J",
+        "resolution": 50.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5J",
+        "resolution": 50.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      },
+      {
+        "coverage": 1.0,
+        "has_ligand": null,
+        "method": "Electron Microscopy",
+        "mutation_count": null,
+        "pdb_id": "7R5J",
+        "resolution": 50.0,
+        "unp_end": 2012,
+        "unp_start": 1
+      }
+    ],
+    "snapshot_at": "2026-01-26T00:37:41.556642+00:00"
+  },
+  "request": {
+    "uniprot": "Q92621"
+  },
+  "schema_version": 1
+}

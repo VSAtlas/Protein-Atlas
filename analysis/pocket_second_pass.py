@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import math
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -250,7 +251,28 @@ def run_second_pass(
         raise FileNotFoundError(f"pocket_performance.json missing: {perf_path}")
 
     try:
-        payload = json.loads(perf_path.read_text(encoding="utf-8"))
+        bytes_on_disk = None
+        try:
+            bytes_on_disk = perf_path.stat().st_size
+        except Exception:
+            bytes_on_disk = None
+        if bytes_on_disk is not None:
+            log.info(
+                "[pocket_eval.json.read.start] path=%s bytes=%d",
+                perf_path,
+                bytes_on_disk,
+            )
+        start = time.perf_counter()
+        raw = perf_path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+        elapsed_s = time.perf_counter() - start
+        keys = list(payload.keys()) if isinstance(payload, dict) else []
+        log.info(
+            "[pocket_eval.json.read.done] path=%s elapsed_s=%.3f keys=%s",
+            perf_path,
+            elapsed_s,
+            keys[:8],
+        )
     except Exception as exc:
         raise ValueError(f"Failed to read pocket performance: {perf_path}") from exc
 
@@ -374,7 +396,17 @@ def run_second_pass(
             "sorted_strong_split" if multi_pocket_detected else "skipped_single_pocket"
         ),
     }
-    assignments_path.write_text(json.dumps(assignments_payload, indent=2), encoding="utf-8")
+    assignments_text = json.dumps(assignments_payload, indent=2)
+    start = time.perf_counter()
+    assignments_path.write_text(assignments_text, encoding="utf-8")
+    elapsed_s = time.perf_counter() - start
+    log.info(
+        "[pocket_eval.json.write.done] path=%s bytes=%d elapsed_s=%.3f keys=%s",
+        assignments_path,
+        len(assignments_text.encode("utf-8")),
+        elapsed_s,
+        list(assignments_payload.keys())[:8],
+    )
 
     pocket_by_id = {p["pocket_id"]: p for p in pockets}
     pocket_entries: List[Dict[str, Any]] = []
@@ -403,8 +435,16 @@ def run_second_pass(
         "decision_reason": decision_reason,
         "pockets": pocket_entries,
     }
-    performance_sorted_path.write_text(
-        json.dumps(performance_payload, indent=2), encoding="utf-8"
+    performance_text = json.dumps(performance_payload, indent=2)
+    start = time.perf_counter()
+    performance_sorted_path.write_text(performance_text, encoding="utf-8")
+    elapsed_s = time.perf_counter() - start
+    log.info(
+        "[pocket_eval.json.write.done] path=%s bytes=%d elapsed_s=%.3f keys=%s",
+        performance_sorted_path,
+        len(performance_text.encode("utf-8")),
+        elapsed_s,
+        list(performance_payload.keys())[:8],
     )
 
     return {

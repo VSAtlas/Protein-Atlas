@@ -2,6 +2,7 @@ import csv
 import re
 from pathlib import Path
 
+import analysis.heatmap_html as heatmap_html
 from analysis.heatmap_html import render_interactive_heatmap_html
 
 
@@ -25,7 +26,15 @@ def _extract_col_labels(html_text: str) -> list[str]:
     return re.findall(r'<th class="hm-col-label"><div>(.*?)</div></th>', thead_match.group(1))
 
 
-def test_heatmap_html_order_and_na_white(tmp_path: Path) -> None:
+def _force_legacy(monkeypatch) -> None:
+    def _raise(*_args, **_kwargs) -> None:
+        raise ImportError("clustergrammer disabled for legacy tests")
+
+    monkeypatch.setattr(heatmap_html, "_build_clustergrammer_viz_json", _raise)
+
+
+def test_heatmap_html_order_and_na_white(tmp_path: Path, monkeypatch) -> None:
+    _force_legacy(monkeypatch)
     repo_root = tmp_path / "repo"
     run_id = "HM_ORDER"
     data_dir = repo_root / "data" / run_id
@@ -57,7 +66,8 @@ def test_heatmap_html_order_and_na_white(tmp_path: Path) -> None:
     assert "background-color: white" in match.group(0)
 
 
-def test_heatmap_html_config_palette_bins(tmp_path: Path) -> None:
+def test_heatmap_html_config_palette_bins(tmp_path: Path, monkeypatch) -> None:
+    _force_legacy(monkeypatch)
     repo_root = tmp_path / "repo"
     run_id = "HM_COLORS"
     data_dir = repo_root / "data" / run_id

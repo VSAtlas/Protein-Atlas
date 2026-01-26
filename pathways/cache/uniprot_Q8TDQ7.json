@@ -1,0 +1,11 @@
+{
+  "created_at": "2026-01-26T00:37:35.433953+00:00",
+  "data": {
+    "candidates": [],
+    "snapshot_at": "2026-01-26T00:37:35.433898+00:00"
+  },
+  "request": {
+    "uniprot": "Q8TDQ7"
+  },
+  "schema_version": 1
+}

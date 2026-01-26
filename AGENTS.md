@@ -18,7 +18,6 @@
 * **Safety Stack (MANDATORY):**
     1. **Lint:** Run `ruff check --fix .` to clean syntax.
     2. **Types:** Run `mypy <filename>` to check logic errors.
-    3. **Test:** Run `pytest --cov=src chemdb/tests/` to verify logic + coverage.
 * **Commit Rule:** The repo uses `pre-commit`. You CANNOT commit code that fails Ruff or MyPy. Run them manually first to ensure success.
 * **Verification:** Run `git diff` immediately after editing to verify changes.
 * **Isolation:** Output to `docked/.../stage1` (etc) to avoid overwrites.

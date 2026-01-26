@@ -82,6 +82,57 @@ _BAD_SYNONYM_PREFIXES = (
     "NCI",
     "NSC",
 )
+_NAME_FIELDS_PRIMARY = [
+    "rxnorm_generic_name",
+    "drugcentral_generic_name",
+    "generic_name",
+    "display_name",
+    "pubchem_record_title",
+    "pubchem_name",
+    "pubchem_iupac_name",
+    "remark_name",
+    "sdf_title",
+]
+_NAME_FIELDS_FALLBACK = [
+    "fda_name",
+    "name",
+    "drug_name",
+    "preferred_name",
+    "international_nonproprietary_name",
+    "inn",
+    "brand_name",
+    "brand_names",
+    "trade_name",
+    "label_name",
+]
+_SYNONYM_FIELDS_EXTRA = [
+    "synonyms",
+    "alias",
+    "alts",
+    "pubchem_synonyms",
+    "display_name",
+    "brand_names",
+    "rxnorm_brand_names",
+    "drugcentral_brand_names",
+    "generic_name",
+    "rxnorm_generic_name",
+    "drugcentral_generic_name",
+    "pubchem_name",
+    "pubchem_record_title",
+    "pubchem_iupac_name",
+    "remark_name",
+    "sdf_title",
+    "fda_name",
+    "name",
+    "drug_name",
+    "preferred_name",
+    "international_nonproprietary_name",
+    "inn",
+    "brand_name",
+    "trade_name",
+    "label_name",
+]
+_NAME_FALLBACK_EXCLUDE = ("filename", "file_name", "pathname", "path_name")
 
 
 def _norm(s: Optional[str]) -> str:
@@ -193,29 +244,59 @@ def _choose_pubchem_synonym(raw: str) -> str:
     return ""
 
 
-def _select_preferred_name(row: Dict[str, Any], rdk_id: str) -> str:
-    name = _pick_first(
-        row,
-        "rxnorm_generic_name",
-        "drugcentral_generic_name",
-        "generic_name",
-        "display_name",
-        "pubchem_record_title",
-        "pubchem_name",
-        "pubchem_iupac_name",
-        "remark_name",
-        "sdf_title",
-    )
+def _canonical_fieldname(name: str) -> str:
+    return str(name or "").strip().lower()
+
+
+def _infer_name_fields(fieldnames: List[str]) -> List[str]:
+    field_map = {_canonical_fieldname(name): name for name in fieldnames if name}
+    ordered: List[str] = []
+
+    for name in _NAME_FIELDS_PRIMARY + _NAME_FIELDS_FALLBACK:
+        key = _canonical_fieldname(name)
+        actual = field_map.get(key)
+        if actual and actual not in ordered:
+            ordered.append(actual)
+
+    for name in fieldnames:
+        key = _canonical_fieldname(name)
+        if not key or name in ordered:
+            continue
+        if "name" in key and not any(bad in key for bad in _NAME_FALLBACK_EXCLUDE):
+            ordered.append(name)
+
+    return ordered
+
+
+def _infer_synonym_fields(fieldnames: List[str], name_fields: List[str]) -> List[str]:
+    field_map = {_canonical_fieldname(name): name for name in fieldnames if name}
+    ordered: List[str] = []
+
+    for name in _SYNONYM_FIELDS_EXTRA:
+        key = _canonical_fieldname(name)
+        actual = field_map.get(key)
+        if actual and actual not in ordered:
+            ordered.append(actual)
+
+    for name in name_fields:
+        if name not in ordered:
+            ordered.append(name)
+
+    return ordered
+
+
+def _select_preferred_name(
+    row: Dict[str, Any], rdk_id: str, name_fields: List[str]
+) -> str:
+    name = _pick_first(row, *name_fields)
     if not name:
         return rdk_id or "unknown"
 
     if _is_iupac_like(name):
-        record_title = _pick_first(row, "pubchem_record_title")
-        if record_title and not _is_iupac_like(record_title):
-            return record_title
-        display_name = _pick_first(row, "display_name")
-        if display_name and not _is_iupac_like(display_name):
-            return display_name
+        for field in name_fields:
+            candidate = _row_value(row, field)
+            if candidate and not _is_iupac_like(candidate):
+                return candidate
         synonym = _choose_pubchem_synonym(_pick_first(row, "pubchem_synonyms"))
         if synonym:
             return synonym
@@ -272,6 +353,9 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
     idx = LibraryIndex()
     with open(mapping_csv, newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
+        fieldnames = [name for name in (r.fieldnames or []) if name]
+        name_fields = _infer_name_fields(fieldnames)
+        synonym_fields = _infer_synonym_fields(fieldnames, name_fields)
         for row in r:
             scheme = _pick_first(row, "scheme")
             rdk_id = _extract_rdk_id(
@@ -292,35 +376,9 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
                 raw_id = _pick_first(row, "id")
                 rdk_id = _extract_rdk_id(raw_id) or (raw_id or "")
 
-            name = _select_preferred_name(row, rdk_id)
+            name = _select_preferred_name(row, rdk_id, name_fields)
             syn_fields = []
-            syn_fields.extend(
-                _collect_values(row, "synonyms", "alias", "alts", "pubchem_synonyms")
-            )
-            syn_fields.extend(_collect_values(row, "display_name"))
-            syn_fields.extend(
-                _collect_values(
-                    row, "brand_names", "rxnorm_brand_names", "drugcentral_brand_names"
-                )
-            )
-            syn_fields.extend(
-                _collect_values(
-                    row,
-                    "generic_name",
-                    "rxnorm_generic_name",
-                    "drugcentral_generic_name",
-                )
-            )
-            syn_fields.extend(
-                _collect_values(
-                    row,
-                    "pubchem_name",
-                    "pubchem_record_title",
-                    "pubchem_iupac_name",
-                    "remark_name",
-                    "sdf_title",
-                )
-            )
+            syn_fields.extend(_collect_values(row, *synonym_fields))
             path_val = _pick_first(row, "path")
             if path_val:
                 base = os.path.basename(str(path_val))

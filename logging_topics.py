@@ -276,3 +276,36 @@ def bootstrap_root_logging(cfg: Dict, run_log_path: str) -> logging.Logger:
     root.addHandler(stream_handler)
     root._atlas_bootstrapped = True  # type: ignore[attr-defined]
     return root
+
+
+def ensure_file_handler(
+    logger: logging.Logger,
+    log_path: str | Path,
+    cfg: Dict,
+    *,
+    level: int = logging.INFO,
+) -> logging.Handler:
+    path = Path(log_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler):
+            try:
+                if Path(handler.baseFilename).resolve() == path.resolve():
+                    return handler
+            except Exception:
+                if getattr(handler, "baseFilename", None) == str(path):
+                    return handler
+
+    handler = logging.FileHandler(path, mode="a")
+    handler.setLevel(level)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    )
+
+    topic_filter = build_topic_filter(cfg)
+    if topic_filter is not None:
+        handler.addFilter(topic_filter)
+
+    logger.addHandler(handler)
+    return handler

@@ -254,6 +254,7 @@ import traceback
 from logging_topics import (
     _tee_stdio_to,
     bootstrap_root_logging,
+    ensure_file_handler,
 )
 from run_manifest import (
     apply_pocket_detection_events,
@@ -302,6 +303,7 @@ from path_router.path_router import (
     receptor_file,
     docked_dir,
     config_dir as router_config_dir,
+    run_logs_dir,
 )
 from prep_ligands.deepcoy_integration import (
     apply_deepcoy_cli_overrides,
@@ -1030,6 +1032,10 @@ def main() -> None:
         reset=cfg.get("RESET_CONFIGS"),
         logger=logging.getLogger("run"),
     )
+    run_log_dir = run_logs_dir(cfg)
+    pipeline_log_path = run_log_dir / "pipeline.log"
+    ensure_file_handler(logging.getLogger(), pipeline_log_path, cfg, level=logging.INFO)
+    logging.info("[run.log] pipeline_log=%s", pipeline_log_path)
 
     if is_bench and "CONFIG_RUN_DIR" in cfg:
         try:

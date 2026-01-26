@@ -16,6 +16,7 @@ PREPPED_LIGANDS_ROOT=${OVERALL_DIR}/prepped_ligands
 OUTPUT_DIR=${OVERALL_DIR}/processed_pdbs
 PDBQT_DIR=${OVERALL_DIR}/pdbqts
 DOCKED_DIR=${OVERALL_DIR}/docked
+PATHWAY_ORGANISM=Homo sapiens
 
 # P2Rank
 P2RANK_PATH=/home/michael/atlas/tools/p2rank/bin/p2rank.jar
@@ -304,16 +305,16 @@ CTRL_REDOCK_NMODES =9
 # GNINA follow-up docking toggle:
 #   true  -> allow GNINA for difficult targets (default)
 #   false -> completely disable GNINA, Vina only
-USE_GNINA = true
-USE_LEDOCK = true
-USE_DOCK6 = true
+USE_GNINA = false
+USE_LEDOCK = false
+USE_DOCK6 = false
 USE_SCORCH = true
 SCORCH_WEIGHT = 1
 CNN_WEIGHT = 0
 SCORCH_TOP_FRACTION = 0.1
 CNN_TOP_FRACTION = 0.1
 #this turns on the pocket_eval.json files 
-POCKET_EVAL=false
+POCKET_EVAL=true
 POCKET_EVAL_MAX_CALIBRATORS=10
 
 
@@ -325,7 +326,7 @@ CHAIN_KEEP_LIST=
 CHAIN_LOG_DECISIONS=1
 
 # ---- Benchmark & Analysis (paths) ----
-FDA_MAPPING_CSV=fda_mapping_from_pdbqt.csv
+FDA_MAPPING_CSV=fda_mapping_filled.csv
 BENCH_ANALYSIS_OUTDIR=
 BENCH_ONLY_EXTRACTED_CTRL_AND_RDK=true
 
@@ -431,6 +432,9 @@ USE_DENDROGRAM=false
 FILTER_INVALID=false
 REPORT_TOP_N=5
 REPORT_EXTENDED_TOP_N=5
+REPORT_OFFLINE_ASSETS=true
+REPORT_INLINE_ASSETS=true
+REPORT_LIGAND_PAGE_PREFIX=ligands/
 # Heatmap color scale (absolute t_selected)
 HEATMAP_SCALE_MIN=-3
 HEATMAP_SCALE_MID=0
@@ -451,10 +455,11 @@ SINGLE_LIGAND_MANIFEST_ONLY=True
 
 # --- Library subfolder selection ---
 LIBRARY_SUBDIR_DEFAULT = fda_library
-TEST_MODE_ENABLE = test_library_10+dud
+TEST_MODE_ENABLE = dud
 DUD_PREFIX=fda_dud
 TEST_LIBRARY_MAP = {
     "TEST": "test_library_10",
+    "6LU7": "test_library_10",
     "TEMP": "test_library_10",
     "T3MP": "test_library_10",
     "EXAM": "test_library_100",

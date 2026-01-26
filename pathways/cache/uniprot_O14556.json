@@ -1,0 +1,92 @@
+{
+  "created_at": "2026-01-26T00:35:42.633873+00:00",
+  "data": {
+    "candidates": [
+      {
+        "coverage": 0.831,
+        "has_ligand": true,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3H9E",
+        "resolution": 1.72,
+        "unp_end": 407,
+        "unp_start": 69
+      },
+      {
+        "coverage": 0.831,
+        "has_ligand": true,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3H9E",
+        "resolution": 1.72,
+        "unp_end": 407,
+        "unp_start": 69
+      },
+      {
+        "coverage": 0.831,
+        "has_ligand": true,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3PFW",
+        "resolution": 2.15,
+        "unp_end": 407,
+        "unp_start": 69
+      },
+      {
+        "coverage": 0.831,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "3PFW",
+        "resolution": 2.15,
+        "unp_end": 407,
+        "unp_start": 69
+      },
+      {
+        "coverage": 0.819,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "5C7O",
+        "resolution": 1.73,
+        "unp_end": 407,
+        "unp_start": 74
+      },
+      {
+        "coverage": 0.819,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "5C7O",
+        "resolution": 1.73,
+        "unp_end": 407,
+        "unp_start": 74
+      },
+      {
+        "coverage": 0.819,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "5C7L",
+        "resolution": 1.86,
+        "unp_end": 407,
+        "unp_start": 74
+      },
+      {
+        "coverage": 0.819,
+        "has_ligand": null,
+        "method": "X-ray diffraction",
+        "mutation_count": null,
+        "pdb_id": "5C7L",
+        "resolution": 1.86,
+        "unp_end": 407,
+        "unp_start": 74
+      }
+    ],
+    "snapshot_at": "2026-01-26T00:35:42.633814+00:00"
+  },
+  "request": {
+    "uniprot": "O14556"
+  },
+  "schema_version": 1
+}

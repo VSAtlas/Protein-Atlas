@@ -1,5 +1,5 @@
 run_id: test_run
-generated_at: '2026-01-24T04:26:08.948325Z'
+generated_at: '2026-01-26T04:10:05.051955Z'
 sources:
   master_rows_csv: data/test_run/master_rows.csv
   manifest_yaml: manifests/test_run/run_manifest.yaml
@@ -85,15 +85,9 @@ targets:
         unique_decoy_scores: 5
         reliable: false
     pocket:
-      method: fallback_no_controls
-      center:
-      - 4.833
-      - 1.833
-      - 3.633
-      box:
-      - 7.1
-      - 6.0
-      - 7.2
+      method: null
+      center: null
+      box: null
     top5_ligands: []
     top_ligands_extended: []
     notable_ligands: []

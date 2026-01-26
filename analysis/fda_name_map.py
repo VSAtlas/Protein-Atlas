@@ -88,14 +88,14 @@ def resolve_mapping_csv_path(
         repo_root / "config.txt",
     ]
     for path in candidates:
-        value = _read_config_key(path, "FDA_MAPPING_CSV")
+        value = _read_config_key(path, "fda_mapping_filled.csv")
         if value:
             resolved = _resolve_path(value, path.parent)
             if resolved.exists():
                 return resolved
 
     fallbacks = [
-        repo_root / "fda_mapping_from_pdbqt.csv",
+        repo_root / "fda_mapping_filled.csv",
         repo_root / "data" / "fda_mapping_from_pdbqt.csv",
     ]
     for path in fallbacks:

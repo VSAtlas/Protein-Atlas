@@ -289,6 +289,32 @@ def _ensure_router_roots() -> RouterRoots:
 # ---------------------------
 
 
+def run_logs_dir(cfg: Optional[Dict[str, object]] = None) -> Path:
+    roots = _ensure_router_roots()
+    docked_root = roots.docked
+    run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip() or None
+    if cfg:
+        try:
+            cfg_run_id = str(cfg.get("RUN_ID") or "").strip()
+            if cfg_run_id:
+                run_id = cfg_run_id
+        except Exception:
+            pass
+        try:
+            cfg_docked = cfg.get("DOCKED_DIR")
+            if cfg_docked:
+                docked_root = Path(str(cfg_docked)).expanduser()
+        except Exception:
+            pass
+    if run_id and docked_root.name != run_id:
+        docked_root = docked_root / run_id
+    log_dir = docked_root / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("path_router")
+    logger.info("[router.debug] kind=run_logs_dir path=%s", log_dir)
+    return log_dir
+
+
 def receptor_dir(
     pdb_id: str,
     variant: Optional[str] = None,

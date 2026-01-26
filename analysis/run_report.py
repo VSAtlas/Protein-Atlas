@@ -7,10 +7,11 @@ import logging
 import math
 import os
 import re
+import shutil
 import sys
 import yaml  # type: ignore[import-untyped]
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     from analysis.fda_name_map import (
@@ -52,6 +53,8 @@ _TEST_MODE_BOTH_VALUES = {
 }
 MIN_DECOYS_FOR_FDR = 200
 MIN_UNIQUE_DECOY_SCORES = 10
+_INCHIKEY_RE = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
+_RDK_PLACEHOLDER_RE = re.compile(r"rdk[_-]?\d+", re.IGNORECASE)
 
 
 def _configure_logging(verbose: bool) -> logging.Logger:
@@ -373,6 +376,49 @@ def _is_iupac_like(text: str) -> bool:
     return False
 
 
+def _normalize_inchikey_candidate(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    value = re.sub(r"\s+", "-", value)
+    value = re.sub(r"-+", "-", value.upper())
+    return value
+
+
+def _is_inchikey_like(text: str) -> bool:
+    candidate = _normalize_inchikey_candidate(text)
+    return bool(candidate and _INCHIKEY_RE.match(candidate))
+
+
+def _is_relaxed_iupac_like(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if value != value.lower():
+        return False
+    if len(value) < 18:
+        return False
+    digits = sum(ch.isdigit() for ch in value)
+    if digits < 2:
+        return False
+    if value.count(" ") < 4:
+        return False
+    return True
+
+
+def _is_unfriendly_display(text: str) -> bool:
+    value = _clean_text(text)
+    if not value:
+        return True
+    if _is_inchikey_like(value):
+        return True
+    if _RDK_PLACEHOLDER_RE.search(value):
+        return True
+    if _is_iupac_like(value) or _is_relaxed_iupac_like(value):
+        return True
+    return False
+
+
 def _parse_highlight_queries(value: Optional[str]) -> List[str]:
     if not value:
         return []
@@ -428,28 +474,134 @@ def _matches_query(
 def _resolve_ligand_display(
     row: Dict[str, Any], has_ligand_display: bool, fda_index: Optional[Any]
 ) -> str:
+    display, _meta = _resolve_ligand_display_internal(row, has_ligand_display, fda_index)
+    return display
+
+
+def _resolve_ligand_display_internal(
+    row: Dict[str, Any], has_ligand_display: bool, fda_index: Optional[Any]
+) -> Tuple[str, Dict[str, Any]]:
     base = _clean_text(row.get("ligand_base"))
     lig_file = _clean_text(row.get("ligand_file") or row.get("ligand") or "")
-    if has_ligand_display:
-        display = _clean_text(row.get("ligand_display"))
+    display = _clean_text(row.get("ligand_display")) if has_ligand_display else ""
+    is_control = _as_bool(row.get("is_control"))
+    mapping_used = False
+
+    def build_meta(final_display: str) -> Dict[str, Any]:
+        original_unfriendly = _is_unfriendly_display(display)
+        final_unfriendly = _is_unfriendly_display(final_display)
+        mapping_override = bool(
+            has_ligand_display
+            and not is_control
+            and mapping_used
+            and original_unfriendly
+            and final_display
+            and final_display != display
+        )
+        return {
+            "is_control": is_control,
+            "has_ligand_display": has_ligand_display,
+            "original_display": display,
+            "final_display": final_display,
+            "original_unfriendly": original_unfriendly,
+            "final_unfriendly": final_unfriendly,
+            "mapping_used": mapping_used,
+            "mapping_override": mapping_override,
+        }
+
+    if is_control:
         if display:
-            if not _is_iupac_like(display):
-                return display
-            if fda_index is not None:
-                alt = _clean_text(resolve_ligand_display_name(base, lig_file, fda_index))
-                if alt and not _is_iupac_like(alt):
-                    return alt
-            if base and not _is_iupac_like(base):
-                return base
-            return display
-    if fda_index is not None:
-        display = _clean_text(resolve_ligand_display_name(base, lig_file, fda_index))
-        if display:
-            return display
-    display = _clean_text(row.get("ligand"))
+            return display, build_meta(display)
+        fallback = _clean_text(row.get("ligand"))
+        final_display = fallback or base
+        return final_display, build_meta(final_display)
+
     if display:
-        return display
-    return base
+        if fda_index is not None and _is_unfriendly_display(display):
+            alt = _clean_text(resolve_ligand_display_name(base, lig_file, fda_index))
+            if alt and alt != display and not _is_unfriendly_display(alt):
+                mapping_used = True
+                return alt, build_meta(alt)
+        if not _is_unfriendly_display(display):
+            return display, build_meta(display)
+        if base and not _is_unfriendly_display(base):
+            return base, build_meta(base)
+        return display, build_meta(display)
+
+    if fda_index is not None:
+        alt = _clean_text(resolve_ligand_display_name(base, lig_file, fda_index))
+        if alt and not _is_unfriendly_display(alt):
+            mapping_used = True
+            return alt, build_meta(alt)
+
+    fallback = _clean_text(row.get("ligand"))
+    final_display = fallback or base
+    return final_display, build_meta(final_display)
+
+
+def _summarize_display_resolution(
+    rows: List[Dict[str, Any]],
+    has_ligand_display: bool,
+    fda_index: Optional[Any],
+    mapping_csv: Optional[Path],
+    logger: logging.Logger,
+    top_n: int = 15,
+) -> None:
+    if not rows:
+        return
+    mapping_csv_value = str(mapping_csv) if mapping_csv else "missing"
+    mapping_loaded = bool(fda_index)
+    n_overridden = 0
+    n_unfriendly_remaining = 0
+    examples: List[Tuple[str, str, str, str, str]] = []
+    seen: Set[Tuple[str, str, str, str, str]] = set()
+
+    for row in rows:
+        final_display, meta = _resolve_ligand_display_internal(
+            row, has_ligand_display, fda_index
+        )
+        if meta["is_control"]:
+            continue
+        if meta["mapping_override"]:
+            n_overridden += 1
+        if meta["final_unfriendly"]:
+            n_unfriendly_remaining += 1
+            if len(examples) < top_n:
+                lig_base = _clean_text(row.get("ligand_base"))
+                lig_file = _clean_text(row.get("ligand_file") or row.get("ligand") or "")
+                lig_file = os.path.basename(lig_file)
+                library = _clean_text(row.get("library"))
+                key = (
+                    lig_base,
+                    lig_file,
+                    library,
+                    meta["original_display"],
+                    final_display,
+                )
+                if key not in seen:
+                    seen.add(key)
+                    examples.append(key)
+
+    logger.info(
+        "%s action=fda_name_override overridden=%d unfriendly_remaining=%d mapping_csv=%s mapping_loaded=%s",
+        COMPONENT,
+        n_overridden,
+        n_unfriendly_remaining,
+        mapping_csv_value,
+        mapping_loaded,
+    )
+    for lig_base, lig_file, library, original_display, final_display in examples:
+        logger.info(
+            "%s action=fda_name_unresolved ligand_base=%s ligand_file=%s library=%s original_display=%s final_display=%s mapping_csv=%s mapping_loaded=%s",
+            COMPONENT,
+            lig_base,
+            lig_file,
+            library,
+            original_display,
+            final_display,
+            mapping_csv_value,
+            mapping_loaded,
+        )
 
 
 def _read_decoy_prefix_from_file(path: Path) -> Optional[str]:
@@ -737,22 +889,25 @@ def build_report(
         highlight_queries = []
 
     fda_index = None
-    if not has_ligand_display:
-        mapping_csv = resolve_mapping_csv_path(
-            repo_root, run_id, cli_value=fda_mapping_csv
-        )
-        if mapping_csv is None:
+    mapping_csv = resolve_mapping_csv_path(repo_root, run_id, cli_value=fda_mapping_csv)
+    if mapping_csv is None:
+        logger.warning("%s action=fda_mapping status=missing run_id=%s", COMPONENT, run_id)
+    else:
+        fda_index = try_load_fda_index(mapping_csv)
+        if fda_index is None:
             logger.warning(
-                "%s action=fda_mapping status=missing run_id=%s", COMPONENT, run_id
+                "%s action=fda_mapping status=load_failed path=%s",
+                COMPONENT,
+                mapping_csv,
             )
-        else:
-            fda_index = try_load_fda_index(mapping_csv)
-            if fda_index is None:
-                logger.warning(
-                    "%s action=fda_mapping status=load_failed path=%s",
-                    COMPONENT,
-                    mapping_csv,
-                )
+
+    _summarize_display_resolution(
+        rows,
+        has_ligand_display,
+        fda_index,
+        mapping_csv,
+        logger,
+    )
 
 
     # Group by target combo
@@ -1204,6 +1359,48 @@ def _format_num(value: Any, fmt: str) -> str:
     return ""
 
 
+def _stage_artifacts(
+    output_dir: Path, artifacts: List[Tuple[str, Path]]
+) -> List[Tuple[str, str]]:
+    staged: List[Tuple[str, str]] = []
+    if not artifacts:
+        return staged
+    artifacts_dir = output_dir / "artifacts"
+    logger = logging.getLogger("run-report")
+    for label, src in artifacts:
+        if not src.exists():
+            continue
+        dest = artifacts_dir / src.name
+        if dest.exists():
+            try:
+                if dest.resolve() == src.resolve():
+                    rel_path = dest.relative_to(output_dir).as_posix()
+                    staged.append((label, rel_path))
+                    continue
+            except Exception:
+                pass
+            stem = src.stem
+            suffix = src.suffix
+            counter = 1
+            while dest.exists():
+                dest = artifacts_dir / f"{stem}-{counter}{suffix}"
+                counter += 1
+        try:
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        except Exception as exc:
+            logger.warning(
+                "%s action=stage_artifact_failed src=%s error=%s",
+                COMPONENT,
+                src,
+                exc,
+            )
+            continue
+        rel_path = dest.relative_to(output_dir).as_posix()
+        staged.append((label, rel_path))
+    return staged
+
+
 def _write_html_report(
     report: Dict[str, Any],
     out_path: Path,
@@ -1214,7 +1411,7 @@ def _write_html_report(
     generated_at = report.get("generated_at", "")
 
     highlight_headers = "".join(
-        f"<th>{html.escape(q)}</th>" for q in highlight_queries
+        f"<th class=\"num\">{html.escape(q)}</th>" for q in highlight_queries
     )
     highlight_rows = []
     targets = report.get("targets", {}) or {}
@@ -1235,7 +1432,7 @@ def _write_html_report(
                     cell = "not found"
             else:
                 cell = "not found"
-            cells.append(f"<td>{html.escape(cell)}</td>")
+            cells.append(f"<td class=\"num\">{html.escape(cell)}</td>")
         row_html = (
             f"<tr><td>{html.escape(target_id)}</td>{''.join(cells)}</tr>"
         )
@@ -1247,15 +1444,15 @@ def _write_html_report(
             "<tr>"
             f"<td>{html.escape(str(hit.get('ligand_display', '')))}</td>"
             f"<td>{html.escape(str(hit.get('ligand_base', '')))}</td>"
-            f"<td>{html.escape(str(hit.get('targets_qualified', '')))}</td>"
-            f"<td>{html.escape(_format_num(hit.get('worst_pct'), '.6f'))}</td>"
-            f"<td>{html.escape(_format_num(hit.get('mean_pct'), '.6f'))}</td>"
-            f"<td>{html.escape(str(hit.get('best_rank', '')))}</td>"
-            f"<td>{html.escape(_format_num(hit.get('best_t_selected'), '.6g'))}</td>"
+            f"<td class=\"num\">{html.escape(str(hit.get('targets_qualified', '')))}</td>"
+            f"<td class=\"num\">{html.escape(_format_num(hit.get('worst_pct'), '.6f'))}</td>"
+            f"<td class=\"num\">{html.escape(_format_num(hit.get('mean_pct'), '.6f'))}</td>"
+            f"<td class=\"num\">{html.escape(str(hit.get('best_rank', '')))}</td>"
+            f"<td class=\"num\">{html.escape(_format_num(hit.get('best_t_selected'), '.6g'))}</td>"
             "</tr>"
         )
 
-    heatmap_section = ""
+    heatmap_html = ""
     heatmap_csv = repo_root / "data" / run_id / "heatmap_input.csv"
     master_csv = repo_root / "data" / run_id / "master_rows.csv"
     heatmap_source = None
@@ -1265,85 +1462,212 @@ def _write_html_report(
         heatmap_source = master_csv
     if heatmap_source is not None:
         try:
-            heatmap_section = (
-                "<h2>Heatmap</h2>"
-                f"{render_interactive_heatmap_html(repo_root, run_id, heatmap_source)}"
+            heatmap_html = render_interactive_heatmap_html(
+                repo_root, run_id, heatmap_source
             )
         except Exception as exc:
-            heatmap_section = (
-                "<h2>Heatmap</h2>"
+            heatmap_html = (
                 f"<div class=\"meta\">Heatmap unavailable: {html.escape(str(exc))}</div>"
             )
+    else:
+        heatmap_html = "<div class=\"meta\">Heatmap data not available.</div>"
 
-    links = []
+    heatmap_section = (
+        "<section class=\"section\" id=\"heatmap\">"
+        "<h2>Heatmap</h2>"
+        f"{heatmap_html}"
+        "</section>"
+    )
+
     report_yaml = repo_root / "data" / run_id / "report.yaml"
-    if report_yaml.exists():
-        links.append(f"<li><a href=\"{html.escape(str(report_yaml))}\">report.yaml</a></li>")
-    if heatmap_csv.exists():
-        links.append(
-            f"<li><a href=\"{html.escape(str(heatmap_csv))}\">heatmap_input.csv</a></li>"
-        )
     heatmap_png = repo_root / "data" / run_id / "heatmap.png"
-    if heatmap_png.exists():
-        links.append(
-            f"<li><a href=\"{html.escape(str(heatmap_png))}\">heatmap.png</a></li>"
-        )
+    artifacts = [
+        ("report.yaml", report_yaml),
+        ("heatmap_input.csv", heatmap_csv),
+        ("heatmap.png", heatmap_png),
+    ]
+    staged = _stage_artifacts(out_path.parent, artifacts)
+    link_items = [
+        f"<li><a href=\"{html.escape(href)}\">{html.escape(label)}</a></li>"
+        for label, href in staged
+    ]
+    if link_items:
+        artifacts_html = f"<ul class=\"artifact-list\">{''.join(link_items)}</ul>"
+    else:
+        artifacts_html = "<div class=\"meta\">No artifacts available.</div>"
 
     html_body = f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(str(run_id))} report</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 24px; }}
-    h1, h2 {{ margin-bottom: 8px; }}
-    table {{ border-collapse: collapse; width: 100%; margin-bottom: 24px; }}
-    th, td {{ border: 1px solid #ddd; padding: 6px 8px; text-align: left; }}
-    th {{ background: #f3f3f3; }}
-    .meta {{ color: #666; font-size: 0.9em; }}
+    :root {{
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --card-bg: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #0f172a;
+      --highlight: #eef2ff;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: "Trebuchet MS", "Lucida Grande", "Lucida Sans Unicode", sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }}
+    h1, h2 {{ margin: 0; color: var(--accent); }}
+    .container {{ max-width: 1200px; margin: 0 auto; padding: 28px 20px 48px; }}
+    .page-header {{
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 16px;
+    }}
+    .page-title {{
+      font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      font-size: 2.1rem;
+    }}
+    .meta {{ color: var(--muted); font-size: 0.95rem; }}
+    .toc {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 16px 0 20px;
+      padding: 10px 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }}
+    .toc a {{
+      text-decoration: none;
+      color: var(--accent);
+      background: #f0f3f8;
+      border: 1px solid #e2e8f0;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.9rem;
+    }}
+    .toc a:hover {{ background: #e8ecf4; }}
+    .section {{
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 18px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }}
+    .section h2 {{ margin-bottom: 12px; font-size: 1.3rem; }}
+    .table-wrap {{
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #ffffff;
+    }}
+    table {{
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 0.95rem;
+      font-variant-numeric: tabular-nums;
+    }}
+    th, td {{ padding: 8px 10px; text-align: left; }}
+    thead th {{
+      position: sticky;
+      top: 0;
+      background: #f4f6fa;
+      border-bottom: 1px solid var(--border);
+      z-index: 1;
+    }}
+    tbody td {{ border-bottom: 1px solid var(--border); }}
+    tbody tr:nth-child(even) {{ background: #f9fafb; }}
+    tbody tr:hover {{ background: var(--highlight); }}
+    th.num, td.num {{ text-align: right; }}
+    .artifact-list {{
+      list-style: none;
+      padding-left: 0;
+      margin: 0;
+      display: grid;
+      gap: 6px;
+    }}
+    .artifact-list a {{
+      text-decoration: none;
+      color: var(--accent);
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 8px;
+      display: inline-block;
+    }}
+    .artifact-list a:hover {{ background: #eef2f7; }}
   </style>
 </head>
 <body>
-  <h1>{html.escape(str(run_id))} report</h1>
-  <div class="meta">Generated at {html.escape(str(generated_at))}</div>
+  <div class="container">
+    <header class="page-header">
+      <h1 class="page-title">{html.escape(str(run_id))} report</h1>
+      <div class="meta">Generated at {html.escape(str(generated_at))}</div>
+    </header>
 
-  <h2>Highlights</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>target_id</th>
-        {highlight_headers}
-      </tr>
-    </thead>
-    <tbody>
-      {''.join(highlight_rows)}
-    </tbody>
-  </table>
+    <nav class="toc" aria-label="Table of contents">
+      <a href="#highlights">Highlights</a>
+      <a href="#multitarget">Multi-target hits</a>
+      <a href="#heatmap">Heatmap</a>
+      <a href="#artifacts">Artifacts</a>
+    </nav>
 
-  <h2>Multi-target hits</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>ligand_display</th>
-        <th>ligand_base</th>
-        <th>targets_qualified</th>
-        <th>worst_pct</th>
-        <th>mean_pct</th>
-        <th>best_rank</th>
-        <th>best_t_selected</th>
-      </tr>
-    </thead>
-    <tbody>
-      {''.join(multi_rows)}
-    </tbody>
-  </table>
+    <section class="section" id="highlights">
+      <h2>Highlights</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>target_id</th>
+              {highlight_headers}
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(highlight_rows)}
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-  {heatmap_section}
+    <section class="section" id="multitarget">
+      <h2>Multi-target hits</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ligand_display</th>
+              <th>ligand_base</th>
+              <th class="num">targets_qualified</th>
+              <th class="num">worst_pct</th>
+              <th class="num">mean_pct</th>
+              <th class="num">best_rank</th>
+              <th class="num">best_t_selected</th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(multi_rows)}
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-  <h2>Artifacts</h2>
-  <ul>
-    {''.join(links)}
-  </ul>
+    {heatmap_section}
+
+    <section class="section" id="artifacts">
+      <h2>Artifacts</h2>
+      {artifacts_html}
+    </section>
+  </div>
 </body>
 </html>
 """
@@ -1361,6 +1685,7 @@ def _write_heatmap_input_csv(
     fda_mapping_csv: Optional[str],
     filter_invalid: bool,
 ) -> None:
+    logger = logging.getLogger("run-report")
     master_csv = repo_root / "data" / run_id / "master_rows.csv"
     if not master_csv.exists():
         raise FileNotFoundError(f"Master CSV not found: {master_csv}")
@@ -1373,12 +1698,17 @@ def _write_heatmap_input_csv(
             rows.append(r)
 
     fda_index = None
-    if not has_ligand_display:
-        mapping_csv = resolve_mapping_csv_path(
-            repo_root, run_id, cli_value=fda_mapping_csv
-        )
-        if mapping_csv is not None:
-            fda_index = try_load_fda_index(mapping_csv)
+    mapping_csv = resolve_mapping_csv_path(repo_root, run_id, cli_value=fda_mapping_csv)
+    if mapping_csv is None:
+        logger.warning("%s action=fda_mapping status=missing run_id=%s", COMPONENT, run_id)
+    else:
+        fda_index = try_load_fda_index(mapping_csv)
+        if fda_index is None:
+            logger.warning(
+                "%s action=fda_mapping status=load_failed path=%s",
+                COMPONENT,
+                mapping_csv,
+            )
 
     rows_by_target: Dict[str, List[Dict[str, Any]]] = {}
     row_rank: Dict[int, Dict[str, Any]] = {}
@@ -1466,6 +1796,14 @@ def _write_heatmap_input_csv(
         "is_decoy",
         "is_control",
     ]
+
+    _summarize_display_resolution(
+        rows,
+        has_ligand_display,
+        fda_index,
+        mapping_csv,
+        logger,
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="", encoding="utf-8") as f:

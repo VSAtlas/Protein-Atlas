@@ -86,3 +86,7 @@ llama.cpp/
 .direnv/
 .cache/
 .envrc
+
+# Local build/vendor dirs
+node_modules/
+report_assets/
