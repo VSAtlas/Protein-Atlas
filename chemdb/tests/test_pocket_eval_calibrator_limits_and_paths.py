@@ -10,9 +10,13 @@ import pytest
 def test_select_calibrator_rows_respects_maximum(monkeypatch):
     cal_rows = []
     for i in range(50):
-        cal_rows.append({"ligand_id": f"chembl:strong_{i}", "smiles": "C", "label": "strong"})
+        cal_rows.append(
+            {"ligand_id": f"chembl:strong_{i}", "smiles": "C", "label": "strong"}
+        )
         cal_rows.append({"ligand_id": f"chembl:non_{i}", "smiles": "C", "label": "non"})
-        cal_rows.append({"ligand_id": f"chembl:weak_{i}", "smiles": "C", "label": "weak"})
+        cal_rows.append(
+            {"ligand_id": f"chembl:weak_{i}", "smiles": "C", "label": "weak"}
+        )
 
     rows_used, weak_ignored = pocket_eval._select_calibrator_rows_for_eval_and_prep(
         cal_rows, max_total=10, seed=0, logger=logging.getLogger("test")
@@ -51,7 +55,7 @@ def test_prepare_calibrator_inputs_override_writes_to_extracted(tmp_path, monkey
     )
 
     cfg = {"FORCE_REPROCESS": True}
-    prepared = pocket_eval.prepare_calibrator_ligands(
+    prepared, prep_report = pocket_eval.prepare_calibrator_ligands(
         rows, prepped_dir, cfg, logger=None, inputs_dir_override=inputs_dir
     )
 
@@ -59,6 +63,7 @@ def test_prepare_calibrator_inputs_override_writes_to_extracted(tmp_path, monkey
     assert (inputs_dir / "calibrators.sdf").is_file()
     assert not (prepped_dir / "inputs" / "calibrators.sdf").exists()
     assert len(prepared) == len(rows)
+    assert prep_report["missing_ligand_ids"] == []
 
 
 def test_filter_supported_calibrators_skips_unsupported_atoms(monkeypatch):

@@ -10,9 +10,9 @@ from pathlib import Path
 from distutils.util import strtobool
 from typing import Any, Dict, Optional
 
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 import sitecustomize  # noqa: F401  # ensure HOME is writable for micromamba/pytest sandboxes
-from path_router import make_paths
+from path_router import make_paths  # type: ignore[import-not-found]
 
 # -------------------------
 # OS guards (Windows-only)
@@ -156,6 +156,27 @@ def _default_runtime() -> Dict[str, Any]:
         "POCKET_EVAL_MAX_CALIBRATORS": 0,
         "POCKET_EVAL_SEED": 0,
         "POCKET_EVAL_FOLDS": 5,
+        "POCKET_EVAL_DATASET_ENABLE": True,
+        "POCKET_EVAL_DATASET_FORMATS": "csv",
+        "POCKET_EVAL_DATASET_WIDE_ENABLE": False,
+        "POCKET_EVAL_SPLITS_ENABLE": True,
+        "POCKET_EVAL_SPLIT_GROUP_KEY": "ligand_id",
+        "POCKET_EVAL_SPLIT_STRATEGY": "auto",
+        "POCKET_EVAL_SPLIT_FOLDS": 0,
+        "POCKET_EVAL_ENSEMBLE_ENABLE": False,
+        "POCKET_EVAL_CV_ENABLE": False,
+        "POCKET_EVAL_CV_TOP_M": 2,
+        "POCKET_EVAL_CV_REQUIRE_SCORES": True,
+        "POCKET_EVAL_ORACLE_ENABLE": False,
+        # calibrator sampling / evaluation
+        "CALIBRATOR_SAMPLING_POLICY": "stratified_scaffold",
+        "CALIBRATOR_SAMPLING_SEED": None,
+        "CALIBRATOR_TEST_FRACTION": 0.20,
+        "CALIBRATOR_REMAINDER_EVAL_FRACTION": 0.00,
+        "CALIBRATOR_POSITIVE_CLASS": "strong",
+        "CALIBRATOR_NEGATIVE_CLASS": "weak",
+        "CALIBRATOR_METRICS_TOP_FRACS": "0.01,0.005",
+        "CALIBRATOR_SET_TABLE_FORMAT": "parquet",
         # control-centering knobs
         "CONTROL_CENTER_POLICY": "best_redock",
         "CONTROL_CENTER_CLOSE_MAX_A": 8.0,
@@ -278,6 +299,30 @@ _ALLOWED_ENV_OVERRIDES = {
     "DEEPCOY_SOURCE_AUDIT",
     "DEEPCOY_SOURCE_AUDIT_MAX_LINES",
     "DEEPCOY_CHEMBL_MAX_PAGES",
+    "POCKET_EVAL",
+    "POCKET_EVAL_MAX_CALIBRATORS",
+    "POCKET_EVAL_SEED",
+    "POCKET_EVAL_FOLDS",
+    "POCKET_EVAL_DATASET_ENABLE",
+    "POCKET_EVAL_DATASET_FORMATS",
+    "POCKET_EVAL_DATASET_WIDE_ENABLE",
+    "POCKET_EVAL_SPLITS_ENABLE",
+    "POCKET_EVAL_SPLIT_GROUP_KEY",
+    "POCKET_EVAL_SPLIT_STRATEGY",
+    "POCKET_EVAL_SPLIT_FOLDS",
+    "POCKET_EVAL_ENSEMBLE_ENABLE",
+    "POCKET_EVAL_CV_ENABLE",
+    "POCKET_EVAL_CV_TOP_M",
+    "POCKET_EVAL_CV_REQUIRE_SCORES",
+    "POCKET_EVAL_ORACLE_ENABLE",
+    "CALIBRATOR_SAMPLING_POLICY",
+    "CALIBRATOR_SAMPLING_SEED",
+    "CALIBRATOR_TEST_FRACTION",
+    "CALIBRATOR_REMAINDER_EVAL_FRACTION",
+    "CALIBRATOR_POSITIVE_CLASS",
+    "CALIBRATOR_NEGATIVE_CLASS",
+    "CALIBRATOR_METRICS_TOP_FRACS",
+    "CALIBRATOR_SET_TABLE_FORMAT",
     "DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM",
     "DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN",
     # ---  allow ENV override for the knobs ---
@@ -413,7 +458,7 @@ def _parse_kv_config(path: Path) -> Dict[str, str]:
     """
     Lightweight key=value parser; allows comments starting with '#'.
     """
-    out = {}
+    out: Dict[str, str] = {}
     if not path.exists():
         return out
     with path.open() as f:
@@ -558,6 +603,13 @@ def load_config(
         "MMGBSA_LIGAND_FORCE",
         "MMGBSA_RDKit_VALIDATE",
         "POCKET_EVAL",
+        "POCKET_EVAL_DATASET_ENABLE",
+        "POCKET_EVAL_DATASET_WIDE_ENABLE",
+        "POCKET_EVAL_SPLITS_ENABLE",
+        "POCKET_EVAL_ENSEMBLE_ENABLE",
+        "POCKET_EVAL_CV_ENABLE",
+        "POCKET_EVAL_CV_REQUIRE_SCORES",
+        "POCKET_EVAL_ORACLE_ENABLE",
     ]:
         if k in cfg:
             cfg[k] = _to_bool(cfg[k])
@@ -601,6 +653,9 @@ def load_config(
         "POCKET_EVAL_MAX_CALIBRATORS",
         "POCKET_EVAL_SEED",
         "POCKET_EVAL_FOLDS",
+        "POCKET_EVAL_SPLIT_FOLDS",
+        "POCKET_EVAL_CV_TOP_M",
+        "CALIBRATOR_SAMPLING_SEED",
     ]:
         if k in cfg:
             cfg[k] = _to_int(cfg[k], cfg[k])
@@ -615,6 +670,8 @@ def load_config(
         "MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK",
         "MMGBSA_RERANKED_TOP_PCT",
         "MMGBSA_GB_SALTCON",
+        "CALIBRATOR_TEST_FRACTION",
+        "CALIBRATOR_REMAINDER_EVAL_FRACTION",
     ]:
         if k in cfg:
             cfg[k] = _to_float(cfg[k], cfg[k])
@@ -819,7 +876,7 @@ def extract_gnina_scores(docked_pdbqt_path: str) -> Dict[str, Optional[float]]:
       - cnn_affinity_pK
     Values are float or None if not present/parseable.
     """
-    metrics = {
+    metrics: Dict[str, Optional[float]] = {
         "minimized_affinity_kcal": None,
         "cnn_score": None,
         "cnn_affinity_pK": None,
@@ -864,7 +921,7 @@ def generate_config(
     docked_dir=None,
 ):
     # Legacy shim: derive a minimal cfg for older callers
-    from docking.docking_vina import emit_vina_config
+    from docking.docking_vina import emit_vina_config  # type: ignore[import-not-found]
 
     cfg = {
         "OVERALL_DIR": output_dir,
@@ -949,7 +1006,7 @@ def annotate_fda_long_csv_with_t_scores_vs_decoys(
     Returns the path to the updated FDA long CSV, or None if skipped.
     """
     try:
-        from dud_eval import (
+        from dud_eval import (  # type: ignore[attr-defined]
             compute_decoy_stats_from_long_csv,
             guess_ligfile_col,
             guess_score_col,

@@ -1,4 +1,6 @@
 import argparse
+import hashlib
+import inspect
 import json
 import os
 import sys
@@ -6,8 +8,10 @@ import shutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from unittest import mock
+
+import requests  # type: ignore[import-untyped]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -20,7 +24,12 @@ if str(DEEPCOY_MODULE_ROOT) not in sys.path:
 
 from calibrator import uniprot_resolver  # noqa: E402
 from DeepCoy_duds import generate_dud_library  # noqa: E402
-from DeepCoy_duds.external_sources import fetch_chembl_labeled_smiles  # noqa: E402
+from DeepCoy_duds.external_sources import (  # noqa: E402
+    CHEMBL_API_BASE,
+    fetch_chembl_labeled_smiles,
+    load_cached_smiles,
+    save_cached_smiles,
+)
 from DeepCoy_duds.generate_dud_library import get_uniprot_and_ec  # noqa: E402
 
 DEFAULT_PDBS = ["1T46", "6LU7", "1Q4X", "2AZR", "1UYG"]
@@ -208,6 +217,479 @@ def _write_smiles(path: Path, smiles: List[str]) -> None:
     path.write_text("\n".join(smiles) + ("\n" if smiles else ""))
 
 
+def _smiles_hash(smiles: str) -> str:
+    return hashlib.sha1(smiles.encode("utf-8")).hexdigest()[:10]
+
+
+def _ligand_id(label: str, smiles: str) -> str:
+    return f"chembl:{label}_{_smiles_hash(smiles)}"
+
+
+def _write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def _normalize_supporting_activity(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = {
+        "pchembl_value": None,
+        "standard_value": None,
+        "standard_units": None,
+        "standard_type": None,
+        "standard_relation": None,
+    }
+    if isinstance(raw, dict):
+        for key in payload:
+            payload[key] = raw.get(key)
+    return payload
+
+
+def _label_by_smiles(labels: Dict[str, List[str]]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for label, smi_list in labels.items():
+        for smi in smi_list or []:
+            mapping[str(smi)] = str(label)
+    return mapping
+
+
+def _minimal_label_records(labels: Dict[str, List[str]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for label, smi_list in labels.items():
+        for smi in smi_list or []:
+            records.append(
+                {
+                    "molecule_chembl_id": None,
+                    "canonical_smiles": smi,
+                    "inchi_key": None,
+                    "label": label,
+                    "supporting_activity": _normalize_supporting_activity(None),
+                    "assay_chembl_id": None,
+                    "activity_chembl_id": None,
+                    "document_chembl_id": None,
+                }
+            )
+    return records
+
+
+def _build_calibrator_ligand_records(
+    pdb_id: str,
+    selected_chain: Optional[str],
+    selected_uniprot: Optional[str],
+    labels: Dict[str, List[str]],
+    chembl_meta: Optional[Dict[str, Any]],
+    activity_types: List[str],
+    chembl_max_phase: Optional[int],
+) -> List[Dict[str, Any]]:
+    label_lookup = _label_by_smiles(labels)
+    raw_records: List[Dict[str, Any]] = []
+    if isinstance(chembl_meta, dict):
+        meta_records = chembl_meta.get("records")
+        if isinstance(meta_records, list):
+            raw_records = [r for r in meta_records if isinstance(r, dict)]
+    if not raw_records:
+        raw_records = _minimal_label_records(labels)
+
+    records_out: List[Dict[str, Any]] = []
+    for raw in raw_records:
+        smi = raw.get("canonical_smiles") or raw.get("smiles")
+        if not smi:
+            continue
+        label = label_lookup.get(str(smi)) or raw.get("label")
+        if label not in {"strong", "weak", "non"}:
+            continue
+        records_out.append(
+            {
+                "pdb_id": pdb_id,
+                "selected_chain": selected_chain,
+                "selected_uniprot": selected_uniprot,
+                "ligand_id": _ligand_id(label, str(smi)),
+                "molecule_chembl_id": raw.get("molecule_chembl_id"),
+                "canonical_smiles": smi,
+                "inchi_key": raw.get("inchi_key"),
+                "label": label,
+                "supporting_activity": _normalize_supporting_activity(
+                    raw.get("supporting_activity")
+                    if isinstance(raw.get("supporting_activity"), dict)
+                    else None
+                ),
+                "assay_chembl_id": raw.get("assay_chembl_id"),
+                "activity_chembl_id": raw.get("activity_chembl_id"),
+                "document_chembl_id": raw.get("document_chembl_id"),
+                "chembl_max_phase": chembl_max_phase,
+                "activity_types": list(activity_types),
+            }
+        )
+    return records_out
+
+
+def _supports_kwarg(func, name: str) -> bool:
+    try:
+        return name in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _load_chain_uniprot_map(
+    pdb_id: str, fallback: Optional[Dict[str, Dict[str, Any]]] = None
+) -> Dict[str, Dict[str, Any]]:
+    out_file = REPO_ROOT / "calibrator" / pdb_id / "chain_uniprot.json"
+    if out_file.is_file():
+        try:
+            return json.loads(out_file.read_text())
+        except Exception:
+            return fallback or {}
+    return fallback or {}
+
+
+def _build_uniprot_chain_index(
+    chain_map: Dict[str, Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    index: Dict[str, List[str]] = {}
+    for chain_id, entry in (chain_map or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        uniprot = entry.get("uniprot")
+        if uniprot:
+            index.setdefault(str(uniprot).upper(), []).append(str(chain_id))
+    return index
+
+
+def _first_present(*values: Any) -> Optional[str]:
+    for value in values:
+        if value:
+            return str(value)
+    return None
+
+
+def _summarize_site_components(
+    binding_site: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    summary: List[Dict[str, Any]] = []
+    site_components = (
+        binding_site.get("site_components") if isinstance(binding_site, dict) else None
+    )
+    for comp in site_components or []:
+        if not isinstance(comp, dict):
+            continue
+        component = (
+            comp.get("component") if isinstance(comp.get("component"), dict) else {}
+        )
+        accession = _first_present(
+            comp.get("accession"),
+            comp.get("component_accession"),
+            comp.get("protein_accession"),
+            comp.get("uniprot_accession"),
+            component.get("accession"),
+            component.get("component_accession"),
+        )
+        summary.append(
+            {
+                "component_id": comp.get("component_id")
+                or comp.get("site_component_id")
+                or component.get("component_id"),
+                "component_type": comp.get("component_type")
+                or comp.get("type")
+                or component.get("component_type"),
+                "accession": accession,
+                "relationship": comp.get("relationship"),
+            }
+        )
+    return summary
+
+
+def _extract_uniprot_accessions(binding_site: Optional[Dict[str, Any]]) -> List[str]:
+    accessions: List[str] = []
+    seen: set[str] = set()
+    site_components = (
+        binding_site.get("site_components") if isinstance(binding_site, dict) else None
+    )
+    for comp in site_components or []:
+        if not isinstance(comp, dict):
+            continue
+        component = (
+            comp.get("component") if isinstance(comp.get("component"), dict) else {}
+        )
+        accession = _first_present(
+            comp.get("accession"),
+            comp.get("component_accession"),
+            comp.get("protein_accession"),
+            comp.get("uniprot_accession"),
+            component.get("accession"),
+            component.get("component_accession"),
+        )
+        if accession:
+            accession_norm = str(accession).upper()
+            if accession_norm not in seen:
+                seen.add(accession_norm)
+                accessions.append(accession_norm)
+    return accessions
+
+
+def _map_evidence_chains(
+    evidence_uniprots: List[str], chain_index: Dict[str, List[str]]
+) -> List[str]:
+    chains: List[str] = []
+    for accession in evidence_uniprots or []:
+        for chain_id in chain_index.get(str(accession).upper(), []):
+            if chain_id not in chains:
+                chains.append(chain_id)
+    return chains
+
+
+def _chembl_get_json(
+    url: str,
+    params: Dict[str, Any],
+    timeout: int,
+    retries: int,
+    session=None,
+) -> Dict[str, Any]:
+    last_err = None
+    client = session or requests
+    for _ in range(retries + 1):
+        try:
+            resp = client.get(
+                url,
+                params=params,
+                headers={"Accept": "application/json"},
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            last_err = f"status={resp.status_code}"
+        except Exception as exc:
+            last_err = str(exc)
+    raise RuntimeError(last_err or "request failed")
+
+
+def _load_cached_response(
+    cache_dir: Path, source: str, key: Dict[str, Any]
+) -> Optional[Any]:
+    cached = load_cached_smiles(cache_dir, source, key)
+    if cached and isinstance(cached, dict):
+        response = cached.get("response")
+        if isinstance(response, (dict, list)):
+            return response
+    return None
+
+
+def _extract_mechanisms(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        mechanisms = (
+            payload.get("mechanisms")
+            or payload.get("mechanism")
+            or payload.get("data")
+            or []
+        )
+    elif isinstance(payload, list):
+        mechanisms = payload
+    else:
+        mechanisms = []
+    return [entry for entry in mechanisms if isinstance(entry, dict)]
+
+
+def _fetch_chembl_mechanisms(
+    molecule_chembl_id: str,
+    target_chembl_id: str,
+    cache_dir: Path,
+    timeout: int,
+    retries: int,
+    *,
+    session=None,
+    force_refresh: bool = False,
+    fetch_fn=None,
+) -> List[Dict[str, Any]]:
+    if fetch_fn:
+        return fetch_fn(molecule_chembl_id, target_chembl_id) or []
+    key = {
+        "source": "chembl_mechanism",
+        "molecule_chembl_id": molecule_chembl_id,
+        "target_chembl_id": target_chembl_id,
+    }
+    if not force_refresh:
+        cached = _load_cached_response(cache_dir, "chembl_mechanism", key)
+        if cached is not None:
+            return _extract_mechanisms(cached)
+    response = _chembl_get_json(
+        f"{CHEMBL_API_BASE}/mechanism",
+        {
+            "molecule_chembl_id": molecule_chembl_id,
+            "target_chembl_id": target_chembl_id,
+            "format": "json",
+        },
+        timeout,
+        retries,
+        session=session,
+    )
+    save_cached_smiles(cache_dir, "chembl_mechanism", key, {"response": response})
+    return _extract_mechanisms(response)
+
+
+def _fetch_binding_site(
+    site_id: str,
+    cache_dir: Path,
+    timeout: int,
+    retries: int,
+    *,
+    session=None,
+    force_refresh: bool = False,
+    fetch_fn=None,
+) -> Optional[Dict[str, Any]]:
+    if not site_id:
+        return None
+    if fetch_fn:
+        return fetch_fn(site_id)
+    key = {"source": "chembl_binding_site", "site_id": site_id}
+    if not force_refresh:
+        cached = _load_cached_response(cache_dir, "chembl_binding_site", key)
+        if isinstance(cached, dict):
+            return cached
+    response = _chembl_get_json(
+        f"{CHEMBL_API_BASE}/binding_site/{site_id}.json",
+        {},
+        timeout,
+        retries,
+        session=session,
+    )
+    save_cached_smiles(cache_dir, "chembl_binding_site", key, {"response": response})
+    return response if isinstance(response, dict) else None
+
+
+def _build_site_evidence_records(
+    pdb_id: str,
+    ligand_records: List[Dict[str, Any]],
+    target_ids: List[str],
+    chain_map: Dict[str, Dict[str, Any]],
+    cache_dir: Path,
+    timeout: int,
+    retries: int,
+    force_refresh: bool,
+    *,
+    session=None,
+    mechanism_fetch_fn=None,
+    binding_site_fetch_fn=None,
+) -> List[Dict[str, Any]]:
+    if not ligand_records or not target_ids:
+        return []
+    chain_index = _build_uniprot_chain_index(chain_map)
+    ligand_id_by_mol: Dict[str, Optional[str]] = {}
+    for record in ligand_records:
+        mol_id = record.get("molecule_chembl_id")
+        if mol_id and mol_id not in ligand_id_by_mol:
+            ligand_id_by_mol[str(mol_id)] = record.get("ligand_id")
+
+    evidence_records: List[Dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for record in ligand_records:
+        mol_id = record.get("molecule_chembl_id")
+        if not mol_id:
+            continue
+        mol_id_str = str(mol_id)
+        for target_id in target_ids:
+            target_id_str = str(target_id)
+            pair = (mol_id_str, target_id_str)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            mechanisms = _fetch_chembl_mechanisms(
+                mol_id_str,
+                target_id_str,
+                cache_dir,
+                timeout,
+                retries,
+                session=session,
+                force_refresh=force_refresh,
+                fetch_fn=mechanism_fetch_fn,
+            )
+            if not mechanisms:
+                evidence_records.append(
+                    {
+                        "pdb_id": pdb_id,
+                        "ligand_id": ligand_id_by_mol.get(mol_id_str),
+                        "molecule_chembl_id": mol_id_str,
+                        "target_chembl_id": target_id_str,
+                        "site_id": None,
+                        "binding_site_name": None,
+                        "binding_site_comment": None,
+                        "site_components": [],
+                        "evidence_uniprot_accessions": [],
+                        "evidence_chains": [],
+                        "evidence_strength": "none",
+                    }
+                )
+                continue
+            for mechanism in mechanisms:
+                site_id = _first_present(
+                    mechanism.get("binding_site_id"),
+                    mechanism.get("site_id"),
+                    mechanism.get("binding_site"),
+                )
+                binding_site = (
+                    _fetch_binding_site(
+                        site_id,
+                        cache_dir,
+                        timeout,
+                        retries,
+                        session=session,
+                        force_refresh=force_refresh,
+                        fetch_fn=binding_site_fetch_fn,
+                    )
+                    if site_id
+                    else None
+                )
+                site_name = _first_present(
+                    binding_site.get("site_name")
+                    if isinstance(binding_site, dict)
+                    else None,
+                    binding_site.get("binding_site_name")
+                    if isinstance(binding_site, dict)
+                    else None,
+                    binding_site.get("name")
+                    if isinstance(binding_site, dict)
+                    else None,
+                    mechanism.get("binding_site_name"),
+                    mechanism.get("site_name"),
+                )
+                site_comment = _first_present(
+                    binding_site.get("comment")
+                    if isinstance(binding_site, dict)
+                    else None,
+                    binding_site.get("description")
+                    if isinstance(binding_site, dict)
+                    else None,
+                    mechanism.get("comment"),
+                    mechanism.get("mechanism_of_action"),
+                )
+                site_components = _summarize_site_components(binding_site)
+                evidence_uniprots = _extract_uniprot_accessions(binding_site)
+                evidence_chains = _map_evidence_chains(evidence_uniprots, chain_index)
+                if site_id:
+                    evidence_strength = (
+                        "site_components_mapped"
+                        if evidence_chains
+                        else "site_id_present"
+                    )
+                else:
+                    evidence_strength = "none"
+                evidence_records.append(
+                    {
+                        "pdb_id": pdb_id,
+                        "ligand_id": ligand_id_by_mol.get(mol_id_str),
+                        "molecule_chembl_id": mol_id_str,
+                        "target_chembl_id": target_id_str,
+                        "site_id": site_id,
+                        "binding_site_name": site_name,
+                        "binding_site_comment": site_comment,
+                        "site_components": site_components,
+                        "evidence_uniprot_accessions": evidence_uniprots,
+                        "evidence_chains": evidence_chains,
+                        "evidence_strength": evidence_strength,
+                    }
+                )
+    return evidence_records
+
+
 def _log_source_audit(
     uniprot_id: str, activity_types: List[str], chembl_max_phase: Optional[int]
 ) -> None:
@@ -387,6 +869,9 @@ def run_calibrator_for_pdb(
     debug_reject_samples: int = 25,
     force_refresh: bool = False,
     fetch_fn=None,
+    mechanism_fetch_fn=None,
+    binding_site_fetch_fn=None,
+    enable_site_evidence: bool = True,
 ) -> Dict:
     pdb_norm = pdb_id.upper()
     out_dir = Path(out_root) / f"{pdb_norm}_calibrator"
@@ -404,14 +889,38 @@ def run_calibrator_for_pdb(
     with tee_to_log(log_file):
         print(f"[calibrator.logs] run_tag={run_tag_value} log_file={log_file}")
         uniprot_id, ec_numbers, mapping = resolve_target(pdb_norm, deepcoy_root)
-        chain_segments = mapping.get("chain_segments") if isinstance(mapping, dict) else {}
-        selected_chain = mapping.get("selected_chain") if isinstance(mapping, dict) else None
+        chain_segments = (
+            mapping.get("chain_segments") if isinstance(mapping, dict) else {}
+        )
+        selected_chain = (
+            mapping.get("selected_chain") if isinstance(mapping, dict) else None
+        )
         selected_segment = mapping.get("selected_segment") or {}
-        selected_unp_start = selected_segment.get("unp_start") if isinstance(selected_segment, dict) else None
-        selected_unp_end = selected_segment.get("unp_end") if isinstance(selected_segment, dict) else None
-        selected_pdb_start = selected_segment.get("pdb_start") if isinstance(selected_segment, dict) else None
-        selected_pdb_end = selected_segment.get("pdb_end") if isinstance(selected_segment, dict) else None
-        selected_uniprot = uniprot_id or (selected_segment.get("uniprot") if isinstance(selected_segment, dict) else None)
+        selected_unp_start = (
+            selected_segment.get("unp_start")
+            if isinstance(selected_segment, dict)
+            else None
+        )
+        selected_unp_end = (
+            selected_segment.get("unp_end")
+            if isinstance(selected_segment, dict)
+            else None
+        )
+        selected_pdb_start = (
+            selected_segment.get("pdb_start")
+            if isinstance(selected_segment, dict)
+            else None
+        )
+        selected_pdb_end = (
+            selected_segment.get("pdb_end")
+            if isinstance(selected_segment, dict)
+            else None
+        )
+        selected_uniprot = uniprot_id or (
+            selected_segment.get("uniprot")
+            if isinstance(selected_segment, dict)
+            else None
+        )
         primary_uniprot = selected_uniprot
         meta: Dict = {
             "pdb_id": pdb_norm,
@@ -461,6 +970,8 @@ def run_calibrator_for_pdb(
         }
         if force_refresh:
             fetch_kwargs["force_refresh"] = True
+        if _supports_kwarg(fetch_impl, "return_records"):
+            fetch_kwargs["return_records"] = True
         labels, chembl_meta = fetch_impl(
             selected_uniprot,
             pdb_norm,
@@ -502,6 +1013,46 @@ def run_calibrator_for_pdb(
             )
             if isinstance(telemetry_selection, dict):
                 selection_meta = telemetry_selection
+        selected_targets = selection_meta.get("selected_ids") or []
+
+        ligand_records = _build_calibrator_ligand_records(
+            pdb_norm,
+            selected_chain,
+            primary_uniprot,
+            labels,
+            chembl_meta if isinstance(chembl_meta, dict) else None,
+            resolved_activity_types,
+            chembl_max_phase,
+        )
+        _write_jsonl(out_dir / "calibrator_ligands.jsonl", ligand_records)
+
+        site_evidence_records: List[Dict[str, Any]] = []
+        if enable_site_evidence and selected_targets:
+            chain_map = _load_chain_uniprot_map(
+                pdb_norm,
+                chain_segments if isinstance(chain_segments, dict) else {},
+            )
+            chembl_session = requests.Session()
+            try:
+                site_evidence_records = _build_site_evidence_records(
+                    pdb_norm,
+                    ligand_records,
+                    selected_targets,
+                    chain_map,
+                    cache_dir,
+                    timeout,
+                    retries,
+                    force_refresh,
+                    session=chembl_session,
+                    mechanism_fetch_fn=mechanism_fetch_fn,
+                    binding_site_fetch_fn=binding_site_fetch_fn,
+                )
+            finally:
+                try:
+                    chembl_session.close()
+                except Exception:
+                    pass
+        _write_jsonl(out_dir / "calibrator_site_evidence.jsonl", site_evidence_records)
 
         meta.update(
             {
@@ -518,7 +1069,7 @@ def run_calibrator_for_pdb(
                 "selected_chain": selected_chain,
                 "selected_segment": selected_segment,
                 "selected_uniprot": primary_uniprot,
-                "selected_targets": selection_meta.get("selected_ids") or [],
+                "selected_targets": selected_targets,
                 "target_selection": selection_meta,
             }
         )
@@ -535,7 +1086,7 @@ def run_calibrator_for_pdb(
             "mapping": mapping,
             "selected_chain": selected_chain,
             "selected_segment": selected_segment,
-            "selected_targets": selection_meta.get("selected_ids") or [],
+            "selected_targets": selected_targets,
             "target_selection": selection_meta,
             "chembl_meta": chembl_meta,
             "telemetry": telemetry,

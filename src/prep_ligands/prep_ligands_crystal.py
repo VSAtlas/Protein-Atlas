@@ -47,10 +47,95 @@ from prep_ligands.prep_ligands_common import (
 
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.+-]+")
+_EXTRACTED_LIGAND_NAME_EXCLUDES = ("nolig", "phenix_clean", "phenix-clean")
+
+
+def _base_stem_from_pdb_path(pdb_path: Path) -> str:
+    return pdb_path.stem.split(".sanitized")[0]
+
+
+def _looks_like_extracted_ligand_pdb(pdb_path: Path) -> tuple[bool, str]:
+    name_lc = pdb_path.name.lower()
+    for token in _EXTRACTED_LIGAND_NAME_EXCLUDES:
+        if token in name_lc:
+            return False, f"name_excluded:{token}"
+
+    has_atom = False
+    has_hetatm = False
+    try:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if line.startswith("ATOM"):
+                    has_atom = True
+                    break
+                if line.startswith("HETATM"):
+                    has_hetatm = True
+    except Exception as exc:
+        return False, f"read_error:{exc.__class__.__name__}"
+
+    if has_atom:
+        return False, "has_atom_records"
+    if not has_hetatm:
+        return False, "no_hetatm_records"
+    return True, "ok"
+
+
+def _filter_extracted_ligand_pdbs(pdb_files: List[Path]) -> List[Path]:
+    excluded_counts: Dict[str, int] = {}
+    kept: List[Path] = []
+    for pdb_path in pdb_files:
+        ok, reason = _looks_like_extracted_ligand_pdb(pdb_path)
+        logging.info(
+            "[ligprep-extracted] filter %s ok=%s reason=%s",
+            pdb_path.name,
+            ok,
+            reason,
+        )
+        if ok:
+            kept.append(pdb_path)
+        else:
+            excluded_counts[reason] = excluded_counts.get(reason, 0) + 1
+
+    logging.info(
+        "[ligprep-extracted] filter_summary kept=%d excluded=%d",
+        len(kept),
+        len(pdb_files) - len(kept),
+    )
+    for reason, count in sorted(excluded_counts.items()):
+        logging.info("[ligprep-extracted] filtered reason=%s count=%d", reason, count)
+    return kept
+
+
+def _dedupe_prefer_sanitized(pdb_files: List[Path]) -> List[Path]:
+    grouped: Dict[str, List[Path]] = {}
+    for pdb_path in pdb_files:
+        grouped.setdefault(_base_stem_from_pdb_path(pdb_path), []).append(pdb_path)
+
+    deduped: List[Path] = []
+    for base_stem, paths in sorted(grouped.items()):
+        if len(paths) == 1:
+            deduped.append(paths[0])
+            continue
+
+        sanitized = [p for p in paths if p.stem.endswith(".sanitized")]
+        keep = sorted(sanitized or paths)[0]
+        dropped = [p for p in sorted(paths) if p != keep]
+        logging.info(
+            "[ligprep-extracted] dedupe base=%s keep=%s drop=%s",
+            base_stem,
+            keep.name,
+            ",".join(p.name for p in dropped),
+        )
+        deduped.append(keep)
+
+    return sorted(deduped)
 
 
 def prep_ligands_from_pdb(
-    ligand_output_dir: Path, ligands_mol2_dir: Path, prepped_ligands_dir: Path
+    ligand_output_dir: Path,
+    ligands_mol2_dir: Path,
+    prepped_ligands_dir: Path,
+    dry_run: bool = False,
 ):
     """
     Crystal-safe path to prepare ligands that were extracted from PDBs (processed_pdbs/*/ligands_raw/*.pdb).
@@ -60,31 +145,11 @@ def prep_ligands_from_pdb(
       - crystal-safety scrubs + helium guard
       - concise one-line summary per ligand
       - test-mode subset selection via EXTRACT_ONLY/EXTRACT_TEST (and mirrored CLI)
+      - dry_run plans outputs without invoking external toolchains
     """
     logging.info(
         "Starting ligand preparation from PDB files (crystal-safe, MOL2-first path)"
     )
-
-    config = read_config()
-    mgltools_python = config.get("MGLTOOLS_PYTHON")
-    mgltools_path = config.get("MGLTOOLS_PATH")
-    obabel_exe_cfg = config.get("OPENBABEL_PATH")
-
-    if not mgltools_python or not mgltools_path or not obabel_exe_cfg:
-        raise RuntimeError(
-            "Missing paths in config.txt: MGLTOOLS_PYTHON, MGLTOOLS_PATH, OPENBABEL_PATH"
-        )
-
-    obabel_exe = obabel_exe_cfg
-    obabel_exe_short = get_short_path_name(obabel_exe)
-
-    mgltools_python_short = get_short_path_name(mgltools_python)
-    prepare_script = _resolve_prepare_ligand4(mgltools_path, config)
-    if not prepare_script.exists():
-        raise FileNotFoundError(
-            f"prepare_ligand4.py not found at {prepare_script} (set PREPARE_LIGAND4 in config.txt)"
-        )
-    prepare_script_short = get_short_path_name(str(prepare_script.resolve()))
 
     # --- discovery root diagnostics ---
     root = ligand_output_dir.resolve()
@@ -153,6 +218,48 @@ def prep_ligands_from_pdb(
             print(
                 f"[ligprep-extracted] warn: requested_not_found={','.join(sorted(missing))}"
             )
+
+    logging.info("[ligprep-extracted] discovery_count=%d", len(pdb_files))
+    pdb_files = _filter_extracted_ligand_pdbs(pdb_files)
+    pdb_files = _dedupe_prefer_sanitized(pdb_files)
+    logging.info(
+        "[ligprep-extracted] selected_after_filter count=%d keep=%s",
+        len(pdb_files),
+        ",".join(p.stem for p in pdb_files),
+    )
+
+    if dry_run:
+        planned_outputs = [
+            (
+                prepped_ligands_dir / f"{_base_stem_from_pdb_path(p)}.sanitized.pdbqt"
+            ).name
+            for p in pdb_files
+        ]
+        return {
+            "selected_inputs": [p.name for p in pdb_files],
+            "planned_outputs": planned_outputs,
+        }
+
+    config = read_config()
+    mgltools_python = config.get("MGLTOOLS_PYTHON")
+    mgltools_path = config.get("MGLTOOLS_PATH")
+    obabel_exe_cfg = config.get("OPENBABEL_PATH")
+
+    if not mgltools_python or not mgltools_path or not obabel_exe_cfg:
+        raise RuntimeError(
+            "Missing paths in config.txt: MGLTOOLS_PYTHON, MGLTOOLS_PATH, OPENBABEL_PATH"
+        )
+
+    obabel_exe = obabel_exe_cfg
+    obabel_exe_short = get_short_path_name(obabel_exe)
+
+    mgltools_python_short = get_short_path_name(mgltools_python)
+    prepare_script = _resolve_prepare_ligand4(mgltools_path, config)
+    if not prepare_script.exists():
+        raise FileNotFoundError(
+            f"prepare_ligand4.py not found at {prepare_script} (set PREPARE_LIGAND4 in config.txt)"
+        )
+    prepare_script_short = get_short_path_name(str(prepare_script.resolve()))
 
     # Verbose toggle like bulk
     if str(os.environ.get("EXTRACT_TEST", "0")).lower() not in {"0", "false", "no"}:

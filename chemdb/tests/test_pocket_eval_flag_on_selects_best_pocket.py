@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import math
 import os
@@ -22,7 +23,14 @@ INPUT_PDB = REPO_ROOT / "input_pdbs" / f"{PDB_ID}.pdb"
 POCKETS_DIR = REPO_ROOT / "processed_pdbs" / PDB_ID / "pockets"
 POCKETS_JSON = POCKETS_DIR / "pockets.json"
 MANIFESTS_DIR = REPO_ROOT / "manifests"
-FIXTURE_CACHE = REPO_ROOT / "chemdb" / "tests" / "data" / "calibrator" / "6LU7_calibrator_cache.json"
+FIXTURE_CACHE = (
+    REPO_ROOT
+    / "chemdb"
+    / "tests"
+    / "data"
+    / "calibrator"
+    / "6LU7_calibrator_cache.json"
+)
 
 MMGBSA_DISABLE_ENV = {
     "MMGBSA_ENABLED": "false",
@@ -86,7 +94,9 @@ def _read_pocket_details(run_id: str):
     return {}
 
 
-def _run_main(run_id: str, env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
+def _run_main(
+    run_id: str, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.update(env_overrides)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -198,7 +208,9 @@ def test_pocket_eval_flag_on_selects_best_pocket(tmp_path: Path) -> None:
 
     selected_id = perf.get("selected_pocket_id")
     assert selected_id, "selected_pocket_id missing in pocket_performance.json"
-    assert perf.get("selected_reason"), "selected_reason missing in pocket_performance.json"
+    assert perf.get(
+        "selected_reason"
+    ), "selected_reason missing in pocket_performance.json"
 
     expected_best = _best_pocket_id(perf_pockets)
     assert expected_best == selected_id
@@ -217,3 +229,46 @@ def test_pocket_eval_flag_on_selects_best_pocket(tmp_path: Path) -> None:
     assert details, "Missing pocket_detection details in run manifest"
     assert details.get("center") == _round_center(expected_center)
     assert details.get("box_size") == _round_box(expected_box)
+
+    dataset_tables_root = (
+        REPO_ROOT / "docked" / run_id / "dataset" / "tables" / "calibrator_sets"
+    )
+    candidate_dirs = [dock_root, dock_root / "calibrator_sets", dataset_tables_root]
+    parquet_path = None
+    csv_path = None
+    for candidate in candidate_dirs:
+        if (candidate / "calibrator_sets.parquet").is_file():
+            parquet_path = candidate / "calibrator_sets.parquet"
+            break
+        if (candidate / "calibrator_sets.csv").is_file():
+            csv_path = candidate / "calibrator_sets.csv"
+            break
+
+    assert parquet_path or csv_path, "calibrator_sets table missing"
+    required_cols = {
+        "bag_uid",
+        "pdb_id",
+        "primary_uniprot",
+        "ligand_uid",
+        "set_name",
+        "sampling_policy",
+        "sampling_seed",
+        "split_regime",
+    }
+    rows = []
+    if parquet_path is not None:
+        try:
+            import pandas as pd  # type: ignore
+        except Exception:
+            pytest.skip("pandas missing; cannot read calibrator_sets.parquet")
+        df = pd.read_parquet(parquet_path)
+        rows = df.to_dict(orient="records")
+        assert required_cols.issubset(set(df.columns))
+    else:
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+            assert required_cols.issubset(set(reader.fieldnames or []))
+
+    bag_uids = [row.get("bag_uid") for row in rows]
+    assert len(bag_uids) == len(set(bag_uids))

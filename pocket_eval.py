@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import hashlib
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold  # type: ignore[import-untyped]
 
 from analysis import dud_eval
 from calibrator.chemdbl_calibrator import (
@@ -29,17 +29,22 @@ from calibrator.chemdbl_calibrator import (
     DEFAULT_TIMEOUT,
     run_calibrator_for_pdb,
 )
-from calibrator.uniprot_resolver import resolve_chain_uniprot_segments, select_primary_chain
+from calibrator.uniprot_resolver import (
+    resolve_chain_uniprot_segments,
+    select_primary_chain,
+)
 from DeepCoy_duds.external_sources import fetch_chembl_labeled_smiles
 from DeepCoy_duds.generate_dud_library import convert_smi_to_sdf
+from chemdb import calibrator_sampling, metrics_reporting, pocket_eval_dataset
 from docking.run_vina import run_docking_task
 from ligand_pocket import compute_box_from_ligand_coords
 from path_router.path_router import make_paths, run_logs_dir
 from prep_ligands.prep_ligands_bulk import prep_ligands_with_mgltools
+
 try:
     from rdkit import Chem  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
-    Chem = None
+    Chem = None  # type: ignore[assignment]
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -63,7 +68,9 @@ def pocket_id_from_entry(entry: Dict[str, Any]) -> str:
     return f"{resname}_{chain}_{resnum}"
 
 
-def _center_and_box_from_pocket(entry: Dict[str, Any]) -> Tuple[Optional[tuple], Optional[tuple]]:
+def _center_and_box_from_pocket(
+    entry: Dict[str, Any],
+) -> Tuple[Optional[tuple], Optional[tuple]]:
     coords = entry.get("coords") or []
     if coords:
         parsed = []
@@ -93,7 +100,9 @@ def _center_and_box_from_pocket(entry: Dict[str, Any]) -> Tuple[Optional[tuple],
     return None, None
 
 
-def _load_calibrator_cache(path: Path, logger: logging.Logger) -> Optional[List[Dict[str, Any]]]:
+def _load_calibrator_cache(
+    path: Path, logger: logging.Logger
+) -> Optional[List[Dict[str, Any]]]:
     if not path.exists():
         return None
     try:
@@ -236,6 +245,135 @@ def _build_rows_from_labels(labels: Dict[str, List[str]]) -> List[Dict[str, Any]
             lid = f"chembl:{label}_{_smiles_hash(smi)}"
             rows.append({"ligand_id": lid, "smiles": smi, "label": label})
     return rows
+
+
+_SITE_EVIDENCE_STRENGTH = {
+    "none": 0,
+    "site_id_present": 1,
+    "site_components_mapped": 2,
+}
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _load_calibrator_site_evidence(extracted_dir: Path) -> List[Dict[str, Any]]:
+    evidence_path = extracted_dir / "calibrator_site_evidence.jsonl"
+    if not evidence_path.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        with evidence_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    payload = json.loads(stripped)
+                except Exception:
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    except Exception:
+        return []
+    return rows
+
+
+def _aggregate_site_evidence(
+    evidence_rows: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    by_ligand: Dict[str, Dict[str, Any]] = {}
+    for row in evidence_rows:
+        ligand_id = row.get("ligand_id")
+        if not ligand_id:
+            continue
+        ligand_key = str(ligand_id)
+        entry = by_ligand.setdefault(
+            ligand_key,
+            {
+                "site_evidence_count": 0,
+                "site_evidence_strength": "none",
+                "site_evidence_site_ids": set(),
+                "site_evidence_chains": set(),
+                "site_evidence_uniprots": set(),
+                "site_evidence_targets": set(),
+                "site_evidence_names": set(),
+            },
+        )
+        entry["site_evidence_count"] += 1
+        strength = row.get("evidence_strength") or "none"
+        current_strength = entry.get("site_evidence_strength") or "none"
+        if _SITE_EVIDENCE_STRENGTH.get(strength, 0) > _SITE_EVIDENCE_STRENGTH.get(
+            current_strength, 0
+        ):
+            entry["site_evidence_strength"] = strength
+        site_id = row.get("site_id")
+        if site_id:
+            entry["site_evidence_site_ids"].add(str(site_id))
+        target_id = row.get("target_chembl_id")
+        if target_id:
+            entry["site_evidence_targets"].add(str(target_id))
+        site_name = row.get("binding_site_name")
+        if site_name:
+            entry["site_evidence_names"].add(str(site_name))
+        for chain in row.get("evidence_chains") or []:
+            entry["site_evidence_chains"].add(str(chain))
+        for accession in row.get("evidence_uniprot_accessions") or []:
+            entry["site_evidence_uniprots"].add(str(accession))
+
+    finalized: Dict[str, Dict[str, Any]] = {}
+    for ligand_id, entry in by_ligand.items():
+        finalized[ligand_id] = {
+            "site_evidence_count": entry["site_evidence_count"],
+            "site_evidence_strength": entry["site_evidence_strength"],
+            "site_evidence_site_ids": sorted(entry["site_evidence_site_ids"]),
+            "site_evidence_chains": sorted(entry["site_evidence_chains"]),
+            "site_evidence_uniprot_accessions": sorted(entry["site_evidence_uniprots"]),
+            "site_evidence_target_ids": sorted(entry["site_evidence_targets"]),
+            "site_evidence_binding_site_names": sorted(entry["site_evidence_names"]),
+        }
+    return finalized
+
+
+def _attach_site_evidence(
+    rows: List[Dict[str, Any]], evidence_map: Dict[str, Dict[str, Any]]
+) -> None:
+    if not evidence_map:
+        return
+    for row in rows:
+        ligand_id = row.get("ligand_id")
+        if not ligand_id:
+            continue
+        evidence = evidence_map.get(str(ligand_id))
+        if not evidence:
+            continue
+        row["site_evidence_count"] = evidence.get("site_evidence_count", 0)
+        row["site_evidence_strength"] = evidence.get("site_evidence_strength", "none")
+        row["site_evidence_site_ids"] = _json_dumps(
+            evidence.get("site_evidence_site_ids", [])
+        )
+        row["site_evidence_chains"] = _json_dumps(
+            evidence.get("site_evidence_chains", [])
+        )
+        row["site_evidence_uniprot_accessions"] = _json_dumps(
+            evidence.get("site_evidence_uniprot_accessions", [])
+        )
+        row["site_evidence_target_ids"] = _json_dumps(
+            evidence.get("site_evidence_target_ids", [])
+        )
+        row["site_evidence_binding_site_names"] = _json_dumps(
+            evidence.get("site_evidence_binding_site_names", [])
+        )
+
+
+def _write_jsonl_atomic(path: Path, rows: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+    tmp.replace(path)
 
 
 def _filter_supported_calibrators(
@@ -417,14 +555,14 @@ def get_calibration_set_for_pdb(
     dock_root.mkdir(parents=True, exist_ok=True)
     run_log_dir = run_logs_dir(cfg)
     cache_path = dock_root / "calibrator_cache.json"
-    cache_dir = Path(cfg.get("CALIBRATOR_CACHE_DIR", REPO_ROOT / "calibrator" / ".cache"))
+    cache_dir = Path(
+        cfg.get("CALIBRATOR_CACHE_DIR", REPO_ROOT / "calibrator" / ".cache")
+    )
     force_calibrator = bool(cfg.get("FORCE_CALIBRATOR", False))
 
     cached_rows = None
     if force_calibrator:
-        log.info(
-            "[pocket-eval] calibrator_cache=force_invalidate path=%s", cache_path
-        )
+        log.info("[pocket-eval] calibrator_cache=force_invalidate path=%s", cache_path)
         try:
             cache_path.unlink(missing_ok=True)
         except Exception:
@@ -493,7 +631,7 @@ def get_calibration_set_for_pdb(
 
     if labels is not None:
         rows = _build_rows_from_labels(labels)
-        payload = {
+        payload: Dict[str, Any] = {
             "pdb_id": pdb_norm,
             "rows": rows,
             "labels": labels,
@@ -553,10 +691,12 @@ def prepare_calibrator_ligands(
     cfg: Dict[str, Any],
     logger: Optional[logging.Logger] = None,
     inputs_dir_override: Optional[Path] = None,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     log = logger or _LOG
     out_dir.mkdir(parents=True, exist_ok=True)
-    inputs_dir = Path(inputs_dir_override) if inputs_dir_override else out_dir / "inputs"
+    inputs_dir = (
+        Path(inputs_dir_override) if inputs_dir_override else out_dir / "inputs"
+    )
     prepped_dir = out_dir
     inputs_dir.mkdir(parents=True, exist_ok=True)
     prepped_dir.mkdir(parents=True, exist_ok=True)
@@ -567,9 +707,7 @@ def prepare_calibrator_ligands(
     sorted_rows = sorted(cal_rows, key=lambda r: r["ligand_id"])
 
     pdbqt_files = sorted(prepped_dir.glob("*.pdbqt"))
-    cache_hit = bool(
-        not force and pdbqt_files and len(pdbqt_files) >= len(sorted_rows)
-    )
+    cache_hit = bool(not force and pdbqt_files and len(pdbqt_files) >= len(sorted_rows))
     if cache_hit:
         log.info(
             "[pocket-eval] ligand_prep=cache_hit n=%d dir=%s",
@@ -604,6 +742,7 @@ def prepare_calibrator_ligands(
 
     prepared: List[Dict[str, Any]] = []
     missing = 0
+    missing_ids: List[str] = []
     expected_by_id = {
         row["ligand_id"]: prepped_dir
         / f"{_sanitize_ligand_name_for_filename(row['ligand_id'])}.pdbqt"
@@ -613,8 +752,7 @@ def prepare_calibrator_ligands(
         mapping = expected_by_id
     elif pdbqt_files and len(pdbqt_files) >= len(sorted_rows):
         mapping = {
-            row["ligand_id"]: pdbqt_files[idx]
-            for idx, row in enumerate(sorted_rows)
+            row["ligand_id"]: pdbqt_files[idx] for idx, row in enumerate(sorted_rows)
         }
     else:
         mapping = expected_by_id
@@ -623,6 +761,7 @@ def prepare_calibrator_ligands(
         path = mapping.get(row["ligand_id"])
         if not path or not path.exists():
             missing += 1
+            missing_ids.append(row["ligand_id"])
             continue
         prepared.append(
             {
@@ -633,6 +772,7 @@ def prepare_calibrator_ligands(
         )
 
     invalid = 0
+    invalid_ligands: List[Dict[str, Any]] = []
     if prepared:
         validated: List[Dict[str, Any]] = []
         for row in prepared:
@@ -642,6 +782,13 @@ def prepare_calibrator_ligands(
                 validated.append(row)
             else:
                 invalid += 1
+                invalid_ligands.append(
+                    {
+                        "ligand_id": row["ligand_id"],
+                        "pdbqt_path": row["pdbqt_path"],
+                        "bad_type": _bad,
+                    }
+                )
         prepared = validated
 
     log.info(
@@ -651,7 +798,12 @@ def prepare_calibrator_ligands(
         invalid,
         prepped_dir,
     )
-    return prepared
+    prep_report = {
+        "missing_ligand_ids": missing_ids,
+        "invalid_ligands": invalid_ligands,
+        "prepared_ligand_ids": [row["ligand_id"] for row in prepared],
+    }
+    return prepared, prep_report
 
 
 def _write_vina_config(
@@ -710,7 +862,7 @@ def _read_scores_csv(path: Path) -> Optional[List[Dict[str, Any]]]:
                 ligand_id = row.get("ligand_id")
                 label = row.get("label")
                 score_raw = row.get("score")
-                if not ligand_id or not label or score_raw in (None, ""):
+                if not ligand_id or not label or score_raw is None or score_raw == "":
                     continue
                 try:
                     score = float(score_raw)
@@ -792,6 +944,13 @@ def _calc_global_vina_workers(
     return max_workers, threads_per_vina
 
 
+def _short_error(exc: Exception, limit: int = 200) -> str:
+    text = str(exc)
+    if len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
 def _dock_calibrators_globally(
     *,
     pockets_plan: List[Dict[str, Any]],
@@ -804,12 +963,15 @@ def _dock_calibrators_globally(
     seed: int,
     cfg: Dict[str, Any],
     logger: logging.Logger,
-) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, int]]:
+) -> Tuple[
+    Dict[str, List[Dict[str, Any]]], Dict[str, int], Dict[str, List[Dict[str, Any]]]
+]:
     expected_ids = {r.get("ligand_id") for r in prepared_scoring if r.get("ligand_id")}
     cached_rows_by_pocket: Dict[str, List[Dict[str, Any]]] = {}
     scores_by_pocket: Dict[str, List[Dict[str, Any]]] = {}
     new_rows_by_pocket: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     no_score_by_pocket: Dict[str, int] = defaultdict(int)
+    dock_events_by_pocket: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     jobs: List[_CalibratorDockJob] = []
 
     for plan in pockets_plan:
@@ -823,7 +985,9 @@ def _dock_calibrators_globally(
             row for row in cached_rows if row.get("ligand_id") in expected_ids
         ]
         cached_rows_by_pocket[pocket_id] = cached_filtered
-        cached_ids = {row.get("ligand_id") for row in cached_filtered if row.get("ligand_id")}
+        cached_ids = {
+            row.get("ligand_id") for row in cached_filtered if row.get("ligand_id")
+        }
         if expected_ids.issubset(cached_ids):
             scores_by_pocket[pocket_id] = list(cached_filtered)
             continue
@@ -854,9 +1018,7 @@ def _dock_calibrators_globally(
             if not missing_ids:
                 break
 
-    max_workers, threads_per_vina = _calc_global_vina_workers(
-        cfg, len(jobs), logger
-    )
+    max_workers, threads_per_vina = _calc_global_vina_workers(cfg, len(jobs), logger)
     if jobs:
         futures: Dict[Any, Tuple[_CalibratorDockJob, float]] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -903,6 +1065,20 @@ def _dock_calibrators_globally(
                         job.ligand_id,
                         exc,
                     )
+                    ms = (time.perf_counter() - t0) * 1000
+                    dock_events_by_pocket[job.pocket_id].append(
+                        {
+                            "ligand_id": job.ligand_id,
+                            "label": job.label,
+                            "status": "error",
+                            "score": None,
+                            "dock_ms": ms,
+                            "out_path": str(job.out_path),
+                            "error_type": type(exc).__name__,
+                            "error_str": _short_error(exc),
+                            "score_source": "run",
+                        }
+                    )
                     no_score_by_pocket[job.pocket_id] += 1
                     continue
 
@@ -923,6 +1099,17 @@ def _dock_calibrators_globally(
                         ms,
                         job.out_path,
                     )
+                    dock_events_by_pocket[job.pocket_id].append(
+                        {
+                            "ligand_id": job.ligand_id,
+                            "label": job.label,
+                            "status": "no_score",
+                            "score": None,
+                            "dock_ms": ms,
+                            "out_path": str(job.out_path),
+                            "score_source": "run",
+                        }
+                    )
                     no_score_by_pocket[job.pocket_id] += 1
                     continue
                 logger.info(
@@ -930,6 +1117,17 @@ def _dock_calibrators_globally(
                     job.pocket_id,
                     job.ligand_id,
                     score,
+                )
+                dock_events_by_pocket[job.pocket_id].append(
+                    {
+                        "ligand_id": job.ligand_id,
+                        "label": job.label,
+                        "status": "scored",
+                        "score": score,
+                        "dock_ms": ms,
+                        "out_path": str(job.out_path),
+                        "score_source": "run",
+                    }
                 )
                 new_rows_by_pocket[job.pocket_id].append(
                     {"ligand_id": job.ligand_id, "label": job.label, "score": score}
@@ -949,7 +1147,7 @@ def _dock_calibrators_globally(
         _write_scores_csv(scores_path, merged_rows)
         scores_by_pocket[pocket_id] = merged_rows
 
-    return scores_by_pocket, dict(no_score_by_pocket)
+    return scores_by_pocket, dict(no_score_by_pocket), dict(dock_events_by_pocket)
 
 
 def _dock_calibrators_for_pocket(
@@ -1054,9 +1252,7 @@ def _dock_calibrators_for_pocket(
                 ligand_id,
                 score,
             )
-            scores_rows.append(
-                {"ligand_id": ligand_id, "label": label, "score": score}
-            )
+            scores_rows.append({"ligand_id": ligand_id, "label": label, "score": score})
 
     scores_rows.sort(key=lambda row: row["ligand_id"])
     return scores_rows, no_score
@@ -1083,11 +1279,15 @@ def _compute_fold_metrics(
 
     if min_class < 2 or folds < 2:
         try:
-            metrics["auc_mean"] = float(dud_eval.roc_auc_score(y_true, -scores))
+            metrics["auc_mean"] = float(
+                dud_eval.roc_auc_score(y_true, -scores)  # type: ignore[attr-defined]
+            )
         except Exception:
             metrics["auc_mean"] = float("nan")
         metrics["auc_std"] = 0.0
-        ef = dud_eval.ef_at_fractions(y_true, scores, fractions=(0.01,))
+        ef = dud_eval.ef_at_fractions(  # type: ignore[attr-defined]
+            y_true, scores, fractions=(0.01,)
+        )
         metrics["ef1_mean"] = float(ef.get("EF@1%", float("nan")))
         metrics["ef1_std"] = 0.0
         return metrics
@@ -1101,12 +1301,16 @@ def _compute_fold_metrics(
         y_fold = y_true[test_idx]
         score_low = scores[test_idx]
         try:
-            auc_val = float(dud_eval.roc_auc_score(y_fold, -score_low))
+            auc_val = float(
+                dud_eval.roc_auc_score(y_fold, -score_low)  # type: ignore[attr-defined]
+            )
         except Exception:
             auc_val = float("nan")
         auc_vals.append(auc_val)
 
-        ef = dud_eval.ef_at_fractions(y_fold, score_low, fractions=(0.01,))
+        ef = dud_eval.ef_at_fractions(  # type: ignore[attr-defined]
+            y_fold, score_low, fractions=(0.01,)
+        )
         ef_val = float(ef.get("EF@1%", float("nan")))
         ef_vals.append(ef_val)
 
@@ -1115,6 +1319,78 @@ def _compute_fold_metrics(
     metrics["ef1_mean"] = float(np.nanmean(ef_vals)) if ef_vals else float("nan")
     metrics["ef1_std"] = float(np.nanstd(ef_vals)) if ef_vals else float("nan")
     return metrics
+
+
+def _best_scores_by_ligand(rows: List[Dict[str, Any]]) -> Dict[str, float]:
+    best: Dict[str, float] = {}
+    for row in rows:
+        ligand_id = row.get("ligand_id")
+        score = row.get("score")
+        if ligand_id is None or score is None:
+            continue
+        try:
+            val = float(score)
+        except Exception:
+            continue
+        key = str(ligand_id)
+        if key not in best or val < best[key]:
+            best[key] = val
+    return best
+
+
+def _compute_calibrator_set_metrics(
+    *,
+    set_name: str,
+    set_rows: List[Dict[str, Any]],
+    scores_by_ligand: Dict[str, float],
+    positive_class: str,
+    negative_class: str,
+    top_fracs: List[float],
+    lower_is_better: bool = True,
+) -> Dict[str, Any]:
+    class_counts: Counter[str] = Counter()
+    y_true: List[int] = []
+    y_score: List[float] = []
+    scored = 0
+
+    for row in set_rows:
+        cls = str(row.get("y_binding_class") or "")
+        class_counts[cls] += 1
+        if cls not in {positive_class, negative_class}:
+            continue
+        lig_id = row.get("bag_uid") or row.get("ligand_uid")
+        if lig_id is None:
+            continue
+        score = scores_by_ligand.get(str(lig_id))
+        if score is None:
+            continue
+        scored += 1
+        y_true.append(1 if cls == positive_class else 0)
+        y_score.append(float(score))
+
+    auc = metrics_reporting.compute_auc(
+        y_true,
+        [(-s if lower_is_better else s) for s in y_score],
+    )
+    ef_payload: Dict[str, float] = {}
+    for frac in top_fracs:
+        pct = frac * 100.0
+        label = f"EF@{pct:g}%"
+        ef_payload[label] = metrics_reporting.compute_enrichment_factor(
+            y_true, y_score, frac, lower_is_better=lower_is_better
+        )
+
+    return {
+        "set_name": set_name,
+        "n_total": len(set_rows),
+        "n_scored": scored,
+        "class_counts": dict(class_counts),
+        "positive_class": positive_class,
+        "negative_class": negative_class,
+        "auc": auc,
+        "ef": ef_payload,
+        "score_direction": "lower_is_better" if lower_is_better else "higher_is_better",
+    }
 
 
 def _metric_or_default(value: Any, default: float) -> float:
@@ -1129,7 +1405,46 @@ def _metric_or_default(value: Any, default: float) -> float:
     return val
 
 
-def _select_best_pocket(pocket_rows: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], str]:
+def _cfg_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _infer_run_id(
+    cfg: Dict[str, Any], paths: Any, dock_root: Path, pdb_norm: str
+) -> str:
+    run_id = str(cfg.get("RUN_ID") or "").strip()
+    if not run_id:
+        run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
+    if not run_id:
+        try:
+            docked_root = paths.docked_pdb_root()
+            if docked_root.name.upper() == pdb_norm:
+                parent = docked_root.parent
+                if parent.name and parent.name != "docked":
+                    run_id = parent.name
+        except Exception:
+            pass
+    if not run_id:
+        try:
+            parent = dock_root.parent
+            if parent.name.upper() == pdb_norm:
+                candidate = parent.parent.name
+                if candidate and candidate != "docked":
+                    run_id = candidate
+        except Exception:
+            pass
+    return run_id or "unknown"
+
+
+def _select_best_pocket(
+    pocket_rows: List[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], str]:
     if not pocket_rows:
         return None, "no_pockets"
 
@@ -1223,27 +1538,109 @@ def select_pocket_with_eval(
     seed = int(cfg.get("POCKET_EVAL_SEED", 0))
     folds = int(cfg.get("POCKET_EVAL_FOLDS", 5))
     max_cal = cfg.get("POCKET_EVAL_MAX_CALIBRATORS")
-
-    log.info(
-        "[pocket-eval] start pdb=%s pockets_json=%s", pdb_norm, pockets_json_path
+    sampling_policy = str(
+        cfg.get("CALIBRATOR_SAMPLING_POLICY") or "stratified_scaffold"
+    ).strip()
+    sampling_seed_raw = cfg.get("CALIBRATOR_SAMPLING_SEED")
+    sampling_seed = seed
+    if sampling_seed_raw not in (None, "", "none", "None"):
+        try:
+            sampling_seed = int(sampling_seed_raw)  # type: ignore[arg-type]
+        except Exception:
+            sampling_seed = seed
+    test_fraction = float(cfg.get("CALIBRATOR_TEST_FRACTION", 0.20))
+    remainder_fraction = float(cfg.get("CALIBRATOR_REMAINDER_EVAL_FRACTION", 0.0))
+    pos_class = str(cfg.get("CALIBRATOR_POSITIVE_CLASS", "strong") or "strong")
+    neg_class = str(cfg.get("CALIBRATOR_NEGATIVE_CLASS", "weak") or "weak")
+    top_fracs = metrics_reporting.parse_top_fracs(
+        cfg.get("CALIBRATOR_METRICS_TOP_FRACS")
     )
+    set_table_format = str(
+        cfg.get("CALIBRATOR_SET_TABLE_FORMAT", "parquet") or "parquet"
+    )
+
+    log.info("[pocket-eval] start pdb=%s pockets_json=%s", pdb_norm, pockets_json_path)
 
     cal_rows = get_calibration_set_for_pdb(pdb_norm, cfg, log)
     if not cal_rows:
         log.warning("[pocket-eval] no_calibrators pdb=%s", pdb_norm)
-        _write_performance_error(perf_path, pdb_norm, "calibrators_empty", seed=seed, folds=folds)
+        _write_performance_error(
+            perf_path, pdb_norm, "calibrators_empty", seed=seed, folds=folds
+        )
         return None
     cal_rows = _filter_supported_calibrators(cal_rows, log)
     if not cal_rows:
         log.warning("[pocket-eval] calibrators_filtered_empty pdb=%s", pdb_norm)
-        _write_performance_error(perf_path, pdb_norm, "calibrators_empty", seed=seed, folds=folds)
+        _write_performance_error(
+            perf_path, pdb_norm, "calibrators_empty", seed=seed, folds=folds
+        )
         return None
 
-    rows_used, weak_ignored = _select_calibrator_rows_for_eval_and_prep(
-        cal_rows, max_cal, seed, log
+    cal_rows_by_id = {
+        str(row.get("ligand_id")): row
+        for row in cal_rows
+        if row.get("ligand_id") is not None
+    }
+    bags = []
+    for row in cal_rows:
+        ligand_id = row.get("ligand_id")
+        if not ligand_id:
+            continue
+        smi = row.get("canonical_smiles") or row.get("smiles")
+        inchikey = row.get("inchi_key") or row.get("inchikey") or row.get("inchiKey")
+        bags.append(
+            {
+                "bag_uid": str(ligand_id),
+                "ligand_uid": str(ligand_id),
+                "canonical_smiles": smi,
+                "inchikey": inchikey,
+                "y_binding_class": row.get("label"),
+            }
+        )
+
+    bags_assigned = calibrator_sampling.assign_holdout_sets(
+        bags,
+        seed=sampling_seed,
+        test_fraction=test_fraction,
+        remainder_eval_fraction=remainder_fraction,
     )
-    strong_used = sum(1 for r in rows_used if r.get("label") == "strong")
-    non_used = sum(1 for r in rows_used if r.get("label") == "non")
+    test_rows = [r for r in bags_assigned if r.get("set_name") == "test"]
+    remainder_rows = [r for r in bags_assigned if r.get("set_name") == "remainder_eval"]
+    train_pool_rows = [r for r in bags_assigned if r.get("set_name") == "train_pool"]
+    train_pool_eval_rows = [
+        r for r in train_pool_rows if r.get("y_binding_class") in {"strong", "non"}
+    ]
+    pocket_select_sample_rows, _ = calibrator_sampling.select_pocket_eval_sample(
+        train_pool_eval_rows, max_cal, sampling_policy, sampling_seed
+    )
+    pocket_select_ids = {
+        str(r.get("bag_uid"))
+        for r in pocket_select_sample_rows
+        if r.get("bag_uid") is not None
+    }
+    train_rows = [
+        r for r in train_pool_rows if r.get("bag_uid") not in pocket_select_ids
+    ]
+    for row in pocket_select_sample_rows:
+        row["set_name"] = "pocket_select_sample"
+    for row in train_rows:
+        row["set_name"] = "train"
+
+    calibrator_sets_rows = (
+        list(pocket_select_sample_rows)
+        + list(train_rows)
+        + list(test_rows)
+        + list(remainder_rows)
+    )
+
+    cal_rows_used = [
+        cal_rows_by_id[str(uid)]
+        for uid in sorted(pocket_select_ids)
+        if uid in cal_rows_by_id
+    ]
+    strong_used = sum(1 for r in cal_rows_used if r.get("label") == "strong")
+    non_used = sum(1 for r in cal_rows_used if r.get("label") == "non")
+    weak_ignored = sum(1 for r in cal_rows if r.get("label") == "weak")
     if not strong_used or not non_used:
         reason = "calibrators_missing_class"
         log.warning(
@@ -1256,21 +1653,69 @@ def select_pocket_with_eval(
         _write_performance_error(perf_path, pdb_norm, reason, seed=seed, folds=folds)
         return None
 
-    cal_rows_used = rows_used
-    prep_rows = rows_used
+    prep_rows = cal_rows_used
+    set_counts: defaultdict[str, int] = defaultdict(int)
+    for row in calibrator_sets_rows:
+        set_counts[str(row.get("set_name") or "unknown")] += 1
     log.info(
-        "[pocket-eval] calibrators used strong=%d non=%d weak_ignored=%d",
-        strong_used,
-        non_used,
-        weak_ignored,
+        "[pocket-eval] calibrator_sets total=%d pocket_select_sample=%d train=%d "
+        "test=%d remainder_eval=%d policy=%s seed=%s max_eval=%s",
+        len(cal_rows),
+        set_counts.get("pocket_select_sample", 0),
+        set_counts.get("train", 0),
+        set_counts.get("test", 0),
+        set_counts.get("remainder_eval", 0),
+        sampling_policy,
+        sampling_seed,
+        max_cal,
     )
+
+    primary_uniprot = None
+    try:
+        chain_map = resolve_chain_uniprot_segments(pdb_norm, write_file=False)
+        _, segment = select_primary_chain(chain_map)
+        if isinstance(segment, dict):
+            primary_uniprot = segment.get("uniprot")
+    except Exception:
+        primary_uniprot = None
+
+    calibrator_sets_table = calibrator_sampling.build_calibrator_sets_table(
+        calibrator_sets_rows,
+        pdb_id=pdb_norm,
+        primary_uniprot=primary_uniprot,
+        sampling_policy=sampling_policy,
+        sampling_seed=sampling_seed,
+    )
+    calibrator_sets_rows_out = calibrator_sets_table
+    if hasattr(calibrator_sets_table, "to_dict"):
+        try:
+            calibrator_sets_rows_out = calibrator_sets_table.to_dict(orient="records")
+        except Exception:
+            calibrator_sets_rows_out = list(calibrator_sets_table)
+    dataset_tables_root = paths.docked_root / "dataset" / "tables"
+    if dataset_tables_root.exists():
+        calibrator_sets_dir = dataset_tables_root / "calibrator_sets"
+    else:
+        calibrator_sets_dir = dock_root
+    calibrator_sets_path = calibrator_sampling.write_calibrator_sets_table(
+        calibrator_sets_dir,
+        list(calibrator_sets_rows_out),
+        table_format=set_table_format,
+        logger=log,
+    )
+    if calibrator_sets_path:
+        log.info(
+            "[pocket-eval] calibrator_sets.write path=%s rows=%d",
+            calibrator_sets_path,
+            len(calibrator_sets_table),
+        )
 
     prep_root = paths.prepped_ligands_dir.parent / f"{pdb_norm}_calibrator"
     prep_dir = prep_root
     extracted_root = Path(cfg.get("LIGAND_EXTRACTED_DIR", DEFAULT_OUT_ROOT))
     extracted_dir = extracted_root / f"{pdb_norm}_calibrator"
     extracted_dir.mkdir(parents=True, exist_ok=True)
-    prepared = prepare_calibrator_ligands(
+    prepared, prep_report = prepare_calibrator_ligands(
         prep_rows, prep_dir, cfg, log, inputs_dir_override=extracted_dir
     )
     used_ids = {r["ligand_id"] for r in cal_rows_used}
@@ -1365,9 +1810,7 @@ def select_pocket_with_eval(
         pocket_id = pocket_id_from_entry(pocket)
         center, box_size = _center_and_box_from_pocket(pocket)
         if not center or not box_size:
-            log.warning(
-                "[pocket-eval] pocket_skip missing_box pocket_id=%s", pocket_id
-            )
+            log.warning("[pocket-eval] pocket_skip missing_box pocket_id=%s", pocket_id)
             continue
 
         dock_dir = dock_root / pocket_id
@@ -1432,7 +1875,11 @@ def select_pocket_with_eval(
             plan["dock_dir"],
         )
 
-    scores_by_pocket, no_score_by_pocket = _dock_calibrators_globally(
+    (
+        scores_by_pocket,
+        no_score_by_pocket,
+        dock_events_by_pocket,
+    ) = _dock_calibrators_globally(
         pockets_plan=pockets_plan,
         prepared_scoring=prepared_scoring,
         receptor_pdbqt_path=receptor_pdbqt_path,
@@ -1444,6 +1891,110 @@ def select_pocket_with_eval(
         cfg=cfg,
         logger=log,
     )
+
+    if _cfg_bool(cfg.get("POCKET_EVAL_DATASET_ENABLE", True), True):
+        run_id = _infer_run_id(cfg, paths, dock_root, pdb_norm)
+        variant = (
+            os.environ.get("APO_HOLO_VARIANT")
+            or cfg.get("APO_HOLO_VARIANT")
+            or cfg.get("VARIANT")
+            or ""
+        ).strip().upper() or "unknown"
+        dataset_rows = pocket_eval_dataset.build_pocket_eval_dataset_long(
+            run_id=run_id,
+            pdb_id=pdb_norm,
+            variant=variant,
+            calibrators_used=cal_rows_used,
+            pockets_plan=pockets_plan,
+            scores_by_pocket=scores_by_pocket,
+            dock_events_by_pocket=dock_events_by_pocket,
+            prep_report=prep_report,
+        )
+        split_group_key = cfg.get("POCKET_EVAL_SPLIT_GROUP_KEY", "ligand_id")
+        split_strategy = cfg.get("POCKET_EVAL_SPLIT_STRATEGY", "auto")
+        split_folds = int(cfg.get("POCKET_EVAL_SPLIT_FOLDS") or folds)
+        splits_enable = _cfg_bool(cfg.get("POCKET_EVAL_SPLITS_ENABLE", True), True)
+        if not splits_enable:
+            split_strategy = "disabled"
+        dataset_rows, splits_payload = pocket_eval_dataset.make_pocket_eval_folds(
+            dataset_rows,
+            n_splits=split_folds,
+            seed=seed,
+            group_key=str(split_group_key),
+            stratify_labels=True,
+            strategy=split_strategy,
+        )
+        site_evidence_rows = _load_calibrator_site_evidence(extracted_dir)
+        if site_evidence_rows:
+            evidence_map = _aggregate_site_evidence(site_evidence_rows)
+            _attach_site_evidence(dataset_rows, evidence_map)
+            _write_jsonl_atomic(
+                dock_root / "pocket_eval_calibrator_site_evidence.jsonl",
+                site_evidence_rows,
+            )
+
+        config_snapshot = {
+            "run_id": run_id,
+            "pdb_id": pdb_norm,
+            "variant": variant,
+            "POCKET_EVAL_SEED": seed,
+            "POCKET_EVAL_FOLDS": folds,
+            "POCKET_EVAL_MAX_CALIBRATORS": max_cal,
+            "CALIBRATOR_SAMPLING_POLICY": sampling_policy,
+            "CALIBRATOR_SAMPLING_SEED": sampling_seed,
+            "CALIBRATOR_TEST_FRACTION": test_fraction,
+            "CALIBRATOR_REMAINDER_EVAL_FRACTION": remainder_fraction,
+            "CALIBRATOR_POSITIVE_CLASS": pos_class,
+            "CALIBRATOR_NEGATIVE_CLASS": neg_class,
+            "CALIBRATOR_METRICS_TOP_FRACS": top_fracs,
+            "CALIBRATOR_SET_TABLE_FORMAT": set_table_format,
+            "POCKET_EVAL_DATASET_ENABLE": True,
+            "POCKET_EVAL_DATASET_FORMATS": cfg.get(
+                "POCKET_EVAL_DATASET_FORMATS", "csv"
+            ),
+            "POCKET_EVAL_SPLITS_ENABLE": splits_enable,
+            "POCKET_EVAL_SPLIT_GROUP_KEY": split_group_key,
+            "POCKET_EVAL_SPLIT_STRATEGY": split_strategy,
+            "POCKET_EVAL_SPLIT_FOLDS": split_folds,
+            "POCKET_EVAL_ENSEMBLE_ENABLE": _cfg_bool(
+                cfg.get("POCKET_EVAL_ENSEMBLE_ENABLE", False), False
+            ),
+            "POCKET_EVAL_CV_ENABLE": _cfg_bool(
+                cfg.get("POCKET_EVAL_CV_ENABLE", False), False
+            ),
+            "POCKET_EVAL_CV_TOP_M": int(cfg.get("POCKET_EVAL_CV_TOP_M", 2)),
+            "POCKET_EVAL_CV_REQUIRE_SCORES": _cfg_bool(
+                cfg.get("POCKET_EVAL_CV_REQUIRE_SCORES", True), True
+            ),
+            "POCKET_EVAL_ORACLE_ENABLE": _cfg_bool(
+                cfg.get("POCKET_EVAL_ORACLE_ENABLE", False), False
+            ),
+            "POCKET_EVAL_DATASET_WIDE_ENABLE": _cfg_bool(
+                cfg.get("POCKET_EVAL_DATASET_WIDE_ENABLE", False), False
+            ),
+        }
+        pockets_used = pocket_eval_dataset.build_pockets_used(pockets_plan)
+        pocket_eval_dataset.write_pocket_eval_artifacts(
+            dock_root,
+            dataset_rows,
+            config_snapshot=config_snapshot,
+            pockets_used=pockets_used,
+            splits_payload=splits_payload,
+            logger=log,
+            formats=cfg.get("POCKET_EVAL_DATASET_FORMATS", "csv"),
+            enable_wide=_cfg_bool(
+                cfg.get("POCKET_EVAL_DATASET_WIDE_ENABLE", False), False
+            ),
+            ensemble_enable=_cfg_bool(
+                cfg.get("POCKET_EVAL_ENSEMBLE_ENABLE", False), False
+            ),
+            cv_enable=_cfg_bool(cfg.get("POCKET_EVAL_CV_ENABLE", False), False),
+            cv_top_m=int(cfg.get("POCKET_EVAL_CV_TOP_M", 2)),
+            cv_require_scores=_cfg_bool(
+                cfg.get("POCKET_EVAL_CV_REQUIRE_SCORES", True), True
+            ),
+            oracle_enable=_cfg_bool(cfg.get("POCKET_EVAL_ORACLE_ENABLE", False), False),
+        )
 
     for plan in pockets_plan:
         pocket = plan["pocket"]
@@ -1492,8 +2043,125 @@ def select_pocket_with_eval(
 
     selected, reason = _select_best_pocket(pocket_rows)
     if not selected:
-        _write_performance_error(perf_path, pdb_norm, "no_valid_pockets", seed=seed, folds=folds, pockets=pocket_rows)
+        _write_performance_error(
+            perf_path,
+            pdb_norm,
+            "no_valid_pockets",
+            seed=seed,
+            folds=folds,
+            pockets=pocket_rows,
+        )
         return None
+
+    calibrator_metrics_payload = None
+    calibrator_metrics_path = None
+    if test_rows or remainder_rows:
+        selected_id = selected.get("pocket_id")
+        selected_plan = next(
+            (plan for plan in pockets_plan if plan.get("pocket_id") == selected_id),
+            None,
+        )
+        if selected_plan and selected_id:
+            eval_rows = list(test_rows) + list(remainder_rows)
+            eval_ids = {
+                str(row.get("bag_uid"))
+                for row in eval_rows
+                if row.get("bag_uid") is not None
+            }
+            eval_cal_rows = [
+                cal_rows_by_id[uid] for uid in eval_ids if uid in cal_rows_by_id
+            ]
+            if eval_cal_rows:
+                prepared_eval, _ = prepare_calibrator_ligands(
+                    eval_cal_rows, prep_dir, cfg, log, inputs_dir_override=extracted_dir
+                )
+                prepared_eval_scoring = [
+                    r for r in prepared_eval if r.get("ligand_id") in eval_ids
+                ]
+                existing_scores = scores_by_pocket.get(selected_id, [])
+                scores_by_ligand = _best_scores_by_ligand(existing_scores)
+                missing_prepared = [
+                    r
+                    for r in prepared_eval_scoring
+                    if r.get("ligand_id") not in scores_by_ligand
+                ]
+                if missing_prepared:
+                    eval_workers, eval_threads = _calc_vina_parallel_workers(
+                        cfg, len(missing_prepared), log
+                    )
+                    new_scores, _ = _dock_calibrators_for_pocket(
+                        pocket_id=str(selected_id),
+                        prepared_scoring=missing_prepared,
+                        receptor_pdbqt_path=receptor_pdbqt_path,
+                        center=selected_plan["center"],
+                        box_size=selected_plan["box_size"],
+                        dock_dir=selected_plan["dock_dir"],
+                        vina_exe=str(vina_exe),
+                        max_workers=eval_workers,
+                        threads_per_vina=eval_threads,
+                        exhaustiveness=exhaustiveness,
+                        num_modes=num_modes,
+                        verbosity=verbosity,
+                        seed=seed,
+                        logger=log,
+                    )
+                    merged = {row["ligand_id"]: row for row in existing_scores}
+                    for row in new_scores:
+                        merged[row["ligand_id"]] = row
+                    merged_rows = list(merged.values())
+                    merged_rows.sort(key=lambda row: row["ligand_id"])
+                    _write_scores_csv(selected_plan["scores_path"], merged_rows)
+                    scores_by_pocket[selected_id] = merged_rows
+                    scores_by_ligand = _best_scores_by_ligand(merged_rows)
+                else:
+                    scores_by_ligand = _best_scores_by_ligand(existing_scores)
+            else:
+                scores_by_ligand = _best_scores_by_ligand(
+                    scores_by_pocket.get(selected_id, [])
+                )
+
+            metrics_sets = [
+                _compute_calibrator_set_metrics(
+                    set_name="test",
+                    set_rows=test_rows,
+                    scores_by_ligand=scores_by_ligand,
+                    positive_class=pos_class,
+                    negative_class=neg_class,
+                    top_fracs=top_fracs,
+                )
+            ]
+            if remainder_rows:
+                metrics_sets.append(
+                    _compute_calibrator_set_metrics(
+                        set_name="remainder_eval",
+                        set_rows=remainder_rows,
+                        scores_by_ligand=scores_by_ligand,
+                        positive_class=pos_class,
+                        negative_class=neg_class,
+                        top_fracs=top_fracs,
+                    )
+                )
+            calibrator_metrics_payload = {
+                "pdb_id": pdb_norm,
+                "selected_pocket_id": selected_id,
+                "split_regime": "ligand_scaffold_holdout",
+                "sampling_policy": sampling_policy,
+                "sampling_seed": sampling_seed,
+                "score_direction": "lower_is_better",
+                "metrics": metrics_sets,
+            }
+            calibrator_metrics_path = dock_root / "calibrator_metrics.json"
+            metrics_text = json.dumps(calibrator_metrics_payload, indent=2)
+            calibrator_metrics_path.write_text(metrics_text, encoding="utf-8")
+            log.info(
+                "[pocket-eval] calibrator_metrics.write path=%s bytes=%d",
+                calibrator_metrics_path,
+                len(metrics_text.encode("utf-8")),
+            )
+        else:
+            log.warning(
+                "[pocket-eval] calibrator_metrics skip reason=selected_pocket_missing"
+            )
 
     performance_payload = {
         "pdb_id": pdb_norm,
@@ -1514,6 +2182,12 @@ def select_pocket_with_eval(
         "selected_pocket_id": selected.get("pocket_id"),
         "selected_reason": reason,
     }
+    if calibrator_metrics_payload is not None:
+        performance_payload["calibrator_metrics"] = calibrator_metrics_payload
+        if calibrator_metrics_path is not None:
+            performance_payload["calibrator_metrics_path"] = str(
+                calibrator_metrics_path
+            )
     perf_path.parent.mkdir(parents=True, exist_ok=True)
     payload_text = json.dumps(performance_payload, indent=2)
     start = time.perf_counter()

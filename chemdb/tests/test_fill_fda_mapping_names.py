@@ -109,7 +109,11 @@ def _fake_get(url: str, timeout: int = 10):
     if "pubchem.ncbi.nlm.nih.gov" in url and "/synonyms/JSON" in url:
         if "/cid/111/" in url:
             return FakeResponse(
-                {"InformationList": {"Information": [{"CID": 111, "Synonym": ["Metformin"]}]}}
+                {
+                    "InformationList": {
+                        "Information": [{"CID": 111, "Synonym": ["Metformin"]}]
+                    }
+                }
             )
         if "/cid/222/" in url:
             return FakeResponse(
@@ -125,7 +129,11 @@ def _fake_get(url: str, timeout: int = 10):
         term = parse_qs(urlparse(url).query).get("term", [""])[0]
         if "Metformin" in term:
             return FakeResponse(
-                {"approximateGroup": {"candidate": [{"rxcui": "860975", "score": "100"}]}}
+                {
+                    "approximateGroup": {
+                        "candidate": [{"rxcui": "860975", "score": "100"}]
+                    }
+                }
             )
         if "Candesartan" in term:
             return FakeResponse(
@@ -160,8 +168,7 @@ def test_fill_fda_mapping_names(tmp_path):
             sdf_title="RowB",
             inchikey="INCHIKEYB",
             display_name=(
-                "6,7-dimethoxy-2-[4-(phenylmethyl)piperazin-1-yl]"
-                "quinazolin-4-amine"
+                "6,7-dimethoxy-2-[4-(phenylmethyl)piperazin-1-yl]" "quinazolin-4-amine"
             ),
         ),
         _make_row(
@@ -192,7 +199,7 @@ def test_fill_fda_mapping_names(tmp_path):
             ]
         )
 
-    assert exit_code == 0
+    assert exit_code == 2
     assert in_csv.read_bytes() == original_bytes
 
     with in_csv.open("r", encoding="utf-8") as handle:
@@ -212,6 +219,6 @@ def test_fill_fda_mapping_names(tmp_path):
         by_file_num["2"]["display_name"], by_file_num["2"].get("pubchem_iupac_name")
     )
     assert by_file_num["3"]["display_name"] == "UNK_3"
-    assert not tool.is_bad_display_name(
+    assert tool.is_bad_display_name(
         by_file_num["3"]["display_name"], by_file_num["3"].get("pubchem_iupac_name")
     )

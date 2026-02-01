@@ -64,7 +64,11 @@ def test_pocket_eval_calibrator_global_parallelism(tmp_path: Path, monkeypatch) 
         },
     ]
 
-    scores_by_pocket, no_score_by_pocket = pocket_eval._dock_calibrators_globally(
+    (
+        scores_by_pocket,
+        no_score_by_pocket,
+        dock_events_by_pocket,
+    ) = pocket_eval._dock_calibrators_globally(
         pockets_plan=pockets_plan,
         prepared_scoring=prepared_scoring,
         receptor_pdbqt_path=receptor_pdbqt,
@@ -94,3 +98,5 @@ def test_pocket_eval_calibrator_global_parallelism(tmp_path: Path, monkeypatch) 
     assert p2_scores is not None
     assert len(p1_scores) == 1
     assert len(p2_scores) == 1
+    assert dock_events_by_pocket["P1"][0]["status"] == "scored"
+    assert dock_events_by_pocket["P2"][0]["status"] == "scored"

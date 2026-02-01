@@ -17,6 +17,7 @@ OUTPUT_DIR=${OVERALL_DIR}/processed_pdbs
 PDBQT_DIR=${OVERALL_DIR}/pdbqts
 DOCKED_DIR=${OVERALL_DIR}/docked
 PATHWAY_ORGANISM=Homo sapiens
+pathway_catalyst_only=true
 
 # P2Rank
 P2RANK_PATH=/home/michael/atlas/tools/p2rank/bin/p2rank.jar
@@ -111,8 +112,7 @@ DRUGGABILITY_TIER_C_POLAR_FRAC_MIN   = 0.60
 # --- Protein family difficulty prior (druggability + family integration) ---
 USE_PROTEIN_FAMILY_PRIOR = true
 
-# Family-tier keyword heuristics (lowercase, semi-colon or comma separated substrings).
-# These are deliberately conservative and can be tuned as you calibrate on DUD-E.
+# Family-tier keyword heuristics 
 FAMILY_PRIOR_TIER_A_KEYWORDS = kinase;protein kinase;tyrosine kinase;serine/threonine kinase;cdk;mapk;thymidylate synthase;dihydrofolate reductase;dehydrogenase;reductase;androgen receptor;estrogen receptor;thyroid hormone receptor
 FAMILY_PRIOR_TIER_B_KEYWORDS = protease;trypsin;thrombin;factor vii;factor x;plasmin;metalloprotease;gpcr;g-protein coupled receptor;adrenergic receptor;cytochrome p450;cyp2c9;ion channel
 FAMILY_PRIOR_TIER_C_KEYWORDS = hsp90;heat shock protein 90;chaperone;comt;catechol o-methyltransferase;farnesyl pyrophosphate synthase;fpps;fpps;metalloenzyme

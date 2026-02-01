@@ -128,7 +128,9 @@ def _resolve_target_keywords(uniprot: str, keywords: Optional[List[str]]) -> Lis
     return []
 
 
-def _extract_component_range(component: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+def _extract_component_range(
+    component: Dict[str, Any],
+) -> Tuple[Optional[int], Optional[int]]:
     start = None
     end = None
     start_keys = (
@@ -171,8 +173,10 @@ def _collect_target_text_fields(target: Dict[str, Any]) -> List[Tuple[str, str]]
                 if isinstance(item, str) and item.strip():
                     fields.append((label, item.strip()))
                 elif isinstance(item, dict):
-                    name_val = item.get("synonym") or item.get("name") or item.get(
-                        "component_synonym"
+                    name_val = (
+                        item.get("synonym")
+                        or item.get("name")
+                        or item.get("component_synonym")
                     )
                     if isinstance(name_val, str) and name_val.strip():
                         fields.append((label, name_val.strip()))
@@ -200,9 +204,7 @@ def _score_keywords(
     lower_fields = [(label, text.lower()) for label, text in text_fields]
     for kw in keywords:
         kw_lower = kw.lower()
-        for (label, lower_text), (_, original) in zip(
-            lower_fields, text_fields
-        ):
+        for (label, lower_text), (_, original) in zip(lower_fields, text_fields):
             if kw_lower in lower_text:
                 score += 1
                 if first_match is None:
@@ -1106,9 +1108,7 @@ def fetch_chembl_smiles(
                         "limit": activity_limit,
                     }
                     if activity_types:
-                        activity_params["standard_type__in"] = ",".join(
-                            activity_types
-                        )
+                        activity_params["standard_type__in"] = ",".join(activity_types)
                     activities, _ = _get_json_paged(
                         f"{base}/activity",
                         activity_params,
@@ -1209,6 +1209,7 @@ def fetch_chembl_labeled_smiles(
     unp_end: Optional[int] = None,
     target_keywords: Optional[List[str]] = None,
     force_refresh: bool = False,
+    return_records: bool = False,
 ) -> Tuple[Dict[str, List[str]], Dict]:
     """
     Retrieve ChEMBL activities for a UniProt target and bucket SMILES into
@@ -1256,6 +1257,31 @@ def fetch_chembl_labeled_smiles(
                 "rejected_value_threshold_samples_max", debug_rejection_samples_max
             )
         cached_meta.setdefault("target_selection", {})
+        if return_records:
+            cached_records = cached_meta.get("records")
+            if cached_records is None:
+                cached_records = []
+                for lbl, smi_list in cached["labels"].items():
+                    for smi in smi_list or []:
+                        cached_records.append(
+                            {
+                                "molecule_chembl_id": None,
+                                "canonical_smiles": smi,
+                                "inchi_key": None,
+                                "label": lbl,
+                                "supporting_activity": {
+                                    "pchembl_value": None,
+                                    "standard_value": None,
+                                    "standard_units": None,
+                                    "standard_type": None,
+                                    "standard_relation": None,
+                                },
+                                "assay_chembl_id": None,
+                                "activity_chembl_id": None,
+                                "document_chembl_id": None,
+                            }
+                        )
+                cached_meta["records"] = cached_records
         return cached["labels"], cached_meta
 
     base = CHEMBL_API_BASE
@@ -1263,6 +1289,7 @@ def fetch_chembl_labeled_smiles(
     labels: Dict[str, List[str]] = {"strong": [], "weak": [], "non": []}
     label_map: Dict[str, str] = {}
     label_priority = {"non": 1, "weak": 2, "strong": 3}
+    record_map: Dict[str, Dict[str, Any]] = {}
     counts = {
         "targets": 0,
         "targets_total": 0,
@@ -1270,7 +1297,7 @@ def fetch_chembl_labeled_smiles(
         "activities": 0,
         "molecules": 0,
     }
-    molecule_cache: Dict[str, Optional[str]] = {}
+    molecule_cache: Dict[str, Dict[str, Optional[str]]] = {}
     error = None
     debug_info = _normalize_debug({})
     target_ids_sample = cast(List[str], debug_info.get("target_ids_sample", []))
@@ -1347,6 +1374,80 @@ def fetch_chembl_labeled_smiles(
         if lower == "nm":
             return "nM"
         return unit_str
+
+    def _supporting_activity_payload(activity: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "pchembl_value": activity.get("pchembl_value"),
+            "standard_value": activity.get("standard_value"),
+            "standard_units": activity.get("standard_units"),
+            "standard_type": activity.get("standard_type"),
+            "standard_relation": activity.get("standard_relation"),
+        }
+
+    def _float_or_none(value: Any) -> Optional[float]:
+        try:
+            return float(value) if value is not None else None
+        except Exception:
+            return None
+
+    def _support_better(
+        current_support: Optional[Dict[str, Any]],
+        candidate_support: Dict[str, Any],
+    ) -> bool:
+        if current_support is None:
+            return True
+        curr_p = _float_or_none(current_support.get("pchembl_value"))
+        cand_p = _float_or_none(candidate_support.get("pchembl_value"))
+        if cand_p is not None and (curr_p is None or cand_p > curr_p):
+            return True
+        if cand_p is None and curr_p is not None:
+            return False
+        curr_std = _float_or_none(current_support.get("standard_value"))
+        cand_std = _float_or_none(candidate_support.get("standard_value"))
+        if cand_std is not None and (curr_std is None or cand_std < curr_std):
+            return True
+        return False
+
+    def _maybe_record(
+        mol_id: str,
+        smiles: str,
+        inchi_key: Optional[str],
+        label: str,
+        activity: Dict[str, Any],
+    ) -> None:
+        if not return_records:
+            return
+        if not mol_id or not smiles:
+            return
+        support = _supporting_activity_payload(activity)
+        candidate = {
+            "molecule_chembl_id": mol_id,
+            "canonical_smiles": smiles,
+            "inchi_key": inchi_key,
+            "label": label,
+            "supporting_activity": support,
+            "assay_chembl_id": activity.get("assay_chembl_id"),
+            "activity_chembl_id": activity.get("activity_chembl_id"),
+            "document_chembl_id": activity.get("document_chembl_id"),
+        }
+        existing = record_map.get(mol_id)
+        if existing:
+            existing_label = existing.get("label")
+            if label_priority.get(existing_label, 0) > label_priority.get(label, 0):
+                if inchi_key and not existing.get("inchi_key"):
+                    existing["inchi_key"] = inchi_key
+                if smiles and not existing.get("canonical_smiles"):
+                    existing["canonical_smiles"] = smiles
+                return
+            if label_priority.get(existing_label, 0) == label_priority.get(
+                label, 0
+            ) and not _support_better(existing.get("supporting_activity"), support):
+                if inchi_key and not existing.get("inchi_key"):
+                    existing["inchi_key"] = inchi_key
+                if smiles and not existing.get("canonical_smiles"):
+                    existing["canonical_smiles"] = smiles
+                return
+        record_map[mol_id] = candidate
 
     def log_request_url(url: Optional[str]) -> None:
         if not url:
@@ -1484,8 +1585,11 @@ def fetch_chembl_labeled_smiles(
                     _increment(skip_counts, "skip_missing_molecule_chembl_id")
                     continue
                 phase_filtered = False
+                inchi_key = None
                 if mol_id in molecule_cache:
-                    smi = molecule_cache[mol_id]
+                    cached_info = molecule_cache[mol_id]
+                    smi = cached_info.get("smiles")
+                    inchi_key = cached_info.get("inchi_key")
                 else:
                     molecule_sanity["n_molecule_fetch_attempted"] += 1
                     try:
@@ -1500,7 +1604,7 @@ def fetch_chembl_labeled_smiles(
                         )
                     except Exception:
                         molecule_sanity["n_molecule_fetch_failed_http"] += 1
-                        molecule_cache[mol_id] = None
+                        molecule_cache[mol_id] = {"smiles": None, "inchi_key": None}
                         continue
                     mol_payload = _safe_dict(mol_json)
                     if not isinstance(mol_json, dict):
@@ -1530,9 +1634,14 @@ def fetch_chembl_labeled_smiles(
                         if mol_structures
                         else None
                     )
+                    if mol_structures:
+                        inchi_key = mol_structures.get("standard_inchi_key")
                     if not smi:
                         smi = parse_chembl_molecule(mol_payload, chembl_max_phase)
-                    molecule_cache[mol_id] = smi
+                    molecule_cache[mol_id] = {
+                        "smiles": smi,
+                        "inchi_key": inchi_key,
+                    }
                 if not smi:
                     if phase_filtered:
                         _increment(skip_counts, "skip_phase_filtered")
@@ -1549,6 +1658,7 @@ def fetch_chembl_labeled_smiles(
                     molecule_sanity.get("n_molecule_parsed_smiles_ok", 0) + 1
                 )
                 assign_label(smi, label)
+                _maybe_record(mol_id, smi, inchi_key, label, activity_obj)
             if not activity_seen:
                 _increment(skip_counts, "skip_empty_activity_page")
         for smi, lbl in label_map.items():
@@ -1585,6 +1695,8 @@ def fetch_chembl_labeled_smiles(
         "telemetry": telemetry,
         "target_selection": selection_meta,
     }
+    if return_records:
+        result_meta["records"] = list(record_map.values())
     if error:
         result_meta["error"] = error
         return labels, result_meta

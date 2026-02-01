@@ -18,7 +18,15 @@ SCHEMA_VERSION = 1
 DEFAULT_ORGANISM = "Homo sapiens"
 
 REACTOME_SEARCH_URL = "https://reactome.org/ContentService/search/query"
-REACTOME_PARTICIPANTS_URL = "https://reactome.org/ContentService/data/participants/{pathway_id}"
+REACTOME_PARTICIPANTS_URL = (
+    "https://reactome.org/ContentService/data/participants/{pathway_id}"
+)
+REACTOME_CONTAINED_EVENTS_URL = (
+    "https://reactome.org/ContentService/data/pathway/{pathway_id}/containedEvents"
+)
+REACTOME_CATALYST_ACTIVITY_URL = (
+    "https://reactome.org/ContentService/data/reaction/{reaction_id}/catalystActivity"
+)
 
 KEGG_BASE_URL = "https://rest.kegg.jp"
 
@@ -29,11 +37,21 @@ PDBE_MAPPING_BASES = [
     "https://www.ebi.ac.uk/pdbe/api/mappings/best_structures",
 ]
 PDBE_LIGAND_URL = "https://www.ebi.ac.uk/pdbe/api/pdb/entry/ligand_monomers"
+PDBE_SUMMARY_URL = "https://www.ebi.ac.uk/pdbe/api/pdb/entry/summary"
 
 _UNIPROT_RE = re.compile(
     r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9][A-Z0-9]{3}[0-9]|[A-Z0-9]{10})$"
 )
 _UNIPROT_TAG_RE = re.compile(r"UniProt:([A-Za-z0-9]+)")
+_MAX_LABEL_LENGTH = 80
+_TITLE_PREFIX_RE = re.compile(
+    r"^(?:THE\s+)?(?:CRYSTAL STRUCTURE|SOLUTION STRUCTURE|STRUCTURAL BASIS|STRUCTURE|"
+    r"X-RAY STRUCTURE|X RAY STRUCTURE|CRYO-EM STRUCTURE|CRYO EM STRUCTURE|NMR STRUCTURE)\b",
+    re.IGNORECASE,
+)
+_LABEL_CLAUSE_RE = re.compile(
+    r"\b(IN COMPLEX WITH|COMPLEX WITH|BOUND TO|WITH)\b", re.IGNORECASE
+)
 
 
 def _now_iso() -> str:
@@ -56,6 +74,67 @@ def _normalize_uniprot(uniprot: str) -> str:
     return uniprot.strip().upper()
 
 
+def _normalize_pdb_id(pdb_id: str) -> str:
+    return pdb_id.strip().upper()
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _config_bool(cfg: dict[str, Any], keys: Iterable[str], default: bool) -> bool:
+    for key in keys:
+        if key in cfg:
+            return _coerce_bool(cfg.get(key), default)
+    return default
+
+
+def label_from_title(title: str) -> str:
+    raw_title = title or ""
+    cleaned = raw_title.strip()
+    if not cleaned:
+        fallback = raw_title.strip().upper()
+        return fallback[:_MAX_LABEL_LENGTH].rstrip()
+
+    while True:
+        updated = _TITLE_PREFIX_RE.sub("", cleaned).strip()
+        if updated == cleaned:
+            break
+        cleaned = updated
+
+    parts = re.split(r"\bOF\b", cleaned, flags=re.IGNORECASE)
+    if len(parts) > 1:
+        cleaned = parts[-1].strip()
+
+    clause_match = _LABEL_CLAUSE_RE.search(cleaned)
+    if clause_match:
+        cleaned = cleaned[: clause_match.start()].strip()
+
+    cleaned = re.sub(r"[^A-Za-z0-9\s-]", " ", cleaned)
+    cleaned = re.sub(r"\s*-\s*", "-", cleaned)
+    cleaned = " ".join(cleaned.split()).upper()
+    if cleaned:
+        if len(cleaned) > _MAX_LABEL_LENGTH:
+            cleaned = cleaned[:_MAX_LABEL_LENGTH].rstrip()
+        return cleaned
+
+    fallback = raw_title.strip().upper()
+    return fallback[:_MAX_LABEL_LENGTH].rstrip()
+
+
 def _is_uniprot_accession(value: str) -> bool:
     return bool(_UNIPROT_RE.match(value.strip().upper()))
 
@@ -68,6 +147,7 @@ def _extract_uniprot_from_text(text: str) -> str | None:
     if _is_uniprot_accession(acc):
         return acc
     return None
+
 
 def _load_config(path: str) -> dict[str, Any]:
     module = importlib.import_module("input_and_export_functions")
@@ -85,14 +165,22 @@ class CachePayload:
 
 class Cache:
     def __init__(
-        self, cache_dir: Path, refresh: bool = False, logger: logging.Logger | None = None
+        self,
+        cache_dir: Path,
+        refresh: bool = False,
+        logger: logging.Logger | None = None,
     ) -> None:
         self.cache_dir = cache_dir
         self.refresh = refresh
         self.logger = logger or logging.getLogger(__name__)
 
-    def pathway_cache_path(self, source: str, organism: str, query: str) -> Path:
-        key = f"{source}|{_normalize_text(organism)}|{_normalize_text(query)}"
+    def pathway_cache_path(
+        self, source: str, organism: str, query: str, catalyst_only: bool
+    ) -> Path:
+        key = (
+            f"{source}|{_normalize_text(organism)}|{_normalize_text(query)}|"
+            f"catalyst_only={bool(catalyst_only)}"
+        )
         digest = _sha256(key)
         return self.cache_dir / f"pathway_{digest}.json"
 
@@ -131,8 +219,10 @@ class Cache:
         )
         tmp_path.replace(path)
 
-    def read_pathway(self, source: str, organism: str, query: str) -> dict[str, Any] | None:
-        path = self.pathway_cache_path(source, organism, query)
+    def read_pathway(
+        self, source: str, organism: str, query: str, catalyst_only: bool
+    ) -> dict[str, Any] | None:
+        path = self.pathway_cache_path(source, organism, query, catalyst_only)
         return self._read_json(path, "pathway")
 
     def write_pathway(
@@ -140,13 +230,19 @@ class Cache:
         source: str,
         organism: str,
         query: str,
+        catalyst_only: bool,
         data: dict[str, Any],
     ) -> None:
-        path = self.pathway_cache_path(source, organism, query)
+        path = self.pathway_cache_path(source, organism, query, catalyst_only)
         payload = CachePayload(
             created_at=_now_iso(),
             schema_version=SCHEMA_VERSION,
-            request={"source": source, "organism": organism, "query": query},
+            request={
+                "source": source,
+                "organism": organism,
+                "query": query,
+                "catalyst_only": bool(catalyst_only),
+            },
             data=data,
         )
         self._write_json(path, payload)
@@ -162,6 +258,23 @@ class Cache:
             schema_version=SCHEMA_VERSION,
             request={"uniprot": _normalize_uniprot(uniprot)},
             data=data,
+        )
+        self._write_json(path, payload)
+
+    def pdb_cache_path(self, pdb_id: str) -> Path:
+        return self.cache_dir / f"pdb_{_normalize_pdb_id(pdb_id)}.json"
+
+    def read_pdb(self, pdb_id: str) -> dict[str, Any] | None:
+        path = self.pdb_cache_path(pdb_id)
+        return self._read_json(path, f"pdb:{_normalize_pdb_id(pdb_id)}")
+
+    def write_pdb(self, pdb_id: str, title: str, label: str) -> None:
+        path = self.pdb_cache_path(pdb_id)
+        payload = CachePayload(
+            created_at=_now_iso(),
+            schema_version=SCHEMA_VERSION,
+            request={"pdb_id": _normalize_pdb_id(pdb_id)},
+            data={"title": title, "label": label},
         )
         self._write_json(path, payload)
 
@@ -224,7 +337,9 @@ def _extract_uniprots_from_reactome(
         if not isinstance(item, dict):
             continue
         db = str(item.get("databaseName") or item.get("database") or "")
-        identifier = item.get("identifier") or item.get("identifierId") or item.get("id")
+        identifier = (
+            item.get("identifier") or item.get("identifierId") or item.get("id")
+        )
         if identifier is None:
             identifier = ""
         acc = str(identifier).strip()
@@ -254,8 +369,125 @@ def _extract_uniprots_from_reactome(
     return uniprots
 
 
+def _as_dict_list(payload: Any, list_keys: Iterable[str]) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in list_keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return [payload]
+    return []
+
+
+def _is_reaction_event(event: dict[str, Any]) -> bool:
+    for key in ("schemaClass", "className", "type", "_class"):
+        value = event.get(key)
+        if isinstance(value, str) and "reaction" in value.lower():
+            return True
+    return False
+
+
+def _extract_uniprots_from_reactome_payload(payload: Any) -> list[str]:
+    items: list[dict[str, Any]] = []
+    stack: list[Any] = [payload]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            items.append(item)
+            for value in item.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+    return _extract_uniprots_from_reactome(items)
+
+
+def _fetch_reactome_participants(
+    pathway_id: str, http: HttpClient, logger: logging.Logger
+) -> list[str]:
+    participants_url = REACTOME_PARTICIPANTS_URL.format(pathway_id=pathway_id)
+    participants_resp = http.get_json(participants_url)
+    participants: list[dict[str, Any]] = []
+    if isinstance(participants_resp, list):
+        participants = [item for item in participants_resp if isinstance(item, dict)]
+    elif isinstance(participants_resp, dict):
+        payload = participants_resp.get("participants") or []
+        if isinstance(payload, list):
+            participants = [item for item in payload if isinstance(item, dict)]
+        elif isinstance(payload, dict):
+            participants = [payload]
+
+    uniprots = _extract_uniprots_from_reactome(participants)
+    logger.info(
+        "Reactome participants: %d (UniProt: %d)",
+        len(participants),
+        len(uniprots),
+    )
+    return uniprots
+
+
+def _resolve_reactome_catalysts(
+    pathway_id: str, http: HttpClient, logger: logging.Logger
+) -> list[str]:
+    events_resp = http.get_json(
+        REACTOME_CONTAINED_EVENTS_URL.format(pathway_id=pathway_id)
+    )
+    events = _as_dict_list(
+        events_resp,
+        ("containedEvents", "events", "results", "result", "data"),
+    )
+    reaction_events = [event for event in events if _is_reaction_event(event)]
+    reactions_processed = 0
+    uniprots: list[str] = []
+    for event in reaction_events:
+        reaction_id = str(event.get("stId") or event.get("id") or "").strip()
+        if not reaction_id:
+            continue
+        reactions_processed += 1
+        try:
+            catalyst_resp = http.get_json(
+                REACTOME_CATALYST_ACTIVITY_URL.format(reaction_id=reaction_id)
+            )
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 404:
+                logger.warning(
+                    "Reactome catalyst activity missing for reaction %s (skipping).",
+                    reaction_id,
+                )
+                continue
+            raise
+        activities = _as_dict_list(
+            catalyst_resp,
+            (
+                "catalystActivity",
+                "catalystActivities",
+                "activities",
+                "results",
+                "result",
+                "data",
+            ),
+        )
+        uniprots.extend(_extract_uniprots_from_reactome_payload(activities))
+
+    unique = sorted(
+        {_normalize_uniprot(p) for p in uniprots if _is_uniprot_accession(p)}
+    )
+    logger.info("Reactome contained events fetched: %d", len(events))
+    logger.info("Reactome reactions processed: %d", reactions_processed)
+    logger.info("Reactome catalyst UniProts extracted: %d", len(unique))
+    return unique
+
+
 def _resolve_reactome(
-    pathway_query: str, organism: str, http: HttpClient, logger: logging.Logger
+    pathway_query: str,
+    organism: str,
+    http: HttpClient,
+    logger: logging.Logger,
+    *,
+    catalyst_only: bool,
 ) -> tuple[str, str, list[str]]:
     params = {"query": pathway_query, "species": organism, "types": "Pathway"}
     resp = http.get_json(REACTOME_SEARCH_URL, params=params)
@@ -290,21 +522,17 @@ def _resolve_reactome(
         str(best.get("name") or best.get("displayName") or pathway_id)
     )
     logger.info("Reactome pathway match: %s (%s)", pathway_name, pathway_id)
+    logger.info("Reactome catalyst-only mode: %s", catalyst_only)
+    if not catalyst_only:
+        uniprots = _fetch_reactome_participants(pathway_id, http, logger)
+        return (pathway_id, pathway_name, uniprots)
 
-    participants_url = REACTOME_PARTICIPANTS_URL.format(pathway_id=pathway_id)
-    participants_resp = http.get_json(participants_url)
-    participants: list[dict[str, Any]] = []
-    if isinstance(participants_resp, list):
-        participants = participants_resp
-    elif isinstance(participants_resp, dict):
-        participants = participants_resp.get("participants") or []
-
-    uniprots = _extract_uniprots_from_reactome(participants)
-    logger.info(
-        "Reactome participants: %d (UniProt: %d)",
-        len(participants),
-        len(uniprots),
-    )
+    uniprots = _resolve_reactome_catalysts(pathway_id, http, logger)
+    if not uniprots:
+        logger.warning(
+            "Reactome catalyst-only resolution returned 0 UniProt accessions for %s.",
+            pathway_id,
+        )
     return (pathway_id, pathway_name, uniprots)
 
 
@@ -439,12 +667,16 @@ def _resolve_wikipathways(
     resp = http.get_json(f"{WIKIPATHWAYS_BASE_URL}/findPathwaysByText", params=params)
     results: list[dict[str, Any]] = []
     if isinstance(resp, dict):
-        raw_results = resp.get("pathways") or resp.get("result", {}).get("pathways") or []
+        raw_results = (
+            resp.get("pathways") or resp.get("result", {}).get("pathways") or []
+        )
         if isinstance(raw_results, list):
             results = [r for r in raw_results if isinstance(r, dict)]
     elif isinstance(resp, list):
         results = [r for r in resp if isinstance(r, dict)]
-    filtered = [r for r in results if isinstance(r, dict) and _matches_organism(r, organism)]
+    filtered = [
+        r for r in results if isinstance(r, dict) and _matches_organism(r, organism)
+    ]
     best = _pick_best_pathway(filtered or results, pathway_query)
     if not best:
         return ("", "", [])
@@ -453,7 +685,8 @@ def _resolve_wikipathways(
     logger.info("WikiPathways match: %s (%s)", pathway_name, pathway_id)
 
     pathway_resp = http.get_json(
-        f"{WIKIPATHWAYS_BASE_URL}/getPathway", params={"pwId": pathway_id, "format": "json"}
+        f"{WIKIPATHWAYS_BASE_URL}/getPathway",
+        params={"pwId": pathway_id, "format": "json"},
     )
     pathway: dict[str, Any] = {}
     if isinstance(pathway_resp, dict):
@@ -470,38 +703,64 @@ def resolve_uniprots(
     organism: str,
     cache: Cache,
     http: HttpClient,
+    *,
+    catalyst_only: bool,
 ) -> list[str]:
-    cached = cache.read_pathway(source, organism, pathway_query)
-    if cached:
-        data = cached.get("data", {})
-        return sorted({_normalize_uniprot(p) for p in data.get("uniprots", [])})
+    cached_uniprots: list[str] | None = None
+    cached_payload: dict[str, Any] | None = None
+    if not cache.refresh:
+        cached_payload = cache.read_pathway(
+            source, organism, pathway_query, catalyst_only
+        )
+        if cached_payload:
+            data = cached_payload.get("data", {})
+            cached_uniprots = sorted(
+                {_normalize_uniprot(p) for p in data.get("uniprots", [])}
+            )
 
     logger = cache.logger
-    source_norm = source.lower()
-    if source_norm == "reactome":
-        pathway_id, pathway_name, uniprots = _resolve_reactome(
-            pathway_query, organism, http, logger
-        )
-    elif source_norm == "kegg":
-        pathway_id, pathway_name, uniprots = _resolve_kegg(
-            pathway_query, organism, http, logger
-        )
-    elif source_norm == "wikipathways":
-        pathway_id, pathway_name, uniprots = _resolve_wikipathways(
-            pathway_query, organism, http, logger
-        )
-    else:
-        raise ValueError(f"Unknown source: {source}")
+    try:
+        source_norm = source.lower()
+        if source_norm == "reactome":
+            pathway_id, pathway_name, uniprots = _resolve_reactome(
+                pathway_query,
+                organism,
+                http,
+                logger,
+                catalyst_only=catalyst_only,
+            )
+        elif source_norm == "kegg":
+            pathway_id, pathway_name, uniprots = _resolve_kegg(
+                pathway_query, organism, http, logger
+            )
+        elif source_norm == "wikipathways":
+            pathway_id, pathway_name, uniprots = _resolve_wikipathways(
+                pathway_query, organism, http, logger
+            )
+        else:
+            raise ValueError(f"Unknown source: {source}")
 
-    unique = sorted({_normalize_uniprot(p) for p in uniprots})
-    cache.write_pathway(
-        source,
-        organism,
-        pathway_query,
-        {"pathway_id": pathway_id, "pathway_name": pathway_name, "uniprots": unique},
-    )
-    logger.info("Resolved UniProts: %d", len(unique))
-    return unique
+        unique = sorted({_normalize_uniprot(p) for p in uniprots})
+        cache.write_pathway(
+            source,
+            organism,
+            pathway_query,
+            catalyst_only,
+            {
+                "pathway_id": pathway_id,
+                "pathway_name": pathway_name,
+                "uniprots": unique,
+            },
+        )
+        logger.info("Resolved UniProts: %d", len(unique))
+        return unique
+    except Exception as exc:
+        if cached_uniprots is not None:
+            logger.warning(
+                "Live pathway resolution failed; using cached results: %s", exc
+            )
+            return cached_uniprots
+        raise
 
 
 def _pdbe_best_structures(
@@ -596,6 +855,29 @@ def _pdbe_has_ligand(pdb_id: str, http: HttpClient) -> bool | None:
     return bool(data)
 
 
+def _fetch_pdb_title(pdb_id: str, http: HttpClient, logger: logging.Logger) -> str:
+    url = f"{PDBE_SUMMARY_URL}/{_normalize_pdb_id(pdb_id).lower()}"
+    try:
+        resp = http.get_json(url)
+    except Exception as exc:  # pragma: no cover - network errors
+        logger.warning("PDB title fetch failed for %s: %s", pdb_id, exc)
+        return ""
+    if not isinstance(resp, dict):
+        return ""
+    data = resp.get(pdb_id.lower()) or resp.get(pdb_id.upper())
+    if isinstance(data, list) and data:
+        entry = data[0]
+        if isinstance(entry, dict):
+            title = entry.get("title")
+            if isinstance(title, str) and title.strip():
+                return title.strip()
+    if isinstance(data, dict):
+        title = data.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+    return ""
+
+
 def _candidate_coverage_score(candidate: dict[str, Any]) -> float:
     coverage = candidate.get("coverage")
     if isinstance(coverage, (int, float)):
@@ -681,8 +963,28 @@ def map_uniprot_to_pdb(
             "candidates": candidates,
         },
     )
-    logger.info("PDBe candidates for %s: %d", _normalize_uniprot(uniprot), len(candidates))
+    logger.info(
+        "PDBe candidates for %s: %d", _normalize_uniprot(uniprot), len(candidates)
+    )
     return candidates
+
+
+def resolve_pdb_label(pdb_id: str, cache: Cache, http: HttpClient) -> str:
+    normalized = _normalize_pdb_id(pdb_id)
+    cached = cache.read_pdb(normalized)
+    if cached:
+        data = cached.get("data", {})
+        label = data.get("label")
+        if isinstance(label, str) and label.strip():
+            return label.strip().upper()
+
+    logger = cache.logger
+    title = _fetch_pdb_title(normalized, http, logger)
+    label = label_from_title(title) if title else normalized
+    if not label:
+        label = normalized
+    cache.write_pdb(normalized, title, label)
+    return label
 
 
 def select_representatives(
@@ -703,6 +1005,21 @@ def select_representatives(
         if len(selected) >= max_n:
             break
     return selected
+
+
+def write_resolved_pdbs_labeled(
+    records: list[tuple[str, str]], output_path: Path
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    for pdb_id, label in records:
+        normalized = pdb_id.strip().upper()
+        if not normalized:
+            continue
+        clean_label = label.strip().upper() if label else normalized
+        lines.append(f"{normalized}\t{clean_label}")
+    payload = "\n".join(lines) + "\n"
+    output_path.write_text(payload, encoding="utf-8")
 
 
 def write_resolved_pdbs(pdb_ids: list[str], output_path: Path) -> None:
@@ -748,6 +1065,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Max PDBs per UniProt (1-3).",
     )
     parser.add_argument("--refresh", action="store_true", help="Bypass cache.")
+    catalyst_group = parser.add_mutually_exclusive_group()
+    catalyst_group.add_argument(
+        "--catalyst-only",
+        dest="catalyst_only",
+        action="store_true",
+        help="Use catalyst-only Reactome participants.",
+    )
+    catalyst_group.add_argument(
+        "--no-catalyst-only",
+        dest="catalyst_only",
+        action="store_false",
+        help="Use full Reactome participant list.",
+    )
     parser.add_argument(
         "--config",
         default="config.txt",
@@ -758,6 +1088,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="INFO",
         help="Logging level.",
     )
+    parser.set_defaults(catalyst_only=None)
     return parser
 
 
@@ -770,7 +1101,20 @@ def run(argv: list[str], http_client: HttpClient | None = None) -> int:
 
     logger = _configure_logging(args.log_level)
     cfg = _load_config(args.config)
-    organism = args.organism or cfg.get("PATHWAY_ORGANISM") or DEFAULT_ORGANISM
+    organism = (
+        args.organism
+        or cfg.get("pathway_organism")
+        or cfg.get("PATHWAY_ORGANISM")
+        or DEFAULT_ORGANISM
+    )
+    if args.catalyst_only is None:
+        catalyst_only = _config_bool(
+            cfg,
+            ("pathway_catalyst_only", "PATHWAY_CATALYST_ONLY"),
+            default=True,
+        )
+    else:
+        catalyst_only = bool(args.catalyst_only)
 
     output_path = Path(args.output)
     cache_dir = Path(args.cache_dir)
@@ -783,7 +1127,14 @@ def run(argv: list[str], http_client: HttpClient | None = None) -> int:
     cache = Cache(cache_dir=cache_dir, refresh=args.refresh, logger=logger)
     http = http_client or HttpClient()
 
-    uniprots = resolve_uniprots(pathway_query, args.source, organism, cache, http)
+    uniprots = resolve_uniprots(
+        pathway_query,
+        args.source,
+        organism,
+        cache,
+        http,
+        catalyst_only=catalyst_only,
+    )
     if not uniprots:
         logger.warning("No UniProt accessions resolved for %s", pathway_query)
 
@@ -797,14 +1148,22 @@ def run(argv: list[str], http_client: HttpClient | None = None) -> int:
         for pdb_id in selected:
             if pdb_id in seen_pdbs:
                 logger.warning(
-                    "Duplicate PDB %s for UniProt %s (already selected)", pdb_id, uniprot
+                    "Duplicate PDB %s for UniProt %s (already selected)",
+                    pdb_id,
+                    uniprot,
                 )
                 continue
             selected_pdbs.append(pdb_id)
             seen_pdbs.add(pdb_id)
 
-    write_resolved_pdbs(selected_pdbs, output_path)
+    labeled_pdbs = [
+        (pdb_id, resolve_pdb_label(pdb_id, cache, http)) for pdb_id in selected_pdbs
+    ]
+    write_resolved_pdbs_labeled(labeled_pdbs, output_path)
+    ids_output_path = output_path.parent / "resolved_pdbs_ids.txt"
+    write_resolved_pdbs(selected_pdbs, ids_output_path)
     logger.info("Resolved PDBs written: %s", output_path)
+    logger.info("Resolved PDB IDs written: %s", ids_output_path)
     return 0
 
 

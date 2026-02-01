@@ -67,7 +67,7 @@ def test_pocket_eval_default_trace_logging(tmp_path: Path, monkeypatch, caplog) 
     def fake_prepare_calibrator_ligands(
         cal_rows, out_dir, cfg_obj, logger=None, inputs_dir_override=None
     ):
-        return [
+        prepared = [
             {
                 "ligand_id": "lig_strong",
                 "label": "strong",
@@ -79,6 +79,11 @@ def test_pocket_eval_default_trace_logging(tmp_path: Path, monkeypatch, caplog) 
                 "pdbqt_path": str(tmp_path / "lig_non.pdbqt"),
             },
         ]
+        return prepared, {
+            "missing_ligand_ids": [],
+            "invalid_ligands": [],
+            "prepared_ligand_ids": [row["ligand_id"] for row in prepared],
+        }
 
     monkeypatch.setattr(
         pocket_eval, "prepare_calibrator_ligands", fake_prepare_calibrator_ligands

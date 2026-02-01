@@ -90,3 +90,7 @@ llama.cpp/
 # Local build/vendor dirs
 node_modules/
 report_assets/
+
+# Pathway resolver artifacts
+pathways/
+drugcentral/structures.smiles.tsv
