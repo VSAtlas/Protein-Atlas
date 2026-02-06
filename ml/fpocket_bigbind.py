@@ -42,6 +42,53 @@ def parse_pocket_residues(pocket_pdb: Path) -> list[tuple[int, str, str]]:
     return sorted(residues, key=lambda entry: (entry[2], entry[0], entry[1]))
 
 
+def _infer_chain_by_residue_from_receptor(receptor_pdb: Path) -> dict[tuple[int, str], str]:
+    if not receptor_pdb.exists():
+        return {}
+    by_key: dict[tuple[int, str], set[str]] = {}
+    with receptor_pdb.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                continue
+            try:
+                resseq = int((line[22:26] or "0").strip() or "0")
+            except ValueError:
+                continue
+            icode = (line[26:27] or "").strip() or "-"
+            chain = (line[21:22] or " ").strip() or " "
+            key = (resseq, icode)
+            if key not in by_key:
+                by_key[key] = set()
+            by_key[key].add(chain)
+    inferred: dict[tuple[int, str], str] = {}
+    for key, chains in by_key.items():
+        ordered = sorted(chains)
+        if ordered:
+            inferred[key] = ordered[0]
+    return inferred
+
+
+def _normalize_pocket_residues_for_receptor(
+    residues: list[tuple[int, str, str]],
+    receptor_pdb: Path,
+) -> list[tuple[int, str, str]]:
+    if not residues:
+        return []
+    chain_by_residue = _infer_chain_by_residue_from_receptor(receptor_pdb)
+    normalized: set[tuple[int, str, str]] = set()
+    for resseq, icode, chain in residues:
+        icode_norm = (icode or "").strip() or "-"
+        chain_norm = (chain or "").strip()
+        if not chain_norm or chain_norm == "-":
+            chain_norm = (
+                chain_by_residue.get((resseq, icode_norm))
+                or chain_by_residue.get((resseq, "-"))
+                or "A"
+            )
+        normalized.add((resseq, icode_norm, chain_norm))
+    return sorted(normalized, key=lambda entry: (entry[2], entry[0], entry[1]))
+
+
 def pocket_center_from_pdb(pocket_pdb: Path) -> tuple[float, float, float] | None:
     if not pocket_pdb.exists():
         return None
@@ -195,9 +242,12 @@ def precompute_fpocket_for_bigbind_df(
             continue
 
         pocket_feature_values = compute_pocket_features(pocket_abs_path)
-        center = pocket_center_from_pdb(pocket_abs_path)
-        pocket_residues = parse_pocket_residues(pocket_abs_path)
         receptor_pdb = derive_receptor_pdb(pocket_abs_path)
+        center = pocket_center_from_pdb(pocket_abs_path)
+        pocket_residues = _normalize_pocket_residues_for_receptor(
+            parse_pocket_residues(pocket_abs_path),
+            receptor_pdb,
+        )
 
         stem = receptor_pdb.stem
         out_dir = output_root / f"{stem}_out"

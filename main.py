@@ -129,6 +129,13 @@ Benchmark Mode 2:
       Writes a 'bench2_config.txt' snapshot to the config run dir.
       Cannot be combined with -resume or -bench.
 
+DUD-Only Runtime Mode:
+  -dude, --dude
+      Force TEST_MODE_ENABLE=dud for this process only (no config file edits).
+      This keeps only proteins listed in TEST_LIBRARY_MAP, while still honoring
+      explicitly requested proteins from --pdb/--pdbs/ONLY_PDBS/SPECIFIED_PROTEINS.
+      Cannot be combined with -bench, -bench2, or -resume.
+
 Single-ligand mode:
   --single PATTERN
       Enable SINGLE_LIGAND mode and restrict docking to a single ligand
@@ -354,6 +361,11 @@ def _bench2_enabled(argv: list[str]) -> bool:
     return _cli_has(argv, "-bench2") or _cli_has(argv, "--bench2")
 
 
+def _dude_enabled(argv: list[str]) -> bool:
+    """Check if -dude or --dude is present in arguments."""
+    return _cli_has(argv, "-dude") or _cli_has(argv, "--dude")
+
+
 def _apply_bench_overrides(cfg: ConfigDict) -> None:
     """Force benchmark configuration settings."""
     cfg["TEST_MODE_ENABLE"] = "dud"
@@ -392,6 +404,117 @@ def _apply_bench2_overrides(cfg: ConfigDict) -> None:
     cfg["USE_LEDOCK"] = False
     cfg["USE_DOCK6"] = False
     cfg["USE_SCORCH"] = True
+
+
+def _apply_dude_overrides(cfg: ConfigDict) -> None:
+    """Force DUD-only runtime mode without touching on-disk config."""
+    cfg["TEST_MODE_ENABLE"] = "dud"
+
+
+def select_pdb_files_for_run(
+    cfg: ConfigDict,
+    argv_for_parsing: list[str],
+    *,
+    is_resume: bool = False,
+    resume_protein_ids: list[str] | None = None,
+) -> list[str]:
+    cfg.setdefault("SPECIFIED_PROTEINS", "")
+    requested_ids, _ = _parse_specified_proteins(argv_for_parsing, cfg)
+    cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = requested_ids
+    print(
+        f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)"
+    )
+
+    pdb_files = [
+        f
+        for f in os.listdir(cfg["INPUT_DIR"])
+        if f.lower().endswith(".pdb") and "_nolig" not in f.lower()
+    ]
+
+    id_index: dict[str, str] = {}
+    for f in pdb_files:
+        base = os.path.splitext(f)[0].replace("_cleaned", "")
+        nid = _norm_pdb_id(base)
+        if nid:
+            id_index.setdefault(nid, f)
+
+    req = list(cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS", []) or [])
+    if is_resume and not req and resume_protein_ids:
+        req = list(resume_protein_ids)
+    if req:
+        hits = [nid for nid in req if nid in id_index]
+        miss = [nid for nid in req if nid not in id_index]
+
+        print(
+            f"[filter.proteins] mode=on requested={len(req)} present={len(hits)} missing={len(miss)} ? {hits}"
+        )
+        for m in miss:
+            print(
+                f"WARNING: requested PDB '{m}' not found under INPUT_DIR={cfg['INPUT_DIR']} or was excluded (_nolig)."
+            )
+
+        if not hits:
+            print(
+                "ERROR: No requested proteins found. Exiting with status 2 to avoid a no-op run."
+            )
+            sys.exit(2)
+
+        pdb_files = [id_index[nid] for nid in hits]
+        print("Selected proteins (Specified Proteins Mode): " + ", ".join(hits))
+    else:
+        print(
+            f"[filter.proteins] mode=off requested=0 present={len(pdb_files)} missing=0 ? []"
+        )
+
+    tokens = parse_test_libraries(cfg)
+    raw_map = cfg.get("TEST_LIBRARY_MAP", {})
+    test_map = _coerce_test_map(raw_map)
+    try:
+        cfg["_TEST_LIBRARY_CANONICAL"] = {
+            str(k).upper(): str(v) for k, v in getattr(test_map, "items", lambda: [])()
+        }
+    except Exception:
+        cfg["_TEST_LIBRARY_CANONICAL"] = {}
+
+    if "dud" in tokens:
+        test_keys = set()
+        for k in getattr(test_map, "keys", lambda: [])():
+            nid = _norm_pdb_id(str(k))
+            if nid:
+                test_keys.add(nid)
+
+        if test_keys:
+            specified_raw = cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS") or []
+            specified_keys = set()
+            for s in specified_raw:
+                nid = _norm_pdb_id(str(s))
+                if nid:
+                    specified_keys.add(nid)
+
+            kept, skipped = [], []
+            for f in pdb_files:
+                nid = _norm_pdb_id(f)
+                if nid and (nid in test_keys or nid in specified_keys):
+                    kept.append(f)
+                else:
+                    skipped.append(f)
+
+            if skipped:
+                print(
+                    f"[test-mode] Enabled tokens={'+'.join(tokens)}; restricting to "
+                    f"{len(kept)} PDBs from TEST_LIBRARY_MAP keys"
+                    + (" (plus specified proteins)." if specified_keys else ".")
+                )
+                for s in skipped:
+                    print(f"[test-mode] Skipping {s} (not in TEST_LIBRARY_MAP).")
+
+            pdb_files = kept
+        else:
+            print(
+                "[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied."
+            )
+
+    return pdb_files
 
 
 def _log_cfg_emit_path_check(pdb_id, receptor_path, variant, legacy):
@@ -785,6 +908,7 @@ def main() -> None:
     cli_run_id = _cli_val(sys.argv, "--run-id") or _cli_val(sys.argv, "-run-id")
     is_bench = _bench_enabled(sys.argv)
     is_bench2 = _bench2_enabled(sys.argv)
+    is_dude = _dude_enabled(sys.argv)
 
     if is_bench and is_bench2:
         print("ERROR: -bench and -bench2 cannot be combined", file=sys.stderr)
@@ -796,6 +920,17 @@ def main() -> None:
 
     if is_resume and is_bench2:
         print("ERROR: -bench2 cannot be used with -resume", file=sys.stderr)
+        sys.exit(2)
+
+    if is_dude and (is_bench or is_bench2):
+        print(
+            "ERROR: -dude cannot be used with -bench or -bench2",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if is_dude and is_resume:
+        print("ERROR: -dude cannot be used with -resume", file=sys.stderr)
         sys.exit(2)
 
     if is_resume and not cli_run_id:
@@ -816,6 +951,10 @@ def main() -> None:
     os.environ["ATLAS_LOG_FILE"] = log_path
     _tee_stdio_to(log_path)
     cfg = ConfigDict(load_inputs())
+
+    if is_dude:
+        _apply_dude_overrides(cfg)
+        logging.info("[dude] DUD-only runtime mode ENABLED. Overrides applied.")
 
     if is_bench:
         _apply_bench_overrides(cfg)
@@ -1174,13 +1313,6 @@ def main() -> None:
             f"[config] TEST_FDA_LIBRARY enabled: "
             f"LIBRARY_SUBDIR_DEFAULT={cfg['LIBRARY_SUBDIR_DEFAULT']}"
         )
-    # --- Specified Proteins Mode ---------------------------------------
-    cfg.setdefault("SPECIFIED_PROTEINS", "")
-    requested_ids, _sel_src = _parse_specified_proteins(argv_for_parsing, cfg)
-    cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] = requested_ids
-    print(
-        f"[config] SPECIFIED_PROTEINS effective={requested_ids} (precedence: CLI>ENV>CFG)"
-    )
     # --- Fast mode: force exhaustiveness=1 everywhere ---
     cfg["FAST_MODE"] = _parse_fast_flag(argv_for_parsing) or bool(
         cfg.get("FAST_MODE", False)
@@ -1328,104 +1460,14 @@ def main() -> None:
     stages = define_docking_stages(cfg.get("DOCKING_MODE", "discovery").lower())
     print("current docking mode is ", cfg.get("DOCKING_MODE"))
 
-    # Discover all candidate PDB files (unchanged default behavior)
-    pdb_files = [
-        f
-        for f in os.listdir(cfg["INPUT_DIR"])
-        if f.lower().endswith(".pdb") and "_nolig" not in f.lower()
-    ]
-
-    # Build an index: PDBID (4-char, upper) -> filename
-    id_index: dict[str, str] = {}
-    for f in pdb_files:
-        base = os.path.splitext(f)[0].replace("_cleaned", "")
-        nid = _norm_pdb_id(base)
-        if nid:
-            # preserve first occurrence to retain directory order
-            id_index.setdefault(nid, f)
-
-    req = list(cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS", []) or [])
-    if is_resume and not req and resume_protein_ids:
-        req = list(resume_protein_ids)
-    if req:
-        # Compute present/missing and apply filter in user-specified order
-        hits = [nid for nid in req if nid in id_index]
-        miss = [nid for nid in req if nid not in id_index]
-
-        print(
-            f"[filter.proteins] mode=on requested={len(req)} present={len(hits)} missing={len(miss)} ? {hits}"
-        )
-        for m in miss:
-            print(
-                f"WARNING: requested PDB '{m}' not found under INPUT_DIR={cfg['INPUT_DIR']} or was excluded (_nolig)."
-            )
-
-        if not hits:
-            print(
-                "ERROR: No requested proteins found. Exiting with status 2 to avoid a no-op run."
-            )
-            sys.exit(2)
-
-        # Restrict queue to the selected files, preserving user order
-        pdb_files = [id_index[nid] for nid in hits]
-        print("Selected proteins (Specified Proteins Mode): " + ", ".join(hits))
-    else:
-        print(
-            f"[filter.proteins] mode=off requested=0 present={len(pdb_files)} missing=0 ? []"
-        )
-
-    # --- Test-mode protein filter: keep only PDBs listed in TEST_LIBRARY_MAP ---
+    pdb_files = select_pdb_files_for_run(
+        cfg,
+        argv_for_parsing,
+        is_resume=is_resume,
+        resume_protein_ids=resume_protein_ids,
+    )
     tokens = parse_test_libraries(cfg)
     test_mode = _resolve_test_mode(cfg)
-    raw_map = cfg.get("TEST_LIBRARY_MAP", {})
-    test_map = _coerce_test_map(raw_map)
-    try:
-        cfg["_TEST_LIBRARY_CANONICAL"] = {
-            str(k).upper(): str(v) for k, v in getattr(test_map, "items", lambda: [])()
-        }
-    except Exception:
-        cfg["_TEST_LIBRARY_CANONICAL"] = {}
-
-    if "dud" in tokens:
-        # Normalize all TEST_LIBRARY_MAP keys to canonical 4-char uppercase PDB IDs.
-        # This makes matching robust to case and minor suffix differences.
-        test_keys = set()
-        for k in getattr(test_map, "keys", lambda: [])():
-            nid = _norm_pdb_id(str(k))
-            if nid:
-                test_keys.add(nid)
-
-        if test_keys:
-            # Always honor explicitly specified proteins even in test mode.
-            specified_raw = cfg.get("_EFFECTIVE_SPECIFIED_PROTEINS") or []
-            specified_keys = set()
-            for s in specified_raw:
-                nid = _norm_pdb_id(str(s))
-                if nid:
-                    specified_keys.add(nid)
-
-            kept, skipped = [], []
-            for f in pdb_files:
-                nid = _norm_pdb_id(f)
-                if nid and (nid in test_keys or nid in specified_keys):
-                    kept.append(f)
-                else:
-                    skipped.append(f)
-
-            if skipped:
-                print(
-                    f"[test-mode] Enabled tokens={'+'.join(tokens)}; restricting to "
-                    f"{len(kept)} PDBs from TEST_LIBRARY_MAP keys"
-                    + (" (plus specified proteins)." if specified_keys else ".")
-                )
-                for s in skipped:
-                    print(f"[test-mode] Skipping {s} (not in TEST_LIBRARY_MAP).")
-
-            pdb_files = kept
-        else:
-            print(
-                "[test-mode] TEST_LIBRARY_MAP empty/invalid; no extra filtering applied."
-            )
 
     print("Working directory:", os.getcwd())
     print("Loaded config keys:", list(cfg.keys()))

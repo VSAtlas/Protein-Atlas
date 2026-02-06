@@ -44,6 +44,7 @@ def expand_variants(mode: Optional[str]) -> list[Optional[str]]:
         If you have a multi-variant mode, call this function and iterate.
     """
     key = _canon(mode)
+    expanded: list[Optional[str]]
     if key in {"", "none", "legacy", "null"}:
         expanded = [None]
     elif key == "apo":
@@ -279,7 +280,13 @@ def _ensure_router_roots() -> RouterRoots:
     try:
         _ROUTER_ROOTS = _load_router_roots()
     except Exception:
-        _ROUTER_ROOTS = None
+        cwd = Path.cwd().resolve()
+        _ROUTER_ROOTS = RouterRoots(
+            overall=cwd,
+            processed=cwd / "processed_pdbs",
+            docked=cwd / "docked",
+            configs=cwd / "configs",
+        )
 
     return _ROUTER_ROOTS
 
@@ -899,5 +906,5 @@ if __name__ == "__main__":
     ]
     for label, params in scenarios:
         print(f"scenario={label}")
-        print_pathmap(**params)
+        print_pathmap(**params)  # type: ignore[arg-type]
         print()

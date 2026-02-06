@@ -1817,8 +1817,12 @@ def build_report(
         for idx, entry in enumerate(top_entries, start=1):
             target_display = _clean_text(entry.get("pdb_id"))
             t_text = _format_num(entry.get("t_selected"), ".6g")
-            p_text = _format_pct_display(entry.get("pct_rank"), pct_display_decimals)
-            top_lines.append(f"{idx}) {target_display} t={t_text} p={p_text}")
+            p_text = _format_pct_display(
+                entry.get("pct_rank"),
+                max(2, pct_display_decimals),
+                min_nonzero_pct=0.01,
+            )
+            top_lines.append(f"{idx}) {target_display}  t={t_text}  pct={p_text}")
         top_targets_text = "\n".join(top_lines) if top_lines else "—"
 
         tail_entries = entries_sorted[top_targets_n:]
@@ -2167,6 +2171,10 @@ def _write_html_report(
     compact_highlights = report.get("ligand_highlights", []) or []
     compact_cfg = report.get("ligand_highlight_config", {}) or {}
     top_targets_n = int(compact_cfg.get("top_targets_n") or 3)
+    breadth_threshold_raw = _as_float(compact_cfg.get("breadth_pct_threshold"))
+    if breadth_threshold_raw is None or not math.isfinite(breadth_threshold_raw):
+        breadth_threshold_raw = 0.01
+    breadth_threshold_label = f"{(breadth_threshold_raw * 100.0):g}%"
     if compact_highlights:
         for row in compact_highlights:
             ligand_name = _clean_text(row.get("ligand")) or _clean_text(
@@ -2195,8 +2203,8 @@ def _write_html_report(
                 f"<td>{html.escape(ligand_name)}</td>"
                 f"<td>{html.escape(best_target)}</td>"
                 f"<td class=\"num\">{html.escape(best_score)}</td>"
-                f"<td class=\"num\">{html.escape(best_percentile)}</td>"
-                f"<td class=\"preline\">{html.escape(top_targets).replace(chr(10), '<br>')}</td>"
+                f"<td class=\"num best-pct\">{html.escape(best_percentile)}</td>"
+                f"<td class=\"top-targets-col top-targets\">{html.escape(top_targets)}</td>"
                 f"<td class=\"num\">{html.escape(coverage)}</td>"
                 f"<td class=\"num\">{html.escape(breadth)}</td>"
                 f"<td class=\"num\">{html.escape(tail_summary)}</td>"
@@ -2374,7 +2382,26 @@ def _write_html_report(
     tbody tr:nth-child(even) {{ background: #f9fafb; }}
     tbody tr:hover {{ background: var(--highlight); }}
     th.num, td.num {{ text-align: right; }}
-    .preline {{ white-space: pre-line; }}
+    .highlights-table th, .highlights-table td {{ vertical-align: top; }}
+    .highlights-table th, .highlights-table td {{ border-right: 1px solid var(--border); }}
+    .highlights-table th:last-child, .highlights-table td:last-child {{ border-right: none; }}
+    .highlights-table .best-pct {{
+      white-space: nowrap;
+      min-width: 7.5rem;
+      padding-right: 14px;
+      border-right: 2px solid #d6dde8;
+    }}
+    .highlights-table .top-targets-col {{
+      min-width: 22rem;
+      padding-left: 14px;
+    }}
+    .top-targets {{
+      white-space: pre;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.9rem;
+      line-height: 1.4;
+      text-align: left;
+    }}
     .artifact-list {{
       list-style: none;
       padding-left: 0;
@@ -2410,11 +2437,11 @@ def _write_html_report(
     <section class="section" id="highlights">
       <h2>Highlights</h2>
       <div class="table-wrap">
-        <table>
+        <table class="highlights-table">
           <thead>
             <tr>
-              {'<th>Ligand</th><th>Best target</th><th class="num">Best score</th><th class="num">Best percentile</th>'
-                + f'<th>Top targets (N={top_targets_n})</th><th class="num">Coverage</th><th class="num">Breadth</th><th class="num">Tail summary</th>'
+              {'<th>Ligand</th><th>Best target</th><th class="num">Best score</th><th class="num best-pct">Best percentile</th>'
+                + f'<th class="top-targets-col">Top targets (N={top_targets_n})</th><th class="num">Coverage</th><th class="num">Breadth {breadth_threshold_label}</th><th class="num">Tail summary</th>'
                 if compact_rows else '<th>target_id</th><th>target_name</th>' + highlight_headers}
             </tr>
           </thead>

@@ -173,8 +173,8 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
     # --- QoL: --XIAP / -XIAP style (exact length, 4-char alnum) ---
     for tok in argv:
         low = tok.lower()
-        # don't treat fast/-fast/--fast as a PDB short-form token
-        if low in ("fast", "-fast", "--fast"):
+        # don't treat command flags as PDB short-form tokens
+        if low in ("fast", "-fast", "--fast", "-dude", "--dude"):
             continue
         if (tok.startswith("--") and len(tok) == 6) or (
             tok.startswith("-") and len(tok) == 5
@@ -235,7 +235,12 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
             cfg_list = [t for t in cfg_val]
         except Exception:
             cfg_list = []
-    cfg_list = [_norm_pdb_id(t) for t in cfg_list if _norm_pdb_id(t)]
+    normalized_cfg_list: list[str] = []
+    for token in cfg_list:
+        nid = _norm_pdb_id(token)
+        if nid:
+            normalized_cfg_list.append(nid)
+    cfg_list = normalized_cfg_list
     if cfg_list:
         return _dedupe_order(cfg_list), "CFG"
 

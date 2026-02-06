@@ -1,7 +1,7 @@
 run_id: test_run
-generated_at: '2026-02-06T17:53:36.184305Z'
+generated_at: '2026-02-06T19:26:05.659647Z'
 sources:
-  master_rows_csv: data/test_run/master_rows.csv
+  master_rows_csv: data/test_run/fda_master_rows.csv
   manifest_yaml: manifests/test_run/run_manifest.yaml
 summary:
   n_target_combos: 2
@@ -9,6 +9,7 @@ summary:
   n_unique_ligands: 7
 targets:
   TEST|APO|pH7_0:
+    target_name: ''
     qc:
       ef1: 0.0
       roc_auc: 0.0
@@ -53,6 +54,7 @@ targets:
       pose_valid_any: false
       pose_invalid_reason_top: ''
   TEST|HOLO|pH7_0:
+    target_name: ''
     qc:
       ef1: 0.0
       roc_auc: 0.0
@@ -72,9 +74,9 @@ targets:
           sigma: null
           n: null
         scorch:
-          mu: 0.000502941
-          sigma: 0.000207191
-          n: 3
+          mu: 0.00325689
+          sigma: 0.00426441
+          n: 4
       fdr_stats:
         score_field: consensus_score
         n_decoys: 5
@@ -103,4 +105,13 @@ targets:
       pose_valid_any: false
       pose_invalid_reason_top: ''
 ligands: {}
+ligand_highlights: []
+ligand_highlight_config:
+  top_targets_n: 3
+  breadth_pct_threshold: 0.01
+  coverage_requires_pose_valid: false
+  pct_display_decimals: 1
+  tail_median_decimals: 0
+  highlights_top_pct: 0.01
+  highlights_max_ligands: 25
 multi_target_hits: []

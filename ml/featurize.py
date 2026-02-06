@@ -267,9 +267,12 @@ class BigBindFeaturizer:
         zeros = [0.0] * len(_FPOCKET_FEATURE_NAMES)
         if all(name in row.index for name in _FPOCKET_FEATURE_NAMES):
             injected = [_safe_optional_float(row.get(name)) for name in _FPOCKET_FEATURE_NAMES]
-            if all(value is not None for value in injected):
+            non_missing = sum(1 for value in injected if value is not None)
+            if non_missing > 0:
                 self.loaded_fpocket_count += 1
-                return [_safe_float(value, default=0.0) for value in injected]
+            else:
+                self.missing_info_count += 1
+            return [_safe_float(value, default=0.0) for value in injected]
 
         pdb_id = _optional_text(row.get("ex_rec_pdb")) or _optional_text(row.get("pdb_id"))
         if not pdb_id:

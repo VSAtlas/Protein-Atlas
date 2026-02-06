@@ -230,30 +230,47 @@ def _resolve_target_display_label(row: Dict[str, Any], target_id: str) -> str:
     if not pdb_id:
         pdb_id = _extract_pdb_id_from_target_id(target_id)
     target_name = _normalize_text(row.get("target_name"))
+    variant = _normalize_text(row.get("variant"))
+    ph_label = _normalize_text(row.get("ph_label"))
+    if (not variant or not ph_label) and "|" in target_id:
+        parts = target_id.split("|")
+        if len(parts) >= 3:
+            if not variant:
+                variant = _normalize_text(parts[1])
+            if not ph_label:
+                ph_label = _normalize_text(parts[2])
+    variant_ph = " | ".join([part for part in (variant, ph_label) if part])
     if target_name and pdb_id:
-        return f"{target_name} ({pdb_id})"
-    if target_name:
-        return target_name
+        lines = [pdb_id, target_name]
+        if variant_ph:
+            lines.append(variant_ph)
+        return "\n".join(lines)
+    if pdb_id and variant_ph:
+        return f"{pdb_id}\n{variant_ph}"
     if pdb_id:
         return pdb_id
+    if target_name:
+        return target_name
     return target_id
 
 
 def _build_target_display_map(rows: List[Dict[str, Any]]) -> Dict[str, str]:
     labels: Dict[str, str] = {}
+    has_name: Dict[str, bool] = {}
     for row in rows:
         target_id = _normalize_text(row.get("target_id"))
         if not target_id:
             continue
         candidate = _resolve_target_display_label(row, target_id)
+        candidate_has_name = bool(_normalize_text(row.get("target_name")))
         if target_id not in labels:
             labels[target_id] = candidate
+            has_name[target_id] = candidate_has_name
             continue
-        # Prefer named labels over pdb-only labels when available.
-        if "(" in candidate and ")" in candidate and (
-            "(" not in labels[target_id] or ")" not in labels[target_id]
-        ):
+        # Prefer labels that include target_name metadata when available.
+        if candidate_has_name and not has_name.get(target_id, False):
             labels[target_id] = candidate
+            has_name[target_id] = True
     return labels
 
 
@@ -1344,7 +1361,7 @@ def render_interactive_heatmap_html(
   .heatmap-table .hm-row-label { position: sticky; left: 0; background: #fff; z-index: 1; padding: 4px 6px; }
   .heatmap-table thead th { position: sticky; top: 0; z-index: 2; }
   .heatmap-table .hm-col-label { height: 140px; vertical-align: bottom; padding: 0 6px; }
-  .heatmap-table .hm-col-label > div { transform: rotate(-60deg); transform-origin: left bottom; white-space: nowrap; }
+  .heatmap-table .hm-col-label > div { transform: rotate(-60deg); transform-origin: left bottom; white-space: pre-line; line-height: 1.15; text-align: left; }
   .hm-cell { width: 18px; height: 18px; border: none; cursor: pointer; }
   .hm-cell:hover { outline: 1px solid #555; }
   .heatmap-detail { min-width: 220px; border: 1px solid #ddd; padding: 8px 10px; background: #fafafa; }

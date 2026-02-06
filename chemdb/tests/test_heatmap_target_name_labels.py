@@ -129,7 +129,8 @@ def test_heatmap_target_name_labels(tmp_path: Path, monkeypatch) -> None:
         input_csv=heatmap_csv,
     )
     assert "EGFR KINASE" in html_with_name
-    assert "(TEST)" in html_with_name
+    assert "TEST" in html_with_name
+    assert "EGFR KINASE (TEST)" not in html_with_name
 
     no_name_csv = data_dir / "heatmap_input_no_target_name.csv"
     no_name_fields = [f for f in (reader.fieldnames or []) if f != "target_name"]
@@ -146,4 +147,4 @@ def test_heatmap_target_name_labels(tmp_path: Path, monkeypatch) -> None:
         input_csv=no_name_csv,
     )
     assert "TEST" in html_without_name
-    assert "EGFR KINASE (TEST)" not in html_without_name
+    assert "EGFR KINASE" not in html_without_name

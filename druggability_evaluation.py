@@ -887,6 +887,7 @@ def run_fpocket_for_explicit_pocket(
         subprocess.run(
             cmd,
             check=True,
+            cwd=str(receptor_path.parent),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
