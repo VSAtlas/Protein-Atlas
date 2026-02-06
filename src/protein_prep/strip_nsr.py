@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, Union
+from typing import Iterable, List, Optional, Set, Tuple, Union
 
 from protein_prep.aliases_policy import (
+    ALIASES,
     _ALIASES_BIND_LOGGED,
     _COFACTOR_CANONICAL,
     _COFACTOR_DROP_LOGGED,
@@ -25,7 +26,20 @@ from protein_prep.aliases_policy import (
     _WATER_NAMES,
     _normalize_resname,
 )
+from protein_prep.element_guard import _post_write_element_guard
+from protein_prep.ion_audit import (
+    _format_token_list,
+    _scan_metal_map,
+    _summarize_ions_file,
+    emit_ion_audit_probe,
+)
+from protein_prep.prep_utils import (
+    _load_retain_allowlist,
+    _resolve_variant_token,
+    config,
+)
 from protein_prep.receptor_prep import _normalize_ion_policy
+from protein_prep.receptor_prep import _distance_from_center
 
 
 def _hydrate_legacy_globals() -> None:
@@ -34,6 +48,18 @@ def _hydrate_legacy_globals() -> None:
     g = globals()
     for name, value in legacy.__dict__.items():
         g.setdefault(name, value)
+
+
+def _parse_xyz(line: str) -> Optional[Tuple[float, float, float]]:
+    try:
+        return (
+            float(line[30:38]),
+            float(line[38:46]),
+            float(line[46:54]),
+        )
+    except Exception:
+        return None
+
 
 def _bucket_counts(counter: Counter) -> dict[str, int]:
     _hydrate_legacy_globals()
@@ -99,9 +125,8 @@ def _maybe_strip_ions(
     variant_token = _resolve_variant_token(cfg, variant)
     variant_label = variant_token or "legacy"
 
-    log_pre_variant = getattr(
-        _activesite_mod, "log_pre_variant_policy_breadcrumb", None
-    )
+    activesite_mod = globals().get("_activesite_mod")
+    log_pre_variant = getattr(activesite_mod, "log_pre_variant_policy_breadcrumb", None)
     if log_pre_variant is not None:
         try:
             log_pre_variant(path)

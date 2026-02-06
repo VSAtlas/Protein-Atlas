@@ -238,6 +238,53 @@ def _sanitize_token(token: str) -> str:
     return cleaned or "custom"
 
 
+def _normalize_library_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in {"unknown", "none", "null", "na", "n/a"}:
+        return ""
+    return text
+
+
+def _infer_library_from_source_csv(source_rel: str, decoy_prefix: str) -> str:
+    basename = Path(str(source_rel or "")).name.lower()
+    if not basename:
+        return ""
+    if basename == "consensus_reranked_scorch.csv":
+        return "FDA"
+    suffix = "_consensus_reranked_scorch.csv"
+    if not basename.endswith(suffix):
+        return ""
+    token = basename[: -len(suffix)]
+    if not token:
+        return ""
+    decoy = str(decoy_prefix or "").strip().lower()
+    if token in {"dud", "decoy"} or (decoy and token == decoy):
+        return "DECOY"
+    return token.upper()
+
+
+def _resolve_library_name(
+    row: Dict[str, Any], source_rel: str, decoy_prefix: str, is_decoy: bool
+) -> str:
+    if is_decoy:
+        return "DECOY"
+    raw_library = _normalize_library_name(row.get("library"))
+    if raw_library:
+        if raw_library.strip().lower() in {"decoy", "dud"}:
+            return "DECOY"
+        return raw_library.upper()
+    source_library = _infer_library_from_source_csv(source_rel, decoy_prefix)
+    if source_library and source_library != "DECOY":
+        return source_library
+    run_mode = _normalize_library_name(row.get("run_mode"))
+    if run_mode and run_mode.strip().lower() not in {"decoy", "dud"}:
+        return run_mode.upper()
+    return "UNKNOWN"
+
+
 def _discover_consensus_files(
     run_root: Path, tokens: List[str], decoy_prefix: str, logger: logging.Logger
 ) -> List[Path]:
@@ -901,6 +948,9 @@ def main() -> int:
             # Decoy/Control
             is_decoy = _row_is_decoy(row, decoy_prefix)
             is_control = base in controls
+            library_name = _resolve_library_name(
+                row, source_rel, decoy_prefix, is_decoy=is_decoy
+            )
 
             # Pose Validity
             pb_valid, pb_reason = pb_map.get((pdb_id, variant, ph, base), ("", ""))
@@ -945,7 +995,7 @@ def main() -> int:
                 "pdb_id": pdb_id,
                 "variant": variant,
                 "ph_label": ph,
-                "library": row.get("library", ""),
+                "library": library_name,
                 "run_mode": row.get("run_mode", ""),
                 "ligand": row.get("ligand", ""),
                 "ligand_file": lig_file_name,

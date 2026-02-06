@@ -11,7 +11,7 @@ import re
 import time
 from bisect import bisect_right
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, cast
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
@@ -220,6 +220,43 @@ def _build_target_id(pdb_id: Any, variant: Any, ph_label: Any) -> str:
     )
 
 
+def _extract_pdb_id_from_target_id(target_id: Any) -> str:
+    token = _normalize_text(target_id).split("|", 1)[0].strip().upper()
+    return token
+
+
+def _resolve_target_display_label(row: Dict[str, Any], target_id: str) -> str:
+    pdb_id = _normalize_text(row.get("pdb_id")).upper()
+    if not pdb_id:
+        pdb_id = _extract_pdb_id_from_target_id(target_id)
+    target_name = _normalize_text(row.get("target_name"))
+    if target_name and pdb_id:
+        return f"{target_name} ({pdb_id})"
+    if target_name:
+        return target_name
+    if pdb_id:
+        return pdb_id
+    return target_id
+
+
+def _build_target_display_map(rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    labels: Dict[str, str] = {}
+    for row in rows:
+        target_id = _normalize_text(row.get("target_id"))
+        if not target_id:
+            continue
+        candidate = _resolve_target_display_label(row, target_id)
+        if target_id not in labels:
+            labels[target_id] = candidate
+            continue
+        # Prefer named labels over pdb-only labels when available.
+        if "(" in candidate and ")" in candidate and (
+            "(" not in labels[target_id] or ")" not in labels[target_id]
+        ):
+            labels[target_id] = candidate
+    return labels
+
+
 def _sample_names(values: List[str], max_items: int = 5, max_len: int = 40) -> List[str]:
     sample: List[str] = []
     for value in values[:max_items]:
@@ -231,8 +268,14 @@ def _sample_names(values: List[str], max_items: int = 5, max_len: int = 40) -> L
 
 
 def _load_heatmap_rows_csv(
-    input_csv: Path, include_decoys: bool
+    input_csv: Path, include_decoys: bool, allowed_pdb_ids: Optional[Set[str]] = None
 ) -> List[Dict[str, Any]]:
+    normalized_allowed_pdb_ids: Optional[Set[str]] = None
+    if allowed_pdb_ids is not None:
+        normalized_allowed_pdb_ids = {
+            str(pdb_id).strip().upper() for pdb_id in allowed_pdb_ids if str(pdb_id).strip()
+        }
+
     with input_csv.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         fieldnames = reader.fieldnames or []
@@ -286,9 +329,19 @@ def _load_heatmap_rows_csv(
             if not target_id:
                 continue
 
+            pdb_id = _normalize_text(row.get("pdb_id")).upper() if "pdb_id" in fieldnames else ""
+            if not pdb_id:
+                pdb_id = _extract_pdb_id_from_target_id(target_id)
+            if (
+                normalized_allowed_pdb_ids is not None
+                and pdb_id not in normalized_allowed_pdb_ids
+            ):
+                continue
+
             row["t_selected"] = t_val
             row["ligand_name"] = ligand_name
             row["target_id"] = target_id
+            row["pdb_id"] = pdb_id
             rows.append(row)
 
     if not rows:
@@ -297,10 +350,16 @@ def _load_heatmap_rows_csv(
 
 
 def _load_heatmap_rows_parquet(
-    input_path: Path, include_decoys: bool
+    input_path: Path, include_decoys: bool, allowed_pdb_ids: Optional[Set[str]] = None
 ) -> List[Dict[str, Any]]:
+    normalized_allowed_pdb_ids: Optional[Set[str]] = None
+    if allowed_pdb_ids is not None:
+        normalized_allowed_pdb_ids = {
+            str(pdb_id).strip().upper() for pdb_id in allowed_pdb_ids if str(pdb_id).strip()
+        }
+
     try:
-        import pyarrow.dataset as ds
+        import pyarrow.dataset as ds  # type: ignore[import-untyped]
     except Exception as exc:  # pragma: no cover - import error path
         raise RuntimeError(
             "pyarrow is required to read parquet heatmap inputs"
@@ -312,6 +371,7 @@ def _load_heatmap_rows_parquet(
         raise ValueError("Missing required column: t_selected")
 
     has_target_id = "target_id" in schema_names
+    has_pdb_id = "pdb_id" in schema_names
     has_target_components = {"pdb_id", "variant", "ph_label"}.issubset(schema_names)
     if not has_target_id and not has_target_components:
         raise ValueError(
@@ -327,6 +387,8 @@ def _load_heatmap_rows_parquet(
     for col in ("target_id", "pdb_id", "variant", "ph_label"):
         if col in schema_names and col not in scan_columns:
             scan_columns.append(col)
+    if "target_name" in schema_names and "target_name" not in scan_columns:
+        scan_columns.append("target_name")
     for col in (
         "ligand_display",
         "ligand_base",
@@ -385,10 +447,20 @@ def _load_heatmap_rows_parquet(
             if not target_id:
                 continue
 
+            pdb_id = _normalize_text(payload["pdb_id"][idx]).upper() if has_pdb_id else ""
+            if not pdb_id:
+                pdb_id = _extract_pdb_id_from_target_id(target_id)
+            if (
+                normalized_allowed_pdb_ids is not None
+                and pdb_id not in normalized_allowed_pdb_ids
+            ):
+                continue
+
             row: Dict[str, Any] = {
                 "t_selected": t_val,
                 "ligand_name": ligand_name,
                 "target_id": target_id,
+                "pdb_id": pdb_id,
             }
             for col in (
                 "rank",
@@ -396,6 +468,7 @@ def _load_heatmap_rows_parquet(
                 "pose_valid_any",
                 "pose_invalid_reason_top",
                 "library",
+                "target_name",
             ):
                 if col in payload:
                     row[col] = payload[col][idx]
@@ -407,12 +480,18 @@ def _load_heatmap_rows_parquet(
 
 
 def _load_heatmap_rows(
-    input_path: Path, include_decoys: bool
+    input_path: Path,
+    include_decoys: bool,
+    allowed_pdb_ids: Optional[Set[str]] = None,
 ) -> List[Dict[str, Any]]:
     is_parquet_source = input_path.is_dir() or input_path.suffix.lower() == ".parquet"
     if is_parquet_source:
-        return _load_heatmap_rows_parquet(input_path, include_decoys)
-    return _load_heatmap_rows_csv(input_path, include_decoys)
+        return _load_heatmap_rows_parquet(
+            input_path, include_decoys, allowed_pdb_ids=allowed_pdb_ids
+        )
+    return _load_heatmap_rows_csv(
+        input_path, include_decoys, allowed_pdb_ids=allowed_pdb_ids
+    )
 
 
 def _aggregate_rows(
@@ -423,17 +502,19 @@ def _aggregate_rows(
     for row in rows:
         ligand_name = row.get("ligand_name") or ""
         target_id = row.get("target_id") or ""
+        target_label = row.get("target_label") or target_id
         t_val = row.get("t_selected")
         if not _is_finite(t_val):
             continue
         t_val = cast(float, t_val)
-        key = (ligand_name, target_id)
+        key = (ligand_name, target_label)
         existing = agg.get(key)
         if existing is None or t_val > existing["t_selected"]:
             agg[key] = {
                 "t_selected": t_val,
                 "ligand_name": ligand_name,
-                "target_id": target_id,
+                "target_id": target_label,
+                "target_raw": _normalize_text(target_id),
                 "rank": _normalize_text(row.get("rank")),
                 "pct_rank": _normalize_text(row.get("pct_rank")),
                 "pose_valid_any": _normalize_text(row.get("pose_valid_any")),
@@ -567,8 +648,8 @@ def _ensure_pandas_ix_compat(pd_module: Any) -> None:
 
 def _load_clustergrammer() -> Optional[Tuple[Any, Any]]:
     try:
-        import pandas as pd
-        from clustergrammer import Network
+        import pandas as pd  # type: ignore[import-untyped]
+        from clustergrammer import Network  # type: ignore[import-untyped]
     except Exception:
         return None
     _ensure_pandas_ix_compat(pd)
@@ -749,7 +830,7 @@ def _render_clustergrammer_html(
         meta_entry: Dict[str, str] = {
             "t_selected": _format_value(cast(Optional[float], cell.get("t_selected"))),
             "ligand_raw": ligand,
-            "target_raw": target,
+            "target_raw": _normalize_text(cell.get("target_raw")) or target,
         }
         for meta_key in (
             "rank",
@@ -959,11 +1040,9 @@ def _render_clustergrammer_html(
         "      ];\n"
         "      if (meta && meta.rank) lines.push(\"rank: \" + meta.rank);\n"
         "      if (meta && meta.pct_rank) lines.push(\"pct_rank: \" + meta.pct_rank);\n"
-        "      if (meta && meta.pose_valid_any) lines.push(\"pose_valid_any: \" + meta.pose_valid_any);\n"
         "      if (meta && meta.pose_invalid_reason_top) {\n"
         "        lines.push(\"pose_invalid_reason_top: \" + meta.pose_invalid_reason_top);\n"
         "      }\n"
-        "      if (meta && meta.library) lines.push(\"library: \" + meta.library);\n"
         "      return lines;\n"
         "    }\n"
         "    function tileKey(rowName, colName) {\n"
@@ -1063,6 +1142,7 @@ def render_interactive_heatmap_html(
     input_csv: Path,
     top_k: int = 100,
     include_decoys: bool = False,
+    allowed_pdb_ids: Optional[Set[str]] = None,
 ) -> str:
     config_path = repo_root / "config.txt"
     use_dendrogram = _parse_bool(
@@ -1123,7 +1203,14 @@ def render_interactive_heatmap_html(
     if not resolved_input.exists():
         raise FileNotFoundError(f"Input heatmap data not found: {resolved_input}")
 
-    rows = _load_heatmap_rows(resolved_input, include_decoys)
+    rows = _load_heatmap_rows(
+        resolved_input, include_decoys, allowed_pdb_ids=allowed_pdb_ids
+    )
+    target_display_map = _build_target_display_map(rows)
+    for row in rows:
+        target_id = _normalize_text(row.get("target_id"))
+        if target_id:
+            row["target_label"] = target_display_map.get(target_id, target_id)
     agg, ligand_max = _aggregate_rows(rows)
     if not ligand_max:
         raise ValueError("No ligands available after filtering")
@@ -1220,9 +1307,7 @@ def render_interactive_heatmap_html(
                 for key in (
                     "rank",
                     "pct_rank",
-                    "pose_valid_any",
                     "pose_invalid_reason_top",
-                    "library",
                 ):
                     value = cell.get(key) or ""
                     if value != "":
@@ -1344,11 +1429,9 @@ def render_interactive_heatmap_html(
         "        ];\n"
         "        if (cell.dataset.rank) lines.push(\"rank: \" + cell.dataset.rank);\n"
         "        if (cell.dataset.pctRank) lines.push(\"pct_rank: \" + cell.dataset.pctRank);\n"
-        "        if (cell.dataset.poseValidAny) lines.push(\"pose_valid_any: \" + cell.dataset.poseValidAny);\n"
         "        if (cell.dataset.poseInvalidReasonTop) {\n"
         "          lines.push(\"pose_invalid_reason_top: \" + cell.dataset.poseInvalidReasonTop);\n"
         "        }\n"
-        "        if (cell.dataset.library) lines.push(\"library: \" + cell.dataset.library);\n"
         "        detail.textContent = lines.join(\"\\n\");\n"
         "      });\n"
         "    });\n"

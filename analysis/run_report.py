@@ -19,8 +19,10 @@ try:
         resolve_mapping_csv_path,
         try_load_fda_index,
     )
+    from analysis.dud_eval_discovery import derive_target_name
     from analysis.heatmap_html import render_interactive_heatmap_html
     from analysis.manifest_utils import extract_pocket, load_run_manifest
+    import pathway_resolver
 except ModuleNotFoundError:
     REPO_ROOT = Path(__file__).resolve().parents[1]
     if str(REPO_ROOT) not in sys.path:
@@ -33,8 +35,10 @@ except ModuleNotFoundError:
         resolve_mapping_csv_path,
         try_load_fda_index,
     )
+    from analysis.dud_eval_discovery import derive_target_name
     from analysis.heatmap_html import render_interactive_heatmap_html
     from analysis.manifest_utils import extract_pocket, load_run_manifest
+    import pathway_resolver
 
 COMPONENT = "[run-report]"
 DECOY_PREFIX_KEY = "DECOY_PREFIX"
@@ -55,6 +59,7 @@ MIN_DECOYS_FOR_FDR = 200
 MIN_UNIQUE_DECOY_SCORES = 10
 _INCHIKEY_RE = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
 _RDK_PLACEHOLDER_RE = re.compile(r"rdk[_-]?\d+", re.IGNORECASE)
+_TARGET_NAME_CACHE: Dict[str, str] = {}
 
 
 def _configure_logging(verbose: bool) -> logging.Logger:
@@ -190,6 +195,51 @@ def _resolve_filter_invalid(repo_root: Path, run_id: str) -> Optional[bool]:
     return None
 
 
+def _read_target_name_prefer_from_file(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    prefer_keys = {
+        "TARGET_NAME_PREFER",
+        "TARGET_NAME_PREFERENCE",
+        "DUD_EVAL_TARGET_NAME_PREFER",
+        "DUD_EVAL_TARGET_NAME_PREFERENCE",
+    }
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, raw_value = stripped.split("=", 1)
+                key = key.strip().upper()
+                if key not in prefer_keys:
+                    continue
+                value = _strip_quotes(raw_value).strip().lower()
+                if value:
+                    return value
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_target_name_cfg(repo_root: Path, run_id: str) -> Dict[str, str]:
+    env_value = _strip_quotes(os.environ.get("TARGET_NAME_PREFER", "")).strip().lower()
+    if env_value:
+        return {"target_name_prefer": env_value, "repo_root": str(repo_root)}
+
+    candidates = [
+        repo_root / "data" / run_id / "config.txt",
+        repo_root / "data" / run_id / "config_snapshot.txt",
+        repo_root / "manifests" / run_id / "config.txt",
+        repo_root / "config.txt",
+    ]
+    for path in candidates:
+        value = _read_target_name_prefer_from_file(path)
+        if value:
+            return {"target_name_prefer": value, "repo_root": str(repo_root)}
+    return {"repo_root": str(repo_root)}
+
+
 def _parse_report_limit(raw: object) -> Optional[int]:
     if isinstance(raw, bool):
         return None
@@ -245,6 +295,90 @@ def _resolve_report_limit(repo_root: Path, run_id: str, key: str) -> Optional[in
     ]
     for path in candidates:
         parsed = _read_report_limit_from_file(path, key)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _read_report_float_from_file(
+    path: Path, key: str, allow_percent: bool = False
+) -> Optional[float]:
+    if not path.exists():
+        return None
+    key_norm = key.strip().lower()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                k, raw_value = stripped.split("=", 1)
+                if k.strip().lower() != key_norm:
+                    continue
+                if allow_percent:
+                    parsed = _parse_percent_searched(raw_value)
+                    if parsed is not None:
+                        return parsed
+                raw = _strip_quotes(raw_value).strip()
+                if not raw:
+                    continue
+                try:
+                    parsed = float(raw)
+                except ValueError:
+                    continue
+                if math.isfinite(parsed):
+                    return parsed
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_report_float(
+    repo_root: Path, run_id: str, key: str, allow_percent: bool = False
+) -> Optional[float]:
+    candidates = [
+        repo_root / "data" / run_id / "config.txt",
+        repo_root / "data" / run_id / "config_snapshot.txt",
+        repo_root / "manifests" / run_id / "config.txt",
+        repo_root / "config.txt",
+    ]
+    for path in candidates:
+        parsed = _read_report_float_from_file(path, key, allow_percent=allow_percent)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _read_report_bool_from_file(path: Path, key: str) -> Optional[bool]:
+    if not path.exists():
+        return None
+    key_norm = key.strip().lower()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                k, raw_value = stripped.split("=", 1)
+                if k.strip().lower() != key_norm:
+                    continue
+                parsed = _parse_filter_invalid(raw_value)
+                if parsed is not None:
+                    return parsed
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_report_bool(repo_root: Path, run_id: str, key: str) -> Optional[bool]:
+    candidates = [
+        repo_root / "data" / run_id / "config.txt",
+        repo_root / "data" / run_id / "config_snapshot.txt",
+        repo_root / "manifests" / run_id / "config.txt",
+        repo_root / "config.txt",
+    ]
+    for path in candidates:
+        parsed = _read_report_bool_from_file(path, key)
         if parsed is not None:
             return parsed
     return None
@@ -337,6 +471,131 @@ def _resolve_master_csvs(
         candidates.append(data_dir / f"{prefix}_master_rows.csv")
         candidates.append(data_dir / f"master_rows_{prefix}.csv")
     return [path for path in candidates if path.exists()]
+
+
+def _safe_relpath(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except Exception:
+        return str(path)
+
+
+def _is_decoy_filename(name: str, decoy_prefix: str) -> bool:
+    token = str(name or "").strip().lower()
+    if not token:
+        return False
+    if token.startswith("decoy") or token.startswith("dud") or "_dud_" in token:
+        return True
+    decoy = str(decoy_prefix or "").strip().lower()
+    if decoy and (
+        token.startswith(f"{decoy}_") or f"_{decoy}_" in token or token.startswith(decoy)
+    ):
+        return True
+    return False
+
+
+def _row_is_decoy_for_split(row: Dict[str, Any], decoy_prefix: str) -> bool:
+    if _as_bool(row.get("is_decoy")):
+        return True
+    library = _clean_text(row.get("library")).lower()
+    if library in {"decoy", "dud"}:
+        return True
+    run_mode = _clean_text(row.get("run_mode")).lower()
+    if run_mode in {"dud", "decoy"}:
+        return True
+    ligand_file = _clean_text(
+        row.get("ligand_file") or row.get("ligand") or row.get("Ligand_ID")
+    )
+    return _is_decoy_filename(ligand_file, decoy_prefix)
+
+
+def _normalize_library_slug(value: Any) -> str:
+    text = _clean_text(value).lower()
+    if not text:
+        return ""
+    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    if not text:
+        return ""
+    if text in {"na", "none", "null", "unknown"}:
+        return ""
+    return text
+
+
+def _infer_library_from_source_csv(source_csv: Any, decoy_prefix: str) -> str:
+    source = _clean_text(source_csv)
+    if not source:
+        return ""
+    basename = Path(source).name.lower()
+    if basename == "consensus_reranked_scorch.csv":
+        return "fda"
+    suffix = "_consensus_reranked_scorch.csv"
+    if not basename.endswith(suffix):
+        return ""
+    prefix = basename[: -len(suffix)]
+    if not prefix:
+        return ""
+    decoy = _normalize_library_slug(decoy_prefix)
+    if prefix in {"dud", "decoy"} or (decoy and prefix == decoy):
+        return ""
+    return _normalize_library_slug(prefix)
+
+
+def _resolve_row_library_slug(row: Dict[str, Any], decoy_prefix: str) -> str:
+    if _row_is_decoy_for_split(row, decoy_prefix):
+        return "decoy"
+    lib = _normalize_library_slug(row.get("library"))
+    if lib and lib not in {"decoy", "dud"}:
+        return lib
+    mode = _normalize_library_slug(row.get("run_mode"))
+    if mode and mode not in {"decoy", "dud"}:
+        return mode
+    source_lib = _infer_library_from_source_csv(row.get("source_csv"), decoy_prefix)
+    if source_lib:
+        return source_lib
+    return "unknown"
+
+
+def _write_split_master_rows(
+    repo_root: Path,
+    run_id: str,
+    decoy_prefix: str,
+    master_csvs: List[Path],
+) -> Dict[str, Path]:
+    data_dir = repo_root / "data" / run_id
+    rows: List[Dict[str, Any]] = []
+    fieldnames: List[str] = []
+    field_set: Set[str] = set()
+    for csv_path in master_csvs:
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for name in reader.fieldnames or []:
+                if name not in field_set:
+                    field_set.add(name)
+                    fieldnames.append(name)
+            for row in reader:
+                rows.append(row)
+    if not rows:
+        return {}
+
+    decoy_rows: List[Dict[str, Any]] = []
+    by_library: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        lib_slug = _resolve_row_library_slug(row, decoy_prefix)
+        if lib_slug == "decoy":
+            decoy_rows.append(row)
+            continue
+        by_library.setdefault(lib_slug or "unknown", []).append(row)
+
+    written: Dict[str, Path] = {}
+    for lib_slug in sorted(by_library.keys()):
+        subset_rows = list(by_library[lib_slug]) + list(decoy_rows)
+        out_path = data_dir / f"{lib_slug}_master_rows.csv"
+        with out_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(subset_rows)
+        written[lib_slug] = out_path
+    return written
 
 
 def _clean_text(value: Any) -> str:
@@ -737,6 +996,119 @@ def _as_bool(x: Any) -> bool:
     return s in ("1", "true", "yes", "on")
 
 
+def _resolve_target_name(pdb_id: str, cfg: Dict[str, Any]) -> str:
+    normalized_pdb = _clean_text(pdb_id).upper()
+    if not normalized_pdb:
+        return ""
+    cached = _TARGET_NAME_CACHE.get(normalized_pdb)
+    if cached is not None:
+        return cached
+
+    prefer_raw = _clean_text(
+        cfg.get("target_name_prefer")
+        or cfg.get("TARGET_NAME_PREFER")
+        or cfg.get("target_name_preference")
+        or cfg.get("TARGET_NAME_PREFERENCE")
+        or "auto"
+    ).lower()
+    prefer = prefer_raw if prefer_raw in {"auto", "compnd", "uniprot"} else "auto"
+    repo_root = Path(_clean_text(cfg.get("repo_root"))).resolve() if _clean_text(cfg.get("repo_root")) else None
+    try:
+        if repo_root and repo_root.exists():
+            cwd = Path.cwd()
+            os.chdir(repo_root)
+            try:
+                target_name = _clean_text(
+                    derive_target_name(
+                        normalized_pdb,
+                        prefer=prefer,
+                        pdb_root_override=repo_root / "input_pdbs",
+                        cfg=cfg,
+                    )
+                )
+            finally:
+                os.chdir(cwd)
+        else:
+            target_name = _clean_text(
+                derive_target_name(
+                    normalized_pdb,
+                    prefer=prefer,
+                    pdb_root_override=Path("input_pdbs"),
+                    cfg=cfg,
+                )
+            )
+    except Exception:
+        target_name = ""
+
+    _TARGET_NAME_CACHE[normalized_pdb] = target_name
+    return target_name
+
+
+def _ligand_identity_for_library(row: Dict[str, Any]) -> str:
+    lig_base = _clean_text(row.get("ligand_base"))
+    if lig_base:
+        return lig_base
+    for key in ("ligand", "ligand_file"):
+        raw = _clean_text(row.get(key))
+        if not raw:
+            continue
+        basename = os.path.basename(raw)
+        stem = Path(basename).stem if basename else ""
+        token = _clean_text(stem or basename)
+        if token:
+            return token
+    return ""
+
+
+def _total_library_n(group_rows: List[Dict[str, Any]]) -> int:
+    unique_ligands: Set[str] = set()
+    for row in group_rows:
+        if _as_bool(row.get("is_decoy")):
+            continue
+        ligand_id = _ligand_identity_for_library(row)
+        if ligand_id:
+            unique_ligands.add(ligand_id)
+    return max(1, len(unique_ligands))
+
+
+def _target_display_name(pdb_id: str, target_name: str) -> str:
+    pdb = _clean_text(pdb_id)
+    name = _clean_text(target_name)
+    if name and pdb:
+        return f"{name} ({pdb})"
+    if pdb:
+        return pdb
+    return name
+
+
+def _format_pct_display(
+    value: Any, decimals: int = 1, min_nonzero_pct: Optional[float] = None
+) -> str:
+    pct = _as_float(value)
+    if pct is None or not math.isfinite(pct):
+        return ""
+    pct_display = pct * 100.0
+    if (
+        min_nonzero_pct is not None
+        and min_nonzero_pct > 0
+        and pct_display > 0
+        and pct_display < min_nonzero_pct
+    ):
+        pct_display = min_nonzero_pct
+    digits = max(0, int(decimals))
+    return f"{pct_display:.{digits}f}%"
+
+
+def _median(values: List[float]) -> Optional[float]:
+    if not values:
+        return None
+    sorted_values = sorted(float(v) for v in values)
+    mid = len(sorted_values) // 2
+    if len(sorted_values) % 2 == 1:
+        return sorted_values[mid]
+    return (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
+
+
 def _compute_fdr_stats(group_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     non_decoys = [r for r in group_rows if not _as_bool(r.get("is_decoy"))]
     if not non_decoys:
@@ -850,10 +1222,21 @@ def build_report(
     multi_target_max_hits: int = 50,
     multi_target_sort: str = "worst_pct_then_mean",
     filter_invalid: bool = False,
+    top_targets_n: int = 3,
+    breadth_pct_threshold: float = 0.01,
+    coverage_requires_pose_valid: bool = False,
+    pct_display_decimals: int = 1,
+    tail_median_decimals: int = 0,
+    highlights_top_pct: float = 0.01,
+    highlights_max_ligands: int = 25,
     test_mode_tokens: Optional[List[str]] = None,
+    master_csvs_override: Optional[List[Path]] = None,
 ) -> Dict[str, Any]:
     tokens = test_mode_tokens or _resolve_test_mode_tokens(repo_root, run_id)
-    master_csvs = _resolve_master_csvs(repo_root, run_id, tokens, decoy_prefix)
+    if master_csvs_override:
+        master_csvs = [Path(p) for p in master_csvs_override]
+    else:
+        master_csvs = _resolve_master_csvs(repo_root, run_id, tokens, decoy_prefix)
     if not master_csvs:
         raise FileNotFoundError(
             f"Master CSV not found for run_id={run_id} tokens={tokens}"
@@ -870,6 +1253,20 @@ def build_report(
     multi_target_min_targets = max(0, int(multi_target_min_targets))
     multi_target_max_hits = max(0, int(multi_target_max_hits))
     multi_target_max_pct = float(multi_target_max_pct) if multi_target_max_pct is not None else 0.0
+    top_targets_n = max(1, int(top_targets_n))
+    breadth_pct_threshold = (
+        float(breadth_pct_threshold) if breadth_pct_threshold is not None else 0.01
+    )
+    if not math.isfinite(breadth_pct_threshold) or breadth_pct_threshold < 0:
+        breadth_pct_threshold = 0.01
+    pct_display_decimals = max(0, int(pct_display_decimals))
+    tail_median_decimals = max(0, int(tail_median_decimals))
+    highlights_max_ligands = max(0, int(highlights_max_ligands))
+    highlights_top_pct = (
+        float(highlights_top_pct) if highlights_top_pct is not None else 0.01
+    )
+    if not math.isfinite(highlights_top_pct) or highlights_top_pct < 0:
+        highlights_top_pct = 0.01
 
     logger = logging.getLogger("run-report")
     rows: List[Dict[str, Any]] = []
@@ -914,6 +1311,7 @@ def build_report(
         mapping_csv,
         logger,
     )
+    target_name_cfg = _resolve_target_name_cfg(repo_root, run_id)
 
 
     # Group by target combo
@@ -923,6 +1321,7 @@ def build_report(
     ligand_notable_hits: Dict[str, List[Dict[str, Any]]] = {}
     ligand_display_map: Dict[str, str] = {}
     multi_target_entries: Dict[str, List[Dict[str, Any]]] = {}
+    compact_ligand_entries: Dict[str, List[Dict[str, Any]]] = {}
 
     unique_ligands = set()
 
@@ -950,6 +1349,8 @@ def build_report(
     for key in sorted_keys:
         group_rows = target_groups[key]
         pdb, variant, ph = key.split("|")
+        target_name = _resolve_target_name(pdb, target_name_cfg)
+        target_display = _target_display_name(pdb, target_name)
 
         # QC Stats
         n_rows = len(group_rows)
@@ -1007,12 +1408,12 @@ def build_report(
         sorted_rankable = sorted(rankable, key=rank_key)
         ranked_entries = []
         ranked_rows: List[Dict[str, Any]] = []
-        n_rankable = len(sorted_rankable)
+        total_library_n = _total_library_n(group_rows)
         for idx, (r, t_sel) in enumerate(sorted_rankable, start=1):
             lig_base = _clean_text(r.get("ligand_base"))
             lig_display = _resolve_ligand_display(r, has_ligand_display, fda_index)
             t_src = r.get("t_selected_source") or None
-            pct = idx / n_rankable if n_rankable else 0.0
+            pct = idx / total_library_n
 
             entry = {
                 "ligand_base": lig_base,
@@ -1032,6 +1433,71 @@ def build_report(
             ranked_rows.append({"row": r, "entry": entry})
             if lig_base and lig_base not in ligand_display_map:
                 ligand_display_map[lig_base] = lig_display or lig_base
+
+        compact_best_by_ligand: Dict[str, Dict[str, Any]] = {}
+        for r in group_rows:
+            if _as_bool(r.get("is_decoy")):
+                continue
+            t_val = _as_float(r.get("t_selected"))
+            if t_val is None or not math.isfinite(t_val):
+                continue
+            if coverage_requires_pose_valid and not _as_bool(r.get("pose_valid_any")):
+                continue
+            lig_base = _ligand_identity_for_library(r)
+            if not lig_base:
+                continue
+            lig_display = _resolve_ligand_display(r, has_ligand_display, fda_index)
+            lig_file = _clean_text(r.get("ligand_file") or r.get("ligand") or "")
+            candidate = {
+                "ligand_base": lig_base,
+                "ligand_display": lig_display or lig_base,
+                "ligand_file": lig_file,
+                "t_selected": t_val,
+                "t_selected_source": r.get("t_selected_source") or None,
+            }
+            current = compact_best_by_ligand.get(lig_base)
+            if current is None:
+                compact_best_by_ligand[lig_base] = candidate
+                continue
+            current_t = _as_float(current.get("t_selected"))
+            if current_t is None or t_val > current_t:
+                compact_best_by_ligand[lig_base] = candidate
+                continue
+            if current_t is not None and t_val == current_t and lig_file < str(
+                current.get("ligand_file") or ""
+            ):
+                compact_best_by_ligand[lig_base] = candidate
+
+        def compact_rank_key(item: Dict[str, Any]) -> tuple:
+            t_val = _as_float(item.get("t_selected"))
+            return (
+                -(t_val if t_val is not None else float("-inf")),
+                _clean_text(item.get("ligand_base")),
+                _clean_text(item.get("ligand_file")),
+            )
+
+        compact_rankable = sorted(compact_best_by_ligand.values(), key=compact_rank_key)
+        for idx, item in enumerate(compact_rankable, start=1):
+            lig_base = _clean_text(item.get("ligand_base"))
+            if not lig_base:
+                continue
+            lig_display = _clean_text(item.get("ligand_display")) or lig_base
+            if lig_base not in ligand_display_map:
+                ligand_display_map[lig_base] = lig_display
+            pct = idx / total_library_n
+            compact_ligand_entries.setdefault(lig_base, []).append(
+                {
+                    "target_id": key,
+                    "pdb_id": pdb,
+                    "target_name": target_name,
+                    "target_display": target_display,
+                    "rank": idx,
+                    "pct_rank": float(f"{pct:.6f}"),
+                    "t_selected": float(_as_float(item.get("t_selected")) or 0.0),
+                    "t_selected_source": item.get("t_selected_source"),
+                    "ligand_display": lig_display,
+                }
+            )
 
         top_list = ranked_entries[:top_n] if top_n > 0 else []
         extended_list = ranked_entries[:extended_top_n] if extended_top_n > 0 else []
@@ -1173,6 +1639,7 @@ def build_report(
             fdr_value = float(best_q) if reliable else f"SMALL {best_q:.6g}"
 
         targets_out[key] = {
+            "target_name": target_name,
             "qc": {
                 "ef1": ef1,
                 "roc_auc": roc_auc,
@@ -1325,13 +1792,101 @@ def build_report(
         for entry in multi_target_hits:
             entry.pop("_rank_sum", None)
 
+    ligand_highlights = []
+    total_targets = len(target_groups)
+    for lig_base, entries in sorted(compact_ligand_entries.items()):
+        if not entries:
+            continue
+        entries_sorted = sorted(
+            entries,
+            key=lambda item: (
+                float(_as_float(item.get("pct_rank")) or 1.0),
+                -(float(_as_float(item.get("t_selected")) or float("-inf"))),
+                _clean_text(item.get("target_id")),
+            ),
+        )
+        best = entries_sorted[0]
+        best_score = float(_as_float(best.get("t_selected")) or 0.0)
+        best_pct_rank = float(_as_float(best.get("pct_rank")) or 1.0)
+        best_target = _clean_text(best.get("target_display")) or _clean_text(
+            best.get("pdb_id")
+        )
+
+        top_entries = entries_sorted[:top_targets_n]
+        top_lines = []
+        for idx, entry in enumerate(top_entries, start=1):
+            target_display = _clean_text(entry.get("pdb_id"))
+            t_text = _format_num(entry.get("t_selected"), ".6g")
+            p_text = _format_pct_display(entry.get("pct_rank"), pct_display_decimals)
+            top_lines.append(f"{idx}) {target_display} t={t_text} p={p_text}")
+        top_targets_text = "\n".join(top_lines) if top_lines else "—"
+
+        tail_entries = entries_sorted[top_targets_n:]
+        if tail_entries:
+            tail_pcts = [float(e.get("pct_rank") or 0.0) for e in tail_entries]
+            tail_median = _median(tail_pcts)
+            if tail_median is None:
+                tail_summary = f"+{len(tail_entries)} more"
+            else:
+                tail_pct = _format_pct_display(tail_median, tail_median_decimals)
+                tail_summary = f"+{len(tail_entries)} more (median p={tail_pct})"
+        else:
+            tail_summary = "—"
+
+        breadth_count = sum(
+            1
+            for entry in entries_sorted
+            if float(_as_float(entry.get("pct_rank")) or 1.0) <= breadth_pct_threshold
+        )
+        coverage_k = len(entries_sorted)
+        ligand_name = ligand_display_map.get(lig_base, lig_base)
+        ligand_highlights.append(
+            {
+                "ligand": ligand_name,
+                "ligand_display": ligand_name,
+                "ligand_base": lig_base,
+                "best_target": best_target,
+                "best_score": best_score,
+                "best_percentile": _format_pct_display(
+                    best_pct_rank,
+                    max(2, pct_display_decimals),
+                    min_nonzero_pct=0.01,
+                ),
+                "best_pct_rank": float(f"{best_pct_rank:.6f}"),
+                "top_targets": top_targets_text,
+                "coverage": f"{coverage_k} / {total_targets} targets",
+                "coverage_k": coverage_k,
+                "coverage_m": total_targets,
+                "breadth": f"{breadth_count}",
+                "breadth_count": breadth_count,
+                "tail_summary": tail_summary,
+            }
+        )
+
+    ligand_highlights.sort(
+        key=lambda item: (
+            float(_as_float(item.get("best_pct_rank")) or 1.0),
+            -(float(_as_float(item.get("best_score")) or 0.0)),
+            _clean_text(item.get("ligand_base")),
+        )
+    )
+    highlights_top_count = len(ligand_highlights)
+    if highlights_top_count and highlights_top_pct > 0:
+        pct_fraction = min(float(highlights_top_pct), 1.0)
+        highlights_top_count = max(1, int(math.ceil(highlights_top_count * pct_fraction)))
+    filtered_highlights = ligand_highlights[:highlights_top_count]
+    if highlights_max_ligands > 0:
+        ligand_highlights = filtered_highlights[:highlights_max_ligands]
+    else:
+        ligand_highlights = filtered_highlights
+
     sources: Dict[str, Any] = {
-        "master_rows_csv": str(primary_master_csv.relative_to(repo_root)),
+        "master_rows_csv": _safe_relpath(primary_master_csv, repo_root),
         "manifest_yaml": str(canonical_manifest_rel),
     }
     if len(master_csvs) > 1:
         sources["master_rows_csvs"] = [
-            str(path.relative_to(repo_root)) for path in master_csvs
+            _safe_relpath(path, repo_root) for path in master_csvs
         ]
 
     report = {
@@ -1341,6 +1896,16 @@ def build_report(
         "summary": summary,
         "targets": targets_out,
         "ligands": ligands_out,
+        "ligand_highlights": ligand_highlights,
+        "ligand_highlight_config": {
+            "top_targets_n": top_targets_n,
+            "breadth_pct_threshold": float(f"{breadth_pct_threshold:.6f}"),
+            "coverage_requires_pose_valid": bool(coverage_requires_pose_valid),
+            "pct_display_decimals": pct_display_decimals,
+            "tail_median_decimals": tail_median_decimals,
+            "highlights_top_pct": float(f"{highlights_top_pct:.6f}"),
+            "highlights_max_ligands": highlights_max_ligands,
+        },
         "multi_target_hits": multi_target_hits,
     }
 
@@ -1407,69 +1972,269 @@ def _stage_artifacts(
     return staged
 
 
+def _resolve_heatmap_source(repo_root: Path, run_id: str) -> Optional[Path]:
+    interactions_dataset = repo_root / "data" / run_id / "dataset" / "interactions"
+    heatmap_csv = repo_root / "data" / run_id / "heatmap_input.csv"
+    master_csv = repo_root / "data" / run_id / "master_rows.csv"
+    # Preserve existing report source preference.
+    if heatmap_csv.exists():
+        return heatmap_csv
+    if interactions_dataset.exists():
+        return interactions_dataset
+    if master_csv.exists():
+        return master_csv
+    return None
+
+
+def _extract_pdb_id_from_target_id(target_id: Any) -> str:
+    token = str(target_id or "").strip().split("|", 1)[0].strip().upper()
+    return token
+
+
+def _collect_pdb_ids_from_manifest(repo_root: Path, run_id: str) -> Set[str]:
+    manifest, _manifest_path = load_run_manifest(repo_root, run_id)
+    proteins = (manifest or {}).get("proteins", {}) if isinstance(manifest, dict) else {}
+    if not isinstance(proteins, dict):
+        return set()
+
+    pdb_ids: Set[str] = set()
+    for protein_key, entry in proteins.items():
+        token = _extract_pdb_id_from_target_id(protein_key)
+        if token:
+            pdb_ids.add(token)
+        if isinstance(entry, dict):
+            entry_pdb_id = str(entry.get("pdb_id") or "").strip().upper()
+            if entry_pdb_id:
+                pdb_ids.add(entry_pdb_id)
+    return pdb_ids
+
+
+def _collect_pdb_ids_from_heatmap_csv(heatmap_csv: Path) -> Set[str]:
+    if not heatmap_csv.exists():
+        return set()
+    pdb_ids: Set[str] = set()
+    with heatmap_csv.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames or []
+        has_pdb_id = "pdb_id" in fieldnames
+        for row in reader:
+            token = str(row.get("pdb_id") or "").strip().upper() if has_pdb_id else ""
+            if not token:
+                token = _extract_pdb_id_from_target_id(row.get("target_id"))
+            if token:
+                pdb_ids.add(token)
+    return pdb_ids
+
+
+def _collect_pdb_ids_for_pathway_reports(
+    repo_root: Path, run_id: str, heatmap_source: Path
+) -> Set[str]:
+    from_manifest = _collect_pdb_ids_from_manifest(repo_root, run_id)
+    if from_manifest:
+        return from_manifest
+    if heatmap_source.suffix.lower() == ".csv":
+        return _collect_pdb_ids_from_heatmap_csv(heatmap_source)
+    fallback_csv = repo_root / "data" / run_id / "heatmap_input.csv"
+    return _collect_pdb_ids_from_heatmap_csv(fallback_csv)
+
+
+def _render_pathway_heatmap_document(run_id: str, pathway_slug: str, body_html: str) -> str:
+    title = f"{run_id} pathway heatmap: {pathway_slug}"
+    return (
+        "<!doctype html>\n"
+        "<html>\n"
+        "<head>\n"
+        "  <meta charset=\"utf-8\">\n"
+        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        f"  <title>{html.escape(title)}</title>\n"
+        "</head>\n"
+        "<body>\n"
+        f"{body_html}\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _write_pathway_specific_heatmap_reports(
+    report: Dict[str, Any],
+    html_path: Path,
+    repo_root: Path,
+    heatmap_source_override: Optional[Path] = None,
+) -> List[Path]:
+    run_id = str(report.get("run_id") or "").strip()
+    if not run_id:
+        return []
+
+    heatmap_source = heatmap_source_override or _resolve_heatmap_source(repo_root, run_id)
+    if heatmap_source is None:
+        return []
+
+    pdb_ids = sorted(_collect_pdb_ids_for_pathway_reports(repo_root, run_id, heatmap_source))
+    if not pdb_ids:
+        return []
+
+    logger = logging.getLogger("run-report")
+    cache = pathway_resolver.Cache(
+        cache_dir=repo_root / "pathways" / "cache",
+        refresh=False,
+        logger=logger,
+    )
+    http_client = pathway_resolver.HttpClient()
+    pathway_by_pdb = pathway_resolver.assign_single_pathway_per_pdb(
+        pdb_ids, cache, http_client
+    )
+    if not pathway_by_pdb:
+        return []
+
+    grouped: Dict[str, Set[str]] = {}
+    for pdb_id in pdb_ids:
+        slug = pathway_by_pdb.get(pdb_id) or pathway_resolver.slugify_pathway_name(
+            "pathway"
+        )
+        grouped.setdefault(slug, set()).add(pdb_id)
+
+    eligible_groups = {
+        slug: pdb_set for slug, pdb_set in grouped.items() if len(pdb_set) >= 2
+    }
+    if not eligible_groups:
+        return []
+
+    written_paths: List[Path] = []
+    pathway_prefix = html_path.stem
+    for pathway_slug in sorted(eligible_groups.keys()):
+        pdb_filter = eligible_groups[pathway_slug]
+        if not pdb_filter:
+            continue
+        pathway_path = html_path.with_name(f"{pathway_prefix}_{pathway_slug}.html")
+        try:
+            heatmap_html = render_interactive_heatmap_html(
+                repo_root,
+                run_id,
+                heatmap_source,
+                allowed_pdb_ids=pdb_filter,
+            )
+            html_payload = _render_pathway_heatmap_document(
+                run_id, pathway_slug, heatmap_html
+            )
+        except Exception as exc:
+            html_payload = _render_pathway_heatmap_document(
+                run_id,
+                pathway_slug,
+                (
+                    "<div>Heatmap unavailable: "
+                    f"{html.escape(str(exc))}"
+                    "</div>"
+                ),
+            )
+        pathway_path.write_text(html_payload, encoding="utf-8")
+        written_paths.append(pathway_path)
+    return written_paths
+
+
+def _write_html_reports(
+    report: Dict[str, Any],
+    out_path: Path,
+    highlight_queries: List[str],
+    repo_root: Path,
+    heatmap_source_override: Optional[Path] = None,
+) -> List[Path]:
+    _write_html_report(
+        report,
+        out_path,
+        highlight_queries,
+        repo_root,
+        heatmap_source_override=heatmap_source_override,
+    )
+    return _write_pathway_specific_heatmap_reports(
+        report,
+        out_path,
+        repo_root,
+        heatmap_source_override=heatmap_source_override,
+    )
+
+
 def _write_html_report(
     report: Dict[str, Any],
     out_path: Path,
     highlight_queries: List[str],
     repo_root: Path,
+    heatmap_source_override: Optional[Path] = None,
 ) -> None:
     run_id = report.get("run_id", "")
     generated_at = report.get("generated_at", "")
 
+    compact_rows = []
+    compact_highlights = report.get("ligand_highlights", []) or []
+    compact_cfg = report.get("ligand_highlight_config", {}) or {}
+    top_targets_n = int(compact_cfg.get("top_targets_n") or 3)
+    if compact_highlights:
+        for row in compact_highlights:
+            ligand_name = _clean_text(row.get("ligand")) or _clean_text(
+                row.get("ligand_display")
+            )
+            if not ligand_name:
+                ligand_name = _clean_text(row.get("ligand_base")) or "—"
+            best_target = _clean_text(row.get("best_target")) or "—"
+            best_score = _format_num(row.get("best_score"), ".6g") or "—"
+            best_percentile = _clean_text(row.get("best_percentile"))
+            if not best_percentile:
+                best_percentile = (
+                    _format_pct_display(
+                        row.get("best_pct_rank"),
+                        2,
+                        min_nonzero_pct=0.01,
+                    )
+                    or "—"
+                )
+            top_targets = _clean_text(row.get("top_targets")) or "—"
+            coverage = _clean_text(row.get("coverage")) or "—"
+            breadth = _clean_text(row.get("breadth")) or "0"
+            tail_summary = _clean_text(row.get("tail_summary")) or "—"
+            compact_rows.append(
+                "<tr>"
+                f"<td>{html.escape(ligand_name)}</td>"
+                f"<td>{html.escape(best_target)}</td>"
+                f"<td class=\"num\">{html.escape(best_score)}</td>"
+                f"<td class=\"num\">{html.escape(best_percentile)}</td>"
+                f"<td class=\"preline\">{html.escape(top_targets).replace(chr(10), '<br>')}</td>"
+                f"<td class=\"num\">{html.escape(coverage)}</td>"
+                f"<td class=\"num\">{html.escape(breadth)}</td>"
+                f"<td class=\"num\">{html.escape(tail_summary)}</td>"
+                "</tr>"
+            )
+
+    highlight_rows = []
     highlight_headers = "".join(
         f"<th class=\"num\">{html.escape(q)}</th>" for q in highlight_queries
     )
-    highlight_rows = []
-    targets = report.get("targets", {}) or {}
-    for target_id in sorted(targets.keys()):
-        target = targets[target_id]
-        highlights = target.get("highlights", []) or []
-        highlight_map = {h.get("query"): h for h in highlights if h}
-        cells = []
-        for query in highlight_queries:
-            entry = highlight_map.get(query)
-            if entry and entry.get("found"):
-                rank = entry.get("rank")
-                pct = _format_num(entry.get("pct_rank"), ".6f")
-                t_sel = _format_num(entry.get("t_selected"), ".6g")
-                if rank:
-                    cell = f"{rank} ({pct}) {t_sel}".strip()
+    if not compact_rows:
+        targets = report.get("targets", {}) or {}
+        for target_id in sorted(targets.keys()):
+            target = targets[target_id]
+            target_name = _clean_text(target.get("target_name")) or "—"
+            highlights = target.get("highlights", []) or []
+            highlight_map = {h.get("query"): h for h in highlights if h}
+            cells = []
+            for query in highlight_queries:
+                entry = highlight_map.get(query)
+                if entry and entry.get("found"):
+                    rank = entry.get("rank")
+                    pct = _format_num(entry.get("pct_rank"), ".6f")
+                    t_sel = _format_num(entry.get("t_selected"), ".6g")
+                    if rank:
+                        cell = f"{rank} ({pct}) {t_sel}".strip()
+                    else:
+                        cell = "not found"
                 else:
                     cell = "not found"
-            else:
-                cell = "not found"
-            cells.append(f"<td class=\"num\">{html.escape(cell)}</td>")
-        row_html = (
-            f"<tr><td>{html.escape(target_id)}</td>{''.join(cells)}</tr>"
-        )
-        highlight_rows.append(row_html)
-
-    multi_rows = []
-    for hit in report.get("multi_target_hits", []) or []:
-        multi_rows.append(
-            "<tr>"
-            f"<td>{html.escape(str(hit.get('ligand_display', '')))}</td>"
-            f"<td>{html.escape(str(hit.get('ligand_base', '')))}</td>"
-            f"<td class=\"num\">{html.escape(str(hit.get('targets_qualified', '')))}</td>"
-            f"<td class=\"num\">{html.escape(_format_num(hit.get('worst_pct'), '.6f'))}</td>"
-            f"<td class=\"num\">{html.escape(_format_num(hit.get('mean_pct'), '.6f'))}</td>"
-            f"<td class=\"num\">{html.escape(str(hit.get('best_rank', '')))}</td>"
-            f"<td class=\"num\">{html.escape(_format_num(hit.get('best_t_selected'), '.6g'))}</td>"
-            "</tr>"
-        )
+                cells.append(f"<td class=\"num\">{html.escape(cell)}</td>")
+            row_html = (
+                f"<tr><td>{html.escape(target_id)}</td><td>{html.escape(target_name)}</td>{''.join(cells)}</tr>"
+            )
+            highlight_rows.append(row_html)
 
     heatmap_html = ""
-    interactions_dataset = repo_root / "data" / run_id / "dataset" / "interactions"
-    heatmap_csv = repo_root / "data" / run_id / "heatmap_input.csv"
-    master_csv = repo_root / "data" / run_id / "master_rows.csv"
-    heatmap_source = None
-    # Prefer the generated heatmap CSV because it applies FDA name remapping.
-    if heatmap_csv.exists():
-        heatmap_source = heatmap_csv
-    elif interactions_dataset.exists():
-        heatmap_source = interactions_dataset
-    elif master_csv.exists():
-        heatmap_source = master_csv
+    heatmap_source = heatmap_source_override or _resolve_heatmap_source(repo_root, run_id)
     if heatmap_source is not None:
         try:
             heatmap_html = render_interactive_heatmap_html(
@@ -1489,11 +2254,21 @@ def _write_html_report(
         "</section>"
     )
 
-    report_yaml = repo_root / "data" / run_id / "report.yaml"
-    heatmap_png = repo_root / "data" / run_id / "heatmap.png"
+    report_suffix = ""
+    if out_path.stem.startswith("report_"):
+        report_suffix = out_path.stem[len("report_") :]
+    data_dir = repo_root / "data" / run_id
+    if report_suffix:
+        report_yaml = data_dir / f"report_{report_suffix}.yaml"
+        heatmap_csv_artifact = data_dir / f"heatmap_input_{report_suffix}.csv"
+        heatmap_png = data_dir / f"heatmap_{report_suffix}.png"
+    else:
+        report_yaml = data_dir / "report.yaml"
+        heatmap_csv_artifact = data_dir / "heatmap_input.csv"
+        heatmap_png = data_dir / "heatmap.png"
     artifacts = [
         ("report.yaml", report_yaml),
-        ("heatmap_input.csv", heatmap_csv),
+        ("heatmap_input.csv", heatmap_csv_artifact),
         ("heatmap.png", heatmap_png),
     ]
     staged = _stage_artifacts(out_path.parent, artifacts)
@@ -1599,6 +2374,7 @@ def _write_html_report(
     tbody tr:nth-child(even) {{ background: #f9fafb; }}
     tbody tr:hover {{ background: var(--highlight); }}
     th.num, td.num {{ text-align: right; }}
+    .preline {{ white-space: pre-line; }}
     .artifact-list {{
       list-style: none;
       padding-left: 0;
@@ -1627,7 +2403,6 @@ def _write_html_report(
 
     <nav class="toc" aria-label="Table of contents">
       <a href="#highlights">Highlights</a>
-      <a href="#multitarget">Multi-target hits</a>
       <a href="#heatmap">Heatmap</a>
       <a href="#artifacts">Artifacts</a>
     </nav>
@@ -1638,34 +2413,13 @@ def _write_html_report(
         <table>
           <thead>
             <tr>
-              <th>target_id</th>
-              {highlight_headers}
+              {'<th>Ligand</th><th>Best target</th><th class="num">Best score</th><th class="num">Best percentile</th>'
+                + f'<th>Top targets (N={top_targets_n})</th><th class="num">Coverage</th><th class="num">Breadth</th><th class="num">Tail summary</th>'
+                if compact_rows else '<th>target_id</th><th>target_name</th>' + highlight_headers}
             </tr>
           </thead>
           <tbody>
-            {''.join(highlight_rows)}
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="section" id="multitarget">
-      <h2>Multi-target hits</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>ligand_display</th>
-              <th>ligand_base</th>
-              <th class="num">targets_qualified</th>
-              <th class="num">worst_pct</th>
-              <th class="num">mean_pct</th>
-              <th class="num">best_rank</th>
-              <th class="num">best_t_selected</th>
-            </tr>
-          </thead>
-          <tbody>
-            {''.join(multi_rows)}
+            {''.join(compact_rows) if compact_rows else ''.join(highlight_rows)}
           </tbody>
         </table>
       </div>
@@ -1694,9 +2448,10 @@ def _write_heatmap_input_csv(
     top_k: Optional[int],
     fda_mapping_csv: Optional[str],
     filter_invalid: bool,
+    master_csv_override: Optional[Path] = None,
 ) -> None:
     logger = logging.getLogger("run-report")
-    master_csv = repo_root / "data" / run_id / "master_rows.csv"
+    master_csv = master_csv_override or (repo_root / "data" / run_id / "master_rows.csv")
     if not master_csv.exists():
         raise FileNotFoundError(f"Master CSV not found: {master_csv}")
 
@@ -1706,6 +2461,7 @@ def _write_heatmap_input_csv(
         has_ligand_display = "ligand_display" in (reader.fieldnames or [])
         for r in reader:
             rows.append(r)
+    target_name_cfg = _resolve_target_name_cfg(repo_root, run_id)
 
     fda_index = None
     mapping_csv = resolve_mapping_csv_path(repo_root, run_id, cli_value=fda_mapping_csv)
@@ -1754,9 +2510,9 @@ def _write_heatmap_input_csv(
             return (-t_val, lig_base, lig_file)
 
         sorted_rankable = sorted(rankable, key=rank_key)
-        n_rankable = len(sorted_rankable)
+        total_library_n = _total_library_n(group_rows)
         for idx, (row, _t_val) in enumerate(sorted_rankable, start=1):
-            pct = idx / n_rankable if n_rankable else 0.0
+            pct = idx / total_library_n
             row_rank[id(row)] = {
                 "rank": idx,
                 "pct_rank": float(f"{pct:.6f}"),
@@ -1798,6 +2554,7 @@ def _write_heatmap_input_csv(
 
     fieldnames = [
         "target_id",
+        "target_name",
         "pdb_id",
         "variant",
         "ph_label",
@@ -1835,6 +2592,7 @@ def _write_heatmap_input_csv(
             writer.writerow(
                 {
                     "target_id": target_id,
+                    "target_name": _resolve_target_name(pdb, target_name_cfg),
                     "pdb_id": pdb,
                     "variant": variant,
                     "ph_label": ph,
@@ -1897,6 +2655,24 @@ def main() -> int:
     )
     parser.add_argument("--heatmap-csv-path", default=None)
     parser.add_argument("--heatmap-top-k", type=int, default=200)
+    parser.add_argument("--top-targets-n", type=int, default=3)
+    parser.add_argument("--breadth-pct-threshold", type=float, default=0.01)
+    parser.add_argument(
+        "--coverage-requires-pose-valid",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument("--pct-display-decimals", type=int, default=1)
+    parser.add_argument("--tail-median-decimals", type=int, default=0)
+    parser.add_argument("--highlights-top-pct", type=float, default=0.01)
+    parser.add_argument("--highlights-max-ligands", type=int, default=25)
+    parser.add_argument(
+        "-combined",
+        "--combined",
+        action="store_true",
+        default=False,
+        help="Emit a single combined report instead of per-library reports.",
+    )
     args = parser.parse_args()
 
     logger = _configure_logging(args.verbose)
@@ -1942,86 +2718,199 @@ def main() -> int:
         if cfg_extended is not None:
             extended_top_n = cfg_extended
 
-    out_path = repo_root / "data" / run_id / "report.yaml"
-    if out_path.exists() and not args.overwrite:
-        logger.info("%s action=skip reason=exists path=%s", COMPONENT, out_path)
-        return 0
+    top_targets_n = args.top_targets_n
+    if "--top-targets-n" not in sys.argv:
+        cfg_top_targets_n = _resolve_report_limit(repo_root, run_id, "TOP_TARGETS_N")
+        if cfg_top_targets_n is not None:
+            top_targets_n = cfg_top_targets_n
+
+    breadth_pct_threshold = args.breadth_pct_threshold
+    if "--breadth-pct-threshold" not in sys.argv:
+        cfg_breadth_pct = _resolve_report_float(
+            repo_root, run_id, "BREADTH_PCT_THRESHOLD", allow_percent=True
+        )
+        if cfg_breadth_pct is not None:
+            breadth_pct_threshold = cfg_breadth_pct
+
+    coverage_requires_pose_valid = args.coverage_requires_pose_valid
+    if "--coverage-requires-pose-valid" not in sys.argv:
+        cfg_coverage_requires = _resolve_report_bool(
+            repo_root, run_id, "COVERAGE_REQUIRES_POSE_VALID"
+        )
+        if cfg_coverage_requires is not None:
+            coverage_requires_pose_valid = cfg_coverage_requires
+
+    pct_display_decimals = args.pct_display_decimals
+    if "--pct-display-decimals" not in sys.argv:
+        cfg_pct_display_decimals = _resolve_report_limit(
+            repo_root, run_id, "PCT_DISPLAY_DECIMALS"
+        )
+        if cfg_pct_display_decimals is not None:
+            pct_display_decimals = cfg_pct_display_decimals
+
+    tail_median_decimals = args.tail_median_decimals
+    if "--tail-median-decimals" not in sys.argv:
+        cfg_tail_median_decimals = _resolve_report_limit(
+            repo_root, run_id, "TAIL_MEDIAN_DECIMALS"
+        )
+        if cfg_tail_median_decimals is not None:
+            tail_median_decimals = cfg_tail_median_decimals
+
+    highlights_top_pct = args.highlights_top_pct
+    highlights_max_ligands = args.highlights_max_ligands
+
+    master_csvs = _resolve_master_csvs(repo_root, run_id, tokens, decoy_prefix)
+    if not master_csvs:
+        logger.error(
+            "%s action=fail error=%s",
+            COMPONENT,
+            f"Master CSV not found for run_id={run_id} tokens={tokens}",
+        )
+        return 1
+
+    jobs: List[Tuple[Optional[str], List[Path]]] = []
+    if args.combined:
+        jobs.append((None, master_csvs))
+    else:
+        split_map = _write_split_master_rows(repo_root, run_id, decoy_prefix, master_csvs)
+        split_keys = sorted(split_map.keys())
+        if len(split_keys) > 1:
+            for lib_slug in split_keys:
+                jobs.append((lib_slug, [split_map[lib_slug]]))
+        elif len(split_keys) == 1:
+            only = split_keys[0]
+            jobs.append((None, [split_map[only]]))
+        else:
+            jobs.append((None, master_csvs))
 
     try:
-        report = build_report(
-            run_id,
-            repo_root,
-            top_n=top_n,
-            extended_top_n=extended_top_n,
-            notable_pct=notable_pct,
-            notable_max=args.notable_max,
-            decoy_prefix=decoy_prefix,
-            fda_mapping_csv=args.fda_mapping_csv,
-            highlight_ligands=args.highlight_ligands,
-            highlight_match=args.highlight_match,
-            highlight_max_per_target=args.highlight_max_per_target,
-            multi_target_min_targets=args.multi_target_min_targets,
-            multi_target_max_pct=multi_target_max_pct,
-            multi_target_max_hits=args.multi_target_max_hits,
-            multi_target_sort=args.multi_target_sort,
-            filter_invalid=filter_invalid,
-            test_mode_tokens=tokens,
-        )
-        write_yaml(report, out_path)
-        logger.info("%s action=write status=ok path=%s", COMPONENT, out_path)
+        highlight_queries = _parse_highlight_queries(args.highlight_ligands)
+        if args.highlight_max_per_target > 0:
+            highlight_queries = highlight_queries[: args.highlight_max_per_target]
+        else:
+            highlight_queries = []
+        top_k = args.heatmap_top_k if args.heatmap_top_k > 0 else None
 
-        if args.emit_heatmap_csv:
-            heatmap_path = (
-                Path(args.heatmap_csv_path)
-                if args.heatmap_csv_path
-                else repo_root / "data" / run_id / "heatmap_input.csv"
-            )
-            top_k = args.heatmap_top_k if args.heatmap_top_k > 0 else None
-            try:
-                _write_heatmap_input_csv(
-                    repo_root,
-                    run_id,
-                    heatmap_path,
-                    top_k,
-                    args.fda_mapping_csv,
-                    filter_invalid,
-                )
-                logger.info(
-                    "%s action=write_heatmap_csv status=ok path=%s",
-                    COMPONENT,
-                    heatmap_path,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "%s action=write_heatmap_csv status=failed path=%s error=%s",
-                    COMPONENT,
-                    heatmap_path,
-                    exc,
-                )
-
-        if args.emit_html:
-            html_path = (
-                Path(args.html_path)
-                if args.html_path
-                else repo_root / "data" / run_id / "report.html"
-            )
-            highlight_queries = _parse_highlight_queries(args.highlight_ligands)
-            if args.highlight_max_per_target > 0:
-                highlight_queries = highlight_queries[: args.highlight_max_per_target]
+        for lib_suffix, job_master_csvs in jobs:
+            suffix = _normalize_library_slug(lib_suffix) if lib_suffix else ""
+            data_dir = repo_root / "data" / run_id
+            if suffix:
+                yaml_path = data_dir / f"report_{suffix}.yaml"
+                default_heatmap_path = data_dir / f"heatmap_input_{suffix}.csv"
+                default_html_path = data_dir / f"report_{suffix}.html"
             else:
-                highlight_queries = []
-            try:
-                _write_html_report(report, html_path, highlight_queries, repo_root)
-                logger.info(
-                    "%s action=write_html status=ok path=%s", COMPONENT, html_path
-                )
-            except Exception as exc:
-                logger.warning(
-                    "%s action=write_html status=failed path=%s error=%s",
-                    COMPONENT,
-                    html_path,
-                    exc,
-                )
+                yaml_path = data_dir / "report.yaml"
+                default_heatmap_path = data_dir / "heatmap_input.csv"
+                default_html_path = data_dir / "report.html"
+
+            if yaml_path.exists() and not args.overwrite:
+                logger.info("%s action=skip reason=exists path=%s", COMPONENT, yaml_path)
+                continue
+
+            report = build_report(
+                run_id,
+                repo_root,
+                top_n=top_n,
+                extended_top_n=extended_top_n,
+                notable_pct=notable_pct,
+                notable_max=args.notable_max,
+                decoy_prefix=decoy_prefix,
+                fda_mapping_csv=args.fda_mapping_csv,
+                highlight_ligands=args.highlight_ligands,
+                highlight_match=args.highlight_match,
+                highlight_max_per_target=args.highlight_max_per_target,
+                multi_target_min_targets=args.multi_target_min_targets,
+                multi_target_max_pct=multi_target_max_pct,
+                multi_target_max_hits=args.multi_target_max_hits,
+                multi_target_sort=args.multi_target_sort,
+                filter_invalid=filter_invalid,
+                top_targets_n=top_targets_n,
+                breadth_pct_threshold=breadth_pct_threshold,
+                coverage_requires_pose_valid=coverage_requires_pose_valid,
+                pct_display_decimals=pct_display_decimals,
+                tail_median_decimals=tail_median_decimals,
+                highlights_top_pct=highlights_top_pct,
+                highlights_max_ligands=highlights_max_ligands,
+                test_mode_tokens=tokens,
+                master_csvs_override=job_master_csvs,
+            )
+            write_yaml(report, yaml_path)
+            logger.info(
+                "%s action=write status=ok path=%s library=%s",
+                COMPONENT,
+                yaml_path,
+                suffix or "combined",
+            )
+
+            heatmap_path: Optional[Path] = None
+            if args.emit_heatmap_csv:
+                if args.heatmap_csv_path and len(jobs) == 1:
+                    heatmap_path = Path(args.heatmap_csv_path)
+                else:
+                    heatmap_path = default_heatmap_path
+                try:
+                    _write_heatmap_input_csv(
+                        repo_root,
+                        run_id,
+                        heatmap_path,
+                        top_k,
+                        args.fda_mapping_csv,
+                        filter_invalid,
+                        master_csv_override=job_master_csvs[0] if job_master_csvs else None,
+                    )
+                    logger.info(
+                        "%s action=write_heatmap_csv status=ok path=%s library=%s",
+                        COMPONENT,
+                        heatmap_path,
+                        suffix or "combined",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "%s action=write_heatmap_csv status=failed path=%s error=%s library=%s",
+                        COMPONENT,
+                        heatmap_path,
+                        exc,
+                        suffix or "combined",
+                    )
+                    heatmap_path = None
+
+            if args.emit_html:
+                if args.html_path and len(jobs) == 1:
+                    html_path = Path(args.html_path)
+                else:
+                    html_path = default_html_path
+                try:
+                    heatmap_source_for_html = heatmap_path
+                    if heatmap_source_for_html is None and job_master_csvs:
+                        heatmap_source_for_html = job_master_csvs[0]
+                    pathway_htmls = _write_html_reports(
+                        report,
+                        html_path,
+                        highlight_queries,
+                        repo_root,
+                        heatmap_source_override=heatmap_source_for_html,
+                    )
+                    logger.info(
+                        "%s action=write_html status=ok path=%s library=%s",
+                        COMPONENT,
+                        html_path,
+                        suffix or "combined",
+                    )
+                    if pathway_htmls:
+                        logger.info(
+                            "%s action=write_html_pathways status=ok count=%d library=%s",
+                            COMPONENT,
+                            len(pathway_htmls),
+                            suffix or "combined",
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "%s action=write_html status=failed path=%s error=%s library=%s",
+                        COMPONENT,
+                        html_path,
+                        exc,
+                        suffix or "combined",
+                    )
     except Exception as e:
         logger.error("%s action=fail error=%s", COMPONENT, e)
         return 1

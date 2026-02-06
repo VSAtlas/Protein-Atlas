@@ -1,43 +1,183 @@
 # -*- coding: utf-8 -*-
+import csv
 import re
-import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
-try:
-    from prep_ligands.metabolite_resolver import (  # type: ignore[import-not-found]
-        load_library_index,
-        resolve_corresponding_name_for_rdk,
-        resolve_corresponding_name_from_text,
-    )
-except Exception:
-    REPO_ROOT = Path(__file__).resolve().parents[1]
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    SRC_ROOT = REPO_ROOT / "src"
-    if str(SRC_ROOT) not in sys.path:
-        sys.path.insert(0, str(SRC_ROOT))
-    try:
-        from prep_ligands.metabolite_resolver import (  # type: ignore[import-not-found]
-            load_library_index,
-            resolve_corresponding_name_for_rdk,
-            resolve_corresponding_name_from_text,
-        )
-    except Exception:
-        # Keep report generation non-fatal when optional resolver deps (e.g., RDKit ABI)
-        # are unavailable in the runtime environment.
-        def load_library_index(_mapping_csv: str) -> Optional[Any]:
-            return None
+_PRIMARY_NAME_FIELDS = (
+    "rxnorm_generic_name",
+    "drugcentral_generic_name",
+    "generic_name",
+    "display_name",
+    "pubchem_record_title",
+    "pubchem_name",
+    "pubchem_iupac_name",
+    "remark_name",
+    "sdf_title",
+)
+_FALLBACK_NAME_FIELDS = (
+    "fda_name",
+    "name",
+    "drug_name",
+    "preferred_name",
+    "international_nonproprietary_name",
+    "inn",
+    "brand_name",
+    "brand_names",
+    "trade_name",
+    "label_name",
+)
+_SYNONYM_FIELDS = (
+    "synonyms",
+    "alias",
+    "alts",
+    "pubchem_synonyms",
+    "brand_names",
+    "rxnorm_brand_names",
+    "drugcentral_brand_names",
+)
 
-        def resolve_corresponding_name_for_rdk(
-            _rdk_id: int, _fda_index: Any
-        ) -> Optional[str]:
-            return None
 
-        def resolve_corresponding_name_from_text(
-            _text: str, _fda_index: Any
-        ) -> Optional[str]:
-            return None
+@dataclass
+class LibraryIndex:
+    id_to_name: Dict[str, str] = field(default_factory=dict)
+    name_index: Dict[str, List[str]] = field(default_factory=dict)
+
+    def add(self, rdk_id: str, canonical_name: str, aliases: List[str]) -> None:
+        rid = _extract_rdk_id(rdk_id) or rdk_id
+        rid = str(rid).strip()
+        if not rid:
+            return
+        name = str(canonical_name or rid).strip() or rid
+        self.id_to_name[rid] = name
+        tokens = [name, *aliases, rid]
+        for token in tokens:
+            key = _norm(token)
+            if not key:
+                continue
+            self.name_index.setdefault(key, [])
+            if rid not in self.name_index[key]:
+                self.name_index[key].append(rid)
+
+
+def _norm(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[-_/\\,;:\|\[\]\(\)\{\}\.\+\*'\"]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _tokenize(value: Any) -> List[str]:
+    return [tok for tok in re.split(r"[^a-z0-9\+]+", _norm(value)) if tok]
+
+
+def _extract_rdk_id(value: Any) -> Optional[str]:
+    match = _RDK_RE.search(str(value or ""))
+    if not match:
+        return None
+    return f"rdk_{match.group(1).zfill(7)}"
+
+
+def _clean_cell(row: Dict[str, Any], key: str) -> str:
+    value = row.get(key)
+    text = str(value or "").strip()
+    if not text or text.lower() == "nan":
+        return ""
+    return text
+
+
+def _pick_first(row: Dict[str, Any], keys: List[str]) -> str:
+    for key in keys:
+        value = _clean_cell(row, key)
+        if value:
+            return value
+    return ""
+
+
+def load_library_index(mapping_csv: str) -> LibraryIndex:
+    idx = LibraryIndex()
+    with open(mapping_csv, newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            lowered = {str(k).strip().lower(): (v or "") for k, v in row.items()}
+
+            raw_id = _pick_first(
+                lowered,
+                ["rdk_id", "rdkid", "ligand_id", "id", "path", "sdf_title", "remark_name"],
+            )
+            rdk_id = _extract_rdk_id(raw_id)
+
+            if not rdk_id and str(lowered.get("scheme", "")).strip().lower() == "rdk":
+                file_num = str(lowered.get("file_num", "")).strip()
+                if file_num:
+                    try:
+                        rdk_id = f"rdk_{int(float(file_num)):07d}"
+                    except ValueError:
+                        rdk_id = None
+
+            if not rdk_id:
+                continue
+
+            preferred_name = _pick_first(
+                lowered,
+                list(_PRIMARY_NAME_FIELDS) + list(_FALLBACK_NAME_FIELDS),
+            )
+            if not preferred_name:
+                preferred_name = rdk_id
+
+            synonyms_raw: List[str] = []
+            for key in _SYNONYM_FIELDS:
+                value = _clean_cell(lowered, key)
+                if value:
+                    synonyms_raw.append(value)
+
+            path_val = _clean_cell(lowered, "path")
+            if path_val:
+                stem = Path(path_val).stem
+                if stem:
+                    synonyms_raw.append(stem)
+
+            synonyms: List[str] = []
+            for raw in synonyms_raw:
+                synonyms.extend(
+                    token.strip()
+                    for token in re.split(r"[|,;]", raw)
+                    if token.strip()
+                )
+
+            idx.add(rdk_id, preferred_name, synonyms)
+    return idx
+
+
+def resolve_corresponding_name_for_rdk(
+    rdk_id: str, fda_index: LibraryIndex
+) -> Optional[str]:
+    rid = _extract_rdk_id(rdk_id) or str(rdk_id or "").strip()
+    if not rid:
+        return None
+    return fda_index.id_to_name.get(rid)
+
+
+def resolve_corresponding_name_from_text(
+    text: str, fda_index: LibraryIndex
+) -> Optional[str]:
+    key = _norm(text)
+    if key in fda_index.name_index and fda_index.name_index[key]:
+        rid = fda_index.name_index[key][0]
+        return fda_index.id_to_name.get(rid)
+
+    rdk_id = _extract_rdk_id(text)
+    if rdk_id:
+        return fda_index.id_to_name.get(rdk_id)
+
+    for token in _tokenize(text):
+        if token in fda_index.name_index and fda_index.name_index[token]:
+            rid = fda_index.name_index[token][0]
+            name = fda_index.id_to_name.get(rid)
+            if name:
+                return name
+    return None
 
 _RDK_RE = re.compile(r"rdk[_-]?(\d+)", re.IGNORECASE)
 

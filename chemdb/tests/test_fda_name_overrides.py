@@ -1,7 +1,12 @@
 import csv
+import subprocess
+import sys
+from pathlib import Path
 
 from analysis import fda_name_map
 from analysis import run_report
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_csv(path, rows):
@@ -105,3 +110,19 @@ def test_mapping_fallback_columns_generic_or_brand(tmp_path):
     assert fda_index is not None
     resolved = fda_name_map.resolve_ligand_display_name("rdk_3", "", fda_index)
     assert resolved == "BrandOnly"
+
+
+def test_run_report_help_has_no_rdkit_numpy_import_noise():
+    proc = subprocess.run(
+        [sys.executable, "-m", "analysis.run_report", "-h"],
+        cwd=str(REPO_ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    assert proc.returncode == 0
+    assert "_ARRAY_API not found" not in combined
+    assert "No module named 'prep_ligands'" not in combined
+    assert "A module that was compiled using NumPy 1.x" not in combined
+    assert "Generate run report YAML" in combined

@@ -32,7 +32,7 @@ config = load_config()
 
 # Defaults
 _DEFAULT_FPOCKET_EXE = Path("/home/michael/atlas/tools/fpocket/bin/fpocket")
-_DEFAULT_FPOCKET_OUTPUT_ROOT = Path(__file__).resolve().parent / "f_pocket"
+_DEFAULT_FPOCKET_OUTPUT_ROOT = Path(__file__).resolve().parent / "fpocket"
 _PROTEIN_CLASS_RULES: Optional[Dict[str, Any]] = None
 
 

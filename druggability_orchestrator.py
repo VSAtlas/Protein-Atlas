@@ -216,7 +216,7 @@ def load_fpocket_metrics_for_receptor_pdb(
     cfg_effective = dict(cfg or {})
     cfg_effective.setdefault(
         "FPOCKET_OUTPUT_ROOT",
-        str(Path(__file__).resolve().parent / "f_pocket"),
+        str(Path(__file__).resolve().parent / "fpocket"),
     )
     output_root = get_fpocket_output_root(cfg_effective)
 

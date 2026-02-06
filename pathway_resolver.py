@@ -38,9 +38,16 @@ PDBE_MAPPING_BASES = [
 ]
 PDBE_LIGAND_URL = "https://www.ebi.ac.uk/pdbe/api/pdb/entry/ligand_monomers"
 PDBE_SUMMARY_URL = "https://www.ebi.ac.uk/pdbe/api/pdb/entry/summary"
+PDBE_PDB_TO_UNIPROT_BASES = [
+    "https://www.ebi.ac.uk/pdbe/api/mappings/uniprot",
+    "https://www.ebi.ac.uk/pdbe/graph-api/mappings/uniprot",
+]
+REACTOME_UNIPROT_PATHWAYS_URL = (
+    "https://reactome.org/ContentService/data/mapping/UniProt/{uniprot}/pathways"
+)
 
 _UNIPROT_RE = re.compile(
-    r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9][A-Z0-9]{3}[0-9]|[A-Z0-9]{10})$"
+    r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})$"
 )
 _UNIPROT_TAG_RE = re.compile(r"UniProt:([A-Za-z0-9]+)")
 _MAX_LABEL_LENGTH = 80
@@ -76,6 +83,77 @@ def _normalize_uniprot(uniprot: str) -> str:
 
 def _normalize_pdb_id(pdb_id: str) -> str:
     return pdb_id.strip().upper()
+
+
+def slugify_pathway_name(pathway_name: str, max_length: int = 60) -> str:
+    token = re.sub(r"[^a-z0-9]+", "_", str(pathway_name or "").strip().lower())
+    token = re.sub(r"_+", "_", token).strip("_")
+    if max_length > 0:
+        token = token[:max_length].rstrip("_")
+    if not token:
+        return "pathway"
+    return token
+
+
+_SPECIES_TOKEN_BY_REACTOME_CODE: dict[str, str] = {
+    "HSA": "human",
+    "MMU": "mouse",
+    "RNO": "rat",
+    "DME": "fruit_fly",
+    "CEL": "c_elegans",
+    "SCE": "yeast",
+    "BTA": "bovine",
+    "GGA": "chicken",
+    "SSC": "pig",
+    "XTR": "xenopus",
+    "DRE": "zebrafish",
+}
+_SPECIES_TOKEN_BY_NAME: dict[str, str] = {
+    "homo sapiens": "human",
+    "mus musculus": "mouse",
+    "rattus norvegicus": "rat",
+    "drosophila melanogaster": "fruit_fly",
+    "caenorhabditis elegans": "c_elegans",
+    "saccharomyces cerevisiae": "yeast",
+    "bos taurus": "bovine",
+    "gallus gallus": "chicken",
+    "sus scrofa": "pig",
+    "xenopus tropicalis": "xenopus",
+    "danio rerio": "zebrafish",
+}
+
+
+def _species_token(st_id: str, species_raw: str) -> str:
+    st_text = str(st_id or "").strip().upper()
+    if st_text.startswith("R-"):
+        parts = st_text.split("-")
+        if len(parts) >= 3:
+            code = parts[1]
+            mapped = _SPECIES_TOKEN_BY_REACTOME_CODE.get(code)
+            if mapped:
+                return mapped
+
+    normalized_species = _normalize_text(str(species_raw or ""))
+    if normalized_species:
+        mapped = _SPECIES_TOKEN_BY_NAME.get(normalized_species)
+        if mapped:
+            return mapped
+        return slugify_pathway_name(normalized_species, max_length=24)
+    return "unknown_species"
+
+
+def _reactome_stid_token(st_id: str) -> str:
+    token = slugify_pathway_name(st_id, max_length=32)
+    return token or "unknown_stid"
+
+
+def build_pathway_filename_token(
+    pathway_name: str, st_id: str = "", species: str = ""
+) -> str:
+    name_token = slugify_pathway_name(pathway_name, max_length=60)
+    st_id_token = _reactome_stid_token(st_id)
+    species_token = _species_token(st_id, species)
+    return f"{st_id_token}_{species_token}_{name_token}"
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -761,6 +839,262 @@ def resolve_uniprots(
             )
             return cached_uniprots
         raise
+
+
+def _extract_uniprots_from_pdbe_mapping_payload(payload: Any, pdb_id: str) -> list[str]:
+    normalized_pdb = _normalize_pdb_id(pdb_id)
+    root: Any = payload
+    if isinstance(payload, dict):
+        root = (
+            payload.get(normalized_pdb.lower())
+            or payload.get(normalized_pdb)
+            or payload
+        )
+
+    uniprots: set[str] = set()
+    stack: list[Any] = [root]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if isinstance(key, str) and _is_uniprot_accession(key):
+                    uniprots.add(_normalize_uniprot(key))
+                key_norm = str(key).strip().lower()
+                if key_norm in {
+                    "identifier",
+                    "accession",
+                    "accession_id",
+                    "uniprot",
+                    "uniprot_id",
+                    "uniprot_acc",
+                    "primary_accession",
+                } and isinstance(value, str):
+                    acc = value.strip().upper()
+                    if _is_uniprot_accession(acc):
+                        uniprots.add(_normalize_uniprot(acc))
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            candidate = item.strip().upper()
+            if _is_uniprot_accession(candidate):
+                uniprots.add(_normalize_uniprot(candidate))
+    return sorted(uniprots)
+
+
+def map_pdb_to_uniprots(pdb_id: str, cache: Cache, http: HttpClient) -> list[str]:
+    normalized_pdb = _normalize_pdb_id(pdb_id)
+    cached = cache.read_pathway(
+        "pdbe_pdb_to_uniprots", "", normalized_pdb, catalyst_only=False
+    )
+    if cached:
+        data = cached.get("data", {})
+        payload = data.get("uniprots")
+        if isinstance(payload, list):
+            return sorted(
+                {
+                    _normalize_uniprot(str(entry))
+                    for entry in payload
+                    if _is_uniprot_accession(str(entry))
+                }
+            )
+
+    logger = cache.logger
+    resolved_uniprots: list[str] = []
+    last_error: Exception | None = None
+    had_successful_response = False
+    for base in PDBE_PDB_TO_UNIPROT_BASES:
+        url = f"{base}/{normalized_pdb.lower()}"
+        try:
+            response = http.get_json(url)
+        except Exception as exc:  # pragma: no cover - network errors
+            last_error = exc
+            continue
+        had_successful_response = True
+        resolved_uniprots = _extract_uniprots_from_pdbe_mapping_payload(
+            response, normalized_pdb
+        )
+        if resolved_uniprots:
+            break
+    if last_error and not resolved_uniprots:
+        logger.warning(
+            "PDBe PDB->UniProt mapping failed for %s: %s", normalized_pdb, last_error
+        )
+    # Do not poison cache when all PDBe attempts failed due transport/network errors.
+    if not had_successful_response:
+        return []
+
+    cache.write_pathway(
+        "pdbe_pdb_to_uniprots",
+        "",
+        normalized_pdb,
+        catalyst_only=False,
+        data={"pdb_id": normalized_pdb, "uniprots": resolved_uniprots},
+    )
+    return resolved_uniprots
+
+
+def _extract_reactome_pathways_for_uniprot(
+    payload: Any, organism: str
+) -> list[dict[str, str]]:
+    items: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        items = [entry for entry in payload if isinstance(entry, dict)]
+    elif isinstance(payload, dict):
+        for key in ("pathways", "events", "results", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                items = [entry for entry in value if isinstance(entry, dict)]
+                break
+        if not items:
+            items = [payload]
+
+    pathways: dict[tuple[str, str], dict[str, str]] = {}
+    for item in items:
+        if (
+            organism
+            and any(key in item for key in ("species", "speciesName"))
+            and not _matches_organism(item, organism)
+        ):
+            continue
+        st_id = str(item.get("stId") or item.get("id") or "").strip()
+        pathway_name = str(item.get("displayName") or item.get("name") or "").strip()
+        species_name = str(item.get("speciesName") or item.get("species") or "").strip()
+        if not pathway_name and st_id:
+            pathway_name = st_id
+        if not pathway_name and not st_id:
+            continue
+        pathways[(pathway_name, st_id)] = {
+            "name": pathway_name,
+            "stId": st_id,
+            "species": species_name,
+        }
+
+    return sorted(
+        pathways.values(),
+        key=lambda item: (
+            _normalize_text(item.get("name") or ""),
+            str(item.get("stId") or ""),
+        ),
+    )
+
+
+def map_uniprot_to_reactome_pathways(
+    uniprot: str, cache: Cache, http: HttpClient, organism: str = DEFAULT_ORGANISM
+) -> list[dict[str, str]]:
+    normalized_uniprot = _normalize_uniprot(uniprot)
+    if not _is_uniprot_accession(normalized_uniprot):
+        return []
+    cached = cache.read_pathway(
+        "reactome_uniprot_to_pathways",
+        organism,
+        normalized_uniprot,
+        catalyst_only=False,
+    )
+    parsed_cached: list[dict[str, str]] = []
+    if cached:
+        data = cached.get("data", {})
+        payload = data.get("pathways")
+        if isinstance(payload, list):
+            parsed: list[dict[str, str]] = []
+            for entry in payload:
+                if not isinstance(entry, dict):
+                    continue
+                st_id = str(entry.get("stId") or "").strip()
+                pathway_name = str(entry.get("name") or "").strip()
+                species_name = str(entry.get("species") or "").strip()
+                if pathway_name or st_id:
+                    parsed.append(
+                        {
+                            "name": pathway_name or st_id,
+                            "stId": st_id,
+                            "species": species_name,
+                        }
+                    )
+            parsed_cached = sorted(
+                parsed,
+                key=lambda item: (
+                    _normalize_text(item.get("name") or ""),
+                    str(item.get("stId") or ""),
+                ),
+            )
+            if parsed_cached:
+                return parsed_cached
+
+    logger = cache.logger
+    pathways: list[dict[str, str]] = []
+    try:
+        response = http.get_json(
+            REACTOME_UNIPROT_PATHWAYS_URL.format(uniprot=normalized_uniprot)
+        )
+        pathways = _extract_reactome_pathways_for_uniprot(response, organism)
+        if not pathways and organism:
+            # Some PDB entries map to non-human UniProt accessions. If the
+            # strict organism filter removes all pathways, fall back to
+            # species-agnostic extraction so each PDB can still resolve.
+            pathways = _extract_reactome_pathways_for_uniprot(response, "")
+    except Exception as exc:  # pragma: no cover - network errors
+        logger.warning(
+            "Reactome UniProt->pathways mapping failed for %s: %s",
+            normalized_uniprot,
+            exc,
+        )
+        return parsed_cached
+    cache.write_pathway(
+        "reactome_uniprot_to_pathways",
+        organism,
+        normalized_uniprot,
+        catalyst_only=False,
+        data={"uniprot": normalized_uniprot, "pathways": pathways},
+    )
+    return pathways
+
+
+def assign_single_pathway_per_pdb(
+    pdb_ids: list[str],
+    cache: Cache,
+    http: HttpClient,
+    organism: str = DEFAULT_ORGANISM,
+) -> dict[str, str]:
+    assignments: dict[str, str] = {}
+    normalized_pdb_ids = sorted(
+        {_normalize_pdb_id(pdb_id) for pdb_id in pdb_ids if str(pdb_id).strip()}
+    )
+
+    for pdb_id in normalized_pdb_ids:
+        uniprots = map_pdb_to_uniprots(pdb_id, cache, http)
+        candidates: list[tuple[str, str, str, str]] = []
+        for uniprot in sorted({_normalize_uniprot(u) for u in uniprots}):
+            pathways = map_uniprot_to_reactome_pathways(
+                uniprot, cache, http, organism=organism
+            )
+            for pathway in pathways:
+                pathway_name = str(pathway.get("name") or "").strip()
+                st_id = str(pathway.get("stId") or "").strip()
+                species_name = str(pathway.get("species") or "").strip()
+                if not pathway_name and st_id:
+                    pathway_name = st_id
+                if not pathway_name:
+                    continue
+                candidates.append((pathway_name, st_id, species_name, uniprot))
+
+        if candidates:
+            best = min(
+                candidates,
+                key=lambda item: (
+                    _normalize_text(item[0]),
+                    item[1],
+                    _normalize_text(item[2]),
+                    item[3],
+                ),
+            )
+            assignments[pdb_id] = build_pathway_filename_token(
+                best[0], st_id=best[1], species=best[2]
+            )
+        else:
+            assignments[pdb_id] = build_pathway_filename_token("pathway")
+    return assignments
 
 
 def _pdbe_best_structures(

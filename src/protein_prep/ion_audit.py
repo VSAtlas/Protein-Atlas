@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence, Union
 
 from protein_prep.aliases_policy import (
+    ALIASES,
     _ION_AUDIT_ALIAS_MAP,
     _ION_AUDIT_DISABLED_VALUES,
     _ION_AUDIT_ENABLED_VALUES,
@@ -18,6 +19,8 @@ from protein_prep.aliases_policy import (
     _ION_AUDIT_WATERS,
     _ION_BREADCRUMB_METAL_ORDER,
     _ION_BREADCRUMB_SIMPLE_ORDER,
+    _METAL_RESNAMES,
+    _SALT_RESNAMES,
     _normalize_resname,
 )
 
@@ -33,6 +36,27 @@ def _hydrate_legacy_globals() -> None:
     g = globals()
     for name, value in legacy.__dict__.items():
         g.setdefault(name, value)
+
+
+def _safe_short_path_for_log(path: Path) -> str:
+    short_path_fn = globals().get("_short_path_for_log")
+    if callable(short_path_fn):
+        try:
+            return str(short_path_fn(path))
+        except Exception:
+            pass
+    return str(path)
+
+
+def _get_activesite_module():
+    mod = globals().get("_activesite_mod")
+    if mod is not None:
+        return mod
+    try:
+        import pdb_fixer as mod  # pragma: no cover - trivial fallback
+    except Exception:
+        return None
+    return mod
 
 def _format_histogram(counter: Counter[str]) -> str:
     _hydrate_legacy_globals()
@@ -163,14 +187,14 @@ def _emit_ion_breadcrumb(stage: str, file_path: Union[str, Path]) -> None:
     _hydrate_legacy_globals()
     if not _breadcrumbs_enabled():
         return
-    summarizer = getattr(_activesite_mod, "summarize_ions", None)
+    summarizer = getattr(_get_activesite_module(), "summarize_ions", None)
     if summarizer is None:
         return
     try:
         summary = summarizer(file_path)
     except Exception:
         summary = None
-    short_path = _short_path_for_log(Path(file_path))
+    short_path = _safe_short_path_for_log(Path(file_path))
     if not summary:
         logging.info(
             "[ions.breadcrumb] stage=%s file=%s missing=true", stage, short_path
@@ -274,7 +298,7 @@ def audit_ions(
         "%s stage=%s file=%s present_pdb.metals=%s present_pdb.simple_ions=%s present_pdb.waters=%d present_pdb.other_het=%d",
         stage_tag,
         stage,
-        _short_path_for_log(path),
+        _safe_short_path_for_log(path),
         _serialize_counts(metals),
         _serialize_counts(simple),
         waters,

@@ -6,7 +6,6 @@
 DUD/DUD-E style evaluator for Atlas docking outputs (filename-labeled actives/decoys).
 """
 
-# >>> PATHS IMPORT START
 from pathlib import Path
 
 # --- ensure repo root is importable when running from analysis/ ---
@@ -116,7 +115,6 @@ from analysis.dud_eval_types import (
     TargetSpec,
 )
 
-# >>> PATHS IMPORT END
 
 
 if __name__ == "__main__":

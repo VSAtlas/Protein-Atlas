@@ -30,6 +30,17 @@ DECOY_PREFIX_DEFAULT = "dud"
 DECOY_PREFIX_VALUE = DECOY_PREFIX_DEFAULT
 COMPONENT = "[prep-for-scorch]"
 EXAMPLE_LIMIT = 8
+_TEST_MODE_OFF_VALUES = {"", "0", "false", "no", "off", "none", "null"}
+_TEST_MODE_ON_VALUES = {"true", "yes", "on", "1"}
+_TEST_MODE_BOTH_VALUES = {
+    "both",
+    "fda_dud",
+    "dud_fda",
+    "fda+dud",
+    "dud+fda",
+    "fda-dud",
+    "dud-fda",
+}
 
 
 def _decoy_prefix_value() -> str:
@@ -51,7 +62,7 @@ def _resolve_decoy_prefix_from_config(cfg: Dict[str, object]) -> str:
         raw = str(cfg.get(DUD_PREFIX_KEY, "")).strip()
         if raw:
             return _normalize_decoy_prefix(cfg.get(DUD_PREFIX_KEY))
-    return DECOY_PREFIX_DEFAULT
+    return _infer_decoy_prefix_from_test_mode(cfg)
 
 
 def _set_decoy_prefix(
@@ -62,6 +73,64 @@ def _set_decoy_prefix(
     if logger:
         logger.info("%s action=preflight decoy_prefix=%s", COMPONENT, DECOY_PREFIX_VALUE)
     return DECOY_PREFIX_VALUE
+
+
+def _parse_test_mode_value(raw: object) -> list[str]:
+    if isinstance(raw, bool):
+        return ["dud", "fda"] if raw else ["fda"]
+
+    s = str(raw).strip()
+    if not s:
+        return ["fda"]
+    lowered = s.lower()
+
+    if lowered in _TEST_MODE_OFF_VALUES:
+        return ["fda"]
+    if lowered in _TEST_MODE_ON_VALUES:
+        return ["dud", "fda"]
+    if lowered == "default":
+        return ["fda"]
+    if lowered in _TEST_MODE_BOTH_VALUES:
+        return ["dud", "fda"]
+
+    tokens = [tok for tok in re.split(r"[+,\s]+", lowered) if tok]
+    normalized: list[str] = []
+    for tok in tokens:
+        if tok in {"and", "off", "none", "null"}:
+            continue
+        if tok == "default":
+            tok = "fda"
+        normalized.append(tok)
+
+    if not normalized:
+        return ["fda"]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for tok in normalized:
+        if tok not in seen:
+            seen.add(tok)
+            deduped.append(tok)
+    return deduped
+
+
+def _parse_test_mode_tokens(cfg: Dict[str, object]) -> list[str]:
+    raw = (
+        os.environ.get("TEST_MODE_ENABLE")
+        if "TEST_MODE_ENABLE" in os.environ
+        else cfg.get("TEST_MODE_ENABLE", "off")
+    )
+    return _parse_test_mode_value(raw)
+
+
+def _infer_decoy_prefix_from_test_mode(cfg: Dict[str, object]) -> str:
+    for tok in _parse_test_mode_tokens(cfg):
+        if tok == "fda":
+            continue
+        if tok == "dud":
+            return DECOY_PREFIX_DEFAULT
+        return _normalize_decoy_prefix(tok)
+    return DECOY_PREFIX_DEFAULT
 
 
 def _resolve_decoy_prefix(
@@ -155,7 +224,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--decoy-prefix",
         default=None,
-        help="Override decoy prefix (default: config DECOY_PREFIX or DUD_PREFIX)",
+        help="Override decoy prefix (default: config DECOY_PREFIX/DUD_PREFIX or inferred from TEST_MODE_ENABLE)",
     )
     parser.add_argument(
         "--workers",

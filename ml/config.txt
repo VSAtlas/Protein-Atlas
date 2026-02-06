@@ -1,80 +1,78 @@
-{
-  "bigbind_dir": "data/bigbind/BigBindV1.5",
-  "train_pdb": "cp3a4_human_23_503_catalytic_0",
-    "dataset_split_mode": "standard",
-    "splits": ["sna_1_train", "sna_1_val", "sna_1_test"  "exclude_target_prefixes": [
-    "MK01_HUMAN_8_360_0",
-    "FABP4_HUMAN_2_132_0",
-    "PUR2_HUMAN_807_1010_0"
-  ],
+# BIGBIND_DIR points to the extracted BigBindV1.5 directory used by ML runs.
+BIGBIND_DIR=data/bigbind/BigBindV1.5
+# TRAIN_PDB identifies the legacy holdout target when dataset split mode is legacy.
+TRAIN_PDB=cp3a4_human_23_503_catalytic_0
+# DATASET_SPLIT_MODE controls whether holdout is train_pdb-based legacy or standard split-based.
+DATASET_SPLIT_MODE=standard
+# SPLITS lists the BigBind activity CSV split suffixes to include.
+SPLITS=sna_1_train,sna_1_val,sna_1_test
+# EXCLUDE_TARGET_PREFIXES removes rows whose pocket path starts with these comma-separated prefixes.
+EXCLUDE_TARGET_PREFIXES=MK01_HUMAN_8_360_0,FABP4_HUMAN_2_132_0,PUR2_HUMAN_807_1010_0
+# RANDOM_SEED sets the global seed for deterministic featurization and model routines.
+RANDOM_SEED=7
+# MAX_ROWS limits loaded rows for quick iteration and can be set to null for full data.
+MAX_ROWS=50000
+# RUN_ID names the output folder under ml/outputs for this config.
+RUN_ID=config_txt_smoke_20260205
+# ATLAS_CFG_PATH optionally points at an Atlas config override and null means use defaults.
+ATLAS_CFG_PATH=null
 
-  "random_seed": 7,
-  "max_rows": 50000,
-  "atlas_cfg_path": null,
-  "fpocket_center_columns": [
-    "pocket_center_x",
-    "pocket_center_y",
-    "pocket_center_z"
-  ],
-  "fpocket_variant_column": "variant",
-  "fpocket_ph_column": "pH",
-  "fpocket_centers_by_pdb": {},
-  "inner_scaffold_folds": 3,
-  "model": {
-    "type": "logreg",
-    "C": 1.0,
-    "class_weight": "balanced",
-    "max_iter": 1000
-  },
-  "features": {
-    "ligand_descriptors": true,
-    "ligand_extra_descriptors": false,
-    "ligand_morgan_fp_bits": 512,
-    "pocket_fpocket": true,
-    "vina_score": false
-  },
-  "automl": {
-    "feature_variants": [
-      "baseline",
-      "ligand_only",
-      "no_fp"
-    ],
-    "model_families": [
-      "logreg",
-      "hgb"
-    ],
-    "grid": {
-      "logreg": {
-        "C": [
-          0.1,
-          1.0
-        ],
-        "penalty": [
-          "l2"
-        ],
-        "solver": [
-          "lbfgs"
-        ],
-        "class_weight": [
-          "balanced"
-        ]
-      },
-      "hgb": {
-        "max_depth": [
-          3
-        ],
-        "learning_rate": [
-          0.1
-        ],
-        "max_leaf_nodes": [
-          31
-        ],
-        "min_samples_leaf": [
-          20,
-          50
-        ]
-      }
-    }
-  },
-  "run_id": "config_txt_smoke_20260205"
-}
+# FPOCKET_CENTER_COLUMNS defines the three dataframe columns used for pocket center coordinates.
+FPOCKET_CENTER_COLUMNS=pocket_center_x,pocket_center_y,pocket_center_z
+# FPOCKET_VARIANT_COLUMN defines the optional variant column name passed into fpocket lookups.
+FPOCKET_VARIANT_COLUMN=variant
+# FPOCKET_PH_COLUMN defines the optional pH column name passed into fpocket lookups.
+FPOCKET_PH_COLUMN=pH
+# INNER_SCAFFOLD_FOLDS sets Murcko-scaffold grouped CV fold count for inner selection.
+INNER_SCAFFOLD_FOLDS=3
+
+# MODEL_TYPE chooses the legacy model block type used for defaults and compatibility.
+MODEL_TYPE=logreg
+# MODEL_C sets inverse regularization strength for logistic regression.
+MODEL_C=1.0
+# MODEL_CLASS_WEIGHT controls class weighting behavior for supported classifiers.
+MODEL_CLASS_WEIGHT=balanced
+# MODEL_MAX_ITER sets the maximum solver iterations for logistic regression.
+MODEL_MAX_ITER=1000
+# MODEL_FAMILY selects the primary model implementation family for training.
+MODEL_FAMILY=logreg
+
+# FEATURES_LIGAND_DESCRIPTORS toggles core RDKit ligand descriptor features.
+FEATURES_LIGAND_DESCRIPTORS=true
+# FEATURES_LIGAND_EXTRA_DESCRIPTORS toggles extended ligand descriptor features.
+FEATURES_LIGAND_EXTRA_DESCRIPTORS=false
+# FEATURES_LIGAND_MORGAN_FP_BITS sets the Morgan fingerprint bit-vector size.
+FEATURES_LIGAND_MORGAN_FP_BITS=512
+# FEATURES_POCKET_FPOCKET toggles fpocket-derived pocket metrics.
+FEATURES_POCKET_FPOCKET=true
+# FEATURES_POCKET_FEATURES toggles residue/geometry pocket feature enrichment.
+FEATURES_POCKET_FEATURES=false
+# FEATURES_VINA_SCORE toggles optional Vina-score feature ingestion when available.
+FEATURES_VINA_SCORE=false
+
+# CALIBRATION_ENABLED toggles leakage-safe probability calibration on train OOF predictions.
+CALIBRATION_ENABLED=false
+# CALIBRATION_METHOD chooses calibration mapping type when calibration is enabled.
+CALIBRATION_METHOD=sigmoid
+# CALIBRATION_CV_FOLDS sets grouped CV fold count used for calibration OOF generation.
+CALIBRATION_CV_FOLDS=5
+# CALIBRATION_SEED sets deterministic calibration split seeding.
+CALIBRATION_SEED=7
+
+# METRICS_REPORT_BRIER toggles Brier score reporting in calibration metrics output.
+METRICS_REPORT_BRIER=true
+# METRICS_REPORT_ECE toggles expected calibration error reporting in calibration metrics output.
+METRICS_REPORT_ECE=true
+# METRICS_ECE_BINS sets the number of bins used for ECE/reliability curve computation.
+METRICS_ECE_BINS=15
+# REGISTRY_ENABLED toggles writing registry metadata artifacts for each ML run.
+REGISTRY_ENABLED=true
+
+# AUTOML.FEATURE_VARIANTS lists feature-set variants considered during AutoML search.
+AUTOML.FEATURE_VARIANTS=baseline,ligand_only,pocket_only,no_fp,add_ligand_extras,add_pocket_fpocket,add_both
+# AUTOML.MODEL_FAMILIES lists model families considered during AutoML search.
+AUTOML.MODEL_FAMILIES=logreg,hgb,lightgbm,xgboost,lightgbm_rank,xgboost_rank
+# AUTOML.GRID.LOGREG defines the logreg parameter grid as JSON for AutoML grid mode.
+AUTOML.GRID.LOGREG={"C":[0.1,1.0],"penalty":["l2"],"solver":["lbfgs"],"class_weight":["balanced"]}
+# AUTOML.GRID.HGB defines the histogram-gradient-boosting parameter grid as JSON.
+AUTOML.GRID.HGB={"max_depth":[3],"learning_rate":[0.1],"max_leaf_nodes":[31],"min_samples_leaf":[20,50]}

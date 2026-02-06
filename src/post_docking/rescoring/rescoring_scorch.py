@@ -83,7 +83,7 @@ def _resolve_decoy_prefix_from_config(cfg: Dict[str, object]) -> str:
         raw = str(cfg.get(DUD_PREFIX_KEY, "")).strip()
         if raw:
             return _normalize_decoy_prefix(cfg.get(DUD_PREFIX_KEY))
-    return DECOY_PREFIX_DEFAULT
+    return _infer_decoy_prefix_from_test_mode(cfg)
 
 
 def _set_decoy_prefix(
@@ -141,6 +141,16 @@ def _parse_test_mode_tokens(cfg: Dict[str, object]) -> list[str]:
         else cfg.get("TEST_MODE_ENABLE", "off")
     )
     return _parse_test_mode_value(raw)
+
+
+def _infer_decoy_prefix_from_test_mode(cfg: Dict[str, object]) -> str:
+    for tok in _parse_test_mode_tokens(cfg):
+        if tok == "fda":
+            continue
+        if tok == "dud":
+            return DECOY_PREFIX_DEFAULT
+        return _normalize_decoy_prefix(tok)
+    return DECOY_PREFIX_DEFAULT
 
 
 def _resolve_decoy_prefix_override(args: argparse.Namespace) -> Optional[str]:

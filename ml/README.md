@@ -17,6 +17,17 @@ Optional dependency for Bayesian search mode:
 pip install optuna
 ```
 
+Environment note (RDKit/NumPy ABI):
+
+- Keep `numpy` on `1.26.4` in this repo environment.
+- Use `rdkit` and avoid installing `rdkit-pypi` into the same env.
+- If you see `_ARRAY_API not found`, run:
+
+```bash
+python -m pip uninstall -y rdkit-pypi
+python -m pip install --force-reinstall rdkit==2025.3.6 numpy==1.26.4 Pillow==11.3.0
+```
+
 ## 1) Download BigBind v1.5
 
 Run from repo root:
@@ -100,8 +111,7 @@ Pocket:
 - features: `fpocket_druggability`, `fpocket_volume`, `fpocket_openness`,
   `fpocket_polar_fraction`, `fpocket_has_metal`, `fpocket_tier`
 - fpocket output root is resolved by `get_fpocket_output_root(atlas_cfg)`
-  (default repo path is typically `protein_automation/fpocket`, but atlas config
-  may point to `protein_automation/f_pocket`)
+  (default repo path is `protein_automation/fpocket`)
 
 Ensure fpocket has been run for the receptor set you train/evaluate on before
 running ML experiments.

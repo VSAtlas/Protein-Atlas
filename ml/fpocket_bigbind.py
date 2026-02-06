@@ -9,6 +9,7 @@ import pandas as pd
 from druggability_evaluation import run_fpocket_for_explicit_pocket
 from druggability_orchestrator import load_fpocket_metrics_for_receptor_pdb
 from ml.data.bigbind import resolve_pocket_path
+from ml.pocket_features import POCKET_FEATURE_COLUMNS, compute_pocket_features
 
 
 FPOCKET_METRIC_COLUMNS = (
@@ -111,7 +112,7 @@ def _resolve_pocket_path_for_value(
     raw_pocket: str,
 ) -> Path:
     candidate = resolve_pocket_path(bigbind_root, raw_pocket)
-    if candidate.exists():
+    if candidate.exists() and candidate.is_file():
         return candidate.resolve()
 
     if "ex_rec_pocket_file" in df.columns:
@@ -137,13 +138,19 @@ def _resolve_pocket_path_for_value(
             if implied.exists():
                 return implied.resolve()
 
+    if candidate.exists() and candidate.is_dir():
+        for pattern in ("*_rec_pocket.pdb", "*_pocket.pdb", "*.pdb"):
+            matches = sorted(p for p in candidate.glob(pattern) if p.is_file())
+            if matches:
+                return matches[0].resolve()
+
     return candidate.resolve()
 
 
 def _ensure_fpocket_output_root(atlas_cfg: dict[str, Any]) -> Path:
     if "FPOCKET_OUTPUT_ROOT" not in atlas_cfg or not str(atlas_cfg.get("FPOCKET_OUTPUT_ROOT")):
         repo_root = Path(__file__).resolve().parents[1]
-        atlas_cfg["FPOCKET_OUTPUT_ROOT"] = str(repo_root / "f_pocket")
+        atlas_cfg["FPOCKET_OUTPUT_ROOT"] = str(repo_root / "fpocket")
     return Path(str(atlas_cfg["FPOCKET_OUTPUT_ROOT"]))
 
 
@@ -166,6 +173,28 @@ def precompute_fpocket_for_bigbind_df(
     rows: list[dict[str, Any]] = []
     for raw_pocket in unique_pockets:
         pocket_abs_path = _resolve_pocket_path_for_value(df, bigbind_root, raw_pocket)
+        if pocket_abs_path.is_dir():
+            logger.info(
+                "[ml.fpocket_bigbind.skip] pocket=%s path=%s reason=resolved_to_directory",
+                raw_pocket,
+                pocket_abs_path,
+            )
+            row = {
+                "pocket": raw_pocket,
+                "pocket_abs_path": str(pocket_abs_path),
+                "receptor_pdb": str(pocket_abs_path),
+                "pocket_center_x": float("nan"),
+                "pocket_center_y": float("nan"),
+                "pocket_center_z": float("nan"),
+            }
+            for col in FPOCKET_METRIC_COLUMNS:
+                row[col] = float("nan")
+            for col in POCKET_FEATURE_COLUMNS:
+                row[col] = 0.0
+            rows.append(row)
+            continue
+
+        pocket_feature_values = compute_pocket_features(pocket_abs_path)
         center = pocket_center_from_pdb(pocket_abs_path)
         pocket_residues = parse_pocket_residues(pocket_abs_path)
         receptor_pdb = derive_receptor_pdb(pocket_abs_path)
@@ -212,6 +241,8 @@ def precompute_fpocket_for_bigbind_df(
                 if metrics is not None and col in metrics
                 else float("nan")
             )
+        for col in POCKET_FEATURE_COLUMNS:
+            row[col] = float(pocket_feature_values.get(col, 0.0))
         rows.append(row)
 
     columns = [
@@ -220,6 +251,7 @@ def precompute_fpocket_for_bigbind_df(
         "receptor_pdb",
         *FPOCKET_CENTER_COLUMNS,
         *FPOCKET_METRIC_COLUMNS,
+        *POCKET_FEATURE_COLUMNS,
     ]
     metrics_df = pd.DataFrame(rows, columns=columns)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -240,6 +272,7 @@ def merge_fpocket_metrics_on_pocket(df: pd.DataFrame, metrics_df: pd.DataFrame) 
         "receptor_pdb",
         *FPOCKET_CENTER_COLUMNS,
         *FPOCKET_METRIC_COLUMNS,
+        *POCKET_FEATURE_COLUMNS,
     ):
         if col not in dedup.columns:
             continue

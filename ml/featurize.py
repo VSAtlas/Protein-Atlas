@@ -17,6 +17,7 @@ from scipy import sparse
 from druggability_orchestrator import load_fpocket_metrics_for_ml
 from ml.config import FeaturesConfig
 from ml.feature_audit import FeatureAuditWriter
+from ml.pocket_features import POCKET_FEATURE_COLUMNS
 
 
 _FPOCKET_FEATURE_NAMES = (
@@ -173,6 +174,8 @@ class BigBindFeaturizer:
             )
         if features.pocket_fpocket:
             self._continuous_feature_names.extend(list(_FPOCKET_FEATURE_NAMES))
+        if features.pocket_features:
+            self._continuous_feature_names.extend(list(POCKET_FEATURE_COLUMNS))
         if features.vina_score:
             self._continuous_feature_names.append("vina_score_placeholder")
 
@@ -304,6 +307,9 @@ class BigBindFeaturizer:
 
         if self.features.pocket_fpocket:
             values.extend(self._row_fpocket_features(row))
+
+        if self.features.pocket_features:
+            values.extend([_safe_float(row.get(name), default=0.0) for name in POCKET_FEATURE_COLUMNS])
 
         if self.features.vina_score:
             # Placeholder slot only. Docking/import is intentionally out of scope here.

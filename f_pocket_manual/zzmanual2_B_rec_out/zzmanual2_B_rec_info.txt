@@ -1,6 +1,0 @@
-Pocket 1
-Druggability Score : 0.49
-Volume : 390.0
-Total SASA : 950.0
-Polar SASA : 300.0
-Mean alp. sph. solvent access : 0.52

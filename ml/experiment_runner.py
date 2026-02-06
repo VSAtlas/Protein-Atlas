@@ -22,12 +22,22 @@ if __package__ in {None, ""}:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from ml.calibration import apply_calibration, fit_oof_calibrator
 from ml.config import FeaturesConfig, config_to_dict, load_atlas_cfg, load_config
 from ml.data.bigbind import load_train_holdout_from_bigbind
 from ml.evaluate import DEFAULT_FRACTIONS, evaluate_holdout_metrics
 from ml.featurize import BigBindFeaturizer
 from ml.fpocket_bigbind import merge_fpocket_metrics_on_pocket, precompute_fpocket_for_bigbind_df
-from ml.modeling import train_logistic_regression
+from ml.hard_negatives import merge_hard_negatives
+from ml.labels import apply_label_smoothing, derive_sample_weight
+from ml.models import build_model
+from ml.registry import (
+    append_registry_index,
+    collect_env_versions,
+    compute_dataset_hash,
+    get_git_sha,
+    write_registry_record,
+)
 
 
 _FEATURES_ALL_VARIANTS_NAME = "features_all_variants.csv"
@@ -86,8 +96,15 @@ def _inner_grouped_metrics(
     y: np.ndarray,
     murcko_scaffolds: list[str],
     n_splits_requested: int,
-    model_config: Any,
+    model_family: str,
+    model_params: dict[str, Any],
+    calibration_enabled: bool,
+    calibration_method: str,
+    calibration_cv_folds: int,
+    calibration_seed: int,
     random_seed: int,
+    ranking_query_groups: np.ndarray | None = None,
+    sample_weight: np.ndarray | None = None,
 ) -> dict[str, float | int]:
     groups = _normalize_groups(murcko_scaffolds)
     unique_groups = np.unique(groups)
@@ -105,13 +122,43 @@ def _inner_grouped_metrics(
         if np.unique(y_val_fold).size < 2:
             continue
 
-        model = train_logistic_regression(
-            X_train=X[train_idx],
-            y_train=y_train_fold,
-            model_config=model_config,
+        model = build_model(
+            model_family=model_family,
+            model_params=model_params,
             random_seed=random_seed + fold_idx,
         )
-        val_prob_active = model.predict_proba(X[val_idx])[:, 1]
+        fit_kwargs: dict[str, Any] = {}
+        if ranking_query_groups is not None:
+            fit_kwargs["query_groups"] = ranking_query_groups[train_idx]
+        if sample_weight is not None:
+            fit_kwargs["sample_weight"] = sample_weight[train_idx]
+        model.fit(X[train_idx], y_train_fold, **fit_kwargs)
+        val_prob_uncal = model.predict_proba(X[val_idx])[:, 1]
+        val_prob_active = np.asarray(val_prob_uncal, dtype=float)
+        if calibration_enabled:
+            train_groups = [murcko_scaffolds[idx] for idx in train_idx.tolist()]
+
+            def _builder(seed_value: int):
+                return build_model(
+                    model_family=model_family,
+                    model_params=model_params,
+                    random_seed=seed_value,
+                )
+
+            calibrator, _ = fit_oof_calibrator(
+                X=X[train_idx],
+                y=y_train_fold,
+                groups=np.asarray(train_groups, dtype=object),
+                base_model_builder=_builder,
+                method=calibration_method,
+                cv_folds=calibration_cv_folds,
+                seed=calibration_seed + fold_idx,
+                fit_query_groups=(
+                    ranking_query_groups[train_idx] if ranking_query_groups is not None else None
+                ),
+                fit_sample_weights=sample_weight[train_idx] if sample_weight is not None else None,
+            )
+            val_prob_active = apply_calibration(calibrator, val_prob_uncal)
         fold_reports.append(
             evaluate_holdout_metrics(
                 y_val_fold,
@@ -145,11 +192,13 @@ def _inner_grouped_metrics(
 def _build_feature_variants(base_features: FeaturesConfig) -> list[tuple[str, FeaturesConfig]]:
     fp_bits = max(0, int(base_features.ligand_morgan_fp_bits))
     vina_flag = bool(base_features.vina_score)
+    pocket_feature_flag = bool(base_features.pocket_features)
     baseline = FeaturesConfig(
         ligand_descriptors=True,
         ligand_extra_descriptors=False,
         ligand_morgan_fp_bits=fp_bits,
         pocket_fpocket=True,
+        pocket_features=pocket_feature_flag,
         vina_score=vina_flag,
     )
     return [
@@ -162,6 +211,7 @@ def _build_feature_variants(base_features: FeaturesConfig) -> list[tuple[str, Fe
                 ligand_extra_descriptors=False,
                 ligand_morgan_fp_bits=0,
                 pocket_fpocket=True,
+                pocket_features=pocket_feature_flag,
                 vina_score=False,
             ),
         ),
@@ -281,6 +331,20 @@ def _append_variant_audits_to_consolidated(
         )
 
 
+def _collect_fpocket_cache_keys(metrics_df: pd.DataFrame | None) -> list[str]:
+    if metrics_df is None or metrics_df.empty:
+        return []
+    keys: list[str] = []
+    for _, row in metrics_df.iterrows():
+        pocket = str(row.get("pocket", "")).strip()
+        receptor = str(row.get("receptor_pdb", "")).strip()
+        cx = row.get("pocket_center_x")
+        cy = row.get("pocket_center_y")
+        cz = row.get("pocket_center_z")
+        keys.append(f"{pocket}|{receptor}|{cx}|{cy}|{cz}")
+    return sorted(set(keys))
+
+
 def _run_variant(
     *,
     variant_name: str,
@@ -322,22 +386,91 @@ def _run_variant(
         feature_columns=consolidated_feature_columns,
     )
 
+    model_family = str(getattr(config, "model_family", "logreg")).strip().lower()
+    if model_family == "lgbm":
+        model_family = "lightgbm"
+    if model_family == "xgb":
+        model_family = "xgboost"
+    rank_enabled = bool(getattr(config.rank, "enabled", False))
+    if rank_enabled and "rank" not in model_family and model_family in {"lightgbm", "xgboost"}:
+        model_family = f"{model_family}_rank"
+    model_params = dict(getattr(config, "model_params", {}) or {})
+    train_used = train_df.loc[train_features.source_index].copy()
+
+    def _group_values(df: pd.DataFrame, key: str) -> np.ndarray:
+        key_norm = str(key).strip().lower()
+        if key_norm == "target":
+            return df["ex_rec_pdb"].astype(str).to_numpy(dtype=object)
+        if key_norm == "pocket":
+            return df["pocket"].astype(str).to_numpy(dtype=object)
+        return (df["ex_rec_pdb"].astype(str) + "::" + df["pocket"].astype(str)).to_numpy(dtype=object)
+
+    train_rank_groups = (
+        _group_values(train_used, str(config.rank.group_key))
+        if "rank" in model_family
+        else None
+    )
+    sample_weight = (
+        derive_sample_weight(train_used, weight_cap=config.labels.weight_cap)
+        if config.labels.use_sample_weights
+        else None
+    )
+    y_train_fit = train_features.y.astype(float if config.labels.smoothing_eps > 0 else int)
+    if config.labels.smoothing_eps > 0 and "logreg" not in model_family and "rank" not in model_family:
+        y_train_fit = apply_label_smoothing(train_features.y, config.labels.smoothing_eps)
+
     inner_metrics = _inner_grouped_metrics(
         X=train_features.X,
         y=train_features.y,
         murcko_scaffolds=train_features.murcko_scaffolds,
         n_splits_requested=config.inner_scaffold_folds,
-        model_config=config.model,
+        model_family=model_family,
+        model_params=model_params,
+        calibration_enabled=bool(config.calibration_enabled),
+        calibration_method=str(config.calibration_method),
+        calibration_cv_folds=int(config.calibration_cv_folds),
+        calibration_seed=int(config.calibration_seed),
         random_seed=config.random_seed,
+        ranking_query_groups=train_rank_groups,
+        sample_weight=sample_weight,
     )
 
-    model = train_logistic_regression(
-        X_train=train_features.X,
-        y_train=train_features.y,
-        model_config=config.model,
+    model = build_model(
+        model_family=model_family,
+        model_params=model_params,
         random_seed=config.random_seed,
     )
-    holdout_prob_active = model.predict_proba(holdout_features.X)[:, 1]
+    model.fit(
+        train_features.X,
+        np.asarray(y_train_fit),
+        query_groups=train_rank_groups,
+        sample_weight=sample_weight,
+    )
+
+    holdout_prob_uncal = np.asarray(model.predict_proba(holdout_features.X)[:, 1], dtype=float)
+    holdout_prob_active = holdout_prob_uncal
+    if config.calibration_enabled:
+
+        def _builder(seed_value: int):
+            return build_model(
+                model_family=model_family,
+                model_params=model_params,
+                random_seed=seed_value,
+            )
+
+        calibrator, _ = fit_oof_calibrator(
+            X=train_features.X,
+            y=train_features.y,
+            groups=np.asarray(train_features.murcko_scaffolds, dtype=object),
+            base_model_builder=_builder,
+            method=config.calibration_method,
+            cv_folds=config.calibration_cv_folds,
+            seed=config.calibration_seed,
+            fit_query_groups=train_rank_groups,
+            fit_sample_weights=sample_weight,
+        )
+        holdout_prob_active = apply_calibration(calibrator, holdout_prob_uncal)
+
     holdout_metrics = evaluate_holdout_metrics(
         holdout_features.y,
         holdout_prob_active,
@@ -353,7 +486,14 @@ def _run_variant(
         "ligand_extra_descriptors": int(features.ligand_extra_descriptors),
         "ligand_morgan_fp_bits": int(features.ligand_morgan_fp_bits),
         "pocket_fpocket": int(features.pocket_fpocket),
+        "pocket_features": int(features.pocket_features),
         "vina_score": int(features.vina_score),
+        "model_family": model_family,
+        "model_params_json": json.dumps(model_params, sort_keys=True),
+        "calibration_enabled": int(bool(config.calibration_enabled)),
+        "calibration_method": str(config.calibration_method),
+        "rank_enabled": int(rank_enabled),
+        "rank_group_key": str(config.rank.group_key),
         "fpocket_loaded_count": int(featurizer.loaded_fpocket_count),
         "fpocket_missing_center_count": int(featurizer.missing_center_count),
         "fpocket_missing_info_count": int(featurizer.missing_info_count),
@@ -397,16 +537,32 @@ def run_feature_ablation_experiments(
 
     train_df = dataset.train_df.copy()
     holdout_df = dataset.holdout_df.copy()
-    if any(features.pocket_fpocket for _, features in feature_variants):
+    if config.hard_negatives.enabled:
+        group_key = str(config.rank.group_key if config.rank.enabled else "target")
+        train_df = merge_hard_negatives(
+            train_df,
+            policy=config.hard_negatives.policy,
+            ratio=config.hard_negatives.ratio,
+            per_active_k=config.hard_negatives.per_active_k,
+            within_group=config.hard_negatives.within_group,
+            group_key=group_key if config.hard_negatives.within_group else "target",
+            max_candidates=config.hard_negatives.max_candidates,
+            seed=config.hard_negatives.seed,
+        )
+    fpocket_metrics_df: pd.DataFrame | None = None
+    if any(
+        (features.pocket_fpocket or features.pocket_features)
+        for _, features in feature_variants
+    ):
         combined = pd.concat([train_df, holdout_df], ignore_index=False)
-        metrics_df = precompute_fpocket_for_bigbind_df(
+        fpocket_metrics_df = precompute_fpocket_for_bigbind_df(
             df=combined,
             bigbind_root=dataset.bigbind_root,
             atlas_cfg=atlas_cfg,
             run_dir=output_dir,
         )
-        train_df = merge_fpocket_metrics_on_pocket(train_df, metrics_df)
-        holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, metrics_df)
+        train_df = merge_fpocket_metrics_on_pocket(train_df, fpocket_metrics_df)
+        holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, fpocket_metrics_df)
 
     rows: list[dict[str, float | int | str]] = []
     for variant_name, features in feature_variants:
@@ -435,6 +591,38 @@ def run_feature_ablation_experiments(
         json.dumps(config_to_dict(config), indent=2),
         encoding="utf-8",
     )
+    (output_dir / "config_snapshot.json").write_text(
+        json.dumps(config_to_dict(config), indent=2),
+        encoding="utf-8",
+    )
+    if config.registry_enabled:
+        repo_root = Path(__file__).resolve().parents[1]
+        dataset_hash = compute_dataset_hash(
+            train_df=train_df,
+            holdout_df=holdout_df,
+            feature_columns=consolidated_feature_columns,
+            config_snapshot=config_to_dict(config),
+        )
+        registry_record = {
+            "run_id": run_id,
+            "run_dir": str(output_dir),
+            "dataset_hash": dataset_hash,
+            "git_sha": get_git_sha(repo_root),
+            "num_variants": int(len(results_df)),
+            "fpocket_cache_keys_used": _collect_fpocket_cache_keys(fpocket_metrics_df),
+            "environment": collect_env_versions(),
+        }
+        write_registry_record(output_dir, registry_record)
+        append_registry_index(
+            output_dir.parent / "registry_index.csv",
+            {
+                "run_id": run_id,
+                "run_dir": str(output_dir),
+                "dataset_hash": dataset_hash,
+                "git_sha": registry_record["git_sha"],
+                "num_variants": int(len(results_df)),
+            },
+        )
 
     return output_dir, results_df
 

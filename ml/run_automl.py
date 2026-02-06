@@ -18,8 +18,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run AutoML search for BigBind ML workflow.")
     parser.add_argument(
         "--config",
-        default="ml/config.json",
-        help="Path to ml config file (JSON or YAML).",
+        default="ml/config.txt",
+        help="Path to ml config file (TXT, JSON, or YAML).",
     )
     parser.add_argument(
         "--mode",

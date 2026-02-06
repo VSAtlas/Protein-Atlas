@@ -6,8 +6,15 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from path_router.path_router import make_paths
-from prep_ligands.library_index import LibraryIndex
+try:
+    from path_router.path_router import make_paths  # type: ignore[import-not-found]
+except ModuleNotFoundError:
+    from src.path_router.path_router import make_paths  # type: ignore[import-not-found]
+
+try:
+    from prep_ligands.library_index import LibraryIndex  # type: ignore[import-not-found]
+except ModuleNotFoundError:
+    from src.prep_ligands.library_index import LibraryIndex  # type: ignore[import-not-found]
 
 import analysis.dud_eval_types as dud_eval_types
 from analysis.dud_eval_log import dbg

@@ -57,8 +57,11 @@ import logging
 from path_router import make_paths
 
 # >>> PATHS IMPORT END
-from protein_prep.altloc_filter import filter_altlocs
-from protein_prep.aliases_policy import (
+# NOTE:
+# These imports intentionally expose a broad legacy surface for helper modules
+# that hydrate globals from automate_protein_prep.
+from protein_prep.altloc_filter import filter_altlocs  # noqa: F401
+from protein_prep.aliases_policy import (  # noqa: F401
     ALIASES,
     RULES,
     _ALIASES_BIND_LOGGED,
@@ -88,17 +91,17 @@ from protein_prep.aliases_policy import (
     _to_upper_set,
     load_aliases as _aliases_policy_load_aliases,
 )
-from protein_prep.element_guard import (
+from protein_prep.element_guard import (  # noqa: F401
     _meeko_preflight_or_fail,
     _post_write_element_guard,
 )
-from protein_prep.os_utils import (
+from protein_prep.os_utils import (  # noqa: F401
     _as_path,
     _powershell,
     _run_and_log,
     _win_path,
 )
-from protein_prep.prep_utils import (
+from protein_prep.prep_utils import (  # noqa: F401
     _cfg,
     _cfg_bool,
     _cfg_chain_keep_list,
@@ -110,14 +113,14 @@ from protein_prep.prep_utils import (
     _short_path_for_log,
     set_runtime_config,
 )
-from protein_prep.protonation import (
+from protein_prep.protonation import (  # noqa: F401
     REDUCE_EXE,
     _protonate_with_pdb2pqr_if_available,
     assign_protonation_states,
     conect_coverage,
     hydrogenation_status,
 )
-from protein_prep.receptor_prep import (
+from protein_prep.receptor_prep import (  # noqa: F401
     _MEEKO_DROP_IONS,
     _classify_and_rename_histidines,
     _clean_receptor_pdbqt,
@@ -134,7 +137,7 @@ from protein_prep.receptor_prep import (
     _strip_reduce_user_lines,
     run_prepare_receptor,
 )
-from protein_prep.tool_runners import (
+from protein_prep.tool_runners import (  # noqa: F401
     build_adt_prepare_receptor_cmd,
     build_meeko_base_cmd,
     build_meeko_legacy_cmd,
@@ -143,8 +146,8 @@ from protein_prep.tool_runners import (
 )
 
 from installation import load_config
-import pdb_fixer as _activesite_mod
-from pdb_fixer import (
+import pdb_fixer as _activesite_mod  # noqa: F401
+from pdb_fixer import (  # noqa: F401
     assert_no_helium_in_hydrogen_names,
     fix_pdb_elements,
     fix_element_columns_in_file,

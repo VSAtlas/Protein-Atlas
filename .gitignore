@@ -103,3 +103,10 @@ ml/data/bigbind/
 ml/data/*.tar
 ml/data/*.tar.gz
 ml/outputs/
+ml/cache/
+
+# local/manual fpocket + BigBind smoke artifacts
+fpocket/
+f_pocket/
+f_pocket_manual/
+ml/data/manual_bigbind_smoke/

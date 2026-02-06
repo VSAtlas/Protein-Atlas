@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Set
-
-import pandas as pd
+from typing import Any, Optional, Set
 
 @dataclass
 class TargetSpec:
@@ -17,7 +15,7 @@ class TargetSpec:
 
 @dataclass
 class TargetEvaluation:
-    metrics: Optional[pd.Series]
+    metrics: Optional[Any]
     ligand_basenames: Set[str]
     has_run_id_column: bool
     run_ids: Set[str]

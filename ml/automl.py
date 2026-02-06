@@ -2,20 +2,18 @@
 from __future__ import annotations
 
 import itertools
-import json
 import logging
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
 from typing import Any, Iterable, cast
+import json
 
 import joblib
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
 
 if __package__ in {None, ""}:
@@ -23,16 +21,28 @@ if __package__ in {None, ""}:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from ml.config import FeaturesConfig, config_to_dict, load_atlas_cfg, load_config
+from ml.calibration import apply_calibration, fit_oof_calibrator
+from ml.config import (
+    FeaturesConfig,
+    config_to_dict,
+    load_atlas_cfg,
+    load_config,
+    load_config_payload,
+)
 from ml.data.bigbind import load_train_holdout_from_bigbind
 from ml.evaluate import DEFAULT_FRACTIONS, evaluate_holdout_metrics
 from ml.featurize import BigBindFeaturizer, FeaturizedRows
 from ml.fpocket_bigbind import merge_fpocket_metrics_on_pocket, precompute_fpocket_for_bigbind_df
-
-try:  # pragma: no cover - optional dependency
-    from lightgbm import LGBMClassifier  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover - optional dependency
-    LGBMClassifier = None  # type: ignore[assignment]
+from ml.hard_negatives import merge_hard_negatives
+from ml.labels import derive_sample_weight
+from ml.models import build_model
+from ml.registry import (
+    append_registry_index,
+    collect_env_versions,
+    compute_dataset_hash,
+    get_git_sha,
+    write_registry_record,
+)
 
 
 _FEATURE_VARIANT_ORDER = (
@@ -44,7 +54,7 @@ _FEATURE_VARIANT_ORDER = (
     "add_pocket_fpocket",
     "add_both",
 )
-_DEFAULT_MODEL_FAMILIES = ("logreg", "hgb")
+_DEFAULT_MODEL_FAMILIES = ("logreg", "lightgbm", "xgboost")
 
 
 def _setup_logging() -> logging.Logger:
@@ -61,28 +71,8 @@ def _resolve_run_id(config_run_id: str | None) -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
-def _load_json_or_yaml(path: Path) -> dict[str, Any]:
-    suffix = path.suffix.lower()
-    if suffix in {".json", ".txt"}:
-        with path.open("r", encoding="utf-8") as handle:
-            loaded = json.load(handle)
-        return loaded if isinstance(loaded, dict) else {}
-    if suffix in {".yaml", ".yml"}:
-        try:
-            import yaml  # type: ignore[import-untyped]
-        except Exception as exc:  # pragma: no cover - optional dependency
-            raise RuntimeError(
-                "YAML config requested but PyYAML is not installed. "
-                "Use JSON config or install PyYAML."
-            ) from exc
-        with path.open("r", encoding="utf-8") as handle:
-            loaded = yaml.safe_load(handle)
-        return loaded if isinstance(loaded, dict) else {}
-    raise ValueError(f"Unsupported config extension: {path.suffix}")
-
-
 def _load_automl_payload(config_path: str | Path) -> dict[str, Any]:
-    payload = _load_json_or_yaml(Path(config_path).expanduser().resolve())
+    payload = load_config_payload(config_path)
     automl_payload = payload.get("automl")
     return automl_payload if isinstance(automl_payload, dict) else {}
 
@@ -118,9 +108,42 @@ def _default_grid_spaces() -> dict[str, dict[str, list[Any]]]:
         "logreg": {
             "C": [0.01, 0.1, 1.0, 10.0],
             "penalty": ["l2"],
-            "solver": ["lbfgs"],
+            "solver": ["liblinear"],
             "class_weight": ["balanced"],
         },
+        "lightgbm": {
+            "learning_rate": [0.03, 0.1],
+            "num_leaves": [31, 63],
+            "max_depth": [-1, 6],
+            "min_child_samples": [20, 50],
+            "n_estimators": [200],
+            "subsample": [1.0],
+            "colsample_bytree": [1.0],
+            "class_weight": ["balanced"],
+        },
+        "xgboost": {
+            "max_depth": [4, 6],
+            "eta": [0.03, 0.1],
+            "n_estimators": [200],
+            "subsample": [0.8, 1.0],
+            "colsample_bytree": [0.8, 1.0],
+        },
+        "lightgbm_rank": {
+            "objective": ["lambdarank"],
+            "learning_rate": [0.03, 0.1],
+            "num_leaves": [31, 63],
+            "min_child_samples": [20],
+            "n_estimators": [200],
+        },
+        "xgboost_rank": {
+            "objective": ["rank:pairwise"],
+            "max_depth": [4, 6],
+            "eta": [0.03, 0.1],
+            "n_estimators": [200],
+            "subsample": [0.8, 1.0],
+            "colsample_bytree": [0.8, 1.0],
+        },
+        # Legacy compatibility family
         "hgb": {
             "max_depth": [3, 6, None],
             "learning_rate": [0.03, 0.1],
@@ -128,14 +151,6 @@ def _default_grid_spaces() -> dict[str, dict[str, list[Any]]]:
             "min_samples_leaf": [20, 50],
         },
     }
-    if LGBMClassifier is not None:
-        spaces["lgbm"] = {
-            "learning_rate": [0.03, 0.1],
-            "num_leaves": [31, 63],
-            "min_child_samples": [20, 50],
-            "n_estimators": [200],
-            "class_weight": ["balanced"],
-        }
     return spaces
 
 
@@ -153,6 +168,7 @@ def _build_feature_variants(base_features: FeaturesConfig) -> dict[str, Features
             ligand_extra_descriptors=False,
             ligand_morgan_fp_bits=0,
             pocket_fpocket=True,
+            pocket_features=baseline.pocket_features,
             vina_score=False,
         ),
         "no_fp": replace(baseline, ligand_morgan_fp_bits=0),
@@ -163,13 +179,32 @@ def _build_feature_variants(base_features: FeaturesConfig) -> dict[str, Features
 
 
 def _model_families_from_payload(automl_payload: dict[str, Any]) -> list[str]:
-    default = list(_DEFAULT_MODEL_FAMILIES)
-    if LGBMClassifier is not None:
-        default.append("lgbm")
+    default = list(_DEFAULT_MODEL_FAMILIES) + ["lightgbm_rank", "xgboost_rank"]
     names = _normalize_name_list(automl_payload.get("model_families"), default=default)
-    valid = set(default)
-    selected = [name for name in names if name in valid]
-    return selected or default
+    normalized: list[str] = []
+    for raw_name in names:
+        family = str(raw_name).strip().lower()
+        if family == "lgbm":
+            family = "lightgbm"
+        if family == "xgb":
+            family = "xgboost"
+        if family == "lgbm_rank":
+            family = "lightgbm_rank"
+        if family == "xgb_rank":
+            family = "xgboost_rank"
+        normalized.append(family)
+    valid = set(_default_grid_spaces().keys())
+    selected = [name for name in normalized if name in valid]
+    available: list[str] = []
+    for family in selected:
+        try:
+            build_model(model_family=family, model_params={}, random_seed=0)
+            available.append(family)
+        except RuntimeError:
+            continue
+        except Exception:
+            available.append(family)
+    return available or ["logreg"]
 
 
 def _feature_variant_names_from_payload(automl_payload: dict[str, Any]) -> list[str]:
@@ -180,6 +215,47 @@ def _feature_variant_names_from_payload(automl_payload: dict[str, Any]) -> list[
     valid = set(_FEATURE_VARIANT_ORDER)
     selected = [name for name in names if name in valid]
     return selected or list(_FEATURE_VARIANT_ORDER)
+
+
+def _calibration_options_from_payload(
+    automl_payload: dict[str, Any],
+    *,
+    default_enabled: bool,
+    default_method: str,
+) -> list[tuple[bool, str]]:
+    enabled_raw = automl_payload.get("calibration_enabled")
+    method_raw = automl_payload.get("calibration_methods")
+
+    if enabled_raw is None:
+        enabled_values = [bool(default_enabled)]
+    elif isinstance(enabled_raw, (list, tuple)):
+        enabled_values = [bool(value) for value in enabled_raw]
+    else:
+        enabled_values = [bool(enabled_raw)]
+
+    methods = _normalize_name_list(method_raw, default=[default_method])
+    method_values = []
+    for method in methods:
+        name = str(method).strip().lower()
+        if name in {"sigmoid", "isotonic"} and name not in method_values:
+            method_values.append(name)
+    if not method_values:
+        method_values = [str(default_method).strip().lower() or "sigmoid"]
+
+    options: list[tuple[bool, str]] = []
+    for enabled in enabled_values:
+        if enabled:
+            for method in method_values:
+                options.append((True, method))
+        else:
+            options.append((False, "sigmoid"))
+    dedup = []
+    seen: set[tuple[bool, str]] = set()
+    for option in options:
+        if option not in seen:
+            seen.add(option)
+            dedup.append(option)
+    return dedup
 
 
 def _group_splits(
@@ -215,59 +291,31 @@ def _fit_model(
     model_params: dict[str, Any],
     X_train: sparse.csr_matrix,
     y_train: np.ndarray,
+    query_groups: np.ndarray | None = None,
+    sample_weight: np.ndarray | None = None,
     random_seed: int,
 ) -> Any:
-    family = model_family.strip().lower()
-    if family == "logreg":
-        model = LogisticRegression(
-            C=float(model_params.get("C", 1.0)),
-            penalty=str(model_params.get("penalty", "l2")),
-            solver=str(model_params.get("solver", "lbfgs")),
-            class_weight=model_params.get("class_weight", "balanced"),
-            max_iter=int(model_params.get("max_iter", 1000)),
-            random_state=int(random_seed),
-        )
-        model.fit(X_train, y_train)
-        return model
-
-    if family == "hgb":
-        model = HistGradientBoostingClassifier(
-            max_depth=model_params.get("max_depth"),
-            learning_rate=float(model_params.get("learning_rate", 0.1)),
-            max_leaf_nodes=int(model_params.get("max_leaf_nodes", 31)),
-            min_samples_leaf=int(model_params.get("min_samples_leaf", 20)),
-            random_state=int(random_seed),
-        )
-        x_dense = X_train.toarray()
-        model.fit(x_dense, y_train)
-        setattr(model, "_atlas_requires_dense", True)
-        return model
-
+    family = str(model_family).strip().lower()
     if family == "lgbm":
-        if LGBMClassifier is None:
-            raise RuntimeError("model_family='lgbm' requested but lightgbm is not installed.")
-        model = LGBMClassifier(
-            learning_rate=float(model_params.get("learning_rate", 0.1)),
-            num_leaves=int(model_params.get("num_leaves", 31)),
-            min_child_samples=int(model_params.get("min_child_samples", 20)),
-            n_estimators=int(model_params.get("n_estimators", 200)),
-            class_weight=model_params.get("class_weight", "balanced"),
-            random_state=int(random_seed),
-            n_jobs=1,
-            verbosity=-1,
-        )
-        model.fit(X_train, y_train)
-        return model
-
-    raise ValueError(f"Unsupported model_family={model_family!r}")
+        family = "lightgbm"
+    if family == "xgb":
+        family = "xgboost"
+    model = build_model(
+        model_family=family,
+        model_params=model_params,
+        random_seed=random_seed,
+    )
+    model.fit(
+        X_train,
+        y_train,
+        query_groups=query_groups,
+        sample_weight=sample_weight,
+    )
+    return model
 
 
 def _predict_p_active(model: Any, X: sparse.csr_matrix) -> np.ndarray:
-    if getattr(model, "_atlas_requires_dense", False):
-        x_used = X.toarray()
-    else:
-        x_used = X
-    prob = model.predict_proba(x_used)
+    prob = model.predict_proba(X)
     if prob.ndim != 2 or prob.shape[1] < 2:
         raise ValueError("Expected predict_proba output with at least 2 columns.")
     return np.asarray(prob[:, 1], dtype=float)
@@ -303,8 +351,14 @@ def _inner_cv_metrics(
     murcko_scaffolds: list[str],
     model_family: str,
     model_params: dict[str, Any],
+    calibration_enabled: bool,
+    calibration_method: str,
+    calibration_cv_folds: int,
+    calibration_seed: int,
     random_seed: int,
     n_splits_requested: int,
+    ranking_query_groups: np.ndarray | None = None,
+    sample_weight: np.ndarray | None = None,
 ) -> dict[str, float | int]:
     splits = _group_splits(murcko_scaffolds, y, n_splits_requested)
     fold_reports: list[dict[str, float | int]] = []
@@ -320,9 +374,38 @@ def _inner_cv_metrics(
             model_params=model_params,
             X_train=X[train_idx],
             y_train=y_train_fold,
+            query_groups=(
+                ranking_query_groups[train_idx] if ranking_query_groups is not None else None
+            ),
+            sample_weight=sample_weight[train_idx] if sample_weight is not None else None,
             random_seed=random_seed + fold_idx,
         )
-        p_active = _predict_p_active(model, X[val_idx])
+        p_uncal = _predict_p_active(model, X[val_idx])
+        p_active = p_uncal
+        if calibration_enabled:
+            train_groups = [murcko_scaffolds[idx] for idx in train_idx.tolist()]
+
+            def _builder(seed_value: int):
+                return build_model(
+                    model_family=model_family,
+                    model_params=model_params,
+                    random_seed=seed_value,
+                )
+
+            calibrator, _ = fit_oof_calibrator(
+                X=X[train_idx],
+                y=y_train_fold,
+                groups=np.asarray(train_groups, dtype=object),
+                base_model_builder=_builder,
+                method=calibration_method,
+                cv_folds=calibration_cv_folds,
+                seed=calibration_seed + fold_idx,
+                fit_query_groups=(
+                    ranking_query_groups[train_idx] if ranking_query_groups is not None else None
+                ),
+                fit_sample_weights=sample_weight[train_idx] if sample_weight is not None else None,
+            )
+            p_active = apply_calibration(calibrator, p_uncal)
         fold_reports.append(
             evaluate_holdout_metrics(
                 y_val_fold,
@@ -365,6 +448,29 @@ def _resolve_ligand_id_column(df: pd.DataFrame) -> pd.Series:
     return pd.Series([str(i) for i in df.index], index=df.index, dtype=str)
 
 
+def _compute_query_groups(df: pd.DataFrame, group_key: str) -> np.ndarray:
+    key = str(group_key).strip().lower()
+    if key == "target":
+        return df["ex_rec_pdb"].astype(str).to_numpy(dtype=object)
+    if key == "pocket":
+        return df["pocket"].astype(str).to_numpy(dtype=object)
+    return (df["ex_rec_pdb"].astype(str) + "::" + df["pocket"].astype(str)).to_numpy(dtype=object)
+
+
+def _collect_fpocket_cache_keys_from_df(df: pd.DataFrame | None) -> list[str]:
+    if df is None or df.empty:
+        return []
+    keys: list[str] = []
+    for _, row in df.iterrows():
+        pocket = str(row.get("pocket", "")).strip()
+        receptor = str(row.get("receptor_pdb", "")).strip()
+        cx = row.get("pocket_center_x")
+        cy = row.get("pocket_center_y")
+        cz = row.get("pocket_center_z")
+        keys.append(f"{pocket}|{receptor}|{cx}|{cy}|{cz}")
+    return sorted(set(keys))
+
+
 def _evaluate_holdout_trial(
     *,
     trial_record: dict[str, Any],
@@ -372,15 +478,44 @@ def _evaluate_holdout_trial(
     holdout_rows: FeaturizedRows,
     holdout_df: pd.DataFrame,
     random_seed: int,
+    calibration_cv_folds: int,
+    calibration_seed: int,
+    train_query_groups: np.ndarray | None = None,
+    sample_weight: np.ndarray | None = None,
 ) -> tuple[dict[str, float | int], pd.DataFrame]:
     model = _fit_model(
         model_family=str(trial_record["model_family"]),
         model_params=dict(trial_record["model_params"]),
         X_train=train_rows.X,
         y_train=train_rows.y,
+        query_groups=train_query_groups,
+        sample_weight=sample_weight,
         random_seed=random_seed,
     )
-    holdout_p_active = _predict_p_active(model, holdout_rows.X)
+    holdout_p_uncal = _predict_p_active(model, holdout_rows.X)
+    holdout_p_active = holdout_p_uncal
+    if bool(trial_record.get("calibration_enabled", False)):
+
+        def _builder(seed_value: int):
+            return build_model(
+                model_family=str(trial_record["model_family"]),
+                model_params=dict(trial_record["model_params"]),
+                random_seed=seed_value,
+            )
+
+        calibrator, _ = fit_oof_calibrator(
+            X=train_rows.X,
+            y=train_rows.y,
+            groups=np.asarray(train_rows.murcko_scaffolds, dtype=object),
+            base_model_builder=_builder,
+            method=str(trial_record.get("calibration_method", "sigmoid")),
+            cv_folds=int(calibration_cv_folds),
+            seed=int(calibration_seed),
+            fit_query_groups=train_query_groups,
+            fit_sample_weights=sample_weight,
+        )
+        holdout_p_active = apply_calibration(calibrator, holdout_p_uncal)
+
     holdout_metrics = evaluate_holdout_metrics(
         holdout_rows.y,
         holdout_p_active,
@@ -393,6 +528,7 @@ def _evaluate_holdout_trial(
         {
             "lig_id": ligand_id.values,
             "p_active": holdout_p_active,
+            "p_active_uncalibrated": holdout_p_uncal,
             "active": holdout_rows.y,
         }
     )
@@ -410,6 +546,8 @@ def _materialize_trial_row(record: dict[str, Any]) -> dict[str, Any]:
         "status": str(record["status"]),
         "feature_variant": str(record["feature_variant"]),
         "model_family": str(record["model_family"]),
+        "calibration_enabled": int(bool(record.get("calibration_enabled", False))),
+        "calibration_method": str(record.get("calibration_method", "sigmoid")),
         "model_params_json": json.dumps(record["model_params"], sort_keys=True),
         "features_json": json.dumps(record["features"], sort_keys=True),
         "error": str(record.get("error") or ""),
@@ -431,49 +569,73 @@ def _run_grid_search(
     feature_variant_names: list[str],
     feature_variants: dict[str, FeaturesConfig],
     model_families: list[str],
+    calibration_options: list[tuple[bool, str]],
     grid_spaces: dict[str, dict[str, list[Any]]],
-    feature_cache: dict[str, tuple[FeaturesConfig, FeaturizedRows, FeaturizedRows, dict[str, int]]],
+    feature_cache: dict[
+        str,
+        tuple[
+            FeaturesConfig,
+            FeaturizedRows,
+            FeaturizedRows,
+            dict[str, int],
+            np.ndarray | None,
+            np.ndarray | None,
+        ],
+    ],
     random_seed: int,
     inner_scaffold_folds: int,
+    calibration_cv_folds: int,
+    calibration_seed: int,
 ) -> list[dict[str, Any]]:
     trial_records: list[dict[str, Any]] = []
     trial_id = 0
     for feature_variant_name in feature_variant_names:
         train_rows = feature_cache[feature_variant_name][1]
+        train_query_groups = feature_cache[feature_variant_name][4]
+        train_sample_weight = feature_cache[feature_variant_name][5]
         for model_family in model_families:
             if model_family not in grid_spaces:
                 continue
             for params in _iter_grid_param_sets(grid_spaces[model_family]):
-                record: dict[str, Any] = {
-                    "trial_id": trial_id,
-                    "mode": "grid",
-                    "status": "ok",
-                    "feature_variant": feature_variant_name,
-                    "features": asdict(feature_variants[feature_variant_name]),
-                    "model_family": model_family,
-                    "model_params": dict(params),
-                    "inner_metrics": {},
-                    "error": "",
-                }
-                trial_id += 1
-                try:
-                    inner_metrics = _inner_cv_metrics(
-                        X=train_rows.X,
-                        y=train_rows.y,
-                        murcko_scaffolds=train_rows.murcko_scaffolds,
-                        model_family=model_family,
-                        model_params=params,
-                        random_seed=random_seed,
-                        n_splits_requested=inner_scaffold_folds,
-                    )
-                    if int(inner_metrics.get("inner_folds", 0)) <= 0:
-                        record["status"] = "skipped"
-                        record["error"] = "no_valid_inner_folds"
-                    record["inner_metrics"] = inner_metrics
-                except Exception as exc:
-                    record["status"] = "failed"
-                    record["error"] = f"{type(exc).__name__}: {exc}"
-                trial_records.append(record)
+                for calibration_enabled, calibration_method in calibration_options:
+                    record: dict[str, Any] = {
+                        "trial_id": trial_id,
+                        "mode": "grid",
+                        "status": "ok",
+                        "feature_variant": feature_variant_name,
+                        "features": asdict(feature_variants[feature_variant_name]),
+                        "model_family": model_family,
+                        "model_params": dict(params),
+                        "calibration_enabled": bool(calibration_enabled),
+                        "calibration_method": str(calibration_method),
+                        "inner_metrics": {},
+                        "error": "",
+                    }
+                    trial_id += 1
+                    try:
+                        inner_metrics = _inner_cv_metrics(
+                            X=train_rows.X,
+                            y=train_rows.y,
+                            murcko_scaffolds=train_rows.murcko_scaffolds,
+                            model_family=model_family,
+                            model_params=params,
+                            calibration_enabled=bool(calibration_enabled),
+                            calibration_method=str(calibration_method),
+                            calibration_cv_folds=calibration_cv_folds,
+                            calibration_seed=calibration_seed,
+                            random_seed=random_seed,
+                            n_splits_requested=inner_scaffold_folds,
+                            ranking_query_groups=train_query_groups,
+                            sample_weight=train_sample_weight,
+                        )
+                        if int(inner_metrics.get("inner_folds", 0)) <= 0:
+                            record["status"] = "skipped"
+                            record["error"] = "no_valid_inner_folds"
+                        record["inner_metrics"] = inner_metrics
+                    except Exception as exc:
+                        record["status"] = "failed"
+                        record["error"] = f"{type(exc).__name__}: {exc}"
+                    trial_records.append(record)
     return trial_records
 
 
@@ -482,9 +644,22 @@ def _run_optuna_search(
     feature_variant_names: list[str],
     feature_variants: dict[str, FeaturesConfig],
     model_families: list[str],
-    feature_cache: dict[str, tuple[FeaturesConfig, FeaturizedRows, FeaturizedRows, dict[str, int]]],
+    calibration_options: list[tuple[bool, str]],
+    feature_cache: dict[
+        str,
+        tuple[
+            FeaturesConfig,
+            FeaturizedRows,
+            FeaturizedRows,
+            dict[str, int],
+            np.ndarray | None,
+            np.ndarray | None,
+        ],
+    ],
     random_seed: int,
     inner_scaffold_folds: int,
+    calibration_cv_folds: int,
+    calibration_seed: int,
     max_trials: int,
 ) -> list[dict[str, Any]]:
     try:
@@ -504,15 +679,42 @@ def _run_optuna_search(
             feature_variant_names,
         )
         model_family = trial.suggest_categorical("model_family", model_families)
+        calibration_enabled, calibration_method = trial.suggest_categorical(
+            "calibration_option",
+            calibration_options,
+        )
 
         if model_family == "logreg":
             params = {
                 "C": float(trial.suggest_float("logreg_C", 0.01, 10.0, log=True)),
                 "penalty": "l2",
-                "solver": "lbfgs",
+                "solver": "liblinear",
                 "class_weight": "balanced",
             }
-        elif model_family == "hgb":
+        elif model_family == "lightgbm":
+            params = {
+                "max_depth": int(trial.suggest_categorical("lgbm_max_depth", [-1, 6, 10])),
+                "learning_rate": float(
+                    trial.suggest_float("lgbm_learning_rate", 0.01, 0.2, log=True)
+                ),
+                "num_leaves": int(
+                    trial.suggest_int("lgbm_num_leaves", 31, 127, step=16)
+                ),
+                "min_child_samples": int(
+                    trial.suggest_int("lgbm_min_child_samples", 10, 80, step=10)
+                ),
+                "n_estimators": int(trial.suggest_int("lgbm_n_estimators", 100, 400, step=100)),
+                "class_weight": "balanced",
+            }
+        elif model_family == "xgboost":
+            params = {
+                "max_depth": int(trial.suggest_int("xgb_max_depth", 3, 10)),
+                "eta": float(trial.suggest_float("xgb_eta", 0.01, 0.2, log=True)),
+                "n_estimators": int(trial.suggest_int("xgb_n_estimators", 100, 400, step=100)),
+                "subsample": float(trial.suggest_float("xgb_subsample", 0.6, 1.0)),
+                "colsample_bytree": float(trial.suggest_float("xgb_colsample", 0.6, 1.0)),
+            }
+        elif model_family == "hgb":  # legacy option
             params = {
                 "max_depth": trial.suggest_categorical("hgb_max_depth", [3, 6, None]),
                 "learning_rate": float(
@@ -525,21 +727,26 @@ def _run_optuna_search(
                     trial.suggest_int("hgb_min_samples_leaf", 10, 80, step=10)
                 ),
             }
-        elif model_family == "lgbm":
+        elif model_family == "lightgbm_rank":
             params = {
+                "objective": "lambdarank",
                 "learning_rate": float(
-                    trial.suggest_float("lgbm_learning_rate", 0.01, 0.2, log=True)
+                    trial.suggest_float("lgbmr_learning_rate", 0.01, 0.2, log=True)
                 ),
-                "num_leaves": int(
-                    trial.suggest_int("lgbm_num_leaves", 31, 127, step=16)
-                ),
+                "num_leaves": int(trial.suggest_int("lgbmr_num_leaves", 31, 127, step=16)),
                 "min_child_samples": int(
-                    trial.suggest_int("lgbm_min_child_samples", 10, 80, step=10)
+                    trial.suggest_int("lgbmr_min_child_samples", 10, 80, step=10)
                 ),
-                "n_estimators": int(
-                    trial.suggest_int("lgbm_n_estimators", 100, 400, step=100)
-                ),
-                "class_weight": "balanced",
+                "n_estimators": int(trial.suggest_int("lgbmr_n_estimators", 100, 400, step=100)),
+            }
+        elif model_family == "xgboost_rank":
+            params = {
+                "objective": "rank:pairwise",
+                "max_depth": int(trial.suggest_int("xgbr_max_depth", 3, 10)),
+                "eta": float(trial.suggest_float("xgbr_eta", 0.01, 0.2, log=True)),
+                "n_estimators": int(trial.suggest_int("xgbr_n_estimators", 100, 400, step=100)),
+                "subsample": float(trial.suggest_float("xgbr_subsample", 0.6, 1.0)),
+                "colsample_bytree": float(trial.suggest_float("xgbr_colsample", 0.6, 1.0)),
             }
         else:
             raise ValueError(f"Unsupported model_family={model_family!r}")
@@ -552,12 +759,16 @@ def _run_optuna_search(
             "features": asdict(feature_variants[feature_variant_name]),
             "model_family": model_family,
             "model_params": dict(params),
+            "calibration_enabled": bool(calibration_enabled),
+            "calibration_method": str(calibration_method),
             "inner_metrics": {},
             "error": "",
         }
         trial_records.append(record)
 
         train_rows = feature_cache[feature_variant_name][1]
+        train_query_groups = feature_cache[feature_variant_name][4]
+        train_sample_weight = feature_cache[feature_variant_name][5]
         splits = _group_splits(
             train_rows.murcko_scaffolds,
             train_rows.y,
@@ -575,12 +786,44 @@ def _run_optuna_search(
                 model_params=params,
                 X_train=train_rows.X[train_idx],
                 y_train=y_train_fold,
+                query_groups=(
+                    train_query_groups[train_idx] if train_query_groups is not None else None
+                ),
+                sample_weight=(
+                    train_sample_weight[train_idx] if train_sample_weight is not None else None
+                ),
                 random_seed=random_seed + fold_idx,
             )
             p_active = _predict_p_active(model, train_rows.X[val_idx])
             report = evaluate_holdout_metrics(
                 y_val_fold,
-                p_active,
+                apply_calibration(
+                    fit_oof_calibrator(
+                        X=train_rows.X[train_idx],
+                        y=y_train_fold,
+                        groups=np.asarray(
+                            [train_rows.murcko_scaffolds[idx] for idx in train_idx.tolist()],
+                            dtype=object,
+                        ),
+                        base_model_builder=lambda fold_seed: build_model(
+                            model_family=model_family,
+                            model_params=params,
+                            random_seed=fold_seed,
+                        ),
+                        method=str(calibration_method),
+                        cv_folds=calibration_cv_folds,
+                        seed=calibration_seed + fold_idx,
+                        fit_query_groups=(
+                            train_query_groups[train_idx] if train_query_groups is not None else None
+                        ),
+                        fit_sample_weights=(
+                            train_sample_weight[train_idx] if train_sample_weight is not None else None
+                        ),
+                    )[0],
+                    p_active,
+                )
+                if calibration_enabled
+                else p_active,
                 fractions=DEFAULT_FRACTIONS,
             )
             fold_reports.append(report)
@@ -664,31 +907,59 @@ def run_automl(
         if name in feature_variants
     ]
     model_families = _model_families_from_payload(raw_automl_payload)
+    requires_rank_groups = any("rank" in str(name) for name in model_families)
+    calibration_options = _calibration_options_from_payload(
+        raw_automl_payload,
+        default_enabled=bool(config.calibration_enabled),
+        default_method=str(config.calibration_method),
+    )
     run_id = _resolve_run_id(config.run_id)
     run_dir = Path(__file__).resolve().parent / "outputs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     train_df = dataset.train_df.copy()
     holdout_df = dataset.holdout_df.copy()
+    if config.hard_negatives.enabled:
+        group_key = str(config.rank.group_key if config.rank.enabled else "target")
+        train_df = merge_hard_negatives(
+            train_df,
+            policy=config.hard_negatives.policy,
+            ratio=config.hard_negatives.ratio,
+            per_active_k=config.hard_negatives.per_active_k,
+            within_group=config.hard_negatives.within_group,
+            group_key=group_key if config.hard_negatives.within_group else "target",
+            max_candidates=config.hard_negatives.max_candidates,
+            seed=config.hard_negatives.seed,
+        )
+    fpocket_metrics_df: pd.DataFrame | None = None
     needs_fpocket_precompute = any(
-        feature_variants[name].pocket_fpocket for name in feature_variant_names
+        (feature_variants[name].pocket_fpocket or feature_variants[name].pocket_features)
+        for name in feature_variant_names
     )
     if needs_fpocket_precompute:
         combined = pd.concat([train_df, holdout_df], ignore_index=False)
-        metrics_df = precompute_fpocket_for_bigbind_df(
+        fpocket_metrics_df = precompute_fpocket_for_bigbind_df(
             df=combined,
             bigbind_root=dataset.bigbind_root,
             atlas_cfg=atlas_cfg,
             run_dir=run_dir,
         )
-        train_df = merge_fpocket_metrics_on_pocket(train_df, metrics_df)
-        holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, metrics_df)
+        train_df = merge_fpocket_metrics_on_pocket(train_df, fpocket_metrics_df)
+        holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, fpocket_metrics_df)
 
     grid_spaces = _default_grid_spaces()
     grid_override = raw_automl_payload.get("grid")
     if isinstance(grid_override, dict):
         for model_family, space in grid_override.items():
             family = str(model_family).strip().lower()
+            if family == "lgbm":
+                family = "lightgbm"
+            if family == "xgb":
+                family = "xgboost"
+            if family == "lgbm_rank":
+                family = "lightgbm_rank"
+            if family == "xgb_rank":
+                family = "xgboost_rank"
             if family in grid_spaces:
                 grid_spaces[family] = _normalize_grid_space(
                     space,
@@ -696,7 +967,15 @@ def run_automl(
                 )
 
     feature_cache: dict[
-        str, tuple[FeaturesConfig, FeaturizedRows, FeaturizedRows, dict[str, int]]
+        str,
+        tuple[
+            FeaturesConfig,
+            FeaturizedRows,
+            FeaturizedRows,
+            dict[str, int],
+            np.ndarray | None,
+            np.ndarray | None,
+        ],
     ] = {}
     for feature_variant_name in feature_variant_names:
         features = feature_variants[feature_variant_name]
@@ -712,6 +991,17 @@ def run_automl(
         )
         train_rows = featurizer.transform(train_df)
         holdout_rows = featurizer.transform(holdout_df)
+        train_used = train_df.loc[train_rows.source_index].copy()
+        train_query_groups = (
+            _compute_query_groups(train_used, str(config.rank.group_key))
+            if (config.rank.enabled or requires_rank_groups)
+            else None
+        )
+        train_sample_weight = (
+            derive_sample_weight(train_used, weight_cap=config.labels.weight_cap)
+            if config.labels.use_sample_weights
+            else None
+        )
         feature_cache[feature_variant_name] = (
             features,
             train_rows,
@@ -721,6 +1011,8 @@ def run_automl(
                 "fpocket_missing_center_count": int(featurizer.missing_center_count),
                 "fpocket_missing_info_count": int(featurizer.missing_info_count),
             },
+            train_query_groups,
+            train_sample_weight,
         )
 
     mode_norm = str(mode).strip().lower()
@@ -732,19 +1024,25 @@ def run_automl(
             feature_variant_names=feature_variant_names,
             feature_variants=feature_variants,
             model_families=model_families,
+            calibration_options=calibration_options,
             grid_spaces=grid_spaces,
             feature_cache=feature_cache,
             random_seed=config.random_seed,
             inner_scaffold_folds=config.inner_scaffold_folds,
+            calibration_cv_folds=config.calibration_cv_folds,
+            calibration_seed=config.calibration_seed,
         )
     else:
         trial_records = _run_optuna_search(
             feature_variant_names=feature_variant_names,
             feature_variants=feature_variants,
             model_families=model_families,
+            calibration_options=calibration_options,
             feature_cache=feature_cache,
             random_seed=config.random_seed,
             inner_scaffold_folds=config.inner_scaffold_folds,
+            calibration_cv_folds=config.calibration_cv_folds,
+            calibration_seed=config.calibration_seed,
             max_trials=max_trials,
         )
 
@@ -767,12 +1065,16 @@ def run_automl(
     best_variant_name = str(best_trial["feature_variant"])
     best_train_rows = feature_cache[best_variant_name][1]
     best_holdout_rows = feature_cache[best_variant_name][2]
+    best_train_query_groups = feature_cache[best_variant_name][4]
+    best_train_sample_weight = feature_cache[best_variant_name][5]
 
     best_model = _fit_model(
         model_family=str(best_trial["model_family"]),
         model_params=dict(best_trial["model_params"]),
         X_train=best_train_rows.X,
         y_train=best_train_rows.y,
+        query_groups=best_train_query_groups,
+        sample_weight=best_train_sample_weight,
         random_seed=config.random_seed,
     )
     joblib.dump(best_model, run_dir / "best_model.joblib")
@@ -783,6 +1085,10 @@ def run_automl(
         holdout_rows=best_holdout_rows,
         holdout_df=holdout_df,
         random_seed=config.random_seed,
+        calibration_cv_folds=config.calibration_cv_folds,
+        calibration_seed=config.calibration_seed,
+        train_query_groups=best_train_query_groups,
+        sample_weight=best_train_sample_weight,
     )
     best_pred_df.to_csv(run_dir / "best_holdout_predictions.csv", index=False)
     pd.DataFrame([best_holdout_metrics]).to_csv(
@@ -800,6 +1106,8 @@ def run_automl(
         "feature_variant": str(best_trial["feature_variant"]),
         "features": dict(best_trial["features"]),
         "model_family": str(best_trial["model_family"]),
+        "calibration_enabled": bool(best_trial.get("calibration_enabled", False)),
+        "calibration_method": str(best_trial.get("calibration_method", "sigmoid")),
         "model_params": dict(best_trial["model_params"]),
         "inner_metrics": dict(best_trial["inner_metrics"]),
         "holdout_metrics": dict(best_holdout_metrics),
@@ -821,18 +1129,26 @@ def run_automl(
         variant_name = str(trial_record["feature_variant"])
         train_rows = feature_cache[variant_name][1]
         holdout_rows = feature_cache[variant_name][2]
+        train_query_groups = feature_cache[variant_name][4]
+        train_sample_weight = feature_cache[variant_name][5]
         holdout_metrics, _ = _evaluate_holdout_trial(
             trial_record=trial_record,
             train_rows=train_rows,
             holdout_rows=holdout_rows,
             holdout_df=holdout_df,
             random_seed=config.random_seed,
+            calibration_cv_folds=config.calibration_cv_folds,
+            calibration_seed=config.calibration_seed,
+            train_query_groups=train_query_groups,
+            sample_weight=train_sample_weight,
         )
         top_row: dict[str, Any] = {
             "rank_by_inner": rank,
             "trial_id": int(trial_record["trial_id"]),
             "feature_variant": str(trial_record["feature_variant"]),
             "model_family": str(trial_record["model_family"]),
+            "calibration_enabled": int(bool(trial_record.get("calibration_enabled", False))),
+            "calibration_method": str(trial_record.get("calibration_method", "sigmoid")),
             "inner_mean_EF@1%": trial_record["inner_metrics"].get("inner_mean_EF@1%"),
             "inner_mean_PR_AUC": trial_record["inner_metrics"].get("inner_mean_PR_AUC"),
             "model_params_json": json.dumps(trial_record["model_params"], sort_keys=True),
@@ -853,12 +1169,60 @@ def run_automl(
                 "top_k_report": int(top_k),
                 "feature_variants": feature_variant_names,
                 "model_families": model_families,
+                "calibration_options": calibration_options,
                 "raw_payload": raw_automl_payload,
             },
             indent=2,
         ),
         encoding="utf-8",
     )
+    (run_dir / "config_snapshot.json").write_text(
+        json.dumps(config_to_dict(config), indent=2),
+        encoding="utf-8",
+    )
+
+    if config.registry_enabled:
+        repo_root = Path(__file__).resolve().parents[1]
+        feature_columns = [f"f{i}" for i in range(int(best_train_rows.X.shape[1]))]
+        dataset_hash = compute_dataset_hash(
+            train_df=train_df.loc[best_train_rows.source_index].copy(),
+            holdout_df=holdout_df.loc[best_holdout_rows.source_index].copy(),
+            feature_columns=feature_columns,
+            config_snapshot=config_to_dict(config),
+        )
+        registry_record = {
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "dataset_hash": dataset_hash,
+            "git_sha": get_git_sha(repo_root),
+            "best_trial_id": int(best_trial["trial_id"]),
+            "best_feature_variant": str(best_trial["feature_variant"]),
+            "best_model_family": str(best_trial["model_family"]),
+            "best_model_params": dict(best_trial["model_params"]),
+            "calibration_enabled": bool(best_trial.get("calibration_enabled", False)),
+            "calibration_method": str(best_trial.get("calibration_method", "sigmoid")),
+            "rank_enabled": bool(config.rank.enabled),
+            "rank_group_key": str(config.rank.group_key),
+            "hard_negatives": config_to_dict(config).get("hard_negatives", {}),
+            "holdout_metrics": dict(best_holdout_metrics),
+            "fpocket_cache_keys_used": _collect_fpocket_cache_keys_from_df(fpocket_metrics_df),
+            "environment": collect_env_versions(),
+        }
+        write_registry_record(run_dir, registry_record)
+        append_registry_index(
+            run_dir.parent / "registry_index.csv",
+            {
+                "run_id": run_id,
+                "run_dir": str(run_dir),
+                "dataset_hash": dataset_hash,
+                "git_sha": registry_record["git_sha"],
+                "model_family": registry_record["best_model_family"],
+                "calibration_enabled": int(registry_record["calibration_enabled"]),
+                "calibration_method": registry_record["calibration_method"],
+                "holdout_PR_AUC": float(best_holdout_metrics.get("PR_AUC", float("nan"))),
+                "holdout_EF@1%": float(best_holdout_metrics.get("EF@1%", float("nan"))),
+            },
+        )
 
     inner_metrics_payload = cast(dict[str, Any], best_trial_payload["inner_metrics"])
     logger.info(
