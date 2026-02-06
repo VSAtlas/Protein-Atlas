@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -415,6 +416,11 @@ def _ctrl_best_model_to_pdb(pdbqt_file: str, obabel: str):
     best_e = None
     best_chunk = None
     pdbqt_path = _Path(pdbqt_file)
+    try:
+        if (not pdbqt_path.exists()) or (pdbqt_path.stat().st_size <= 0):
+            return None, None
+    except Exception:
+        return None, None
     with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
         chunk = []
         in_model = False
@@ -928,13 +934,23 @@ def select_center_via_control_redock(
                         res = fut.result()
                         results.append(res)
             except Exception as e:
-                logger.exception(
-                    "[control-redock] ProcessPoolExecutor failed for pdb=%s: %s",
+                logger.warning(
+                    "[control-redock] ProcessPoolExecutor unavailable for pdb=%s; "
+                    "falling back to serial redock jobs (err=%s)",
                     paths.pdb_id,
                     e,
                 )
-                # A hard failure here should signal the caller to fall back to activesite
-                return None, None
+                results = []
+                for job in jobs:
+                    try:
+                        results.append(_ctrl_redock_job(job))
+                    except Exception as serial_exc:
+                        logger.warning(
+                            "[control-redock] serial job failed for pdb=%s lig=%s err=%s",
+                            paths.pdb_id,
+                            str(job.get("ligand_name", "?")),
+                            serial_exc,
+                        )
         else:
             logger.warning(
                 "[control-redock] No jobs constructed for ctrl_redock; skipping redock."
@@ -1027,7 +1043,20 @@ def select_center_via_control_redock(
                     )
 
     if best is None:
-        return None, None
+        # Fail-soft: when control redock produced no usable poses, keep docking
+        # by falling back to a deterministic control centroid.
+        fallback_base = bases[0] if bases else None
+        fallback_center = centroids.get(fallback_base) if fallback_base else None
+        if fallback_center is None:
+            return None, None
+        logger.warning(
+            "[control-redock] no finite redock RMSD; fallback centroid base=%s center=(%.3f,%.3f,%.3f)",
+            fallback_base,
+            float(fallback_center[0]),
+            float(fallback_center[1]),
+            float(fallback_center[2]),
+        )
+        return fallback_center, (24.0, 24.0, 24.0)
 
     def _extract_smiles_from_ref(ref_path: _Path, obabel_bin: str) -> Optional[str]:
         if not ref_path or not ref_path.exists():

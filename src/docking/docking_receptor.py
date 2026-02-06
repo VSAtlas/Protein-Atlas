@@ -40,6 +40,7 @@ def prepare_receptor(
     box_size: Optional[Tuple[float, float, float]] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     import automate_protein_prep
+    from protein_prep.receptor_prep import run_prepare_receptor
     from distutils.util import strtobool
 
     prepare_receptor.last_provenance = "unknown"
@@ -554,7 +555,7 @@ def prepare_receptor(
 
     # Generate receptor PDBQT directly at the variant-aware path
     try:
-        ok = automate_protein_prep.run_prepare_receptor(
+        ok = run_prepare_receptor(
             input_pdb=cleaned_pdb, output_pdbqt=str(receptor_pdbqt_path), cfg=cfg
         )
         receptor_pdbqt = str(receptor_pdbqt_path) if ok else None

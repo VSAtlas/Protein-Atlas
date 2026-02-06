@@ -1208,12 +1208,10 @@ def _run_pose_bust(
         cmd.append("--overwrite")
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        logger.error(
-            "%s action=autofix status=failed step=pose_bust returncode=%s stderr=%s stdout=%s",
+        logger.warning(
+            "%s action=autofix status=skip step=pose_bust returncode=%s",
             COMPONENT,
             proc.returncode,
-            proc.stderr.strip(),
-            proc.stdout.strip(),
         )
         return False
     logger.info(
@@ -1241,12 +1239,10 @@ def _run_prep_for_scorch(
         cmd.append("--overwrite")
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        logger.error(
-            "%s action=autofix status=failed step=prep_for_scorch returncode=%s stderr=%s stdout=%s",
+        logger.warning(
+            "%s action=autofix status=skip step=prep_for_scorch returncode=%s",
             COMPONENT,
             proc.returncode,
-            proc.stderr.strip(),
-            proc.stdout.strip(),
         )
         return False
     logger.info(

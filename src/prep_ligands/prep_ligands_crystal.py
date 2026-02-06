@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import contextlib
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -12,7 +13,7 @@ from pdb_fixer import (
     fix_element_columns_in_file,
     rules_version,
 )
-from rdkit import Chem
+from rdkit import Chem, rdBase
 
 from prep_ligands.prep_ligands_common import (
     EXCLUDE_CRYSTAL_ADDITIVES,
@@ -48,6 +49,13 @@ from prep_ligands.prep_ligands_common import (
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.+-]+")
 _EXTRACTED_LIGAND_NAME_EXCLUDES = ("nolig", "phenix_clean", "phenix-clean")
+
+
+def _rdkit_quiet_logs():
+    try:
+        return rdBase.BlockLogs()
+    except Exception:
+        return contextlib.nullcontext()
 
 
 def _base_stem_from_pdb_path(pdb_path: Path) -> str:
@@ -453,26 +461,29 @@ def prep_ligands_from_pdb(
         flag_buffer = False
         reason = None
         try:
-            m_chk = Chem.MolFromPDBFile(str(sanitized), sanitize=False, removeHs=False)
-            if m_chk is not None:
-                if _buffer_like_by_counts_from_mol(m_chk):
-                    flag_buffer, reason = True, "buffer_like_by_counts"
-                if not flag_buffer:
-                    try:
-                        Chem.SanitizeMol(m_chk)
-                    except Exception:
-                        pass
-                    reason = _matches_counterion(m_chk) or (
-                        _looks_like_buffer_salt(m_chk) and "buffer_like"
-                    )
-                    if reason:
-                        flag_buffer = True
-                    if (
-                        not flag_buffer
-                        and residue_name in {"UNL", "LIG"}
-                        and _is_polyacidic_buffer_like(m_chk)
-                    ):
-                        flag_buffer, reason = True, "polyacidic_buffer_like"
+            with _rdkit_quiet_logs():
+                m_chk = Chem.MolFromPDBFile(
+                    str(sanitized), sanitize=False, removeHs=False
+                )
+                if m_chk is not None:
+                    if _buffer_like_by_counts_from_mol(m_chk):
+                        flag_buffer, reason = True, "buffer_like_by_counts"
+                    if not flag_buffer:
+                        try:
+                            Chem.SanitizeMol(m_chk)
+                        except Exception:
+                            pass
+                        reason = _matches_counterion(m_chk) or (
+                            _looks_like_buffer_salt(m_chk) and "buffer_like"
+                        )
+                        if reason:
+                            flag_buffer = True
+                        if (
+                            not flag_buffer
+                            and residue_name in {"UNL", "LIG"}
+                            and _is_polyacidic_buffer_like(m_chk)
+                        ):
+                            flag_buffer, reason = True, "polyacidic_buffer_like"
         except Exception:
             if _buffer_like_by_counts_from_pdbfile(sanitized) or (
                 residue_name in {"UNL", "LIG"}
@@ -489,25 +500,31 @@ def prep_ligands_from_pdb(
 
         # Additional UNL O-rich ringless fragment guard
         try:
-            if (
-                "m_chk" in locals()
-                and m_chk is not None
-                and residue_name in {"UNL", "LIG"}
-            ):
-                from rdkit.Chem import rdMolDescriptors as rdmd
+            with _rdkit_quiet_logs():
+                if (
+                    "m_chk" in locals()
+                    and m_chk is not None
+                    and residue_name in {"UNL", "LIG"}
+                ):
+                    from rdkit.Chem import rdMolDescriptors as rdmd
 
-                rings = rdmd.CalcNumRings(m_chk)
-                arom = rdmd.CalcNumAromaticRings(m_chk)
-                o = sum(1 for a in m_chk.GetAtoms() if a.GetSymbol() == "O")
-                hac = m_chk.GetNumHeavyAtoms()
-                if rings == 0 and arom == 0 and hac >= 12 and (o / float(hac)) >= 0.40:
-                    _log_malformed(
-                        pdb_file, "UNL_O_rich_ringless", log_dir=prepped_ligands_dir
-                    )
-                    logging.info(
-                        f"Skipping UNL O-rich ringless fragment: {pdb_file.name}"
-                    )
-                    continue
+                    rings = rdmd.CalcNumRings(m_chk)
+                    arom = rdmd.CalcNumAromaticRings(m_chk)
+                    o = sum(1 for a in m_chk.GetAtoms() if a.GetSymbol() == "O")
+                    hac = m_chk.GetNumHeavyAtoms()
+                    if (
+                        rings == 0
+                        and arom == 0
+                        and hac >= 12
+                        and (o / float(hac)) >= 0.40
+                    ):
+                        _log_malformed(
+                            pdb_file, "UNL_O_rich_ringless", log_dir=prepped_ligands_dir
+                        )
+                        logging.info(
+                            f"Skipping UNL O-rich ringless fragment: {pdb_file.name}"
+                        )
+                        continue
         except Exception:
             pass
 

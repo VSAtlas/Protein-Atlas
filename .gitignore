@@ -94,3 +94,11 @@ report_assets/
 # Pathway resolver artifacts
 pathways/
 drugcentral/structures.smiles.tsv
+
+# ML workflow artifacts
+!ml/data/
+!ml/data/*.py
+ml/data/bigbind/
+ml/data/*.tar
+ml/data/*.tar.gz
+ml/outputs/

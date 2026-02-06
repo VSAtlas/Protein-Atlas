@@ -110,6 +110,52 @@ def _load_druggability_metrics(
     )
 
 
+def _tier_to_numeric(tier: str | None) -> float:
+    normalized = str(tier or "").strip().upper()
+    if normalized == "A":
+        return 1.0
+    if normalized == "B":
+        return 2.0
+    if normalized == "C":
+        return 3.0
+    return 0.0
+
+
+def load_fpocket_metrics_for_ml(
+    cfg: Dict[str, Any],
+    pdb_id: str,
+    variant: Optional[str],
+    ph_label: Optional[str],
+    center: Optional[Tuple[float, float, float]],
+    logger: logging.Logger,
+) -> Optional[Dict[str, float]]:
+    """
+    Public ML-facing fpocket loader.
+
+    This intentionally reuses _load_druggability_metrics so fpocket output
+    naming/path logic stays centralized in one place.
+    """
+    metrics = _load_druggability_metrics(
+        cfg=cfg,
+        pdb_id=pdb_id,
+        variant=variant,
+        ph_label=ph_label,
+        center=center,
+        logger=logger,
+    )
+    if metrics is None:
+        return None
+
+    return {
+        "fpocket_druggability": float(metrics.druggability),
+        "fpocket_volume": float(metrics.volume),
+        "fpocket_openness": float(metrics.openness),
+        "fpocket_polar_fraction": float(metrics.polar_fraction),
+        "fpocket_has_metal": float(int(metrics.has_metal)),
+        "fpocket_tier": float(_tier_to_numeric(metrics.tier)),
+    }
+
+
 def decide_engine_policy(
     cfg: Dict[str, Any],
     pdb_id: str,

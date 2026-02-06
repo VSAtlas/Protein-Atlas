@@ -196,6 +196,30 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _is_truthy_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            numeric = float(value)
+        except Exception:
+            numeric = 0.0
+        if math.isnan(numeric):
+            return False
+        return numeric != 0.0
+    return _normalize_text(value).lower() in _TRUTHY
+
+
+def _build_target_id(pdb_id: Any, variant: Any, ph_label: Any) -> str:
+    return "|".join(
+        [
+            _normalize_text(pdb_id),
+            _normalize_text(variant),
+            _normalize_text(ph_label),
+        ]
+    )
+
+
 def _sample_names(values: List[str], max_items: int = 5, max_len: int = 40) -> List[str]:
     sample: List[str] = []
     for value in values[:max_items]:
@@ -206,7 +230,7 @@ def _sample_names(values: List[str], max_items: int = 5, max_len: int = 40) -> L
     return sample
 
 
-def _load_heatmap_rows(
+def _load_heatmap_rows_csv(
     input_csv: Path, include_decoys: bool
 ) -> List[Dict[str, Any]]:
     with input_csv.open("r", encoding="utf-8", newline="") as handle:
@@ -233,9 +257,7 @@ def _load_heatmap_rows(
             if t_val is None:
                 continue
             if not include_decoys and "is_decoy" in fieldnames:
-                decoy_flag = (
-                    str(row.get("is_decoy") or "").strip().lower() in _TRUTHY
-                )
+                decoy_flag = _is_truthy_value(row.get("is_decoy"))
                 if decoy_flag:
                     continue
 
@@ -244,17 +266,25 @@ def _load_heatmap_rows(
             if not ligand_display or ligand_display.lower() == "nan":
                 ligand_display = ligand_base
             ligand_name = ligand_display
+            if not ligand_name:
+                continue
 
             if has_target_id:
                 target_id = _normalize_text(row.get("target_id"))
+                if not target_id and {"pdb_id", "variant", "ph_label"}.issubset(fieldnames):
+                    target_id = _build_target_id(
+                        row.get("pdb_id"),
+                        row.get("variant"),
+                        row.get("ph_label"),
+                    )
             else:
-                target_id = "|".join(
-                    [
-                        _normalize_text(row.get("pdb_id")),
-                        _normalize_text(row.get("variant")),
-                        _normalize_text(row.get("ph_label")),
-                    ]
+                target_id = _build_target_id(
+                    row.get("pdb_id"),
+                    row.get("variant"),
+                    row.get("ph_label"),
                 )
+            if not target_id:
+                continue
 
             row["t_selected"] = t_val
             row["ligand_name"] = ligand_name
@@ -264,6 +294,125 @@ def _load_heatmap_rows(
     if not rows:
         raise ValueError("No usable t_selected values found in input CSV")
     return rows
+
+
+def _load_heatmap_rows_parquet(
+    input_path: Path, include_decoys: bool
+) -> List[Dict[str, Any]]:
+    try:
+        import pyarrow.dataset as ds
+    except Exception as exc:  # pragma: no cover - import error path
+        raise RuntimeError(
+            "pyarrow is required to read parquet heatmap inputs"
+        ) from exc
+
+    dataset = ds.dataset(str(input_path), format="parquet", partitioning="hive")
+    schema_names = set(dataset.schema.names)
+    if "t_selected" not in schema_names:
+        raise ValueError("Missing required column: t_selected")
+
+    has_target_id = "target_id" in schema_names
+    has_target_components = {"pdb_id", "variant", "ph_label"}.issubset(schema_names)
+    if not has_target_id and not has_target_components:
+        raise ValueError(
+            "Missing required columns: target_id or pdb_id/variant/ph_label"
+        )
+
+    has_ligand_display = "ligand_display" in schema_names
+    has_ligand_base = "ligand_base" in schema_names
+    if not has_ligand_display and not has_ligand_base:
+        raise ValueError("Missing ligand_display/ligand_base columns in input parquet")
+
+    scan_columns: List[str] = ["t_selected"]
+    for col in ("target_id", "pdb_id", "variant", "ph_label"):
+        if col in schema_names and col not in scan_columns:
+            scan_columns.append(col)
+    for col in (
+        "ligand_display",
+        "ligand_base",
+        "is_decoy",
+        "rank",
+        "pct_rank",
+        "pose_valid_any",
+        "pose_invalid_reason_top",
+        "library",
+    ):
+        if col in schema_names and col not in scan_columns:
+            scan_columns.append(col)
+
+    rows: List[Dict[str, Any]] = []
+    scanner = dataset.scanner(columns=scan_columns, use_threads=True)
+    for batch in scanner.to_batches():
+        payload = batch.to_pydict()
+        n_rows = batch.num_rows
+        for idx in range(n_rows):
+            t_val = _parse_t_selected(payload["t_selected"][idx])
+            if t_val is None:
+                continue
+
+            if not include_decoys and "is_decoy" in payload:
+                if _is_truthy_value(payload["is_decoy"][idx]):
+                    continue
+
+            ligand_display = (
+                _normalize_text(payload["ligand_display"][idx])
+                if has_ligand_display
+                else ""
+            )
+            ligand_base = (
+                _normalize_text(payload["ligand_base"][idx]) if has_ligand_base else ""
+            )
+            if not ligand_display or ligand_display.lower() == "nan":
+                ligand_display = ligand_base
+            ligand_name = ligand_display
+            if not ligand_name:
+                continue
+
+            if has_target_id:
+                target_id = _normalize_text(payload["target_id"][idx])
+                if not target_id and has_target_components:
+                    target_id = _build_target_id(
+                        payload["pdb_id"][idx],
+                        payload["variant"][idx],
+                        payload["ph_label"][idx],
+                    )
+            else:
+                target_id = _build_target_id(
+                    payload["pdb_id"][idx],
+                    payload["variant"][idx],
+                    payload["ph_label"][idx],
+                )
+            if not target_id:
+                continue
+
+            row: Dict[str, Any] = {
+                "t_selected": t_val,
+                "ligand_name": ligand_name,
+                "target_id": target_id,
+            }
+            for col in (
+                "rank",
+                "pct_rank",
+                "pose_valid_any",
+                "pose_invalid_reason_top",
+                "library",
+            ):
+                if col in payload:
+                    row[col] = payload[col][idx]
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("No usable t_selected values found in input parquet")
+    return rows
+
+
+def _load_heatmap_rows(
+    input_path: Path, include_decoys: bool
+) -> List[Dict[str, Any]]:
+    is_parquet_source = input_path.is_dir() or input_path.suffix.lower() == ".parquet"
+    if is_parquet_source:
+        return _load_heatmap_rows_parquet(input_path, include_decoys)
+    return _load_heatmap_rows_csv(input_path, include_decoys)
 
 
 def _aggregate_rows(
@@ -962,14 +1111,17 @@ def render_interactive_heatmap_html(
 
     resolved_input = input_csv
     if not resolved_input.exists():
+        interactions_parquet = repo_root / "data" / run_id / "dataset" / "interactions"
         heatmap_path = repo_root / "data" / run_id / "heatmap_input.csv"
         master_path = repo_root / "data" / run_id / "master_rows.csv"
-        if heatmap_path.exists():
+        if interactions_parquet.exists():
+            resolved_input = interactions_parquet
+        elif heatmap_path.exists():
             resolved_input = heatmap_path
         else:
             resolved_input = master_path
     if not resolved_input.exists():
-        raise FileNotFoundError(f"Input CSV not found: {resolved_input}")
+        raise FileNotFoundError(f"Input heatmap data not found: {resolved_input}")
 
     rows = _load_heatmap_rows(resolved_input, include_decoys)
     agg, ligand_max = _aggregate_rows(rows)

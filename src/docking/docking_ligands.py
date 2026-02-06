@@ -7,11 +7,12 @@ import shutil
 import subprocess
 import tempfile
 import sys
+import contextlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import math
-from rdkit import Chem
+from rdkit import Chem, rdBase
 from rdkit.Chem import FilterCatalog, rdFMCS, rdMolAlign
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
@@ -26,6 +27,13 @@ from .pose_validation import compute_redock_rmsd
 from prep_ligands.library_index import LibraryIndex
 from path_router.path_router import Paths
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
+
+
+def _rdkit_quiet_logs():
+    try:
+        return rdBase.BlockLogs()
+    except Exception:
+        return contextlib.nullcontext()
 
 
 def ensure_deepcoy_decoy_sdfs(
@@ -1379,79 +1387,85 @@ def _read_any_lig(path: str):
     _rlog = logging.getLogger("rmsd")
 
     try:
-        if ext in (".sdf", ".sd"):
-            loader = "SDMolSupplier"
-            sanitize = True
-            suppl = Chem.SDMolSupplier(path, removeHs=False, sanitize=True)
-            mol = next((m for m in suppl if m is not None), None)
-        elif ext in (".mol2",):
-            loader = "MolFromMol2File"
-            sanitize = True
-            mol = Chem.MolFromMol2File(path, sanitize=True, removeHs=False)
-        elif ext in (".pdbqt",):
-            loader = "MolFromPDBFile(pdbqt)"
-            sanitize = False
-            mol = Chem.MolFromPDBFile(
-                path, sanitize=False, removeHs=False, proximityBonding=True
-            )
-            if mol is not None:
-                try:
-                    Chem.SanitizeMol(mol)
-                except Exception as e:
-                    sanitize_failed = True
-                    if _rlog:
-                        _rlog.warning(
-                            f"[read_any] sanitize failed for path='{path}' err={e!r}"
-                        )
-        elif ext in (".pdb",):
-            loader = "MolFromPDBFile"
-            sanitize = True
-            # If you use proximityBonding or flavor flags elsewhere, keep them consistent here.
-            try:
+        with _rdkit_quiet_logs():
+            if ext in (".sdf", ".sd"):
+                loader = "SDMolSupplier"
+                sanitize = True
+                suppl = Chem.SDMolSupplier(path, removeHs=False, sanitize=True)
+                mol = next((m for m in suppl if m is not None), None)
+            elif ext in (".mol2",):
+                loader = "MolFromMol2File"
+                sanitize = True
+                mol = Chem.MolFromMol2File(path, sanitize=True, removeHs=False)
+            elif ext in (".pdbqt",):
+                loader = "MolFromPDBFile(pdbqt)"
+                sanitize = False
                 mol = Chem.MolFromPDBFile(
-                    path, sanitize=True, removeHs=False, proximityBonding=True
+                    path, sanitize=False, removeHs=False, proximityBonding=True
                 )
-            except Exception as e:
-                load_err = e
-                mol = None
-            if mol is None:
-                try:
-                    with open(path, "rt", errors="ignore") as fh:
-                        head = fh.read(1024)
-                except Exception:
-                    head = ""
-                looks_like_pdbqt = (
-                    ("REMARK VINA" in head) or ("TORSDOF" in head) or ("ROOT" in head)
-                )
-                if looks_like_pdbqt:
-                    if _rlog:
-                        _rlog.warning(
-                            f"[read_any] PDBQT fallback for path='{path}' (sanitize=True failed; retry sanitize=False)"
-                        )
-                    loader = "MolFromPDBFile(pdbqt-fallback)"
-                    sanitize = False
+                if mol is not None:
                     try:
-                        mol = Chem.MolFromPDBFile(
-                            path, sanitize=False, removeHs=False, proximityBonding=True
-                        )
+                        Chem.SanitizeMol(mol)
                     except Exception as e:
-                        load_err = e
-                        mol = None
-                    if mol is not None:
+                        sanitize_failed = True
+                        if _rlog:
+                            _rlog.warning(
+                                f"[read_any] sanitize failed for path='{path}' err={e!r}"
+                            )
+            elif ext in (".pdb",):
+                loader = "MolFromPDBFile"
+                sanitize = True
+                # If you use proximityBonding or flavor flags elsewhere, keep them consistent here.
+                try:
+                    mol = Chem.MolFromPDBFile(
+                        path, sanitize=True, removeHs=False, proximityBonding=True
+                    )
+                except Exception as e:
+                    load_err = e
+                    mol = None
+                if mol is None:
+                    try:
+                        with open(path, "rt", errors="ignore") as fh:
+                            head = fh.read(1024)
+                    except Exception:
+                        head = ""
+                    looks_like_pdbqt = (
+                        ("REMARK VINA" in head)
+                        or ("TORSDOF" in head)
+                        or ("ROOT" in head)
+                    )
+                    if looks_like_pdbqt:
+                        if _rlog:
+                            _rlog.warning(
+                                f"[read_any] PDBQT fallback for path='{path}' (sanitize=True failed; retry sanitize=False)"
+                            )
+                        loader = "MolFromPDBFile(pdbqt-fallback)"
+                        sanitize = False
                         try:
-                            Chem.SanitizeMol(mol)
+                            mol = Chem.MolFromPDBFile(
+                                path,
+                                sanitize=False,
+                                removeHs=False,
+                                proximityBonding=True,
+                            )
                         except Exception as e:
-                            sanitize_failed = True
-                            if _rlog:
-                                _rlog.warning(
-                                    f"[read_any] sanitize failed for path='{path}' err={e!r}"
-                                )
-        else:
-            loader = "auto"
-            sanitize = True
-            mol = Chem.MolFromMolFile(
-                path, sanitize=True, removeHs=False
-            )  # last-ditch; or return None
+                            load_err = e
+                            mol = None
+                        if mol is not None:
+                            try:
+                                Chem.SanitizeMol(mol)
+                            except Exception as e:
+                                sanitize_failed = True
+                                if _rlog:
+                                    _rlog.warning(
+                                        f"[read_any] sanitize failed for path='{path}' err={e!r}"
+                                    )
+            else:
+                loader = "auto"
+                sanitize = True
+                mol = Chem.MolFromMolFile(
+                    path, sanitize=True, removeHs=False
+                )  # last-ditch; or return None
     except Exception as e:
         load_err = e if load_err is None else load_err
         mol = None

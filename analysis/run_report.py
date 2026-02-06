@@ -900,6 +900,12 @@ def build_report(
                 COMPONENT,
                 mapping_csv,
             )
+        else:
+            logger.info(
+                "%s action=fda_mapping status=loaded path=%s",
+                COMPONENT,
+                mapping_csv,
+            )
 
     _summarize_display_resolution(
         rows,
@@ -1453,11 +1459,15 @@ def _write_html_report(
         )
 
     heatmap_html = ""
+    interactions_dataset = repo_root / "data" / run_id / "dataset" / "interactions"
     heatmap_csv = repo_root / "data" / run_id / "heatmap_input.csv"
     master_csv = repo_root / "data" / run_id / "master_rows.csv"
     heatmap_source = None
+    # Prefer the generated heatmap CSV because it applies FDA name remapping.
     if heatmap_csv.exists():
         heatmap_source = heatmap_csv
+    elif interactions_dataset.exists():
+        heatmap_source = interactions_dataset
     elif master_csv.exists():
         heatmap_source = master_csv
     if heatmap_source is not None:
@@ -1706,6 +1716,12 @@ def _write_heatmap_input_csv(
         if fda_index is None:
             logger.warning(
                 "%s action=fda_mapping status=load_failed path=%s",
+                COMPONENT,
+                mapping_csv,
+            )
+        else:
+            logger.info(
+                "%s action=fda_mapping status=loaded path=%s",
                 COMPONENT,
                 mapping_csv,
             )

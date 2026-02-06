@@ -314,7 +314,7 @@ CNN_WEIGHT = 0
 SCORCH_TOP_FRACTION = 0.1
 CNN_TOP_FRACTION = 0.1
 #this turns on the pocket_eval.json files 
-POCKET_EVAL=true
+POCKET_EVAL=false
 POCKET_EVAL_MAX_CALIBRATORS=10
 
 
@@ -326,7 +326,7 @@ CHAIN_KEEP_LIST=
 CHAIN_LOG_DECISIONS=1
 
 # ---- Benchmark & Analysis (paths) ----
-FDA_MAPPING_CSV=fda_mapping_filled.csv
+FDA_MAPPING_CSV=fda_mapping_from_pdbqt.csv
 BENCH_ANALYSIS_OUTDIR=
 BENCH_ONLY_EXTRACTED_CTRL_AND_RDK=true
 

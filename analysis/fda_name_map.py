@@ -10,18 +10,34 @@ try:
         resolve_corresponding_name_for_rdk,
         resolve_corresponding_name_from_text,
     )
-except ModuleNotFoundError:
+except Exception:
     REPO_ROOT = Path(__file__).resolve().parents[1]
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     SRC_ROOT = REPO_ROOT / "src"
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
-    from prep_ligands.metabolite_resolver import (  # type: ignore[import-not-found]
-        load_library_index,
-        resolve_corresponding_name_for_rdk,
-        resolve_corresponding_name_from_text,
-    )
+    try:
+        from prep_ligands.metabolite_resolver import (  # type: ignore[import-not-found]
+            load_library_index,
+            resolve_corresponding_name_for_rdk,
+            resolve_corresponding_name_from_text,
+        )
+    except Exception:
+        # Keep report generation non-fatal when optional resolver deps (e.g., RDKit ABI)
+        # are unavailable in the runtime environment.
+        def load_library_index(_mapping_csv: str) -> Optional[Any]:
+            return None
+
+        def resolve_corresponding_name_for_rdk(
+            _rdk_id: int, _fda_index: Any
+        ) -> Optional[str]:
+            return None
+
+        def resolve_corresponding_name_from_text(
+            _text: str, _fda_index: Any
+        ) -> Optional[str]:
+            return None
 
 _RDK_RE = re.compile(r"rdk[_-]?(\d+)", re.IGNORECASE)
 
@@ -81,15 +97,27 @@ def resolve_mapping_csv_path(
             if path.exists():
                 return path
 
-    candidates = [
+    config_candidates = [
         repo_root / "data" / run_id / "config.txt",
         repo_root / "data" / run_id / "config_snapshot.txt",
         repo_root / "manifests" / run_id / "config.txt",
         repo_root / "config.txt",
     ]
-    for path in candidates:
-        value = _read_config_key(path, "fda_mapping_filled.csv")
-        if value:
+
+    # Priority for implicit defaults:
+    # 1) FDA_MAPPING_CSV (current config key)
+    # 2) backward-compatible aliases used by older flows
+    key_candidates = [
+        "FDA_MAPPING_CSV",
+        "fda_mapping_csv",
+        "fda_mapping_filled.csv",
+        "IDENTIFY_MAPPING_CSV",
+    ]
+    for path in config_candidates:
+        for key_name in key_candidates:
+            value = _read_config_key(path, key_name)
+            if not value:
+                continue
             resolved = _resolve_path(value, path.parent)
             if resolved.exists():
                 return resolved

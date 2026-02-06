@@ -191,6 +191,13 @@ def attempt_fallback_recenter(
     candidates = []
     # Build a ranked list of candidates by (is_valid_first, score_asc, distance_asc)
     for lig_path, pose_path in fallback_ligands.items():
+        if not os.path.exists(pose_path):
+            logger.debug(
+                "Fallback recenter: skipping missing pose for %s -> %s",
+                os.path.basename(lig_path),
+                pose_path,
+            )
+            continue
         try:
             # Your existing helper; if not available here, import from input_and_export_functions
             score = extract_best_score(pose_path) if os.path.exists(pose_path) else None
@@ -201,16 +208,24 @@ def attempt_fallback_recenter(
         _fb_surface = min(_POSE_DIST_SURFACE_MAX_A, 6.0)
         _fb_centroid = min(_POSE_DIST_CENTROID_MAX_A, 4.5)
 
-        res = validate_pose_pdbqt(
-            protein_pdbqt=receptor_pdbqt,
-            ligand_pdbqt=pose_path,
-            pocket_center=pocket_center,
-            clash_threshold=_POSE_CLASH_THRESHOLD_A,
-            CLASH_TOLERANCE=_POSE_CLASH_TOLERANCE,
-            DIST_THRESHOLD_SURFACE=_fb_surface,
-            DIST_THRESHOLD_CENTROID=_fb_centroid,
-            surface_atom_coords=None,
-        )
+        try:
+            res = validate_pose_pdbqt(
+                protein_pdbqt=receptor_pdbqt,
+                ligand_pdbqt=pose_path,
+                pocket_center=pocket_center,
+                clash_threshold=_POSE_CLASH_THRESHOLD_A,
+                CLASH_TOLERANCE=_POSE_CLASH_TOLERANCE,
+                DIST_THRESHOLD_SURFACE=_fb_surface,
+                DIST_THRESHOLD_CENTROID=_fb_centroid,
+                surface_atom_coords=None,
+            )
+        except Exception as e:
+            logger.debug(
+                "Fallback recenter: validation failed for %s (%s)",
+                pose_path,
+                e,
+            )
+            continue
 
         dist = res.get("distance_to_pocket", float("inf"))
         valid = bool(res.get("valid", False))

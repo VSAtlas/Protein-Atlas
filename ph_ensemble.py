@@ -167,7 +167,26 @@ def _ph_member_job(job):
         cfg=automate_protein_prep.config,
     )
     if not ok:
-        shutil.copy2(withH_pdb, pdbqt_path)
+        base_receptor_pdbqt = (
+            Path(cleaned_receptor_pdb)
+            .with_name(Path(cleaned_receptor_pdb).stem.replace("_cleaned", "") + ".pdbqt")
+        )
+        if base_receptor_pdbqt.exists():
+            shutil.copy2(base_receptor_pdbqt, pdbqt_path)
+            elog.warning(
+                "[stage.C.pdbqt] fallback=base_receptor ph=%.2f src=%s dst=%s",
+                ph,
+                base_receptor_pdbqt,
+                pdbqt_path,
+            )
+        else:
+            shutil.copy2(withH_pdb, pdbqt_path)
+            elog.warning(
+                "[stage.C.pdbqt] fallback=withH_copy ph=%.2f src=%s dst=%s",
+                ph,
+                withH_pdb,
+                pdbqt_path,
+            )
 
     try:
         pdbqt_size = Path(pdbqt_path).stat().st_size

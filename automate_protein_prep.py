@@ -34,11 +34,8 @@ Prerequisites (recommended)
 
 from __future__ import annotations
 
-import json
-import platform
 import re
 from collections import Counter, defaultdict
-from math import sqrt
 from pathlib import Path
 from typing import (
     Collection,
@@ -54,293 +51,139 @@ from typing import (
 )
 import os
 import shutil
-import subprocess
 import logging
 
 # >>> PATHS IMPORT START
 from path_router import make_paths
 
 # >>> PATHS IMPORT END
-from propka_wire import pdb2pqr_protonate
+from protein_prep.altloc_filter import filter_altlocs
+from protein_prep.aliases_policy import (
+    ALIASES,
+    RULES,
+    _ALIASES_BIND_LOGGED,
+    _COFACTOR_CANONICAL,
+    _COFACTOR_DROP_LOGGED,
+    _COFACTOR_NAMES,
+    _COFACTOR_RAW_ALL,
+    _ELEM_CANON,
+    _ELEMENT_TOKENS_RAW,
+    _ION_AUDIT_ALIAS_MAP,
+    _ION_AUDIT_DISABLED_VALUES,
+    _ION_AUDIT_ENABLED_VALUES,
+    _ION_AUDIT_METALS,
+    _ION_AUDIT_SIMPLE_IONS,
+    _ION_AUDIT_WATERS,
+    _ION_BREADCRUMB_METAL_ORDER,
+    _ION_BREADCRUMB_SIMPLE_ORDER,
+    _ION_KEEP_LOGGED,
+    _IONS_CFG_CACHE,
+    _IONS_CFG_LOGGED,
+    _POLICY_MODE,
+    _RETAIN_VARIANT,
+    _RETAIN_VARIANT_CANONICAL,
+    _WATER_NAMES,
+    _flatten_semicolons,
+    _normalize_resname,
+    _to_upper_set,
+    load_aliases as _aliases_policy_load_aliases,
+)
+from protein_prep.element_guard import (
+    _meeko_preflight_or_fail,
+    _post_write_element_guard,
+)
+from protein_prep.os_utils import (
+    _as_path,
+    _powershell,
+    _run_and_log,
+    _win_path,
+)
+from protein_prep.prep_utils import (
+    _cfg,
+    _cfg_bool,
+    _cfg_chain_keep_list,
+    _cfg_float,
+    _cfg_int,
+    _load_retain_allowlist,
+    _persist_subproc,
+    _resolve_variant_token,
+    _short_path_for_log,
+    set_runtime_config,
+)
+from protein_prep.protonation import (
+    REDUCE_EXE,
+    _protonate_with_pdb2pqr_if_available,
+    assign_protonation_states,
+    conect_coverage,
+    hydrogenation_status,
+)
+from protein_prep.receptor_prep import (
+    _MEEKO_DROP_IONS,
+    _classify_and_rename_histidines,
+    _clean_receptor_pdbqt,
+    _distance_from_center,
+    _drop_free_ions_for_meeko,
+    _first_last_lines,
+    _ion_pairs_from_pdb,
+    _ion_pairs_from_pdbqt,
+    _log_ion_diff,
+    _log_pdb_pdbqt_counts_diff,
+    _normalize_ion_policy,
+    _ok_receptor_file,
+    _rewrite_his_default,
+    _strip_reduce_user_lines,
+    run_prepare_receptor,
+)
+from protein_prep.tool_runners import (
+    build_adt_prepare_receptor_cmd,
+    build_meeko_base_cmd,
+    build_meeko_legacy_cmd,
+    build_meeko_modern_cmd,
+    run_subprocess_capture,
+)
 
 from installation import load_config
 import pdb_fixer as _activesite_mod
 from pdb_fixer import (
-    fix_element_columns_in_file,
-    scan_helium_counts,
     assert_no_helium_in_hydrogen_names,
-    get_atom_rules,
     fix_pdb_elements,
-    scan_helium_counts_with_hits,
-    rules_version,
-    load_canonical_metals,
+    fix_element_columns_in_file,
+    get_atom_rules,
     load_canonical_cofactors,
+    load_canonical_metals,
     load_canonical_waters,
+    scan_helium_counts,
 )
-
-ALIASES = get_atom_rules()
-RULES = ALIASES.__dict__ if hasattr(ALIASES, "__dict__") else dict(ALIASES)
 _HE_POSTWRITE_VERBOSE = os.environ.get("HELIUM_POSTWRITE_VERBOSE", "1") != "0"
 
 
 def load_aliases():
-    return get_atom_rules()
+    return _aliases_policy_load_aliases()
 
-
-def _flatten_semicolons(items):
-    out = []
-    for item in items or []:
-        # items might be lines like "A; B; C"
-        parts = [p.strip().upper() for p in str(item).split(";") if p.strip()]
-        out.extend(parts)
-    return out
-
-
-def _canonize_two_letter(xs) -> set[str]:
-    out = set()
-    for line in xs or []:
-        for tok in str(line).split(";"):
-            t = tok.strip()
-            if t:
-                out.add(t.upper())
-    return out
-
-
-def _to_upper_set(values: Iterable[str] | None) -> set[str]:
-    out: set[str] = set()
-    for val in values or []:
-        if val is None:
-            continue
-        text = str(val).strip()
-        if text:
-            out.add(text.upper())
-    return out
-
-
-_ES = RULES.get("element_sets", {}) or {}
-_ONE = {str(s).upper() for s in (_ES.get("one_letter_elements") or [])}
-_TWORAW = _ES.get("two_letter_elements", []) or []
-_TWO = _canonize_two_letter(_TWORAW)
-_ALIAS_SETS = getattr(ALIASES, "alias_sets", None)
-_ELEMENT_ALIAS_MAP = {
-    str(k).strip().upper(): str(v).strip().upper()
-    for k, v in (getattr(_ALIAS_SETS, "element_alias", {}) or {}).items()
-    if str(k).strip() and str(v).strip()
-}
-_NORMALIZE_RESNAME_FN = getattr(ALIASES, "normalize_resname", None)
-
-
-def _normalize_resname(token: str) -> str:
-    base = (token or "").strip().upper()
-    if not base:
-        return ""
-    if callable(_NORMALIZE_RESNAME_FN):
-        try:
-            normalized = _NORMALIZE_RESNAME_FN(token)
-            if normalized:
-                text = str(normalized).strip().upper()
-                if text:
-                    return text
-        except Exception:
-            pass
-    return _ELEMENT_ALIAS_MAP.get(base, base)
-
-
-_POLICY_MODE = getattr(ALIASES, "policy_mode", "LEGACY")
-
-_RETAIN_VARIANT = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
-_RETAIN_VARIANT_CANONICAL = {
-    _normalize_resname(tok)
-    for tok in getattr(ALIASES, "retain_resnames", [])
-    if _normalize_resname(tok)
-}
-
-_WATER_NAMES = _to_upper_set(
-    getattr(ALIASES, "waters", getattr(_ALIAS_SETS, "waters", set()))
-)
-
-_COFACTOR_NAMES = _to_upper_set(getattr(ALIASES, "cofactors", set()))
-_COFACTOR_CANONICAL = {
-    _normalize_resname(tok)
-    for tok in getattr(ALIASES, "cofactors", set())
-    if _normalize_resname(tok)
-}
-_COFACTOR_RAW_ALL = _to_upper_set(
-    getattr(ALIASES, "cofactors_all", getattr(_ALIAS_SETS, "cofactors", set()))
-)
-
-_ELEMENT_TOKENS_RAW = _to_upper_set(
-    getattr(ALIASES, "element_tokens", getattr(_ALIAS_SETS, "element_tokens", set()))
-)
-_ELEM_CANON = _to_upper_set(
-    getattr(
-        ALIASES,
-        "elem_tokens_canonical",
-        getattr(_ALIAS_SETS, "elem_tokens_canonical", set()),
-    )
-)
-
-_ALIASES_BIND_LOGGED = False
-_ION_KEEP_LOGGED: set[str] = set()
-_COFACTOR_DROP_LOGGED: set[str] = set()
-
-_MEEKO_DROP_IONS = set(_flatten_semicolons(RULES.get("meeko_drop_free_ions", []))) or {
-    "NA",
-    "K",
-    "LI",
-}
-
-_SALT_RESNAMES = {"NA", "K", "CL", "BR", "I"}
-_METAL_RESNAMES = {"MG", "MN", "FE", "ZN", "CU", "CO", "NI", "CA"}
-_IONS_CFG_CACHE: tuple[set[str], str] | None = None
-_IONS_CFG_LOGGED = False
-
-
-_ION_AUDIT_METALS = {
-    "ZN",
-    "MG",
-    "MN",
-    "FE",
-    "CO",
-    "NI",
-    "CU",
-    "CD",
-    "HG",
-    "CA",
-}
-_ION_AUDIT_SIMPLE_IONS = {"NA", "K", "CL", "BR", "I"}
-_ION_AUDIT_WATERS = {"HOH", "WAT"}
-_ION_AUDIT_ALIAS_MAP = {
-    "ZN1": "ZN",
-    "ZN2": "ZN",
-    "ZN3": "ZN",
-    "ZN+": "ZN",
-    "ZN+2": "ZN",
-    "MG1": "MG",
-    "MG2": "MG",
-    "MG+": "MG",
-    "MN2": "MN",
-    "MN3": "MN",
-    "FE2": "FE",
-    "FE3": "FE",
-    "CO2": "CO",
-    "NI2": "NI",
-    "CU1": "CU",
-    "CU2": "CU",
-    "CD2": "CD",
-    "HG2": "HG",
-    "CA1": "CA",
-    "CA2": "CA",
-    "NA1": "NA",
-    "K1": "K",
-    "CL-": "CL",
-    "BR-": "BR",
-    "I-": "I",
-}
-_ION_AUDIT_ENABLED_VALUES = {"1", "true", "yes"}
-_ION_AUDIT_DISABLED_VALUES = {"0", "false", "no"}
 
 _ION_PIPE_AUDIT: dict = {}
 _ION_PIPE_WARNED = False
 
-_ION_BREADCRUMB_METAL_ORDER = (
-    "ZN",
-    "HG",
-    "MG",
-    "FE",
-    "MN",
-    "CO",
-    "NI",
-    "CU",
-    "CD",
-    "CA",
-)
-_ION_BREADCRUMB_SIMPLE_ORDER = ("NA", "K", "CL", "BR", "I")
-
 
 def _format_histogram(counter: Counter[str]) -> str:
-    if not counter:
-        return "none"
-    items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
-    return ",".join(f"{name}:{count}" for name, count in items)
+    from protein_prep.ion_audit import _format_histogram as _format_histogram_impl
+
+    return _format_histogram_impl(counter)
+
 
 
 def _format_token_list(tokens: Iterable[str], *, limit: int = 8) -> str:
-    unique = []
-    seen: set[str] = set()
-    for token in sorted(str(tok).strip().upper() for tok in tokens if str(tok).strip()):
-        if token in seen:
-            continue
-        seen.add(token)
-        unique.append(token)
-    if not unique:
-        return "none"
-    head = unique[:limit]
-    remaining = len(unique) - len(head)
-    if remaining > 0:
-        head.append(f"+{remaining}")
-    return ",".join(head)
+    from protein_prep.ion_audit import _format_token_list as _format_token_list_impl
+
+    return _format_token_list_impl(tokens, limit=limit)
+
 
 
 def _summarize_ions_file(file_path: Union[str, Path]) -> dict[str, object]:
-    path = Path(file_path)
-    if not path.exists():
-        return {
-            "res_hist": "missing",
-            "elem_hist": "missing",
-            "res_counts": {},
-            "elem_counts": {},
-            "metals_present": False,
-            "salts_present": False,
-            "error": "missing",
-        }
+    from protein_prep.ion_audit import _summarize_ions_file as _summarize_ions_file_impl
 
-    res_counts: Counter[str] = Counter()
-    elem_counts: Counter[str] = Counter()
-    try:
-        with path.open("r", encoding="utf-8", errors="ignore") as fh:
-            for line in fh:
-                if not line.startswith("HETATM"):
-                    continue
-                res = line[17:20].strip().upper()
-                elem = (line[76:78].strip() or res).upper()
-                if res:
-                    res_counts[res] += 1
-                if elem:
-                    elem_counts[elem] += 1
-    except Exception as exc:
-        return {
-            "res_hist": "error",
-            "elem_hist": "error",
-            "res_counts": {},
-            "elem_counts": {},
-            "metals_present": False,
-            "salts_present": False,
-            "error": str(exc),
-        }
+    return _summarize_ions_file_impl(file_path)
 
-    metals_present = any(
-        token in _ION_AUDIT_METALS and res_counts[token] > 0 for token in res_counts
-    ) or any(
-        token in _ION_AUDIT_METALS and elem_counts[token] > 0 for token in elem_counts
-    )
-    salts_present = any(
-        token in _ION_AUDIT_SIMPLE_IONS and res_counts[token] > 0
-        for token in res_counts
-    ) or any(
-        token in _ION_AUDIT_SIMPLE_IONS and elem_counts[token] > 0
-        for token in elem_counts
-    )
-
-    return {
-        "res_hist": _format_histogram(res_counts),
-        "elem_hist": _format_histogram(elem_counts),
-        "res_counts": dict(res_counts),
-        "elem_counts": dict(elem_counts),
-        "metals_present": metals_present,
-        "salts_present": salts_present,
-        "error": None,
-    }
 
 
 def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
@@ -351,138 +194,63 @@ def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
 
 
 def _ion_audit_enabled() -> bool:
-    raw = os.environ.get("ION_AUDIT", "")
-    return raw.strip().lower() in _ION_AUDIT_ENABLED_VALUES
+    from protein_prep.ion_audit import _ion_audit_enabled as _ion_audit_enabled_impl
+
+    return _ion_audit_enabled_impl()
+
 
 
 def _canon_ion_resname(resname: str) -> str:
-    key = resname.strip().upper()
-    return _ION_AUDIT_ALIAS_MAP.get(key, key)
+    from protein_prep.ion_audit import _canon_ion_resname as _canon_ion_resname_impl
 
+    return _canon_ion_resname_impl(resname)
 
-def _short_path_for_log(path: Path) -> str:
-    try:
-        cwd = Path.cwd()
-        return str(path.resolve(strict=False).relative_to(cwd))
-    except Exception:
-        try:
-            return str(path.resolve(strict=False))
-        except Exception:
-            return str(path)
 
 
 def _format_breadcrumb_counts(counts: dict[str, int], order: Sequence[str]) -> str:
-    parts: list[str] = []
-    for key in order:
-        parts.append(f"{key}:{int(counts.get(key, 0))}")
-    extras = [key for key in sorted(counts) if key not in order]
-    for key in extras:
-        parts.append(f"{key}:{int(counts.get(key, 0))}")
-    return "{" + ",".join(parts) + "}"
+    from protein_prep.ion_audit import (
+        _format_breadcrumb_counts as _format_breadcrumb_counts_impl,
+    )
+
+    return _format_breadcrumb_counts_impl(counts, order)
+
 
 
 def _breadcrumbs_enabled() -> bool:
-    raw = os.environ.get("ION_AUDIT")
-    if raw is None:
-        return True
-    text = raw.strip()
-    if not text:
-        return True
-    lowered = text.lower()
-    if lowered in _ION_AUDIT_DISABLED_VALUES:
-        return False
-    return lowered in _ION_AUDIT_ENABLED_VALUES
+    from protein_prep.ion_audit import _breadcrumbs_enabled as _breadcrumbs_enabled_impl
+
+    return _breadcrumbs_enabled_impl()
+
 
 
 def _emit_ion_breadcrumb(stage: str, file_path: Union[str, Path]) -> None:
-    if not _breadcrumbs_enabled():
-        return
-    summarizer = getattr(_activesite_mod, "summarize_ions", None)
-    if summarizer is None:
-        return
-    try:
-        summary = summarizer(file_path)
-    except Exception:
-        summary = None
-    short_path = _short_path_for_log(Path(file_path))
-    if not summary:
-        logging.info(
-            "[ions.breadcrumb] stage=%s file=%s missing=true", stage, short_path
-        )
-        return
-    if summary.get("missing"):
-        logging.info(
-            "[ions.breadcrumb] stage=%s file=%s missing=true", stage, short_path
-        )
-        return
-    metals = summary.get("metals", {}) or {}
-    simple = summary.get("simple_ions", {}) or {}
-    waters = int(summary.get("waters", 0) or 0)
-    other = int(summary.get("other_het", 0) or 0)
-    logging.info(
-        "[ions.breadcrumb] stage=%s file=%s metals=%s waters=%d simple_ions=%s other_het=%d",
-        stage,
-        short_path,
-        _format_breadcrumb_counts(metals, _ION_BREADCRUMB_METAL_ORDER),
-        waters,
-        _format_breadcrumb_counts(simple, _ION_BREADCRUMB_SIMPLE_ORDER),
-        other,
-    )
+    from protein_prep.ion_audit import _emit_ion_breadcrumb as _emit_ion_breadcrumb_impl
+
+    _emit_ion_breadcrumb_impl(stage, file_path)
+
 
 
 def _serialize_counts(counts: dict[str, int]) -> str:
-    if not counts:
-        return "{}"
-    ordered = {key: counts[key] for key in sorted(counts)}
-    return json.dumps(ordered, sort_keys=True)
+    from protein_prep.ion_audit import _serialize_counts as _serialize_counts_impl
+
+    return _serialize_counts_impl(counts)
+
 
 
 def _legacy_ion_global_missing() -> None:
-    global _ION_PIPE_WARNED
-    if not _ION_PIPE_WARNED:
-        logging.warning("[ion.audit.warn] disabled=legacy_global_missing")
-        _ION_PIPE_WARNED = True
+    from protein_prep.ion_audit import (
+        _legacy_ion_global_missing as _legacy_ion_global_missing_impl,
+    )
+
+    _legacy_ion_global_missing_impl()
+
 
 
 def _gather_ion_counts(path: Path) -> tuple[dict[str, int], dict[str, int], int, int]:
-    metals: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
-    simple: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
-    waters: set[tuple[str, str, str]] = set()
-    other: set[tuple[str, str, str, str]] = set()
+    from protein_prep.ion_audit import _gather_ion_counts as _gather_ion_counts_impl
 
-    if not path.exists():
-        return {}, {}, 0, 0
+    return _gather_ion_counts_impl(path)
 
-    try:
-        with path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if not line.startswith("HETATM"):
-                    continue
-                resname_raw = line[17:20]
-                resname = _canon_ion_resname(resname_raw)
-                if not resname:
-                    continue
-                chain = (line[21:22] or "-").strip() or "-"
-                resseq = (line[22:26] or "0").strip() or "0"
-                icode = (line[26:27] or "").strip()
-                resid = (chain, resseq, icode)
-                if resname in _ION_AUDIT_METALS:
-                    metals[resname].add(resid)
-                elif resname in _ION_AUDIT_SIMPLE_IONS:
-                    simple[resname].add(resid)
-                elif resname in _ION_AUDIT_WATERS:
-                    waters.add(resid)
-                else:
-                    other.add((resname, *resid))
-    except Exception as exc:
-        logging.warning("[ions.probe] stage=read_error file=%s err=%s", path, exc)
-        return {}, {}, 0, 0
-
-    metals_counts = {key: len(val) for key, val in metals.items() if val}
-    simple_counts = {key: len(val) for key, val in simple.items() if val}
-    waters_count = len(waters)
-    other_count = len(other)
-    return metals_counts, simple_counts, waters_count, other_count
 
 
 def audit_ions(
@@ -492,47 +260,16 @@ def audit_ions(
     variant: Optional[str],
     logger: logging.Logger | None = None,
 ) -> Optional[dict[str, object]]:
-    if not _ion_audit_enabled():
-        return None
+    from protein_prep.ion_audit import audit_ions as _audit_ions_impl
 
-    log = logger or logging
-    path = Path(pdb_path)
-    metals, simple, waters, other = _gather_ion_counts(path)
-    stage_tag = "[ions.probe]"
-    if stage == "input":
-        stage_tag = "[ions.input.counts]"
-    elif stage == "final_cleaned":
-        stage_tag = "[ions.clean.counts]"
-
-    log.info(
-        "%s stage=%s file=%s present_pdb.metals=%s present_pdb.simple_ions=%s present_pdb.waters=%d present_pdb.other_het=%d",
-        stage_tag,
-        stage,
-        _short_path_for_log(path),
-        _serialize_counts(metals),
-        _serialize_counts(simple),
-        waters,
-        other,
+    return _audit_ions_impl(
+        pdb_path=pdb_path,
+        pdb_id=pdb_id,
+        stage=stage,
+        variant=variant,
+        logger=logger,
     )
 
-    try:
-        resolved = str(path.resolve(strict=False))
-    except Exception:
-        resolved = str(path)
-
-    record: dict[str, object] = {
-        "stage": stage,
-        "pdb": pdb_id,
-        "variant": (variant or "NONE").upper(),
-        "file": resolved,
-        "counts": {
-            "metals": {key: metals[key] for key in sorted(metals)},
-            "simple_ions": {key: simple[key] for key in sorted(simple)},
-            "waters": waters,
-            "other_het": other,
-        },
-    }
-    return record
 
 
 def diff_ions(
@@ -540,228 +277,51 @@ def diff_ions(
     curr: dict[str, object],
     logger: logging.Logger | None = None,
 ) -> dict[str, object]:
-    log = logger or logging
-    prev_counts = prev.get("counts", {}) if isinstance(prev, dict) else {}
-    curr_counts = curr.get("counts", {}) if isinstance(curr, dict) else {}
+    from protein_prep.ion_audit import diff_ions as _diff_ions_impl
 
-    def _as_dict(section: str) -> dict[str, int]:
-        counts = {}
-        for source in (prev_counts, curr_counts):
-            if not isinstance(source, dict):
-                continue
-            mapping = source.get(section)
-            if isinstance(mapping, dict):
-                for key, value in mapping.items():
-                    if isinstance(key, str) and isinstance(value, int):
-                        counts.setdefault(key, 0)
-        delta: dict[str, int] = {}
-        for key in sorted(counts):
-            prev_val = 0
-            curr_val = 0
-            prev_section = (
-                prev_counts.get(section) if isinstance(prev_counts, dict) else {}
-            )
-            curr_section = (
-                curr_counts.get(section) if isinstance(curr_counts, dict) else {}
-            )
-            if isinstance(prev_section, dict):
-                prev_val = int(prev_section.get(key, 0))
-            if isinstance(curr_section, dict):
-                curr_val = int(curr_section.get(key, 0))
-            delta_val = curr_val - prev_val
-            if delta_val:
-                delta[key] = delta_val
-        return delta
+    return _diff_ions_impl(prev=prev, curr=curr, logger=logger)
 
-    delta_metals = _as_dict("metals")
-    delta_simple = _as_dict("simple_ions")
-    prev_waters = (
-        int(prev_counts.get("waters", 0)) if isinstance(prev_counts, dict) else 0
-    )
-    curr_waters = (
-        int(curr_counts.get("waters", 0)) if isinstance(curr_counts, dict) else 0
-    )
-    prev_other = (
-        int(prev_counts.get("other_het", 0)) if isinstance(prev_counts, dict) else 0
-    )
-    curr_other = (
-        int(curr_counts.get("other_het", 0)) if isinstance(curr_counts, dict) else 0
-    )
-
-    delta_waters = curr_waters - prev_waters
-    delta_other = curr_other - prev_other
-
-    log.info(
-        "[ions.diff] stage=%s delta.metals=%s delta.simple_ions=%s delta.waters=%+d delta.other_het=%+d",
-        curr.get("stage", "unknown"),
-        json.dumps(delta_metals, sort_keys=True),
-        json.dumps(delta_simple, sort_keys=True),
-        delta_waters,
-        delta_other,
-    )
-
-    return {
-        "metals": delta_metals,
-        "simple_ions": delta_simple,
-        "waters": delta_waters,
-        "other_het": delta_other,
-    }
 
 
 class _IonAuditManager:
-    def __init__(
-        self, pdb_id: str, work_dir: Union[str, Path], variant: Optional[str]
-    ) -> None:
-        self.pdb_id = pdb_id
-        self.work_dir = Path(work_dir)
-        self.variant = (variant or "NONE").upper()
-        self.enabled = _ion_audit_enabled()
-        self._prev_record: dict[str, object] | None = None
-        self._audit_dir = self.work_dir / "audits"
-        if self.enabled:
-            try:
-                self._audit_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as exc:
-                logging.warning(
-                    "[ions.probe] stage=mkdir_failed dir=%s err=%s",
-                    self._audit_dir,
-                    exc,
-                )
-                self.enabled = False
+    def __new__(cls, *args, **kwargs):
+        from protein_prep.ion_audit import _IonAuditManager as _IonAuditManagerImpl
 
-    def probe(
-        self,
-        stage: str,
-        file_path: Union[str, Path],
-        *,
-        variant_override: Optional[str] = None,
-    ) -> None:
-        if not self.enabled:
-            return
-        record = audit_ions(
-            file_path, self.pdb_id, stage, variant_override or self.variant, logging
-        )
-        if record is None:
-            return
-        if self._prev_record is not None:
-            deltas = diff_ions(self._prev_record, record, logging)
-            record["delta_vs_prev"] = deltas
-        elif stage != "input":
-            record["delta_vs_prev"] = {
-                "metals": {},
-                "simple_ions": {},
-                "waters": 0,
-                "other_het": 0,
-            }
+        return _IonAuditManagerImpl(*args, **kwargs)
 
-        if self.enabled:
-            stage_token = stage.replace("/", "_")
-            out_path = self._audit_dir / f"{stage_token}_ions.json"
-            try:
-                with out_path.open("w", encoding="utf-8") as fh:
-                    json.dump(record, fh, indent=2, sort_keys=True)
-                    fh.write("\n")
-            except Exception as exc:
-                logging.warning(
-                    "[ions.probe] stage=json_write_failed file=%s err=%s", out_path, exc
-                )
-
-        self._prev_record = record
 
 
 _ION_AUDIT_STACK: list[_IonAuditManager] = []
 
 
 def _push_ion_audit_manager(manager: _IonAuditManager) -> None:
-    if not manager.enabled:
-        return
-    _ION_AUDIT_STACK.append(manager)
+    from protein_prep.ion_audit import _push_ion_audit_manager as _push_impl
+
+    _push_impl(manager)
+
 
 
 def _pop_ion_audit_manager(manager: _IonAuditManager) -> None:
-    if not manager.enabled:
-        return
-    if _ION_AUDIT_STACK and _ION_AUDIT_STACK[-1] is manager:
-        _ION_AUDIT_STACK.pop()
-        return
-    try:
-        _ION_AUDIT_STACK.remove(manager)
-    except ValueError:
-        pass
+    from protein_prep.ion_audit import _pop_ion_audit_manager as _pop_impl
+
+    _pop_impl(manager)
+
 
 
 def _current_ion_audit_manager() -> Optional[_IonAuditManager]:
-    if not _ION_AUDIT_STACK:
-        return None
-    return _ION_AUDIT_STACK[-1]
+    from protein_prep.ion_audit import _current_ion_audit_manager as _current_impl
+
+    return _current_impl()
+
 
 
 def emit_ion_audit_probe(
     stage: str, file_path: Union[str, Path], *, variant: Optional[str] = None
 ) -> None:
-    manager = _current_ion_audit_manager()
-    if manager is not None:
-        manager.probe(stage, file_path, variant_override=variant)
+    from protein_prep.ion_audit import emit_ion_audit_probe as _emit_probe_impl
 
+    _emit_probe_impl(stage=stage, file_path=file_path, variant=variant)
 
-def _ion_pairs_from_records(
-    file_path: Union[str, Path], prefixes: Sequence[str]
-) -> set[tuple[str, str]]:
-    path = Path(file_path)
-    pairs: set[tuple[str, str]] = set()
-    if not path.exists():
-        return pairs
-    with path.open("r", encoding="utf-8", errors="ignore") as fh:
-        for line in fh:
-            if not any(line.startswith(prefix) for prefix in prefixes):
-                continue
-            res = line[17:20].strip().upper()
-            if not res or not _is_element_token(res):
-                continue
-            chain = (line[21:22] or "-").strip() or "-"
-            resseq = (line[22:26] or "0").strip() or "0"
-            pairs.add((res, f"{chain}:{resseq}"))
-    return pairs
-
-
-def _ion_pairs_from_pdb(file_path: Union[str, Path]) -> set[tuple[str, str]]:
-    return _ion_pairs_from_records(file_path, ("HETATM",))
-
-
-def _ion_pairs_from_pdbqt(file_path: Union[str, Path]) -> set[tuple[str, str]]:
-    return _ion_pairs_from_records(file_path, ("ATOM  ", "HETATM"))
-
-
-def _log_ion_diff(
-    tag: str, pdb_ions: set[tuple[str, str]], pdbqt_ions: set[tuple[str, str]]
-) -> None:
-    missing = pdb_ions - pdbqt_ions
-    kept = pdb_ions & pdbqt_ions
-    logging.info(
-        "[ions.diff.pdb↔pdbqt.%s] kept=%d stripped=%d detail=%s",
-        tag,
-        len(kept),
-        len(missing),
-        _format_ion_pairs(pdb_ions),
-    )
-    if pdb_ions or missing:
-        logging.warning(
-            "[ion diff] present_pdb=%s missing_in_pdbqt=%s",
-            sorted(pdb_ions),
-            sorted(missing),
-        )
-    retained = {
-        str(tok).strip().upper()
-        for tok in getattr(ALIASES, "elem_tokens_canonical", set())
-        if str(tok).strip()
-    }
-    if not retained:
-        retained = set(_ELEM_CANON)
-    lost_retained = sorted(
-        [item for item in missing if _normalize_resname(item[0]) in retained]
-    )
-    if lost_retained:
-        logging.warning("[ion lost] %s", lost_retained)
 
 
 _LAST_CLEAN_PROVENANCE = "unknown"
@@ -777,13 +337,10 @@ def _set_clean_provenance(label: str) -> None:
 
 
 def _reset_ion_probe(pdb_id: str) -> None:
-    """Reset ion probe cache for a PDB identifier (case-normalized)."""
-    if not pdb_id:
-        return
-    try:
-        _ION_PIPE_AUDIT[pdb_id.upper()] = {}
-    except NameError:
-        _legacy_ion_global_missing()
+    from protein_prep.ion_audit import _reset_ion_probe as _reset_probe_impl
+
+    _reset_probe_impl(pdb_id)
+
 
 
 def _ion_candidate_tokens(rules_obj=ALIASES) -> set[str]:
@@ -844,35 +401,15 @@ def _log_ions_probe(
     *,
     phase: str | None = None,
 ) -> dict[str, int]:
-    counts = _scan_metal_map(file_path, ALIASES)
-    total = sum(counts.values())
-    sample = _format_probe_counts(counts, limit=5)
-    if phase:
-        logging.info(
-            "[ions.probe] stage=%s phase=%s file=%s totals=%d sample=%s",
-            stage,
-            phase,
-            file_path,
-            total,
-            sample,
-        )
-        key = f"{stage}:{phase}"
-    else:
-        logging.info(
-            "[ions.probe] stage=%s file=%s totals=%d sample=%s",
-            stage,
-            file_path,
-            total,
-            sample,
-        )
-        key = stage
-    try:
-        bucket = _ION_PIPE_AUDIT.setdefault(pdb_id.upper() if pdb_id else "UNKNOWN", {})
-    except NameError:
-        _legacy_ion_global_missing()
-    else:
-        bucket[key] = counts
-    return counts
+    from protein_prep.ion_audit import _log_ions_probe as _log_probe_impl
+
+    return _log_probe_impl(
+        pdb_id=pdb_id,
+        stage=stage,
+        file_path=file_path,
+        phase=phase,
+    )
+
 
 
 def _format_diff_map(data: dict[str, int]) -> str:
@@ -885,182 +422,11 @@ def _format_diff_map(data: dict[str, int]) -> str:
     return ",".join(f"{res}:{cnt}" for res, cnt in items)
 
 
-def _log_pdb_pdbqt_counts_diff(
-    pdb_path: Union[str, Path],
-    pdbqt_path: Union[str, Path],
-    *,
-    tool: str | None = None,
-) -> None:
-    pdb_file = Path(pdb_path)
-    pdbqt_file = Path(pdbqt_path)
-    if not pdb_file.exists() or not pdbqt_file.exists():
-        logging.warning(
-            "[iondiff.pdb_pdbqt] action=skip reason=missing tool=%s file_pdb=%s exists_pdb=%s file_pdbqt=%s exists_pdbqt=%s",
-            tool or "unknown",
-            pdb_file,
-            pdb_file.exists(),
-            pdbqt_file,
-            pdbqt_file.exists(),
-        )
-        return
-
-    pdb_counts = Counter(_scan_metal_map(pdb_file, ALIASES))
-    pdbqt_counts = Counter(_scan_metal_map(pdbqt_file, ALIASES))
-
-    kept: dict[str, int] = {}
-    lost: dict[str, int] = {}
-    gained: dict[str, int] = {}
-
-    for resname, count in pdb_counts.items():
-        matched = min(count, pdbqt_counts.get(resname, 0))
-        if matched > 0:
-            kept[resname] = matched
-        delta = count - pdbqt_counts.get(resname, 0)
-        if delta > 0:
-            lost[resname] = delta
-
-    for resname, count in pdbqt_counts.items():
-        delta = count - pdb_counts.get(resname, 0)
-        if delta > 0:
-            gained[resname] = delta
-
-    logging.info(
-        "[iondiff.pdb_pdbqt] tool=%s kept=%s lost=%s added=%s",
-        tool or "unknown",
-        _format_diff_map(kept),
-        _format_diff_map(lost),
-        _format_diff_map(gained),
-    )
-
-
 def get_ion_probe_map(pdb_id: str) -> dict[str, dict[str, int]]:
-    try:
-        bucket = _ION_PIPE_AUDIT.get((pdb_id or "").upper(), {})
-    except NameError:
-        _legacy_ion_global_missing()
-        return {}
-    return {k: dict(v) for k, v in bucket.items()}
+    from protein_prep.ion_audit import get_ion_probe_map as _get_probe_map_impl
 
+    return _get_probe_map_impl(pdb_id)
 
-def _resolve_variant_token(
-    cfg: Optional[dict] = None, override: Optional[str] = None
-) -> Optional[str]:
-    token = (override or "").strip().upper() if override else ""
-    if token in {"APO", "HOLO"}:
-        return token
-    env_token = (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
-    if env_token in {"APO", "HOLO"}:
-        return env_token
-    if cfg is not None:
-        cfg_token = str(cfg.get("_CURRENT_VARIANT", "")).strip().upper()
-        if cfg_token in {"APO", "HOLO"}:
-            return cfg_token
-    return None
-
-
-def _normalize_ion_policy(cfg: Optional[dict]) -> str:
-    raw = "by_variant"
-    if cfg is not None:
-        raw = (
-            str(cfg.get("ION_STRIP_POLICY", "by_variant")).strip().lower()
-            or "by_variant"
-        )
-    if raw not in {"by_variant", "always_strip", "never_strip"}:
-        logging.warning("[ions.cfg] unsupported_policy=%s fallback=by_variant", raw)
-        return "by_variant"
-    return raw
-
-
-def _load_retain_allowlist(cfg: Optional[dict]) -> tuple[set[str], str]:
-    global _IONS_CFG_CACHE, _IONS_CFG_LOGGED
-    if _IONS_CFG_CACHE is not None:
-        allow, source = _IONS_CFG_CACHE
-        if not _IONS_CFG_LOGGED:
-            logging.info(
-                "[ions.cfg] retain_tokens=%s source=%s", ",".join(sorted(allow)), source
-            )
-            _IONS_CFG_LOGGED = True
-        return allow, source
-
-    def _tokens_from_attr(value: object) -> set[str]:
-        if value is None:
-            return set()
-        if isinstance(value, Mapping):
-            return _to_upper_set(value.keys())
-        if isinstance(value, str):
-            return _to_upper_set([value])
-        return _to_upper_set(value)
-
-    def _load_canonical_attr(name: str, loader) -> set[str]:
-        tokens = _tokens_from_attr(getattr(ALIASES, name, None))
-        if tokens:
-            return tokens
-        try:
-            loaded = loader(None)
-        except Exception as exc:
-            logging.warning(
-                "[ions.cfg] canonical_load_failed attr=%s err=%s", name, exc
-            )
-            return set()
-        return _to_upper_set(loaded)
-
-    canonical_metals = _load_canonical_attr("canonical_metals", load_canonical_metals)
-    canonical_cofactors = _load_canonical_attr(
-        "canonical_cofactors", load_canonical_cofactors
-    )
-    canonical_waters = _load_canonical_attr("canonical_waters", load_canonical_waters)
-    legacy_tokens = _to_upper_set(getattr(ALIASES, "retain_resnames", []))
-
-    base_tokens = (
-        canonical_metals | canonical_cofactors | canonical_waters | legacy_tokens
-    )
-
-    candidate = None
-    if cfg and "retain_in_receptor_resnames" in cfg:
-        candidate = cfg.get("retain_in_receptor_resnames")
-    elif "retain_in_receptor_resnames" in config:
-        candidate = config.get("retain_in_receptor_resnames")
-
-    config_tokens: set[str] = set()
-    if isinstance(candidate, (list, tuple, set)):
-        config_tokens = _to_upper_set(candidate)
-    elif isinstance(candidate, str) and candidate.strip():
-        text = candidate.strip()
-        parsed: Iterable[str] | None = None
-        if text.startswith("[") and text.endswith("]"):
-            try:
-                loaded = json.loads(text)
-                if isinstance(loaded, list):
-                    parsed = loaded
-            except Exception as exc:
-                logging.warning(
-                    "[ions.cfg] inline_json_parse_failed=%s err=%s", text[:40], exc
-                )
-        if parsed is None:
-            tokens = [
-                tok.strip() for tok in text.replace(";", ",").split(",") if tok.strip()
-            ]
-            if tokens:
-                parsed = tokens
-        if parsed is not None:
-            config_tokens = _to_upper_set(parsed)
-
-    allow_set = set(base_tokens) | set(config_tokens)
-    source = "aliases"
-    if config_tokens and base_tokens:
-        source = "aliases+config"
-    elif config_tokens and not base_tokens:
-        source = "config"
-    elif not base_tokens:
-        source = "aliases"
-
-    _IONS_CFG_CACHE = (allow_set, source)
-    if not _IONS_CFG_LOGGED:
-        logging.info(
-            "[ions.cfg] retain_tokens=%s source=%s", ",".join(sorted(allow_set)), source
-        )
-        _IONS_CFG_LOGGED = True
-    return allow_set, source
 
 
 def _bucket_counts(counter: Counter) -> dict[str, int]:
@@ -1086,52 +452,24 @@ def _format_counts(counter: Counter) -> str:
 
 # [ions] monoatomic audit helpers
 def _collect_monoatomic_records(pdb_path: Union[str, Path]) -> tuple[Counter, Counter]:
-    path = Path(pdb_path)
-    counts: Counter[str] = Counter()
-    detail: Counter[tuple[str, str, str]] = Counter()
-    if not path.exists():
-        return counts, detail
-    try:
-        with path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if not line.startswith("HETATM"):
-                    continue
-                resname = line[17:20].strip().upper()
-                elem = (line[76:78].strip() or resname).upper()
-                canonical_res = _normalize_resname(resname)
-                canonical_elem = _normalize_resname(elem)
-                if not resname and not elem:
-                    continue
-                token = canonical_res or canonical_elem or resname or elem
-                if (
-                    canonical_res in _METAL_RESNAMES
-                    or canonical_elem in _METAL_RESNAMES
-                    or canonical_res in _SALT_RESNAMES
-                    or canonical_elem in _SALT_RESNAMES
-                ):
-                    chain = (line[21] or "-").strip() or "-"
-                    resseq = (line[22:26] or "0").strip() or "0"
-                    counts[token] += 1
-                    detail[(token, chain, resseq)] += 1
-    except Exception as exc:  # logging-only helper
-        logging.warning("[ions.probe] file=%s err=%s", path, exc)
-    return counts, detail
+    from protein_prep.ion_audit import _collect_monoatomic_records as _collect_impl
+
+    return _collect_impl(pdb_path)
+
 
 
 def _format_ion_hist(counter: Counter) -> str:
-    if not counter:
-        return "none"
-    parts = [f"{token}:{counter[token]}" for token in sorted(counter)]
-    return ",".join(parts)
+    from protein_prep.ion_audit import _format_ion_hist as _format_hist_impl
+
+    return _format_hist_impl(counter)
+
 
 
 def _diff_detail_records(before: Counter, after: Counter) -> list[str]:
-    missing = before - after
-    out: list[str] = []
-    for (token, chain, resseq), count in sorted(missing.items()):
-        for _ in range(count):
-            out.append(f"{token}:{chain}:{resseq}")
-    return out
+    from protein_prep.ion_audit import _diff_detail_records as _diff_detail_impl
+
+    return _diff_detail_impl(before, after)
+
 
 
 def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
@@ -1141,61 +479,15 @@ def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
     return ",".join(f"{res}:{loc}" for res, loc in sorted_pairs)
 
 
-def _distance_from_center(
-    line: str, center: Optional[tuple[float, float, float]]
-) -> float | None:
-    if center is None:
-        return None
-    try:
-        x = float(line[30:38])
-        y = float(line[38:46])
-        z = float(line[46:54])
-    except Exception:
-        return None
-    dx = x - center[0]
-    dy = y - center[1]
-    dz = z - center[2]
-    return sqrt(dx * dx + dy * dy + dz * dz)
-
-
 def _parse_atoms_from_pdb_like_lines(
     lines: list[str], canonical_metals: Collection[str] | None = None
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Parse ATOM/HETATM-like records and return (all_atoms, metal_atoms)."""
-    parsed_atoms: list[dict[str, object]] = []
-    metal_atoms: list[dict[str, object]] = []
-    canon_metals = set(canonical_metals or [])
-    for ln in lines:
-        if not (ln.startswith("ATOM") or ln.startswith("HETATM")):
-            continue
-        try:
-            x = float(ln[30:38])
-            y = float(ln[38:46])
-            z = float(ln[46:54])
-        except Exception:
-            continue
-        record = ln[:6].strip().upper()
-        resname = ln[17:20].strip().upper()
-        chain = ln[21:22]
-        resseq = ln[22:26].strip()
-        icode = ln[26:27].strip()
-        atom_name = ln[12:16].strip()
-        element = ln[76:78].strip().upper() or atom_name[:2].strip().upper()
-        atom_info = {
-            "record": record,
-            "resname": resname,
-            "chain": chain,
-            "resseq": resseq,
-            "icode": icode,
-            "atom_name": atom_name,
-            "coords": (x, y, z),
-            "element": element,
-        }
-        parsed_atoms.append(atom_info)
-        is_metal = (element in canon_metals) or (resname in canon_metals)
-        if record == "HETATM" and is_metal:
-            metal_atoms.append(atom_info)
-    return parsed_atoms, metal_atoms
+    from protein_prep.metal_site_audit import (
+        _parse_atoms_from_pdb_like_lines as _parse_atoms_impl,
+    )
+
+    return _parse_atoms_impl(lines, canonical_metals)
+
 
 
 def _find_metal_donors(
@@ -1203,55 +495,10 @@ def _find_metal_donors(
     parsed_atoms: Sequence[Mapping[str, object]],
     canonical_waters: Collection[str] | None = None,
 ) -> list[dict[str, object]]:
-    """Identify N/O/S donors within 3.2 Å of a metal center."""
-    donors: list[dict[str, object]] = []
-    coords = metal.get("coords")
-    if not coords:
-        return donors
-    try:
-        mx, my, mz = coords  # type: ignore[misc]
-    except Exception:
-        return donors
-    water_tokens = {str(w).strip().upper() for w in (canonical_waters or [])}
-    for atom in parsed_atoms:
-        atom_coords = atom.get("coords")
-        if not atom_coords:
-            continue
-        try:
-            ax, ay, az = atom_coords  # type: ignore[misc]
-        except Exception:
-            continue
-        element = str(atom.get("element", "")).upper()
-        if element not in {"N", "O", "S"}:
-            continue
-        dx = mx - ax
-        dy = my - ay
-        dz = mz - az
-        dist = sqrt(dx * dx + dy * dy + dz * dz)
-        if dist > 3.2:
-            continue
-        record = str(atom.get("record", "")).upper()
-        resname = str(atom.get("resname", "")).upper()
-        chain = str(atom.get("chain", ""))
-        resseq = str(atom.get("resseq", ""))
-        atom_name = str(atom.get("atom_name", ""))
-        if record == "ATOM":
-            category = "protein"
-        elif resname in water_tokens:
-            category = "water"
-        else:
-            category = "ligand"
-        donors.append(
-            {
-                "category": category,
-                "resname": resname,
-                "chain": chain,
-                "resseq": resseq,
-                "atom_name": atom_name,
-                "distance": round(dist, 3),
-            }
-        )
-    return donors
+    from protein_prep.metal_site_audit import _find_metal_donors as _find_donors_impl
+
+    return _find_donors_impl(metal, parsed_atoms, canonical_waters)
+
 
 
 def run_metal_site_audit(
@@ -1265,222 +512,19 @@ def run_metal_site_audit(
     variant_label: str | None = None,
     ph_label: str | None = None,
 ) -> None:
-    """Build a single metal_site_audit.json comparing input vs receptor donors."""
+    from protein_prep.metal_site_audit import run_metal_site_audit as _metal_audit_impl
 
-    try:
-        canonical_metals = set(load_canonical_metals(None))
-        canonical_waters = set(load_canonical_waters(None))
-    except Exception as exc:
-        logging.warning(
-            "[holo.metal_audit] skip reason=canonical_load_failed pdb=%s err=%s",
-            pdb_id,
-            exc,
-        )
-        return
-
-    try:
-        input_lines = (
-            Path(input_pdb_path)
-            .read_text(encoding="utf-8", errors="ignore")
-            .splitlines()
-        )
-    except Exception as exc:
-        logging.warning(
-            "[holo.metal_audit] skip reason=input_read_failed pdb=%s err=%s",
-            pdb_id,
-            exc,
-        )
-        return
-
-    parsed_atoms_pre, metal_atoms_pre = _parse_atoms_from_pdb_like_lines(
-        input_lines, canonical_metals
+    _metal_audit_impl(
+        pdb_id=pdb_id,
+        router_paths=router_paths,
+        input_pdb_path=input_pdb_path,
+        receptor_pdb_path=receptor_pdb_path,
+        receptor_pdbqt_path=receptor_pdbqt_path,
+        center=center,
+        variant_label=variant_label,
+        ph_label=ph_label,
     )
 
-    def _metal_key(atom: Mapping[str, object]) -> tuple[str, str, str, str]:
-        return (
-            str(atom.get("element", "")).upper(),
-            str(atom.get("chain", "")),
-            str(atom.get("resseq", "")),
-            str(atom.get("atom_name", "")),
-        )
-
-    def _coords_list(atom: Mapping[str, object] | None) -> list[float] | None:
-        if not atom:
-            return None
-        coords = atom.get("coords")
-        if not coords:
-            return None
-        try:
-            ax, ay, az = coords  # type: ignore[misc]
-        except Exception:
-            return None
-        return [float(ax), float(ay), float(az)]
-
-    metal_pre_by_key: dict[tuple[str, str, str, str], Mapping[str, object]] = {}
-    donors_input_map: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
-    for metal in metal_atoms_pre:
-        key = _metal_key(metal)
-        metal_pre_by_key[key] = metal
-        donors_input_map[key] = _find_metal_donors(
-            metal, parsed_atoms_pre, canonical_waters
-        )
-
-    donors_receptor_map: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
-    metal_post_by_key: dict[tuple[str, str, str, str], Mapping[str, object]] = {}
-    if receptor_pdbqt_path:
-        pdbqt_lines: list[str] = []
-        try:
-            pdbqt_lines = (
-                Path(receptor_pdbqt_path)
-                .read_text(encoding="utf-8", errors="ignore")
-                .splitlines()
-            )
-        except Exception as exc:
-            logging.warning(
-                "[holo.metal_audit] skip reason=receptor_read_failed pdb=%s file=%s err=%s",
-                pdb_id,
-                receptor_pdbqt_path,
-                exc,
-            )
-        if pdbqt_lines:
-            parsed_atoms_post, metal_atoms_post = _parse_atoms_from_pdb_like_lines(
-                pdbqt_lines, canonical_metals
-            )
-            for metal in metal_atoms_post:
-                key = _metal_key(metal)
-                metal_post_by_key[key] = metal
-                donors_receptor_map[key] = _find_metal_donors(
-                    metal, parsed_atoms_post, canonical_waters
-                )
-
-    all_keys = sorted(set(metal_pre_by_key) | set(metal_post_by_key))
-
-    def _donor_key(entry: Mapping[str, object]) -> tuple[str, str, str, str, str]:
-        return (
-            str(entry.get("category", "")),
-            str(entry.get("resname", "")),
-            str(entry.get("chain", "")),
-            str(entry.get("resseq", "")),
-            str(entry.get("atom_name", "")),
-        )
-
-    metals_payload: list[dict[str, object]] = []
-    for key in all_keys:
-        donors_input = donors_input_map.get(key, [])
-        donors_receptor = donors_receptor_map.get(key, [])
-        input_set = {_donor_key(d) for d in donors_input}
-        receptor_set = {_donor_key(d) for d in donors_receptor}
-        lost_keys = input_set - receptor_set
-        gained_keys = receptor_set - input_set
-        lost_donors = [d for d in donors_input if _donor_key(d) in lost_keys]
-        gained_donors = [d for d in donors_receptor if _donor_key(d) in gained_keys]
-
-        metal_source = metal_pre_by_key.get(key) or metal_post_by_key.get(key) or {}
-        resname = str(metal_source.get("resname", ""))
-        chain = str(metal_source.get("chain", ""))
-        resseq = str(metal_source.get("resseq", ""))
-        icode = str(metal_source.get("icode", ""))
-        atom_name = str(metal_source.get("atom_name", ""))
-        element = str(metal_source.get("element", key[0] if key else ""))
-        coords_input = _coords_list(metal_pre_by_key.get(key))
-        coords_receptor = _coords_list(metal_post_by_key.get(key))
-        metals_payload.append(
-            {
-                "id": f"{element or 'UNK'}_{chain or '-'}_{resseq or '-'}_{atom_name or '-'}",
-                "element": element,
-                "resname": resname,
-                "chain": chain,
-                "resseq": resseq,
-                "icode": icode,
-                "atom_name": atom_name,
-                "coords_input": coords_input,
-                "coords_receptor": coords_receptor,
-                "donors_input": donors_input,
-                "donors_receptor": donors_receptor,
-                "lost_donors": lost_donors,
-                "gained_donors": gained_donors,
-            }
-        )
-
-    total_input = 0
-    total_receptor = 0
-    per_metal_summary: list[dict[str, object]] = []
-    for metal in metals_payload:
-        donors_input = metal.get("donors_input", []) or []
-        donors_receptor = metal.get("donors_receptor", []) or []
-        input_count = len(donors_input)
-        receptor_count = len(donors_receptor)
-        total_input += input_count
-        total_receptor += receptor_count
-        per_metal_summary.append(
-            {
-                "id": metal.get("id"),
-                "input_count": input_count,
-                "receptor_count": receptor_count,
-                "delta": input_count - receptor_count,
-            }
-        )
-
-    coordination_summary = {
-        "total_input_count": total_input,
-        "total_receptor_count": total_receptor,
-        "total_delta": total_input - total_receptor,
-        "per_metal": per_metal_summary,
-    }
-
-    variant_for_path = variant_label or "HOLO"
-    if router_paths is None:
-        logging.warning(
-            "[holo.metal_audit] skip reason=router_missing pdb=%s variant=%s",
-            pdb_id,
-            variant_for_path,
-        )
-        return
-
-    try:
-        docked_variant_dir = router_paths.docked_variant_root(
-            variant_for_path, ph_label=ph_label
-        )
-        docked_variant_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
-        logging.warning(
-            "[holo.metal_audit] skip reason=path_resolve_failed pdb=%s err=%s",
-            pdb_id,
-            exc,
-        )
-        return
-
-    payload = {
-        "pdb_id": pdb_id,
-        "variant": variant_label or variant_for_path,
-        "ph_label": ph_label,
-        "source_files": {
-            "input_pdb": input_pdb_path,
-            "receptor_pdb": receptor_pdb_path,
-            "receptor_pdbqt": receptor_pdbqt_path,
-        },
-        "metals": metals_payload,
-        "coordination_summary": coordination_summary,
-    }
-
-    json_path = docked_variant_dir / "metal_site_audit.json"
-    tmp_path = json_path.with_suffix(".part")
-    try:
-        tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        os.replace(tmp_path, json_path)
-        logging.info(
-            "[holo.metal_audit] pdb=%s metals=%d file=%s",
-            pdb_id,
-            len(metals_payload),
-            json_path,
-        )
-    except Exception as exc:
-        logging.warning(
-            "[holo.metal_audit] write_failed pdb=%s file=%s err=%s",
-            pdb_id,
-            json_path,
-            exc,
-        )
 
 
 def _maybe_strip_ions(
@@ -1491,619 +535,30 @@ def _maybe_strip_ions(
     pocket_center: Optional[tuple[float, float, float]] = None,
     extra_keep: Optional[Iterable[str]] = None,
 ) -> int:
-    path = Path(pdb_path)
-    if not path.exists():
-        logging.warning("[ions] skip_missing file=%s", path)
-        return 0
+    from protein_prep.strip_nsr import _maybe_strip_ions as _maybe_strip_ions_impl
 
-    allow_tokens, _ = _load_retain_allowlist(cfg)
-    allow_canonical: set[str] = set()
-    for token in allow_tokens:
-        if not token:
-            continue
-        text = str(token).strip().upper()
-        if not text:
-            continue
-        canonical = _normalize_resname(text)
-        allow_canonical.add(canonical or text)
-
-    extra_canonical: set[str] = set()
-    if extra_keep:
-        for token in extra_keep:
-            if not token:
-                continue
-            text = str(token).strip().upper()
-            if not text:
-                continue
-            canonical = _normalize_resname(text)
-            extra_canonical.add(canonical or text)
-
-    holo_keep_tokens = allow_canonical | extra_canonical
-    apo_keep_tokens = set(extra_canonical)
-
-    policy = _normalize_ion_policy(cfg)
-    variant_token = _resolve_variant_token(cfg, variant)
-    variant_label = variant_token or "legacy"
-
-    log_pre_variant = getattr(
-        _activesite_mod, "log_pre_variant_policy_breadcrumb", None
-    )
-    if log_pre_variant is not None:
-        try:
-            log_pre_variant(path)
-        except Exception:
-            pass
-
-    emit_ion_audit_probe("pre_variant_policy", path, variant=variant_token)
-
-    radius_cfg = 6.0
-    if cfg is not None:
-        try:
-            radius_cfg = float(cfg.get("HOLO_SALT_STRIP_RADIUS", 6.0) or 0.0)
-        except Exception:
-            radius_cfg = 6.0
-    radius_cfg = max(0.0, radius_cfg)
-    radius = radius_cfg if (policy == "by_variant" and variant_token == "HOLO") else 0.0
-    radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
-
-    # [ions] stage=clean instrumentation
-    drop_free_ions = policy != "never_strip"
-    if variant_token == "HOLO":
-        allow_display_set = holo_keep_tokens
-        block_candidates = {
-            tok
-            for tok in _SALT_RESNAMES
-            if _normalize_resname(tok) not in holo_keep_tokens
-        }
-    elif variant_token == "APO":
-        allow_display_set = apo_keep_tokens
-        block_candidates = {
-            tok
-            for tok in (_METAL_RESNAMES | _SALT_RESNAMES)
-            if _normalize_resname(tok) not in apo_keep_tokens
-        }
-    else:
-        allow_display_set = allow_canonical
-        block_candidates = set()
-
-    logging.info(
-        "[ions.policy] stage=central variant=%s drop_free_ions=%s allow_list=%s block_list=%s radius=%s policy=%s file=%s",
-        variant_label,
-        str(drop_free_ions).lower(),
-        _format_token_list(allow_display_set),
-        _format_token_list(block_candidates),
-        radius_term,
-        policy,
-        path,
+    return _maybe_strip_ions_impl(
+        pdb_path=pdb_path,
+        cfg=cfg,
+        variant=variant,
+        pocket_center=pocket_center,
+        extra_keep=extra_keep,
     )
 
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except Exception as exc:
-        logging.warning("[ions] read_failed file=%s err=%s", path, exc)
-        return 0
-
-    residues: dict[tuple[str, str, str, str], list[tuple[int, str]]] = {}
-    for idx, line in enumerate(text):
-        if not line.startswith("HETATM"):
-            continue
-        resname = line[17:20].strip().upper()
-        key = (line[21], line[22:26], line[26], resname)
-        residues.setdefault(key, []).append((idx, line))
-
-    before = Counter()
-    stripped = Counter()
-    kept_counter = Counter()
-    category_totals: dict[str, dict[str, int]] = {
-        "metal": {"kept": 0, "stripped": 0},
-        "salt": {"kept": 0, "stripped": 0},
-        "other": {"kept": 0, "stripped": 0},
-    }
-
-    warn_missing_center = False
-    remove_indices: set[int] = set()
-
-    for key, atoms in residues.items():
-        if len(atoms) != 1:
-            continue
-        chain, resi, icode, resname = key
-        res_token = resname.upper()
-        canonical_res = _normalize_resname(res_token)
-        line_idx, line = atoms[0]
-        before[res_token] += 1
-
-        remove = False
-        reason = ""
-        elem = (line[76:78].strip() or res_token).upper()
-        canonical_elem = _normalize_resname(elem)
-
-        is_metal = (canonical_res in _METAL_RESNAMES) or (
-            canonical_elem in _METAL_RESNAMES
-        )
-        is_salt = (canonical_res in _SALT_RESNAMES) or (
-            canonical_elem in _SALT_RESNAMES
-        )
-        category = "metal" if is_metal else "salt" if is_salt else "other"
-
-        if policy == "never_strip":
-            remove = False
-        elif policy == "always_strip":
-            if canonical_res in holo_keep_tokens:
-                remove = False
-            else:
-                remove = True
-                reason = "policy_always_strip"
-        else:  # policy == by_variant
-            if variant_token == "HOLO":
-                if (canonical_res in holo_keep_tokens) or is_metal:
-                    remove = False
-                elif is_salt:
-                    if radius > 0.0:
-                        dist = _distance_from_center(line, pocket_center)
-                        if dist is None:
-                            warn_missing_center = True
-                            remove = False
-                        elif dist >= radius:
-                            remove = True
-                            reason = "salt_far"
-                        else:
-                            remove = False
-                    else:
-                        remove = False
-                else:
-                    remove = False
-            else:
-                if canonical_res in apo_keep_tokens:
-                    remove = False
-                    reason = "apo_keep_override"
-                else:
-                    if is_metal:
-                        remove = True
-                        reason = "apo_strip_metal"
-                    elif is_salt:
-                        remove = True
-                        reason = "apo_strip_salt"
-                    else:
-                        remove = True
-                        reason = "apo_strip_other"
-
-        if remove:
-            stripped[res_token] += 1
-            remove_indices.add(line_idx)
-            logging.debug(
-                "[ions.remove] elem=%s resname=%s serial=%s chain=%s resi=%s reason=%s",
-                elem,
-                res_token,
-                line[6:11].strip(),
-                chain.strip() or "-",
-                (resi or "0").strip() or "0",
-                reason,
-            )
-            category_totals[category]["stripped"] += 1
-        else:
-            kept_counter[res_token] += 1
-            category_totals[category]["kept"] += 1
-
-    logging.info(
-        "[ions.counts.before] stage=clean variant=%s file=%s detail=%s",
-        variant_label,
-        path,
-        _format_counts(before),
-    )
-    kept = before - stripped
-    logging.info(
-        "[ions.counts.after] stage=clean variant=%s file=%s detail=%s",
-        variant_label,
-        path,
-        _format_counts(kept),
-    )
-    total_kept = sum(kept_counter.values())
-    total_stripped = sum(stripped.values())
-    logging.info(
-        "[ions.summary] variant=%s kept=%d stripped=%d metals_kept=%d metals_stripped=%d salts_kept=%d salts_stripped=%d",
-        variant_label,
-        total_kept,
-        total_stripped,
-        category_totals["metal"]["kept"],
-        category_totals["metal"]["stripped"],
-        category_totals["salt"]["kept"],
-        category_totals["salt"]["stripped"],
-    )
-
-    if warn_missing_center and radius > 0.0 and variant_token == "HOLO":
-        logging.warning(
-            "[ions] holo_salt_radius_set_but_no_center action=keep_salts radius=%.2f",
-            radius,
-        )
-
-    if not remove_indices:
-        logging.debug("[ions] no_monoatomic_hits remove=0")
-        return 0
-
-    for idx in sorted(remove_indices):
-        text[idx] = None  # type: ignore
-
-    rewritten = [ln for ln in text if ln is not None]
-    try:
-        path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
-    except Exception as exc:
-        logging.warning("[ions] write_failed file=%s err=%s", path, exc)
-        return 0
-
-    return len(remove_indices)
 
 
 def _is_element_token(sym):
-    canonical = _normalize_resname(sym)
-    return bool(canonical) and (canonical in _ELEM_CANON)
+    from protein_prep.strip_nsr import _is_element_token as _is_element_token_impl
+
+    return _is_element_token_impl(sym)
 
 
-# Treat as “ion-like” if it normalizes to a canonical element token retained by policy
+
+# Treat as "ion-like" if it normalizes to a canonical element token retained by policy
 def _is_retained_ion(resname: str) -> bool:
-    canonical = _normalize_resname(resname)
-    return bool(canonical) and (canonical in _ELEM_CANON)
+    from protein_prep.strip_nsr import _is_retained_ion as _is_retained_ion_impl
 
-
-import os
-from typing import Any
-
-
-# --- HOLO-only restore helper ---
-def _holo_restore_from_input_if_needed(
-    pdb_id: str,
-    cleaned_pdb: str,
-    output_pdbqt: str,
-    config: Mapping[str, Any],
-    center: Optional[Tuple[float, float, float]] = None,
-    box_size: Optional[Tuple[float, float, float]] = None,
-) -> Tuple[int, int, bool]:
-    """
-    HOLO-only: re-add missing metals/cofactors from input_pdbs/<PDB>.pdb into the
-    final cleaned PDB, normalize element columns, and regenerate PDBQT once.
-
-    Returns: (metals_added, cofactors_added, regenerated_pdbqt)
-    """
-    logging.info(
-        "[holo.box.debug] pdb=%s center=%s box_size=%s",
-        pdb_id,
-        center,
-        box_size,
-    )
-    try:
-        logging.info("[holo.restore] precheck pdb=%s", pdb_id)
-
-        # Resolve APO/HOLO mode (strict)
-        mode = (
-            (os.environ.get("APO_HOLO_MODE") or config.get("APO_HOLO_MODE") or "")
-            .strip()
-            .lower()
-        )
-        mode_norm = {
-            "": "legacy",
-            "none": "legacy",
-            "null": "legacy",
-            "false": "legacy",
-            "0": "legacy",
-        }.get(mode, mode)
-        if mode_norm in {"legacy", "apo"}:
-            logging.warning("[holo.restore] skip reason=mode=%s", mode_norm)
-            return (0, 0, False)
-
-        # Resolve variant
-        variant_token = (_resolve_variant_token(config) or "").strip().upper()
-        if variant_token != "HOLO":
-            logging.warning(
-                "[holo.restore] skip reason=variant=%s", variant_token or "None"
-            )
-            return (0, 0, False)
-
-        # Locate original input PDB via existing router
-        router_paths = None
-        try:
-            router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-            input_pdb = str(router_paths.input_pdb_path)
-        except Exception:
-            input_root = config.get("INPUT_DIR", "input_pdbs")
-            input_pdb = str(Path(input_root) / f"{pdb_id}.pdb")
-
-        target_pdb = str(cleaned_pdb)
-
-        # Load canonical sets from aliases.yaml (no hard-coded lists)
-        try:
-            # NOTE: pass None so loaders use chemdb/aliases.yaml via activesite._load_default_alias_cfg
-            canonical_metals = set(load_canonical_metals(None))
-            canonical_cofactors = set(load_canonical_cofactors(None))
-            canonical_waters = set(load_canonical_waters(None))
-        except Exception as e:
-            logging.warning(
-                "[holo.restore] skip reason=cannot_load_canonical_sets err=%s", e
-            )
-            return (0, 0, False)
-
-        logging.info(
-            "[holo.restore.debug] canonical_sizes metals=%d cofactors=%d waters=%d",
-            len(canonical_metals),
-            len(canonical_cofactors),
-            len(canonical_waters),
-        )
-
-        # Scan original input PDB for candidate HETATMs
-        metals_found = 0
-        cofactors_found = 0
-        candidates: list[str] = []
-        try:
-            with open(input_pdb, "r", encoding="utf-8", errors="ignore") as f:
-                input_lines = f.readlines()
-        except Exception as e:
-            logging.warning("[holo.restore] skip reason=missing_input err=%s", e)
-            return (0, 0, False)
-
-        hetatm_total = sum(1 for ln in input_lines if ln.startswith("HETATM"))
-        logging.info(
-            "[holo.restore.debug] input_hetatm total=%d file=%s",
-            hetatm_total,
-            input_pdb,
-        )
-
-        # --- Metal coordination scan for ligand restoration (JSON emitted later) ---
-        parsed_atoms_pre, metal_atoms_pre = _parse_atoms_from_pdb_like_lines(
-            input_lines, canonical_metals
-        )
-        parsed_atoms = parsed_atoms_pre
-        donor_icode_lookup: dict[tuple[str, str, str, str], str] = {}
-        for atom in parsed_atoms_pre:
-            resname = str(atom.get("resname", "")).upper()
-            chain = str(atom.get("chain", ""))
-            resseq = str(atom.get("resseq", ""))
-            atom_name = str(atom.get("atom_name", ""))
-            icode = str(atom.get("icode", ""))
-            donor_icode_lookup[(resname, chain, resseq, atom_name)] = icode
-
-        coord_ligand_residues: set[tuple[str, str, str, str]] = set()
-        core_water_residues: set[tuple[str, str, str]] = set()
-        for metal in metal_atoms_pre:
-            donors = _find_metal_donors(metal, parsed_atoms_pre, canonical_waters)
-            coords_val = metal.get("coords")
-            if coords_val and center is not None and len(center) == 3:
-                try:
-                    mx, my, mz = coords_val  # type: ignore[misc]
-                    cx, cy, cz = center
-                    dx = mx - cx
-                    dy = my - cy
-                    dz = mz - cz
-                    m_dist = sqrt(dx * dx + dy * dy + dz * dz)
-                    dist_term = f"{m_dist:.3f}"
-                except Exception:
-                    dist_term = "none"
-            else:
-                dist_term = "none"
-            logging.info(
-                "[holo.box.metal] pdb=%s metal=%s chain=%s resseq=%s center_dist=%s",
-                pdb_id,
-                metal.get("element", ""),
-                metal.get("chain", ""),
-                metal.get("resseq", ""),
-                dist_term,
-            )
-            for donor in donors:
-                resname = str(donor.get("resname", "")).upper()
-                chain = str(donor.get("chain", ""))
-                resseq = str(donor.get("resseq", ""))
-                atom_name = str(donor.get("atom_name", ""))
-                icode = donor_icode_lookup.get((resname, chain, resseq, atom_name), "")
-                if donor.get("category") == "water":
-                    core_water_residues.add((chain, resseq, icode))
-                    continue
-                if donor.get("category") != "ligand":
-                    continue
-                coord_ligand_residues.add((resname, chain, resseq, icode))
-
-        def _point_in_box(pt, center_val, box_val):
-            if center_val is None or box_val is None:
-                return None
-            try:
-                cx, cy, cz = center_val
-                sx, sy, sz = box_val
-            except Exception:
-                return None
-            x, y, z = pt
-            return (
-                abs(x - cx) <= sx / 2.0
-                and abs(y - cy) <= sy / 2.0
-                and abs(z - cz) <= sz / 2.0
-            )
-
-        ligand_box_class: dict[tuple[str, str, str, str], str] = {}
-        residue_atoms: dict[
-            tuple[str, str, str, str], list[dict[str, object]]
-        ] = defaultdict(list)
-        for atom in parsed_atoms:
-            if str(atom.get("record", "")).upper() != "HETATM":
-                continue
-            key = (
-                str(atom.get("resname", "")).upper(),
-                str(atom.get("chain", "")),
-                str(atom.get("resseq", "")),
-                str(atom.get("icode", "")),
-            )
-            residue_atoms[key].append(atom)
-
-        for (
-            resname,
-            chain_id,
-            resseq,
-            icode,
-        ), residue_atoms_list in residue_atoms.items():
-            if (
-                resname in canonical_metals
-                or resname in canonical_waters
-                or resname in canonical_cofactors
-            ):
-                continue
-            classification = "out_of_box"
-            has_box_info = False
-            for atom in residue_atoms_list:
-                coords = atom.get("coords")
-                if not coords:
-                    continue
-                inside = _point_in_box(coords, center, box_size)
-                if inside is None:
-                    classification = "no_box"
-                    break
-                has_box_info = True
-                if inside:
-                    classification = "in_box"
-                    break
-            if classification == "out_of_box" and not has_box_info:
-                classification = "no_box"
-            ligand_box_class[(resname, chain_id, resseq, icode)] = classification
-            logging.info(
-                "[holo.ligand.box] pdb=%s resname=%s chain=%s resseq=%s classification=%s num_atoms=%d",
-                pdb_id,
-                resname,
-                chain_id,
-                resseq,
-                classification,
-                len(residue_atoms_list),
-            )
-
-        # Build residue-present keys from the cleaned PDB to ensure idempotency
-        present_keys = set()
-        try:
-            with open(target_pdb, "r", encoding="utf-8", errors="ignore") as f:
-                for ln in f:
-                    if not ln.startswith("HETATM"):
-                        continue
-                    resname = ln[17:20].strip().upper()
-                    chain = ln[21:22]
-                    resseq = ln[22:26].strip()
-                    icode = ln[26:27].strip()
-                    present_keys.add((resname, chain, resseq, icode))
-        except Exception as e:
-            logging.warning("[holo.restore] skip reason=cleaned_unreadable err=%s", e)
-            return (0, 0, False)
-
-        # Classify metals/cofactors; treat water donors separately
-        for ln in input_lines:
-            if not ln.startswith("HETATM"):
-                continue
-            resname = ln[17:20].strip().upper()
-            element = ln[76:78].strip().upper()
-            chain = ln[21:22]
-            resseq = ln[22:26].strip()
-            icode = ln[26:27].strip()
-            key = (resname, chain, resseq, icode)
-            water_key = (chain, resseq, icode)
-            if resname in canonical_waters:
-                if water_key not in core_water_residues:
-                    continue
-                if key not in present_keys:
-                    candidates.append(ln)
-                    logging.info(
-                        "[holo.water.restore] pdb=%s resname=%s chain=%s resseq=%s reason=metal_donor",
-                        pdb_id,
-                        resname,
-                        chain,
-                        resseq,
-                    )
-                continue
-            classification = ligand_box_class.get(key, "no_box")
-            is_metal = (element in canonical_metals) or (resname in canonical_metals)
-            is_cofac = (resname in canonical_cofactors) and not is_metal
-            is_coord_ligand = (key in coord_ligand_residues) or is_cofac
-            if is_metal:
-                metals_found += 1
-            if is_cofac:
-                cofactors_found += 1
-            if is_metal:
-                if key not in present_keys:
-                    candidates.append(ln)
-                continue
-            if not is_coord_ligand:
-                continue
-            if classification == "in_box":
-                logging.info(
-                    "[holo.ligand.restore.skip] pdb=%s resname=%s chain=%s resseq=%s classification=%s reason=in_box",
-                    pdb_id,
-                    resname,
-                    chain,
-                    resseq,
-                    classification,
-                )
-                continue
-            if key not in present_keys:
-                candidates.append(ln)
-                logging.info(
-                    "[holo.ligand.restore.add] pdb=%s resname=%s chain=%s resseq=%s classification=%s",
-                    pdb_id,
-                    resname,
-                    chain,
-                    resseq,
-                    classification,
-                )
-
-        logging.info(
-            "[holo.restore] source=%s target=%s metals_found=%d cofactors_found=%d",
-            input_pdb,
-            target_pdb,
-            metals_found,
-            cofactors_found,
-        )
-
-        if not candidates:
-            logging.info("[holo.restore] metals_added=0 cofactors_added=0")
-            logging.info("[holo.restore] regenerating_pdbqt=false out=%s", output_pdbqt)
-            return (0, 0, False)
-
-        # Append missing HETATMs (strip trailing END/TER/ENDMDL first), then ensure END
-        try:
-            with open(target_pdb, "r", encoding="utf-8", errors="ignore") as f:
-                out_lines = f.read().splitlines()
-            while out_lines and out_lines[-1].strip() in {"END", "ENDMDL", "TER"}:
-                out_lines.pop()
-            with open(target_pdb, "w", encoding="utf-8") as w:
-                if out_lines:
-                    w.write("\n".join(out_lines) + "\n")
-                for ln in candidates:
-                    w.write(ln.rstrip() + "\n")
-                w.write("END\n")
-        except Exception as e:
-            logging.warning("[holo.restore] skip reason=append_failed err=%s", e)
-            return (0, 0, False)
-
-        # Normalize element columns after append
-        try:
-            fix_element_columns_in_file(target_pdb)
-        except Exception as e:
-            logging.warning("[holo.restore] skip reason=elemfix_failed err=%s", e)
-            return (0, 0, False)
-
-        metals_added = sum(
-            1
-            for ln in candidates
-            if (ln[76:78].strip().upper() in canonical_metals)
-            or (ln[17:20].strip().upper() in canonical_metals)
-        )
-        cofactors_added = sum(
-            1
-            for ln in candidates
-            if (ln[17:20].strip().upper() in canonical_cofactors)
-            and (ln[76:78].strip().upper() not in canonical_metals)
-        )
-
-        logging.info(
-            "[holo.restore] metals_added=%d cofactors_added=%d",
-            metals_added,
-            cofactors_added,
-        )
-
-        # We only set regenerated_pdbqt=True here; the actual regeneration is done at the call site
-        regenerated_pdbqt = bool(candidates)
-        return (metals_added, cofactors_added, regenerated_pdbqt)
-
-    except Exception as exc:
-        logging.warning("[holo.restore] skip reason=unexpected err=%s", exc)
-        return (0, 0, False)
+    return _is_retained_ion_impl(resname)
 
 
 # =============================
@@ -2122,21 +577,10 @@ except Exception:
 
     _CFG = _legacy_load_config()
 
-# Keep both names so existing call-sites continue to work, ik this is lazy
+# Keep both names so existing call-sites continue to work
 config = _CFG
 _CONFIG = _CFG
-
-
-def _cfg(key: str, default: str = "", legacy_key: str | None = None) -> str:
-    """env > config[key] > config[legacy_key] > default (all coerced to str)"""
-    v = os.environ.get(key)
-    if v not in (None, ""):
-        return v
-    if key in _CONFIG and str(_CONFIG.get(key)) != "":
-        return str(_CONFIG.get(key))
-    if legacy_key and legacy_key in _CONFIG and str(_CONFIG.get(legacy_key)) != "":
-        return str(_CONFIG.get(legacy_key))
-    return default
+set_runtime_config(_CFG)
 
 
 PHENIX_DIR = _cfg("PHENIX_DIR", "", "phenix_dir")
@@ -2148,208 +592,31 @@ MGLTOOLS_PYTHON = _cfg("MGLTOOLS_PYTHON", "")
 PREPARE_RECEPTOR_SCRIPT = _cfg("PREPARE_RECEPTOR_SCRIPT", "")
 USE_MEEKO = str(_cfg("USE_MEEKO", "")).lower() in ("1", "true", "yes")
 
-
-# prefer explicit env var; else fall back to obabel on PATH
-OPENBABEL_PATH = os.environ.get("OPENBABEL_PATH") or shutil.which("obabel") or ""
-
 # Windows .bat wrappers (if using Windows Phenix)
 PDBTOOLS_BAT = str(Path(PHENIX_DIR) / "phenix.pdbtools.bat") if PHENIX_DIR else ""
 MOLPROBITY_BAT = str(Path(PHENIX_DIR) / "phenix.molprobity.bat") if PHENIX_DIR else ""
 PHENIX_PYTHON_BAT = str(Path(PHENIX_DIR) / "phenix.python.bat") if PHENIX_DIR else ""
 
 
-def _pick_reduce_exe() -> str:
-    """
-    Choose the actual 'reduce' binary robustly.
-    Precedence:
-      1) $REDUCE_EXE (env) or config value
-      2) Repo-relative local build: <repo>/tools/reduce/reduce_src/reduce
-      3) Phenix conda_base/bin/reduce (next to PHENIX_DIR)
-      4) reduce on PATH
-    """
-    # 1) Explicit env/config
-    explicit = (
-        os.environ.get("REDUCE_EXE")
-        or os.environ.get("REDUCE_BIN")
-        or _cfg("REDUCE_EXE", "", "reduce_exe")
+# --- HOLO-only restore helper ---
+def _holo_restore_from_input_if_needed(
+    pdb_id: str,
+    cleaned_pdb: Union[str, Path],
+    output_pdbqt: Union[str, Path],
+    config: dict,
+    center: Optional[tuple[float, float, float]] = None,
+    box_size: Optional[tuple[float, float, float]] = None,
+) -> tuple[int, int, bool]:
+    from protein_prep.holo_restore import _holo_restore_from_input_if_needed as _holo_restore_impl
+
+    return _holo_restore_impl(
+        pdb_id=pdb_id,
+        cleaned_pdb=cleaned_pdb,
+        output_pdbqt=output_pdbqt,
+        config=config,
+        center=center,
+        box_size=box_size,
     )
-    if explicit and Path(explicit).exists():
-        return explicit
-
-    # 2) Repo-relative (portable)
-    repo_root = (
-        Path(__file__).resolve().parent / "tools" / "reduce" / "reduce_src" / "reduce"
-    )
-    if repo_root.exists() and os.access(str(repo_root), os.X_OK):
-        return str(repo_root)
-
-    # 3) Phenix conda-base candidate near PHENIX_DIR
-    if PHENIX_DIR:
-        phenix_root = Path(PHENIX_DIR).resolve().parent
-        cb = phenix_root / "conda_base" / "bin" / "reduce"
-        if cb.exists() and os.access(str(cb), os.X_OK):
-            return str(cb)
-
-    # 4) PATH fallback
-    which = shutil.which("reduce") or shutil.which("reduce.exe")
-    return which or "reduce"
-
-
-REDUCE_EXE = _pick_reduce_exe()
-logging.info("Using Reduce at: %s", REDUCE_EXE)
-
-# Default HET dict (repo-relative) if not provided by env/config
-DEFAULT_HET = (
-    Path(__file__).resolve().parent / "tools" / "reduce" / "reduce_wwPDB_het_dict.txt"
-)
-
-
-def _het_dict_path() -> str | None:
-    hd = os.environ.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT", "")
-    if hd and Path(hd).is_file():
-        return hd
-    return str(DEFAULT_HET) if DEFAULT_HET.is_file() else None
-
-
-import shlex
-from pathlib import Path
-
-
-def _persist_subproc(
-    tag: str,
-    cmd: List[str],
-    cp: "subprocess.CompletedProcess",
-    outdir: Path,
-    receptor_pdbqt: Path,
-) -> None:
-    """
-    Save command, stdout, stderr to <work>/<tag>.* and emit a one-line summary with rc and receptor size.
-    """
-    try:
-        outdir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    (outdir / f"{tag}.cmd.txt").write_text(
-        " ".join(shlex.quote(x) for x in cmd), encoding="utf-8", errors="ignore"
-    )
-    (outdir / f"{tag}.stdout.txt").write_text(
-        cp.stdout or "", encoding="utf-8", errors="ignore"
-    )
-    (outdir / f"{tag}.stderr.txt").write_text(
-        cp.stderr or "", encoding="utf-8", errors="ignore"
-    )
-    exists = receptor_pdbqt.exists()
-    size = receptor_pdbqt.stat().st_size if exists else 0
-    logging.info(
-        "[receptor-attempt %s] rc=%s exists=%s size=%d stderr=%s",
-        tag,
-        cp.returncode,
-        exists,
-        size,
-        str(outdir / f"{tag}.stderr.txt"),
-    )
-
-
-def _first_last_lines(p: Path, n: int = 50) -> Tuple[list, list]:
-    try:
-        lines = (p.read_text(encoding="utf-8", errors="ignore")).splitlines()
-        return lines[:n], lines[-n:]
-    except Exception:
-        return [], []
-
-
-def _ok_receptor_file(p: Path) -> bool:
-    return p.exists() and p.stat().st_size > 0
-
-
-# --- Chain-prune config helpers (reads via _cfg) ---
-def _cfg_bool(key: str, default: bool = False) -> bool:
-    v = (_cfg(key, str(int(default))) or "").strip().lower()
-    return v in ("1", "true", "yes", "y", "on")
-
-
-def _cfg_float(key: str, default: float) -> float:
-    try:
-        return float(_cfg(key, str(default)))
-    except Exception:
-        return float(default)
-
-
-def _cfg_int(key: str, default: int) -> int:
-    try:
-        return int(float(_cfg(key, str(default))))
-    except Exception:
-        return int(default)
-
-
-def _cfg_chain_keep_list() -> set[str]:
-    raw = _cfg("CHAIN_KEEP_LIST", "") or ""
-    toks = [t.strip() for t in raw.replace(";", ",").split(",") if t.strip()]
-    return {t if len(t) == 1 else t[:1] for t in toks}
-
-
-def _post_write_element_guard(step: str, pdb_path: str | Path) -> None:
-    """
-    Normalize element columns after each receptor write step and log helium status.
-    """
-    p = Path(pdb_path)
-    try:
-        fixed = fix_element_columns_in_file(p, dst_path=p, rewrite_atoms=False)
-    except Exception as e:
-        logging.warning(
-            "[helium] stage=post_write step=%s file=%s He->H=? residual_He=? note=elemfix_error:%s",
-            step,
-            p,
-            e,
-        )
-        return
-
-    txt = p.read_text(encoding="utf-8", errors="ignore")
-    he_count = scan_helium_counts(txt)
-    logging.info(
-        "[helium] stage=post_write step=%s file=%s He->H=%s residual_He=%d",
-        step,
-        p,
-        fixed if isinstance(fixed, int) else -1,
-        he_count,
-    )
-
-
-def _meeko_preflight_or_fail(pdb_input: str | Path, work_dir: str | Path) -> Path:
-    """
-    Ensure the exact PDB Meeko will read contains no 'He'.
-    Saves copy to work/meeko_input_pre_sanitize.pdb for forensics.
-    """
-    src = Path(pdb_input).resolve()
-    work = Path(work_dir)
-    work.mkdir(parents=True, exist_ok=True)
-
-    try:
-        fix_element_columns_in_file(src, dst_path=src, rewrite_atoms=False)
-    except Exception as e:
-        logging.warning(
-            "[helium] stage=preflight file=%s note=elemfix_exception:%s", src, e
-        )
-
-    txt = src.read_text(encoding="utf-8", errors="ignore")
-    he_count, first_hits = scan_helium_counts_with_hits(txt, max_hits=5)
-
-    # Save what Meeko will actually see
-    prefile = work / "meeko_input_pre_sanitize.pdb"
-    prefile.write_text(txt, encoding="utf-8")
-
-    if he_count > 0:
-        logging.error(
-            "[helium] stage=preflight file=%s He_count=%d rules=%s",
-            src,
-            he_count,
-            rules_version(),
-        )
-        for hit in first_hits:
-            logging.error("[helium] offender %s", hit)
-        raise RuntimeError("helium_preflight_failed")
-
-    return src
 
 
 def _helium_postwrite_counter(step_name: str, pdb_path: str | Path) -> None:
@@ -2403,94 +670,25 @@ def _helium_postwrite_counter(step_name: str, pdb_path: str | Path) -> None:
 
 
 try:
-    from rdkit import Chem  # type: ignore
 
     _HAS_RDKIT = True
 except Exception:
     _HAS_RDKIT = False
 
-# =============================
-# OS / WSL helpers
-# =============================
-
-
-def _is_wsl() -> bool:
-    try:
-        return "microsoft" in platform.release().lower() or "WSL_INTEROP" in os.environ
-    except Exception:
-        return False
-
-
-def _bin_on_path(name: str) -> bool:
-    return shutil.which(name) is not None
-
-
-def _win_path(p: Union[str, Path]) -> str:
-    s = str(p)
-    if not _is_wsl():
-        return s
-    try:
-        out = subprocess.check_output(["wslpath", "-w", s], text=True).strip()
-        return out
-    except Exception:
-        return s
-
-
-def _powershell(cmd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-
-def _as_path(p) -> Path:
-    return p if isinstance(p, Path) else Path(p)
-
-
 def collapse_sanitized_once(p: Union[str, Path]) -> Path:
-    """
-    Return a Path with a sanitized basename (single pass; no filesystem changes).
-    Keeps directory the same, replaces non [A-Za-z0-9._-] with underscores.
-    """
-    p = Path(p)
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", p.name)
-    return p.with_name(safe)
+    from protein_prep.ligand_extract import collapse_sanitized_once as _collapse_impl
+
+    return _collapse_impl(p)
+
 
 
 def compute_control_centroids(
     ligands_dir: Union[str, Path],
 ) -> list[tuple[float, float, float]]:
-    """Return one centroid per *.pdb control ligand under ligands_dir."""
-    ligands_dir = _as_path(ligands_dir)
-    pts: list[tuple[float, float, float]] = []
-    if not ligands_dir.exists():
-        return pts
-    for p in sorted(ligands_dir.glob("*.pdb")):
-        try:
-            n = 0
-            sx = sy = sz = 0.0
-            with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                for ln in fh:
-                    if not ln.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    # drop hydrogens by element column (77–78)
-                    if len(ln) >= 78 and ln[76:78].strip().upper() == "H":
-                        continue
-                    x = float(ln[30:38])
-                    y = float(ln[38:46])
-                    z = float(ln[46:54])
-                    sx += x
-                    sy += y
-                    sz += z
-                    n += 1
-            if n > 0:
-                pts.append((sx / n, sy / n, sz / n))
-        except Exception:
-            # best-effort; ignore malformed ligand files
-            pass
-    return pts
+    from protein_prep.waters import compute_control_centroids as _compute_centroids_impl
+
+    return _compute_centroids_impl(ligands_dir)
+
 
 
 def filter_waters_near_points(
@@ -2499,126 +697,17 @@ def filter_waters_near_points(
     points: list[tuple[float, float, float]],
     radius_A: float,
 ) -> int:
-    """
-    Copy src_pdb → dst_pdb keeping all non-water records and only water residues
-    with any atom within radius_A of any reference point. Returns #water residues kept.
+    from protein_prep.waters import (
+        filter_waters_near_points as _filter_waters_near_points_impl,
+    )
 
-    Water 3-letter residue names are loaded from YAML if available, else a fallback set.
-    Optional: set env WATER_NAMES_YAML to a file path. YAML may be a list (["HOH","WAT",...])
-    or a dict containing any of these keys: water_resnames, water, waters, solvent_water, water_aliases.
-    """
-    import os
+    return _filter_waters_near_points_impl(
+        src_pdb=src_pdb,
+        dst_pdb=dst_pdb,
+        points=points,
+        radius_A=radius_A,
+    )
 
-    R2 = float(radius_A) * float(radius_A)
-
-    # --- Load water residue names ---
-    water3: set[str] = {
-        # Common crystallographic water names
-        "HOH",
-        "WAT",
-        "OH2",
-        "DOD",
-        "D2O",
-        # MD water models that sometimes leak into PDB-like files
-        "TIP",
-        "TP3",
-        "TP4",
-        "TP5",
-        "TIP3",
-        "TIP4",
-        "TIP5",
-        "SOL",
-        "W",
-        # protonation variants
-        "H3O",
-        "OH-",
-        "OHO",
-        "H2O",
-    }
-    try:
-        import yaml  # PyYAML
-
-        # prefer explicit env; else try a conventional chemdb path beside this file
-        default_yaml = os.path.join(
-            os.path.dirname(__file__), "chemdb", "water_names.yaml"
-        )
-        yaml_path = os.environ.get("WATER_NAMES_YAML", default_yaml)
-        if os.path.exists(yaml_path):
-            with open(yaml_path, "r", encoding="utf-8") as yf:
-                y = yaml.safe_load(yf)
-            candidates: list[str] = []
-            if isinstance(y, dict):
-                for k in (
-                    "water_resnames",
-                    "water",
-                    "waters",
-                    "solvent_water",
-                    "water_aliases",
-                ):
-                    v = y.get(k, [])
-                    if isinstance(v, str):
-                        candidates.append(v)
-                    elif isinstance(v, (list, tuple, set)):
-                        candidates.extend(v)
-            elif isinstance(y, (list, tuple, set)):
-                candidates = list(y)
-            # Normalize to 3-char PDB residue names
-            for itm in candidates:
-                try:
-                    water3.add(str(itm).strip().upper()[:3])
-                except Exception:
-                    pass
-    except Exception:
-        # YAML absent or parse error → fall back silently
-        pass
-
-    keep: set[tuple[str, str]] = set()  # (chain, resseq+icode)
-
-    # --- First pass: decide which water residues to keep ---
-    try:
-        with open(src_pdb, "r", encoding="utf-8", errors="ignore") as fh:
-            for ln in fh:
-                if not ln.startswith(("ATOM  ", "HETATM")):
-                    continue
-                resn = ln[17:20].strip().upper()
-                if resn not in water3:
-                    continue
-                try:
-                    x = float(ln[30:38])
-                    y = float(ln[38:46])
-                    z = float(ln[46:54])
-                except Exception:
-                    continue
-                for cx, cy, cz in points:
-                    dx = x - cx
-                    dy = y - cy
-                    dz = z - cz
-                    if (dx * dx + dy * dy + dz * dz) <= R2:
-                        keep.add((ln[21], ln[22:27]))  # chain, resseq+icode
-                        break
-    except Exception:
-        # If anything goes wrong during reading, just fall back to keeping none.
-        pass
-
-    # --- Second pass: write out everything but only keep selected waters ---
-    with (
-        open(src_pdb, "r", encoding="utf-8", errors="ignore") as fh,
-        open(dst_pdb, "w", encoding="utf-8") as out,
-    ):
-        for ln in fh:
-            if ln.startswith(("ATOM  ", "HETATM")):
-                resn = ln[17:20].strip().upper()
-                if resn in water3:
-                    key = (ln[21], ln[22:27])
-                    if key in keep:
-                        out.write(ln)
-                    # else drop water line
-                else:
-                    out.write(ln)
-            else:
-                out.write(ln)
-
-    return len(keep)
 
 
 def count_waters_within(
@@ -2670,83 +759,21 @@ def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str
 
 
 def _canon_base(output_root: Path, pdb_id: str) -> Path:
-    """Canonical per-protein base: processed_pdbs/<PDB>"""
-    output_root = _as_path(output_root)
-    return (output_root / pdb_id.upper()).resolve()
+    from protein_prep.layout import _canon_base as _impl
+
+    return _impl(output_root, pdb_id)
 
 
 def _merge_dir(src: Path, dst: Path) -> None:
-    """Merge src directory into dst; remove src after moving."""
-    src, dst = src.resolve(), dst.resolve()
-    if not src.exists():
-        return
-    dst.mkdir(parents=True, exist_ok=True)
-    for root, dirs, files in os.walk(src):
-        r = Path(root)
-        rel = r.relative_to(src)
-        (dst / rel).mkdir(parents=True, exist_ok=True)
-        for d in dirs:
-            (dst / rel / d).mkdir(parents=True, exist_ok=True)
-        for f in files:
-            s = r / f
-            t = dst / rel / f
-            if t.exists():
-                try:
-                    if s.stat().st_size == t.stat().st_size:
-                        continue
-                except Exception:
-                    pass
-            shutil.move(str(s), str(t))
-    try:
-        shutil.rmtree(src)
-    except Exception:
-        pass
+    from protein_prep.layout import _merge_dir as _impl
+
+    _impl(src, dst)
 
 
 def fold_legacy_layout(pdb_id: str, output_root) -> None:
-    """
-    Extended: migrate uppercase legacy dirs into canonical tree:
-      <PDB>_NOLIG            -> processed_pdbs/<PDB>/nolig
-      <PDB>_CLEANED_LIGANDS  -> processed_pdbs/<PDB>/ligands_raw
-      <PDB>_nolig(.pdb)      -> processed_pdbs/<PDB>/nolig/<PDB>_nolig_phenix_clean.pdb
-    """
-    try:
-        root = _as_path(output_root).resolve()
-        pdb_idU = pdb_id.upper()
-        base = _canon_base(root, pdb_idU)
-        (base / "nolig").mkdir(parents=True, exist_ok=True)
-        (base / "ligands_raw").mkdir(parents=True, exist_ok=True)
+    from protein_prep.layout import fold_legacy_layout as _impl
 
-        legacy_dirs = [
-            (root / f"{pdb_id}_nolig", base / "nolig"),
-            (root / f"{pdb_id.lower()}_nolig", base / "nolig"),
-            (root / f"{pdb_idU}_NOLIG", base / "nolig"),
-            (root / f"{pdb_id}_cleaned_ligands", base / "ligands_raw"),
-            (root / f"{pdb_id.lower()}_cleaned_ligands", base / "ligands_raw"),
-            (root / f"{pdb_idU}_CLEANED_LIGANDS", base / "ligands_raw"),
-        ]
-        for src, dst in legacy_dirs:
-            if src.exists():
-                logging.info("Migrating legacy directory %s -> %s", src, dst)
-                _merge_dir(src, dst)
-
-        candidates_files = [
-            (
-                root / f"{pdb_id}_nolig.pdb",
-                base / "nolig" / f"{pdb_idU}_nolig_phenix_clean.pdb",
-            ),
-            (
-                root / f"{pdb_id.lower()}_nolig.pdb",
-                base / "nolig" / f"{pdb_idU}_nolig_phenix_clean.pdb",
-            ),
-        ]
-        for src, dst in candidates_files:
-            if src.exists() and not dst.exists():
-                logging.info("Moving legacy file %s -> %s", src, dst)
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(src), str(dst))
-    except Exception as e:
-        logging.warning("fold_legacy_layout (extended) failed for %s: %s", pdb_id, e)
+    _impl(pdb_id, output_root)
 
 
 # =============================
@@ -2755,37 +782,12 @@ def fold_legacy_layout(pdb_id: str, output_root) -> None:
 
 
 def _write_pristine_reference(pdb_lig_path: Path) -> None:
-    """Write pristine ligand copy next to ligands_raw (SDF + light atom map JSON)."""
-    ref_dir = pdb_lig_path.parent.parent / "reference"
-    ref_dir.mkdir(parents=True, exist_ok=True)
-    ref_sdf = ref_dir / (pdb_lig_path.stem + ".sdf")
-    ref_json = ref_dir / (pdb_lig_path.stem + ".map.json")
+    from protein_prep.ligand_extract import (
+        _write_pristine_reference as _write_pristine_reference_impl,
+    )
 
-    if _HAS_RDKIT:
-        m = Chem.MolFromPDBFile(str(pdb_lig_path), sanitize=False, removeHs=False)
-        if m is not None:
-            w = Chem.SDWriter(str(ref_sdf))
-            w.write(m)
-            w.close()
-            amap = []
-            with open(pdb_lig_path, "r", encoding="utf-8", errors="ignore") as f:
-                for ln in f:
-                    if ln.startswith(("ATOM", "HETATM")):
-                        amap.append(
-                            {
-                                "name": ln[12:16].strip(),
-                                "element": (
-                                    ln[76:78].strip() or ln[12:16].strip()[:1].upper()
-                                ),
-                            }
-                        )
-            json.dump({"atoms": amap}, open(ref_json, "w"), indent=2)
-            return
+    _write_pristine_reference_impl(pdb_lig_path)
 
-    # Fallback minimal SDF stub
-    with open(ref_sdf, "w", encoding="utf-8") as out:
-        out.write(f"{pdb_lig_path.stem}\n  -Pristine-\n\n")
-        out.write("$$$$\n")
 
 
 # =============================
@@ -2799,23 +801,13 @@ def canon_paths(
     *,
     variant: Optional[str] = None,
 ) -> Dict[str, Path]:
-    root = Path(output_root).resolve()
-    base = root / pdb_id.upper()
-    variant_token = _resolve_variant_token(config, variant)
-    protein_root = base / variant_token if variant_token else base
-    receptor_dir = protein_root / "receptor"
-    paths = {
-        "protein_root": protein_root,
-        "raw": protein_root / "raw",
-        "work": protein_root / "work",
-        "ligands_raw": base / "ligands_raw",
-        "nolig": protein_root / "nolig",
-        "receptor": receptor_dir,
-    }
-    if variant_token:
-        paths["variant"] = variant_token
-        paths["variant_root"] = protein_root
-    return paths
+    from protein_prep.layout import canon_paths as _impl
+
+    return _impl(
+        pdb_id=pdb_id,
+        output_root=output_root,
+        variant=variant,
+    )
 
 
 # =============================
@@ -2826,205 +818,37 @@ def canon_paths(
 def extract_ligands_from_filtered(
     filtered_pdb: Union[str, Path], out_dir: Union[str, Path]
 ) -> List[Path]:
-    """Extract non-water HETATM residues into individual PDBs (RES_CHAINRESI.pdb),
-    and run text-level element repair on each (YAML rules)."""
-    outd = Path(out_dir)
-    outd.mkdir(parents=True, exist_ok=True)
-    written: List[Path] = []
-    cur_key = None
-    bucket: List[str] = []
-
-    def flush():
-        nonlocal bucket, cur_key, written
-        if not bucket or cur_key is None:
-            return
-        resname, chain, resseq, icode = cur_key
-        name = f"{resname}_{chain}{int(resseq)}"
-        outp = outd / f"{name}.pdb"
-        with open(outp, "w") as w:
-            w.write(f"REMARK Extracted {name}\n")
-            for ln in bucket:
-                w.write(ln)
-            w.write("TER\nEND\n")
-
-        # normalize once (no-op if not needed)
-        norm = collapse_sanitized_once(outp)
-        if norm.name != outp.name:
-            try:
-                outp.replace(norm)
-                outp = norm
-            except Exception:
-                pass
-
-        # YAML-backed element repair (PDB only)
-        try:
-            fix_element_columns_in_file(outp, outp)
-        except Exception as e:
-            logging.warning("Element-fix skipped for %s: %s", outp.name, e)
-        written.append(outp)
-        bucket = []
-        cur_key = None
-        try:
-            _write_pristine_reference(outp)
-        except Exception as e:
-            logging.warning(
-                "Could not write pristine reference for %s: %s", outp.name, e
-            )
-
-    lines: List[str] = []
-    try:
-        with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-    except Exception as exc:
-        logging.warning("[extract.check] file=%s err=%s", filtered_pdb, exc)
-        lines = []
-
-    candidate_resnames = {
-        ln[17:20].strip().upper()
-        for ln in lines
-        if ln.startswith("HETATM") and ln[17:20].strip()
-    }
-    logging.info(
-        "[extract.check] file=%s candidate_resnames=%s",
-        filtered_pdb,
-        ",".join(sorted(candidate_resnames)) if candidate_resnames else "none",
+    from protein_prep.ligand_extract import (
+        extract_ligands_from_filtered as _extract_ligands_impl,
     )
-    retain_allow = {tok.upper() for tok in getattr(ALIASES, "retain_resnames", [])}
-    retain_allow_canonical = {
-        _normalize_resname(tok)
-        for tok in getattr(ALIASES, "retain_resnames", [])
-        if _normalize_resname(tok)
-    }
-    overlap = sorted(
-        res
-        for res in candidate_resnames
-        if (res in retain_allow) or (_normalize_resname(res) in retain_allow_canonical)
-    )
-    if overlap:
-        logging.warning(
-            "[extract.violation] file=%s will_extract_retain_list=%s",
-            filtered_pdb,
-            ",".join(overlap),
-        )
 
-    for ln in lines:
-        if not ln.startswith("HETATM"):
-            continue
-        resname = ln[17:20].strip().upper()
-        if resname in _WATER_NAMES:
-            continue  # never extract waters
-        canonical_res = _normalize_resname(resname)
-        if (resname in _RETAIN_VARIANT) or (canonical_res in _RETAIN_VARIANT_CANONICAL):
-            continue  # don't extract cofactors/metals/ions you keep with protein
-        chain = ln[21]
-        resseq = ln[22:26].strip() or "0"
-        icode = ln[26]
-        key = (resname, chain, resseq, icode)
-        if cur_key is None:
-            cur_key = key
-        if key != cur_key:
-            flush()
-            cur_key = key
-        bucket.append(ln)
-    flush()
-    logging.info("Extracted %d ligand residues to %s", len(written), out_dir)
-    return written
+    return _extract_ligands_impl(filtered_pdb, out_dir)
+
 
 
 def element_fix_all_in_dir(
     dir_path: Union[str, Path], rewrite_atoms: bool = False
 ) -> int:
-    """
-    Run the text-level element column fixer on every *.pdb under dir_path.
-    Returns the number of files rewritten.
-    """
-    d = Path(dir_path)
-    if not d.exists():
-        return 0
-    n = 0
-    for p in d.rglob("*.pdb"):
-        try:
-            fix_element_columns_in_file(p, dst_path=p, rewrite_atoms=rewrite_atoms)
-            n += 1
-        except Exception as e:
-            logging.warning("element_fix_all_in_dir skipped %s: %s", p, e)
-    logging.info("Element column sweep fixed %d PDB files under %s", n, d)
-    return n
+    from protein_prep.ligand_extract import element_fix_all_in_dir as _fix_all_impl
+
+    return _fix_all_impl(dir_path, rewrite_atoms=rewrite_atoms)
+
 
 
 def expose_ligand_intermediates_for_debug(
     src_dir: Union[str, Path], link_dir: Union[str, Path]
 ) -> None:
-    """
-    Create/refresh a symlink 'link_dir' -> 'src_dir' for easy browsing.
-    On Windows, tries directory junction fallback if symlink fails.
-    Quietly skips if the source doesn't exist yet.
-    """
-    src = Path(src_dir).resolve()
-    dst = Path(link_dir)
+    from protein_prep.ligand_extract import (
+        expose_ligand_intermediates_for_debug as _expose_impl,
+    )
 
-    # Avoid noise if source not present yet during early prep
-    if not src.exists():
-        logging.debug("intermediates: skip symlink, source missing: %s", src)
-        return
+    _expose_impl(src_dir, link_dir)
 
-    # Ensure link's parent exists
-    try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        logging.warning("intermediates: could not ensure parent dir for %s: %s", dst, e)
-        return
-
-    try:
-        # Remove existing link/dir
-        if dst.is_symlink() or dst.exists():
-            try:
-                if dst.is_symlink():
-                    dst.unlink()
-                else:
-                    shutil.rmtree(dst)
-            except Exception:
-                pass
-
-        # Create link (with Windows junction fallback)
-        if os.name == "nt":
-            try:
-                os.symlink(src, dst, target_is_directory=True)
-            except OSError:
-                cmd = ["cmd", "/c", "mklink", "/J", str(dst), str(src)]
-                subprocess.run(cmd, check=True)
-        else:
-            os.symlink(src, dst, target_is_directory=True)
-
-        logging.info("Exposed ligand intermediates: %s -> %s", dst, src)
-    except Exception as e:
-        logging.warning(
-            "intermediates: could not create symlink %s -> %s: %s", dst, src, e
-        )
 
 
 # =============================
 # Element & Hydrogen utilities (PDB only)
 # =============================
-
-
-def hydrogenation_status(pdb_path: Union[str, Path]) -> Tuple[str, int, int, float]:
-    h = heavy = 0
-    with open(pdb_path, encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if not line.startswith(("ATOM", "HETATM")):
-                continue
-            el = line[76:78].strip().upper()
-            if el == "H":
-                h += 1
-            else:
-                heavy += 1
-    ratio = h / max(heavy, 1)
-    if h == 0:
-        return "NO_H", h, heavy, ratio
-    if ratio < 0.20:
-        return "SUSPECT_LOW_H", h, heavy, ratio
-    return "HAS_H", h, heavy, ratio
 
 
 def file_contains_hydrogens(pdb_path: Union[str, Path]) -> bool:
@@ -3180,68 +1004,6 @@ def log_possible_metal_mislabels(pdb_path: Union[str, Path]) -> None:
 # =============================
 
 
-def filter_altlocs(
-    pdb_input_path: Union[str, Path], pdb_output_path: Union[str, Path]
-) -> None:
-    """Filter alternate locations (altLoc) deterministically and log decisions."""
-    lines: List[str] = []
-    atoms = {}
-    removed_count = 0
-
-    with open(pdb_input_path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if line.startswith(("ATOM  ", "HETATM")):
-                atom_name = line[12:16]
-                altLoc = line[16]
-                chainID = line[21]
-                resSeq = line[22:26].strip()
-                iCode = line[26]
-                key = (chainID, resSeq, iCode, atom_name.strip())
-                atoms.setdefault(key, {})[altLoc] = line
-            else:
-                lines.append(line)
-
-    filtered_atoms: List[str] = []
-    for key, altloc_dict in atoms.items():
-        altLocs = list(altloc_dict.keys())
-        if len(altLocs) > 1:
-            logging.info("AltLocs found for %s: %s", key, altLocs)
-        if " " in altloc_dict:
-            selected = " "
-        elif "A" in altloc_dict:
-            selected = "A"
-        else:
-            selected = sorted(altloc_dict.keys())[0]
-        if len(altloc_dict) > 1:
-            removed = [alt for alt in altLocs if alt != selected]
-            removed_count += len(removed)
-            logging.info(
-                "Keeping altLoc '%s' for atom %s, removed %s", selected, key, removed
-            )
-        filtered_atoms.append(altloc_dict[selected])
-
-    def _int_safe(s: str) -> int:
-        s = s.strip()
-        return int(s) if s and s.lstrip("-").isdigit() else 0
-
-    filtered_atoms.sort(
-        key=lambda l: (l[21], _int_safe(l[22:26]), l[26], l[12:16].strip())
-    )
-
-    with open(pdb_output_path, "w", encoding="utf-8") as f:
-        for line in lines:
-            f.write(line)
-        for atom_line in filtered_atoms:
-            f.write(atom_line)
-    _post_write_element_guard("altloc_filter", pdb_output_path)
-    logging.info(
-        "Filtered altLocs in %s → %s (removed %d alternates)",
-        pdb_input_path,
-        pdb_output_path,
-        removed_count,
-    )
-
-
 def build_missing_loops(
     input_pdb: Union[str, Path], output_dir: Union[str, Path]
 ) -> str:
@@ -3305,63 +1067,31 @@ def filter_invalid_chains(
 
 
 def _has_backbone_atoms(lines):
-    req = {"N", "CA", "C", "O"}
-    seen = set()
-    for ln in lines:
-        if not ln.startswith(("ATOM", "HETATM")):
-            continue
-        name = ln[12:16].strip()
-        if name in req:
-            seen.add(name)
-    return req.issubset(seen)
+    from protein_prep.chain_prune import _has_backbone_atoms as _impl
+
+    return _impl(lines)
+
 
 
 def _group_by_chain(lines):
-    chains = {}
-    for ln in lines:
-        if not ln.startswith(("ATOM", "HETATM")):
-            continue
-        ch = ln[21]
-        chains.setdefault(ch, []).append(ln)
-    return chains
+    from protein_prep.chain_prune import _group_by_chain as _impl
+
+    return _impl(lines)
+
 
 
 def _prune_chains_conservative(lines, keep_chains):
-    out = []
-    for ln in lines:
-        if ln.startswith(("ATOM", "HETATM")) and ln[21] not in keep_chains:
-            continue
-        out.append(ln)
-    return out
+    from protein_prep.chain_prune import _prune_chains_conservative as _impl
+
+    return _impl(lines, keep_chains)
+
 
 
 def _chains_to_keep(lines, pocket_center=None, r=12.0):
-    chains = _group_by_chain(lines)
-    keep = set()
-    # rule 1: chain has full backbone atoms somewhere
-    for ch, seg in chains.items():
-        if _has_backbone_atoms(seg):
-            keep.add(ch)
-    # rule 2: optional geometric proximity if center known
-    if pocket_center:
-        near = set()
-        x0, y0, z0 = pocket_center
-        for ch, seg in chains.items():
-            for ln in seg:
-                if not ln.startswith(("ATOM", "HETATM")):
-                    continue
-                try:
-                    x = float(ln[30:38])
-                    y = float(ln[38:46])
-                    z = float(ln[46:54])
-                except Exception:
-                    continue
-                if (x - x0) ** 2 + (y - y0) ** 2 + (z - z0) ** 2 <= r * r:
-                    near.add(ch)
-                    break
-        if near:
-            keep = keep & near
-    return keep or set(chains.keys())
+    from protein_prep.chain_prune import _chains_to_keep as _impl
+
+    return _impl(lines, pocket_center=pocket_center, r=r)
+
 
 
 # --- Hydrogen cleanup (geometry + CONECT) ---
@@ -3374,80 +1104,18 @@ def _parse_xyz(line: str):
         return None
 
 
-def conect_coverage(pdb_path: Union[str, Path]) -> float:
-    atom_ids, conect_ids = set(), set()
-    with open(pdb_path, encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if line.startswith(("ATOM", "HETATM")):
-                atom_ids.add(line[6:11].strip())
-            elif line.startswith("CONECT"):
-                parts = line.split()
-                conect_ids.update(parts[1:])
-    return len(conect_ids & atom_ids) / max(len(atom_ids), 1)
-
-
 def remove_unbonded_atoms(pdb_path: Union[str, Path]) -> None:
-    bonded_atoms: Set[str] = set()
-    all_atoms: List[str] = []
-    with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if line.startswith("CONECT"):
-                parts = line.split()
-                for atom_serial in parts[1:]:
-                    bonded_atoms.add(atom_serial)
-            elif line.startswith(("ATOM", "HETATM")):
-                all_atoms.append(line)
+    from protein_prep.hydrogen_cleanup import remove_unbonded_atoms as _impl
 
-    filtered: List[str] = []
-    for line in all_atoms:
-        atom_serial = line[6:11].strip()
-        if atom_serial in bonded_atoms or line[76:78].strip() != "H":
-            filtered.append(line)
-        else:
-            logging.info("Removed unbonded hydrogen: %s", line.strip())
-
-    with open(pdb_path, "w", encoding="utf-8") as f:
-        f.writelines(filtered)
+    _impl(pdb_path)
 
 
 def remove_implausible_hydrogens_by_distance(pdb_path: Union[str, Path]) -> None:
-    atoms: List[Tuple[str, str, Optional[Tuple[float, float, float]]]] = []
-    with open(pdb_path, encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if line.startswith(("ATOM", "HETATM")):
-                try:
-                    x = float(line[30:38])
-                    y = float(line[38:46])
-                    z = float(line[46:54])
-                except ValueError:
-                    atoms.append((line, "UNK", (None, None, None)))
-                    continue
-                el = line[76:78].strip() or line[12:16].strip()[:1]
-                atoms.append((line, el.upper(), (x, y, z)))
+    from protein_prep.hydrogen_cleanup import (
+        remove_implausible_hydrogens_by_distance as _impl,
+    )
 
-    kept: List[str] = []
-    heavy_coords = [a[2] for a in atoms if a[1] != "H" and a[2][0] is not None]
-
-    def near_heavy(coord: Optional[Tuple[float, float, float]]) -> bool:
-        if coord[0] is None:
-            return True
-        x, y, z = coord
-        for X, Y, Z in heavy_coords:
-            dx = x - X
-            dy = y - Y
-            dz = z - Z
-            if (dx * dx + dy * dy + dz * dz) <= (1.35 * 1.35):
-                return True
-        return False
-
-    for line, el, coord in atoms:
-        if el != "H" or near_heavy(coord):
-            kept.append(line)
-        else:
-            logging.info("Removed implausible H: %s", line.strip())
-
-    with open(pdb_path, "w", encoding="utf-8") as out:
-        out.writelines(kept)
+    _impl(pdb_path)
 
 
 def clean_hydrogens(
@@ -3455,11 +1123,13 @@ def clean_hydrogens(
     use_conect_if_reliable: bool = True,
     conect_min_cov: float = 0.6,
 ) -> None:
-    cov = conect_coverage(pdb_path) if use_conect_if_reliable else 0.0
-    if cov >= conect_min_cov:
-        remove_unbonded_atoms(pdb_path)
-    remove_implausible_hydrogens_by_distance(pdb_path)
-    _post_write_element_guard("hydrogen_cleanup", pdb_path)
+    from protein_prep.hydrogen_cleanup import clean_hydrogens as _impl
+
+    _impl(
+        pdb_path,
+        use_conect_if_reliable=use_conect_if_reliable,
+        conect_min_cov=conect_min_cov,
+    )
 
 
 # =============================
@@ -3474,22 +1144,10 @@ def _is_metal(resname: str) -> bool:
 
 
 def _cofactor_policy_keep(resname: str) -> bool:
-    """
-    YAML-only policy:
-      • Keep anything listed under 'retain_in_receptor_resnames'
-      • Keep standard residues (handled elsewhere)
-      • Water handling is done in strip_nonstandard_residues(), so return False here for waters.
-      • Everything else → remove
-    """
-    rn_upper = (resname or "").strip().upper()
-    if not rn_upper:
-        return False
-    if rn_upper in _WATER_NAMES:
-        return False
-    canonical = _normalize_resname(rn_upper)
-    if canonical and canonical in _COFACTOR_CANONICAL:
-        return True
-    return rn_upper in _COFACTOR_NAMES
+    from protein_prep.strip_nsr import _cofactor_policy_keep as _cofactor_keep_impl
+
+    return _cofactor_keep_impl(resname)
+
 
 
 def strip_nonstandard_residues(
@@ -3498,261 +1156,16 @@ def strip_nonstandard_residues(
     *,
     variant: Optional[str] = None,
 ) -> Tuple[int, str]:
-    """
-    Remove nonstandard residues while keeping what the YAML says to keep
-    (retain_in_receptor_resnames) and standard amino acids.
-    Water handling still honors your numeric policy (radius/B-factor) but
-    the water names themselves come from the YAML.
-    """
-    variant_token = _resolve_variant_token(config, variant)
-    variant_label = variant_token or "legacy"
-    global _ALIASES_BIND_LOGGED
-    if not _ALIASES_BIND_LOGGED:
-        logging.info(
-            "[aliases.bind] water_set=%d cofactor_set=%d elem_tokens=%d",
-            len(_WATER_NAMES),
-            len(_COFACTOR_NAMES),
-            len(_ELEM_CANON),
-        )
-        _ALIASES_BIND_LOGGED = True
-    before_map = _scan_metal_map(input_pdb, ALIASES)
-    before_summary = _summarize_ions_file(input_pdb)
-    logging.info(
-        "[stripnsr.before] variant=%s ions_res=%s ions_elem=%s",
-        variant_label,
-        before_summary.get("res_hist", "none"),
-        before_summary.get("elem_hist", "none"),
-    )
-    standard_residues = {
-        "ALA",
-        "ARG",
-        "ASN",
-        "ASP",
-        "CYS",
-        "GLN",
-        "GLU",
-        "GLY",
-        "HIS",
-        "ILE",
-        "LEU",
-        "LYS",
-        "MET",
-        "PHE",
-        "PRO",
-        "SER",
-        "THR",
-        "TRP",
-        "TYR",
-        "VAL",
-        "HID",
-        "HIE",
-        "HIP",
-        "SEC",
-        "PYL",
-        "MSE",
-    }
-
-    removed: Set[str] = set()
-    removed_hits: List[Tuple[str, str, str, str]] = []
-    kept_lines: List[str] = []
-
-    # Estimate pocket center from any YAML-retained cofactors/metals present
-    cofm_xyz: List[Tuple[float, float, float]] = []
-    with open(input_pdb, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if not line.startswith(("ATOM  ", "HETATM")):
-                continue
-            if not line.startswith("HETATM"):
-                continue
-            resname = line[17:20].strip().upper()
-            canonical_res = _normalize_resname(resname)
-            if (resname in _RETAIN_VARIANT) or (
-                canonical_res in _RETAIN_VARIANT_CANONICAL
-            ):
-                xyz = _parse_xyz(line)
-                if xyz:
-                    cofm_xyz.append(xyz)
-
-    pocket_center: Optional[Tuple[float, float, float]] = None
-    if cofm_xyz:
-        from statistics import fmean
-
-        xs, ys, zs = zip(*cofm_xyz)
-        pocket_center = (fmean(xs), fmean(ys), fmean(zs))
-
-    water_policy = (config.get("WATER_POLICY", "site_only") or "site_only").lower()
-    water_radius = float(config.get("WATER_SITE_RADIUS_ANG", 6.0))
-    water_bmax = float(config.get("WATER_MAX_BFACTOR", 60.0))
-    logging.info(
-        "[water.policy] mode=%s policy=%s waters_kept_rule_applied=true",
-        _POLICY_MODE,
-        water_policy,
+    from protein_prep.strip_nsr import (
+        strip_nonstandard_residues as _strip_nonstandard_residues_impl,
     )
 
-    with open(input_pdb, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if line.startswith("ATOM  "):
-                resname = line[17:20].strip().upper()
-                if resname in standard_residues:
-                    kept_lines.append(line)
-                else:
-                    removed.add(resname)
-                continue
-
-            if line.startswith("HETATM"):
-                resname = line[17:20].strip().upper()
-                chain = (line[21] or "-").strip() or "-"
-                resseq = (line[22:26] or "0").strip() or "0"
-                elem_token = (line[76:78].strip() or resname).upper()
-                reason = None
-                canonical = _normalize_resname(resname)
-                canonical_token = canonical or resname
-
-                # Water names come from YAML (no hardcoded list here)
-                if resname in _WATER_NAMES:
-                    keep_line = False
-                    if water_policy == "keep_all":
-                        keep_line = True
-                    elif water_policy == "remove_all":
-                        removed.add(resname)
-                        reason = "water_remove_all"
-                    elif pocket_center is not None:
-                        xyz = _parse_xyz(line)
-                        keep = False
-                        if xyz:
-                            dx = xyz[0] - pocket_center[0]
-                            dy = xyz[1] - pocket_center[1]
-                            dz = xyz[2] - pocket_center[2]
-                            dist2 = dx * dx + dy * dy + dz * dz
-                            if dist2 <= water_radius * water_radius:
-                                try:
-                                    b = float(line[60:66])
-                                    keep = b <= water_bmax
-                                except Exception:
-                                    keep = True
-                        if keep:
-                            keep_line = True
-                        else:
-                            removed.add(resname)
-                            reason = "water_far"
-                    else:
-                        removed.add(resname)
-                        reason = "water_no_center"
-
-                    if keep_line:
-                        kept_lines.append(line)
-                        continue
-
-                    if reason and (
-                        resname in _ION_AUDIT_METALS
-                        or resname in _ION_AUDIT_SIMPLE_IONS
-                        or elem_token in _ION_AUDIT_METALS
-                        or elem_token in _ION_AUDIT_SIMPLE_IONS
-                    ):
-                        removed_hits.append((resname, chain, resseq, reason))
-                        logging.info(
-                            "[stripnsr.hit] resname=%s chain=%s resSeq=%s reason=%s variant=%s",
-                            resname,
-                            chain,
-                            resseq,
-                            reason,
-                            variant_label,
-                        )
-                    continue
-
-                keep_line = False
-                if canonical_token and canonical_token in _ELEM_CANON:
-                    keep_line = True
-                    if canonical_token not in _ION_KEEP_LOGGED:
-                        logging.info(
-                            "[ion.keep] token=%s source=elem_tokens_canonical",
-                            canonical_token,
-                        )
-                        _ION_KEEP_LOGGED.add(canonical_token)
-                elif _cofactor_policy_keep(resname):
-                    keep_line = True
-                elif resname in _RETAIN_VARIANT or (
-                    canonical and canonical in _RETAIN_VARIANT_CANONICAL
-                ):
-                    keep_line = True
-
-                if keep_line:
-                    kept_lines.append(line)
-                else:
-                    removed.add(resname)
-                    reason = "not_in_retain"
-                    if _POLICY_MODE == "APO" and (
-                        resname in _COFACTOR_RAW_ALL
-                        or (canonical and canonical in _COFACTOR_RAW_ALL)
-                    ):
-                        reason = "apo_policy"
-                        drop_key = canonical or resname
-                        if drop_key and drop_key not in _COFACTOR_DROP_LOGGED:
-                            logging.info(
-                                "[cofactor.drop] mode=APO resname=%s reason=apo_policy",
-                                drop_key,
-                            )
-                            _COFACTOR_DROP_LOGGED.add(drop_key)
-                if not keep_line and (
-                    resname in _ION_AUDIT_METALS
-                    or resname in _ION_AUDIT_SIMPLE_IONS
-                    or elem_token in _ION_AUDIT_METALS
-                    or elem_token in _ION_AUDIT_SIMPLE_IONS
-                ):
-                    removed_hits.append(
-                        (resname, chain, resseq, reason or "not_in_retain")
-                    )
-                    logging.info(
-                        "[stripnsr.hit] resname=%s chain=%s resSeq=%s reason=%s variant=%s",
-                        resname,
-                        chain,
-                        resseq,
-                        reason or "not_in_retain",
-                        variant_label,
-                    )
-                continue
-
-            # non-coordinate records pass through
-            kept_lines.append(line)
-
-    with open(output_pdb, "w", encoding="utf-8") as f:
-        f.writelines(kept_lines)
-    _post_write_element_guard("strip_nonstandard", output_pdb)
-
-    after_map = _scan_metal_map(output_pdb, ALIASES)
-    after_summary = _summarize_ions_file(output_pdb)
-    logging.info(
-        "[stripnsr.after] variant=%s ions_res=%s ions_elem=%s removed_total=%d",
-        variant_label,
-        after_summary.get("res_hist", "none"),
-        after_summary.get("elem_hist", "none"),
-        len(removed_hits),
+    return _strip_nonstandard_residues_impl(
+        input_pdb=input_pdb,
+        output_pdb=output_pdb,
+        variant=variant,
     )
-    kept_res = sorted([res for res, count in after_map.items() if count > 0])
-    stripped_res = sorted(
-        {res for res, count in before_map.items() if after_map.get(res, 0) < count}
-    )
-    logging.info(
-        "[stripnsr.diff] kept=%s stripped=%s",
-        ",".join(kept_res) if kept_res else "none",
-        ",".join(stripped_res) if stripped_res else "none",
-    )
-    retain_targets = {tok.upper() for tok in getattr(ALIASES, "retain_resnames", [])}
-    retain_targets_canonical = {
-        _normalize_resname(tok)
-        for tok in getattr(ALIASES, "retain_resnames", [])
-        if _normalize_resname(tok)
-    }
-    for res in stripped_res:
-        if (res in retain_targets) or (
-            _normalize_resname(res) in retain_targets_canonical
-        ):
-            logging.warning("[stripnsr.violation] resname=%s", res)
 
-    logging.info("Removed nonstandard residues (YAML-driven): %s", sorted(removed))
-    if pocket_center:
-        logging.info("Estimated pocket center: (%.2f, %.2f, %.2f)", *pocket_center)
-    return len(removed), str(output_pdb)
 
 
 def quick_element_histogram(pdb_path: Union[str, Path]) -> None:
@@ -3840,352 +1253,39 @@ def assert_no_metal_in_peptidic(pdb_path: Union[str, Path]) -> None:
 def detect_pocket_center_from_ligands(
     filtered_pdb: Union[str, Path], ligands_dir: Union[str, Path]
 ) -> Optional[Tuple[float, float, float]]:
-    """
-    Prefer center of extracted ligands in ligands_raw/; fallback to YAML-retained cofactors/metals
-    present in filtered_pdb. Returns (x,y,z) or None.
-    """
-    from statistics import fmean
+    from protein_prep.chain_prune import (
+        detect_pocket_center_from_ligands as _detect_pocket_center_impl,
+    )
 
-    pts: list[Tuple[float, float, float]] = []
+    return _detect_pocket_center_impl(filtered_pdb, ligands_dir)
 
-    # 1) Extracted ligands (*.pdb) under ligands_dir
-    ligd = Path(ligands_dir)
-    for p in ligd.glob("*.pdb"):
-        try:
-            with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                for ln in f:
-                    if ln.startswith(("ATOM", "HETATM")):
-                        el = ln[76:78].strip().upper()
-                        if el == "H":
-                            continue
-                        try:
-                            x = float(ln[30:38])
-                            y = float(ln[38:46])
-                            z = float(ln[46:54])
-                            pts.append((x, y, z))
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    # 2) Fallback: retained cofactors/metals from YAML in filtered_pdb
-    if not pts:
-        with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
-            for ln in f:
-                if not ln.startswith("HETATM"):
-                    continue
-                resname = ln[17:20].strip().upper()
-                canonical_res = _normalize_resname(resname)
-                if (resname in _RETAIN_VARIANT) or (
-                    canonical_res in _RETAIN_VARIANT_CANONICAL
-                ):
-                    try:
-                        x = float(ln[30:38])
-                        y = float(ln[38:46])
-                        z = float(ln[46:54])
-                        pts.append((x, y, z))
-                    except Exception:
-                        pass
-
-    if not pts:
-        return None
-    xs, ys, zs = zip(*pts)
-    return (fmean(xs), fmean(ys), fmean(zs))
 
 
 def score_chain_contacts(
     pdb_path: Union[str, Path], keep_chains: set[str]
 ) -> Dict[str, int]:
-    """
-    Return heavy-atom pair counts within CHAIN_CONTACT_DIST_ANG between each non-kept chain
-    and the *union* of kept chains.
-    """
-    dist = _cfg_float("CHAIN_CONTACT_DIST_ANG", 5.0)
-    atoms_by_chain: dict[str, list[Tuple[float, float, float]]] = {}
-    with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if not ln.startswith(("ATOM  ", "HETATM")):
-                continue
-            el = ln[76:78].strip().upper()
-            if el == "H":
-                continue
-            c = ln[21]
-            try:
-                x = float(ln[30:38])
-                y = float(ln[38:46])
-                z = float(ln[46:54])
-            except Exception:
-                continue
-            atoms_by_chain.setdefault(c, []).append((x, y, z))
+    from protein_prep.chain_prune import score_chain_contacts as _score_contacts_impl
 
-    kept_pts = []
-    for kc in keep_chains:
-        kept_pts.extend(atoms_by_chain.get(kc, []))
+    return _score_contacts_impl(pdb_path, keep_chains)
 
-    out: Dict[str, int] = {}
-    if not kept_pts:
-        return {c: 0 for c in atoms_by_chain}  # nothing to compare to
-
-    d2 = dist * dist
-    for c, pts in atoms_by_chain.items():
-        if c in keep_chains:
-            continue
-        cnt = 0
-        # simple O(N*M); early stop not necessary but harmless
-        for x, y, z in pts:
-            for X, Y, Z in kept_pts:
-                dx = x - X
-                dy = y - Y
-                dz = z - Z
-                if (dx * dx + dy * dy + dz * dz) <= d2:
-                    cnt += 1
-        out[c] = cnt
-    return out
 
 
 def select_chains_to_keep(
     filtered_pdb: Union[str, Path], ligands_dir: Union[str, Path], cfg=None
 ) -> set[str]:
-    """
-    Decide chains to keep using pocket proximity, contact counts, keep-list, and safety rails.
-    Emits a compact decision table when CHAIN_LOG_DECISIONS is enabled.
-    """
-    radius = _cfg_float("CHAIN_POCKET_RADIUS_ANG", 10.0)
-    min_contacts = _cfg_int("CHAIN_MIN_CONTACTS", 200)
-    keep_list = _cfg_chain_keep_list()
-    log_dec = _cfg_bool("CHAIN_LOG_DECISIONS", True)
+    from protein_prep.chain_prune import select_chains_to_keep as _select_chains_impl
 
-    pocket = detect_pocket_center_from_ligands(filtered_pdb, ligands_dir)
+    return _select_chains_impl(filtered_pdb, ligands_dir, cfg=cfg)
 
-    # Build per-chain stats
-    chains: dict[str, dict] = {}
-    all_chains: set[str] = set()
-    ca_counts: dict[str, int] = {}
-    min_dists: dict[str, float] = {}
-
-    def _dist2(pt, xyz):
-        dx = pt[0] - xyz[0]
-        dy = pt[1] - xyz[1]
-        dz = pt[2] - xyz[2]
-        return dx * dx + dy * dy + dz * dz
-
-    with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if ln.startswith(("ATOM  ", "HETATM")):
-                c = ln[21]
-                all_chains.add(c)
-                if ln.startswith("ATOM  ") and ln[12:16].strip() == "CA":
-                    ca_counts[c] = ca_counts.get(c, 0) + 1
-                if pocket is not None:
-                    try:
-                        xyz = (float(ln[30:38]), float(ln[38:46]), float(ln[46:54]))
-                        d2 = _dist2(pocket, xyz)
-                        md = min_dists.get(c, float("inf"))
-                        if d2 < md:
-                            min_dists[c] = d2
-                    except Exception:
-                        pass
-
-    if not all_chains:
-        return set()  # nothing to decide
-
-    # Initial kept set
-    kept: set[str] = set(keep_list)
-
-    # Always keep blank-chain records conservatively
-    if " " in all_chains:
-        kept.add(" ")
-
-    # Pocket proximity
-    if pocket is not None:
-        r2 = radius * radius
-        for c in all_chains:
-            if min_dists.get(c, float("inf")) <= r2:
-                kept.add(c)
-
-    # If we still have no pocket & no keep_list -> abort prune
-    if (pocket is None) and not keep_list:
-        if log_dec:
-            logging.info("[chain_prune] skipped reason=no_pocket_center or keep_list")
-        return set()  # signal: do not prune
-
-    # Contact expansion to capture interfaces
-    contacts = score_chain_contacts(filtered_pdb, kept)
-    for c, cnt in contacts.items():
-        if cnt >= min_contacts:
-            kept.add(c)
-
-    # Safety rails
-    if not kept:
-        if log_dec:
-            logging.info("[chain_prune] conservative_abort reason=kept_empty")
-        return set()
-    largest_ca_chain = (
-        max(ca_counts, key=lambda c: ca_counts.get(c, 0)) if ca_counts else None
-    )
-    drop_set = {c for c in all_chains if c not in kept}
-    if len(drop_set) > len(all_chains) / 2:
-        if log_dec:
-            logging.warning(
-                "[chain_prune] conservative_abort reason=drop_gt_50pct all=%s drop=%s",
-                sorted(all_chains),
-                sorted(drop_set),
-            )
-        return set()
-    if largest_ca_chain and (largest_ca_chain in drop_set):
-        if log_dec:
-            logging.warning(
-                "[chain_prune] conservative_abort reason=largest_CA_chain_would_be_dropped largest=%s",
-                largest_ca_chain,
-            )
-        return set()
-
-    # Decision table
-    if log_dec:
-        rows = []
-        for c in sorted(all_chains):
-            rows.append(
-                {
-                    "chain": c,
-                    "CA_count": ca_counts.get(c, 0),
-                    "near_pocket": (
-                        "yes"
-                        if (
-                            pocket is not None
-                            and min_dists.get(c, float("inf")) <= (radius * radius)
-                        )
-                        else "no"
-                    ),
-                    "min_dist": (
-                        0.0
-                        if pocket is None
-                        else (min_dists.get(c, float("inf")) ** 0.5)
-                    ),
-                    "contact_count_to_kept": contacts.get(c, 0),
-                    "decision": ("keep" if c in kept else "drop"),
-                    "reason": (
-                        "whitelist"
-                        if c in keep_list
-                        else "near_pocket"
-                        if (
-                            pocket is not None
-                            and min_dists.get(c, float("inf")) <= (radius * radius)
-                        )
-                        else "interface_contacts"
-                        if contacts.get(c, 0) >= min_contacts
-                        else "far_and_sparse"
-                    ),
-                }
-            )
-        # Emit compact table
-        hdr = "# chain  CA  near  min_d  contacts  keep  reason"
-        logging.info(hdr)
-        for r in rows:
-            logging.info(
-                "  %-5s  %-3d %-5s %6.2f    %-7d %-4s  %s",
-                r["chain"],
-                r["CA_count"],
-                r["near_pocket"],
-                r["min_dist"],
-                r["contact_count_to_kept"],
-                ("yes" if r["decision"] == "keep" else "no"),
-                r["reason"],
-            )
-        kept_ids = "".join(sorted(kept)) or "-"
-        dropped_ids = "".join(sorted(drop_set)) or "-"
-        logging.info(
-            "[chain_prune] kept=%s dropped=%s reason=see_table", kept_ids, dropped_ids
-        )
-
-    return kept
 
 
 def prune_to_chains(
     input_pdb: Union[str, Path], kept_chains: set[str], output_pdb: Union[str, Path]
 ) -> None:
-    """
-    Write only coordinate records belonging to kept_chains; copy all non-coordinate lines through.
-    """
-    kept = set(kept_chains or set())
-    with (
-        open(input_pdb, "r", encoding="utf-8", errors="ignore") as f,
-        open(output_pdb, "w", encoding="utf-8") as w,
-    ):
-        for ln in f:
-            if ln.startswith(("ATOM  ", "HETATM")):
-                c = ln[21]
-                if c in kept:
-                    w.write(ln)
-            else:
-                w.write(ln)
-    _post_write_element_guard("chain_pruned", output_pdb)
+    from protein_prep.chain_prune import prune_to_chains as _prune_to_chains_impl
 
+    _prune_to_chains_impl(input_pdb, kept_chains, output_pdb)
 
-def _maybe_get_target_ph() -> float | None:
-    # Priority: explicit env, then context_ph json drop, else None.
-    v = os.environ.get("TARGET_PH", "").strip()
-    if v:
-        try:
-            return float(v)
-        except Exception:
-            pass
-    # allow a sidecar json dumped by context_ph: <pdb_id>.ph.json with {"target_pH": 7.8}
-    try:
-        pdb_base = os.path.splitext(os.path.basename(input_pdb_path))[0]
-        sidecar = Path(input_pdb_path).parent / f"{pdb_base}.ph.json"
-        if sidecar.exists():
-            import json
-
-            data = json.loads(sidecar.read_text())
-            t = data.get("target_pH", None)
-            if isinstance(t, (int, float)):
-                return float(t)
-    except Exception:
-        pass
-    return None
-
-
-def _protonate_with_pdb2pqr_if_available(
-    nolig_pdb_path: str,
-    out_dir: Path,
-    logger,
-    *,
-    variant: Optional[str] = None,
-) -> tuple[Path, bool, str | None]:
-    """
-    Try PDB2PQR at the *pipeline pH* if available; fall back to the input PDB.
-    Returns: (pdb_for_reduce, used_pdb2pqr, propka_log_path_or_None)
-    """
-    # Choose a pH: use context_ph if you already resolved one before calling this,
-    # otherwise default to 7.0 (harmless; you can feed in your target later).
-    try:
-        from path_router.context_ph import select_ph_values_for_protonation
-
-        phs = select_ph_values_for_protonation(nolig_pdb_path)
-        target_ph = float(phs[0]) if phs else 7.0
-    except Exception:
-        target_ph = 7.0
-
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    variant_token = (variant or "").strip().upper() if variant else None
-    if variant_token not in {"APO", "HOLO"}:
-        variant_token = _resolve_variant_token(config)
-
-    pdb_from_p2p, pk_log = pdb2pqr_protonate(
-        nolig_pdb_path,
-        target_ph,
-        out_dir,
-        variant=variant_token,
-        cfg=config,
-    )
-    if pdb_from_p2p:
-        logger.info("PDB2PQR succeeded at pH %.2f -> %s", target_ph, pdb_from_p2p)
-        return Path(pdb_from_p2p), True, pk_log
-    else:
-        logger.warning("PDB2PQR unavailable/failed; Reduce will build hydrogens.")
-        return Path(nolig_pdb_path), False, None
 
 
 # ============================
@@ -4196,1840 +1296,19 @@ def clean_pdb(
     output_root: Union[str, Path],
     logger: Optional[logging.Logger] = None,
 ) -> Optional[str]:
-    """Run the full cleaning pipeline and return path to final cleaned PDB (receptor)."""
-    ion_elements = {
-        "LI",
-        "NA",
-        "K",
-        "RB",
-        "CS",
-        "MG",
-        "CA",
-        "SR",
-        "BA",
-        "ZN",
-        "MN",
-        "FE",
-        "CO",
-        "NI",
-        "CU",
-        "AL",
-        "CD",
-        "HG",
-        "PB",
-        "AG",
-        "AU",
-        "PT",
-        "MO",
-        "RU",
-        "RH",
-        "PD",
-        "CL",
-        "BR",
-        "I",
-        "F",
-        "AT",
-        "LA",
-        "CE",
-        "PR",
-        "ND",
-        "PM",
-        "SM",
-        "EU",
-        "GD",
-        "TB",
-        "DY",
-        "HO",
-        "ER",
-        "TM",
-        "YB",
-        "LU",
-        "U",
-        "TH",
-    }
-    prepare_before_count: Optional[int] = None
+    from protein_prep.clean_pipeline import clean_pdb as _clean_pipeline_pdb
 
-    output_root = str(output_root)
-    Path(output_root).mkdir(parents=True, exist_ok=True)
-
-    raw_stem = os.path.splitext(os.path.basename(str(pdb_file)))[0]
-    pdb_id = re.sub(r"(_nolig(_cleaned)?|_cleaned)$", "", raw_stem, flags=re.I).upper()
-    _set_clean_provenance("automate_protein_prep.clean_pdb")
-    _reset_ion_probe(pdb_id)
-    log = logger or logging.getLogger(pdb_id)
-    log.info("[prep.id] clean_pdb stem=%s -> base_id=%s", raw_stem, pdb_id)
-    variant_token = _resolve_variant_token(config)
-    variant_label = variant_token or "legacy"
-    paths = canon_paths(pdb_id, output_root, variant=variant_token)
-    log.info(
-        "[prep.paths] protein_root=%s receptor=%s nolig=%s work=%s",
-        paths["protein_root"],
-        paths["receptor"],
-        paths["nolig"],
-        paths["work"],
+    return _clean_pipeline_pdb(
+        pdb_file=pdb_file,
+        output_root=output_root,
+        logger=logger,
     )
-    receptor_target = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
-    log.info(
-        "[receptor.clean.location] path=%s variant=%s variant_scoped=%s",
-        receptor_target,
-        variant_label,
-        bool(variant_token),
-    )
-
-    log.info(
-        "[proteinprep] entering clean_pdb pdb_file=%s output_root=%s",
-        pdb_file,
-        output_root,
-    )
-    input_path_for_metals = Path(pdb_file)
-    if os.path.exists(str(input_path_for_metals)):
-        elemfix_before_count = 0
-        with open(
-            input_path_for_metals, "r", encoding="utf-8", errors="ignore"
-        ) as _handle:
-            for _line in _handle:
-                if not _line.startswith(("ATOM  ", "HETATM")):
-                    continue
-                _element = _line[76:78].strip().upper()
-                if not _element:
-                    _name_field = _line[12:16].strip()
-                    _guess = []
-                    for _ch in _name_field:
-                        if _ch.isalpha():
-                            _guess.append(_ch)
-                        else:
-                            break
-                    _guess_text = "".join(_guess).upper()
-                    if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                        _element = _guess_text[:2]
-                    elif _guess_text[:1] in ion_elements:
-                        _element = _guess_text[:1]
-                if _element in ion_elements:
-                    elemfix_before_count += 1
-        # (1) elemfix BEFORE: metals=<elemfix_before_count>
-        log.info(
-            f"(1) elemfix BEFORE: metals={elemfix_before_count} file={str(input_path_for_metals)}"
-        )
-
-    for d in ["protein_root", "raw", "work", "ligands_raw", "nolig", "receptor"]:
-        paths[d].mkdir(parents=True, exist_ok=True)
-
-    try:
-        ion_audit = _IonAuditManager(pdb_id, paths["work"], variant_token)
-    except NameError:
-
-        class _NoOpIonAuditManager:
-            enabled = False
-
-            def probe(self, *args, **kwargs):
-                return None
-
-        ion_audit = _NoOpIonAuditManager()
-    _push_ion_audit_manager(ion_audit)
-
-    try:
-        ion_audit.probe("input", pdb_file)
-        _emit_ion_breadcrumb("input", pdb_file)
-
-        # (1) Working copy → raw/
-        working_pdb = paths["raw"] / f"{pdb_id}_working.pdb"
-        shutil.copyfile(str(pdb_file), working_pdb)
-        _helium_postwrite_counter("copy_working", working_pdb)
-        # (2) AltLoc filtering → raw/filtered.pdb
-        filtered_pdb = paths["raw"] / f"{pdb_id}_filtered.pdb"
-        filter_altlocs(working_pdb, filtered_pdb)
-
-        # (2a) EARLY text-level element fix (YAML-driven), before any heavy tools
-        try:
-            fix_element_columns_in_file(filtered_pdb, filtered_pdb, rewrite_atoms=True)
-            _helium_postwrite_counter("elemfix_filtered", filtered_pdb)
-            log.info("Early text-level element fix applied to %s", filtered_pdb)
-        except Exception as e:
-            log.warning(
-                "Early text-level element fix skipped for %s: %s", filtered_pdb, e
-            )
-
-        # (3) Extract ligands now (controls live here), with YAML element repair per-file
-        _ = extract_ligands_from_filtered(filtered_pdb, paths["ligands_raw"])
-        _log_ions_probe(pdb_id, "extract_ligands", filtered_pdb)
-
-        chain_pruned = False
-        if os.environ.get("EARLY_CHAIN_PRUNE", "1").lower() not in {"0", "false", "no"}:
-            try:
-                with open(filtered_pdb, "r", encoding="utf-8", errors="ignore") as fh:
-                    lines = fh.readlines()
-                keep = _chains_to_keep(
-                    lines, pocket_center=None
-                )  # center can be wired later
-                orig = {ln[21] for ln in lines if ln.startswith(("ATOM", "HETATM"))}
-                if keep and keep != orig:
-                    pruned = _prune_chains_conservative(lines, keep)
-                    with open(filtered_pdb, "w", encoding="utf-8") as out:
-                        out.writelines(pruned)
-                    log.info(
-                        "[chains] early-pruned chains keep=%s drop=%s",
-                        "".join(sorted(keep)),
-                        "".join(sorted(orig - keep)),
-                    )
-                    chain_pruned = True
-            except Exception as e:
-                log.warning("[chains] early prune skipped: %s", e)
-        # (3a) Optional early chain-prune (conservative, pocket-aware)
-        source_for_strip = filtered_pdb
-        if _cfg_bool("CHAIN_PRUNE", False):
-            try:
-                kept = select_chains_to_keep(filtered_pdb, paths["ligands_raw"], config)
-                if kept:
-                    pruned_filtered = paths["raw"] / f"{pdb_id}_filtered_pruned.pdb"
-                    prune_to_chains(filtered_pdb, kept, pruned_filtered)
-                    log.info(
-                        "[chain_prune] using pruned source for step (4): %s",
-                        pruned_filtered,
-                    )
-                    source_for_strip = pruned_filtered
-                    chain_pruned = True
-                else:
-                    log.info(
-                        "[chain_prune] not applied (kept empty or conservative_abort); using unpruned file"
-                    )
-            except Exception as e:
-                log.warning("[chain_prune] skipped due to exception: %s", e)
-
-        # (4) Strip nonstandard from protein (policy aware) → work/stripped.pdb
-        stripped_pdb = paths["work"] / f"{pdb_id}_stripped.pdb"
-        ion_audit.probe("strip_nsr_before", source_for_strip)
-        _emit_ion_breadcrumb("strip_nsr_before", source_for_strip)
-        _log_ions_probe(pdb_id, "strip_nonstandard", source_for_strip, phase="before")
-        if source_for_strip and os.path.exists(str(source_for_strip)):
-            strip_nonstandard_before_count = 0
-            with open(
-                source_for_strip, "r", encoding="utf-8", errors="ignore"
-            ) as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        strip_nonstandard_before_count += 1
-            # (5) strip_nonstandard BEFORE: metals=<strip_nonstandard_before_count>
-            log.info(
-                f"(5) strip_nonstandard BEFORE: metals={strip_nonstandard_before_count} file={str(source_for_strip)}"
-            )
-        removed_count, _out = strip_nonstandard_residues(
-            source_for_strip,
-            stripped_pdb,
-            variant=variant_token,
-        )
-        _log_ions_probe(pdb_id, "strip_nonstandard", stripped_pdb, phase="after")
-        ion_audit.probe("strip_nsr_after", stripped_pdb)
-        _emit_ion_breadcrumb("strip_nsr_after", stripped_pdb)
-        log.info("Removed %d nonstandard residue lines.", removed_count)
-        if os.path.exists(str(stripped_pdb)):
-            strip_nonstandard_after_count = 0
-            with open(stripped_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        strip_nonstandard_after_count += 1
-            # (5) strip_nonstandard AFTER:  metals=<strip_nonstandard_after_count>
-            log.info(
-                f"(5) strip_nonstandard AFTER:  metals={strip_nonstandard_after_count} file={str(stripped_pdb)}"
-            )
-
-        # (5) Element fix → MODELLER → element fix again (PDB only)
-        elemfix_pdb = paths["work"] / f"{pdb_id}_elemfix.pdb"
-
-        fix_pdb_elements(stripped_pdb, elemfix_pdb)
-        ion_audit.probe("elemfix", elemfix_pdb)
-        _log_ions_probe(pdb_id, "elemfix", elemfix_pdb)
-        quick_element_histogram(elemfix_pdb)
-        _helium_postwrite_counter("elemfix_before_modeller", elemfix_pdb)
-        if os.path.exists(str(elemfix_pdb)):
-            elemfix_after_count = 0
-            with open(elemfix_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        elemfix_after_count += 1
-            # (1) elemfix AFTER:  metals=<elemfix_after_count>
-            log.info(
-                f"(1) elemfix AFTER:  metals={elemfix_after_count} file={str(elemfix_pdb)}"
-            )
-            modeller_before_count = elemfix_after_count
-            # (2) modeller_fill BEFORE: metals=<modeller_before_count>
-            log.info(
-                f"(2) modeller_fill BEFORE: metals={modeller_before_count} file={str(elemfix_pdb)}"
-            )
-        loop_fixed_pdb = build_missing_loops(elemfix_pdb, paths["work"])
-        fix_pdb_elements(loop_fixed_pdb, loop_fixed_pdb)
-        ion_audit.probe("modeller", loop_fixed_pdb)
-        _emit_ion_breadcrumb("modeller", loop_fixed_pdb)
-        _log_ions_probe(pdb_id, "modeller", loop_fixed_pdb)
-        quick_element_histogram(loop_fixed_pdb)
-        _helium_postwrite_counter("elemfix_after_modeller", loop_fixed_pdb)
-        if os.path.exists(str(loop_fixed_pdb)):
-            modeller_after_count = 0
-            with open(
-                loop_fixed_pdb, "r", encoding="utf-8", errors="ignore"
-            ) as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        modeller_after_count += 1
-            # (2) modeller_fill AFTER:  metals=<modeller_after_count>
-            log.info(
-                f"(2) modeller_fill AFTER:  metals={modeller_after_count} file={str(loop_fixed_pdb)}"
-            )
-
-        # MODELLER (detect whether a new file was actually produced)
-        modeller_ok = os.path.basename(
-            loop_fixed_pdb
-        ) == "modeller_filled.pdb" and os.path.isfile(loop_fixed_pdb)
-
-        receptor_pdb = paths["receptor"] / f"{pdb_id}_cleaned.pdb"
-        # (6) Optional external Phenix polish (non-fatal if missing)
-        phenix_ok = False
-        _use_phenix = str(
-            config.get("use_phenix", config.get("USE_PHENIX", "false"))
-        ).strip().lower() in ("1", "true", "yes")
-        if _use_phenix:  # Water policy & radius
-            _remove_waters = str(
-                _cfg_env_or_default("REMOVE_WATERS", "true")
-            ).strip().lower() in ("1", "true", "yes")
-            _policy = (
-                (_cfg_env_or_default("WATER_KEEP_POLICY", "none") or "none")
-                .strip()
-                .lower()
-            )
-            _keep_R = float(_cfg_env_or_default("KEEP_WATERS_WITHIN_A", "6.0") or 6.0)
-
-            # Default: feed Phenix the loop-fixed input
-            _phenix_in = loop_fixed_pdb
-
-            if _remove_waters and _policy != "none":
-                # Policy active: derive reference points
-                ref_pts: list[tuple[float, float, float]] = []
-                # Prefer chosen center when available; here we’re early, so fall back to control centroids
-                try:
-                    ref_pts = compute_control_centroids(paths["ligands_raw"])
-                except Exception:
-                    ref_pts = []
-                if ref_pts:
-                    _phenix_in = paths["work"] / f"{pdb_id}_prefiltered_waters.pdb"
-                    kept = filter_waters_near_points(
-                        loop_fixed_pdb, _phenix_in, ref_pts, _keep_R
-                    )
-                    log.info(
-                        "[waters] policy=%s kept=%d within %.1f Å of %d centers",
-                        _policy,
-                        kept,
-                        _keep_R,
-                        len(ref_pts),
-                    )
-                else:
-                    log.info(
-                        "[waters] policy=%s but no reference points found; skipping prefilter",
-                        _policy,
-                    )
-
-            # Blanket removal only when policy is 'none'
-            _phenix_remove = bool(_remove_waters and _policy == "none")
-            if os.path.exists(str(_phenix_in)):
-                phenix_before_count = 0
-                with open(
-                    _phenix_in, "r", encoding="utf-8", errors="ignore"
-                ) as _handle:
-                    for _line in _handle:
-                        if not _line.startswith(("ATOM  ", "HETATM")):
-                            continue
-                        _element = _line[76:78].strip().upper()
-                        if not _element:
-                            _name_field = _line[12:16].strip()
-                            _guess = []
-                            for _ch in _name_field:
-                                if _ch.isalpha():
-                                    _guess.append(_ch)
-                                else:
-                                    break
-                            _guess_text = "".join(_guess).upper()
-                            if (
-                                len(_guess_text) >= 2
-                                and _guess_text[:2] in ion_elements
-                            ):
-                                _element = _guess_text[:2]
-                            elif _guess_text[:1] in ion_elements:
-                                _element = _guess_text[:1]
-                        if _element in ion_elements:
-                            phenix_before_count += 1
-                # (6) phenix_clean BEFORE: metals=<phenix_before_count>
-                log.info(
-                    f"(6) phenix_clean BEFORE: metals={phenix_before_count} file={str(_phenix_in)}"
-                )
-            phenix_ok = run_phenix_pdbtools(
-                input_pdb=_phenix_in,
-                output_pdb=receptor_pdb,
-                remove_waters=_phenix_remove,
-            )
-
-            # (6b) Dry-run sanity: count HOH within 8 Å of control-centroid center in final receptor
-            try:
-                ref_pts = compute_control_centroids(paths["ligands_raw"])
-                center0 = None
-                if ref_pts:
-                    # quick average as an approximate center for the dry-run note
-                    cx = sum(p[0] for p in ref_pts) / len(ref_pts)
-                    cy = sum(p[1] for p in ref_pts) / len(ref_pts)
-                    cz = sum(p[2] for p in ref_pts) / len(ref_pts)
-                    center0 = (cx, cy, cz)
-                if center0:
-                    kept8 = count_waters_within(receptor_pdb, center0, 8.0)
-                    log.info(
-                        "[waters] dry-run kept_within_8A=%d center=(%.2f,%.2f,%.2f) file=%s",
-                        kept8,
-                        center0[0],
-                        center0[1],
-                        center0[2],
-                        receptor_pdb,
-                    )
-            except Exception as _e:
-                log.debug("[waters] dry-run check skipped: %s", _e)
-
-        if not phenix_ok:
-            shutil.copyfile(loop_fixed_pdb, receptor_pdb)
-        _helium_postwrite_counter("phenix_or_copy_receptor", receptor_pdb)
-        if os.path.exists(str(receptor_pdb)):
-            phenix_after_count = 0
-            with open(receptor_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        phenix_after_count += 1
-            # (6) phenix_clean AFTER:  metals=<phenix_after_count>
-            log.info(
-                f"(6) phenix_clean AFTER:  metals={phenix_after_count} file={str(receptor_pdb)}"
-            )
-
-        # choose the file to pass downstream
-        pdb_for_reduce = loop_fixed_pdb if modeller_ok else elemfix_pdb
-
-        reduce_deferred = True
-
-        log.info(
-            "[proteinprep] steps: Reduce=%s Phenix=%s MODELLER=%s",
-            "deferred" if reduce_deferred else "applied",
-            str(phenix_ok),
-            str(modeller_ok),
-        )
-        if modeller_ok:
-            sz = os.path.getsize(loop_fixed_pdb)
-            log.info("[proteinprep] modeller_out=%s size=%d", loop_fixed_pdb, sz)
-        else:
-            log.info("[proteinprep] modeller_out=none (kept %s)", elemfix_pdb)
-
-        if phenix_ok:
-            sz = os.path.getsize(receptor_pdb)
-            log.info("[proteinprep] phenix_applied_to=%s size=%d", receptor_pdb, sz)
-
-        # (7) Hydrogen cleanup & chain validation
-        debulked_pdb = paths["work"] / f"{pdb_id}_debulked.pdb"
-        shutil.copyfile(receptor_pdb, debulked_pdb)
-        clean_hydrogens(debulked_pdb, use_conect_if_reliable=True, conect_min_cov=0.6)
-
-        chain_validated_pdb = paths["work"] / f"{pdb_id}_validated.pdb"
-        if os.path.exists(str(debulked_pdb)):
-            validate_before_count = 0
-            with open(debulked_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        validate_before_count += 1
-            # (3) validate BEFORE: metals=<validate_before_count>
-            log.info(
-                f"(3) validate BEFORE: metals={validate_before_count} file={str(debulked_pdb)}"
-            )
-        filter_invalid_chains(debulked_pdb, chain_validated_pdb)
-        _helium_postwrite_counter("chain_validate", chain_validated_pdb)
-        ion_audit.probe("altloc_validate", chain_validated_pdb)
-
-        if os.path.exists(str(chain_validated_pdb)):
-            validate_after_count = 0
-            with open(
-                chain_validated_pdb, "r", encoding="utf-8", errors="ignore"
-            ) as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        validate_after_count += 1
-            # (3) validate AFTER:  metals=<validate_after_count>
-            log.info(
-                f"(3) validate AFTER:  metals={validate_after_count} file={str(chain_validated_pdb)}"
-            )
-
-        try:
-            _txt_before = Path(chain_validated_pdb).read_text(
-                encoding="utf-8", errors="ignore"
-            )
-        except Exception:
-            _txt_before = ""
-
-        try:
-            # Rewrite PDB element columns (77–78) using the unified rules (also for ATOM when rewrite_atoms=True)
-            fix_element_columns_in_file(
-                chain_validated_pdb, chain_validated_pdb, rewrite_atoms=True
-            )
-
-            # Secondary invariant: if any H-named atom still carries He, fix and summarize
-            _txt_after = Path(chain_validated_pdb).read_text(
-                encoding="utf-8", errors="ignore"
-            )
-            _fixed_text, _nname = assert_no_helium_in_hydrogen_names(_txt_after)
-            if _nname > 0:
-                Path(chain_validated_pdb).write_text(_fixed_text, encoding="utf-8")
-
-            # Grep-friendly one-liner with He→H delta
-            _before = scan_helium_counts(_txt_before)
-            _after = scan_helium_counts(
-                Path(chain_validated_pdb).read_text(encoding="utf-8", errors="ignore")
-            )
-            _delta = max(0, _before - _after)
-            log.info(
-                f"[elem-fix] file={Path(chain_validated_pdb).name} stage=preflight He->H={_delta}"
-            )
-        except Exception as _e:
-            log.warning(
-                f"[elements] receptor preflight failed for {Path(chain_validated_pdb).name}: {_e}"
-            )
-
-        quick_element_histogram(chain_validated_pdb)
-
-        # (8) Protonation (Reduce when safe; else Open Babel fallback)
-        def _present_resnames(pdb_path: Path) -> set[str]:
-            res = set()
-            with open(pdb_path, "r", encoding="utf-8", errors="ignore") as fh:
-                for ln in fh:
-                    if ln.startswith(("ATOM  ", "HETATM")):
-                        res.add(ln[17:20].strip().upper())
-            return res
-
-        present_resnames = _present_resnames(chain_validated_pdb)
-        NUC_LIKE = set(_flatten_semicolons(RULES.get("nucleotide_like_resnames", [])))
-        use_reduce = not any(r in NUC_LIKE for r in present_resnames)
-        # ---- Prefer PDB2PQR (with PROPKA) at pipeline pH; fall back to Reduce ----
-        # This uses the helper already defined earlier in this file.
-        pdb_for_reduce, used_pdb2pqr, pk_log = _protonate_with_pdb2pqr_if_available(
-            str(
-                chain_validated_pdb
-            ),  # protonate the validated, ligand-free coordinates
-            str(
-                paths["work"]
-            ),  # write PROPKA/PDB2PQR artifacts into the work directory
-            logging,
-            variant=variant_token,
-        )
-        if used_pdb2pqr and pdb_for_reduce and Path(pdb_for_reduce).exists():
-            _log_ions_probe(pdb_id, "pdb2pqr", pdb_for_reduce)
-            quick_element_histogram(pdb_for_reduce)
-
-        validated_source = (
-            Path(pdb_for_reduce) if pdb_for_reduce else Path(chain_validated_pdb)
-        )
-
-        # If PDB2PQR succeeded, pdb_for_reduce now has hydrogens and titration states.
-        # assign_protonation_states() will detect H presence and run Reduce WITHOUT -BUILD,
-        # i.e., do flips/cleanup only. If PDB2PQR failed, pdb_for_reduce == chain_validated_pdb
-        # and Reduce will run with -BUILD as needed.
-
-        if not use_reduce:
-            log.info(
-                "[protonation] Skipping Reduce due to detected nucleotides; using OpenBabel path."
-            )
-
-        reduced_pdb = paths["work"] / f"{pdb_id}_reduced.pdb"
-        reduce_input_path = pdb_for_reduce if pdb_for_reduce else chain_validated_pdb
-        if reduce_input_path and os.path.exists(str(reduce_input_path)):
-            reduce_before_count = 0
-            with open(
-                reduce_input_path, "r", encoding="utf-8", errors="ignore"
-            ) as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        reduce_before_count += 1
-            # (4) reduce BEFORE: metals=<reduce_before_count>
-            log.info(
-                f"(4) reduce BEFORE: metals={reduce_before_count} file={str(reduce_input_path)}"
-            )
-        assign_protonation_states(
-            pdb_for_reduce,
-            reduced_pdb,
-            reduce_exe=REDUCE_EXE
-            if use_reduce
-            else None,  # skip Reduce for nucleotide cofactors
-        )
-
-        _helium_postwrite_counter("reduce_or_fallback", reduced_pdb)
-        _log_ions_probe(pdb_id, "reduce", reduced_pdb)
-        ion_audit.probe("reduce", reduced_pdb)
-        print(
-            f"[proteinprep] Reduce/alt_protonation wrote={Path(reduced_pdb).is_file()} -> {reduced_pdb}"
-        )
-        if os.path.exists(str(reduced_pdb)):
-            reduce_after_count = 0
-            with open(reduced_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        reduce_after_count += 1
-            # (4) reduce AFTER:  metals=<reduce_after_count>
-            log.info(
-                f"(4) reduce AFTER:  metals={reduce_after_count} file={str(reduced_pdb)}"
-            )
-
-        # (9) Final element fix and sanity on the protonated file
-        fix_pdb_elements(reduced_pdb)
-        _helium_postwrite_counter("elemfix_after_reduce", reduced_pdb)
-
-        quick_element_histogram(reduced_pdb)
-
-        assert_no_metal_in_peptidic(reduced_pdb)
-
-        # (10) Move to receptor and re-fix (post-step edits)
-        # [ions] receptor_write audit
-        variant_env = (
-            variant_token or (os.environ.get("APO_HOLO_VARIANT") or "").strip().upper()
-        )
-        variant_label = variant_env if variant_env else "legacy"
-        before_counts, before_detail = _collect_monoatomic_records(reduced_pdb)
-        log.info(
-            "[ions.policy] stage=receptor_write variant=%s source=%s target=%s reason=copy_reduced_to_cleaned",
-            variant_label,
-            reduced_pdb,
-            receptor_pdb,
-        )
-        log.info(
-            "[ions.counts.before] stage=receptor_write file=%s metals=%s",
-            reduced_pdb,
-            _format_ion_hist(before_counts),
-        )
-
-        shutil.copyfile(reduced_pdb, receptor_pdb)
-        _helium_postwrite_counter("promote_receptor_copy", receptor_pdb)
-        _log_ions_probe(pdb_id, "receptor_write", receptor_pdb)
-
-        after_counts, after_detail = _collect_monoatomic_records(receptor_pdb)
-        log.info(
-            "[ions.counts.after] stage=receptor_write file=%s metals=%s",
-            receptor_pdb,
-            _format_ion_hist(after_counts),
-        )
-        diff_list = _diff_detail_records(before_detail, after_detail)
-        kept_total = sum(after_counts.values())
-        stripped_total = max(0, sum(before_counts.values()) - kept_total)
-        log.info(
-            "[ions.receptor.copy] action=write_cleaned kept=%d stripped=%d changed=%d",
-            kept_total,
-            stripped_total,
-            len(diff_list),
-        )
-        if diff_list:
-            log.info("[ions.diff.reduced→cleaned] lost=%s", ",".join(diff_list))
-
-        fix_pdb_elements(receptor_pdb)
-        _helium_postwrite_counter("elemfix_final_receptor", receptor_pdb)
-        ion_audit.probe("final_cleaned", receptor_pdb)
-
-        quick_element_histogram(receptor_pdb)
-        assert file_contains_hydrogens(
-            receptor_pdb
-        ), f"[FATAL] Cleaned file lost hydrogens: {receptor_pdb}"
-
-        log.info("Cleaned receptor: %s", receptor_pdb)
-        if os.path.exists(str(receptor_pdb)):
-            prepare_before_count = 0
-            with open(receptor_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        prepare_before_count += 1
-            # (7) prepare_receptor4 BEFORE: metals=<prepare_before_count>
-            log.info(
-                f"(7) prepare_receptor4 BEFORE: metals={prepare_before_count} file={str(receptor_pdb)}"
-            )
-            # (7) prepare_receptor4 AFTER:  metals=<prepare_before_count>
-            log.info(
-                f"(7) prepare_receptor4 AFTER:  metals={prepare_before_count} file={str(receptor_pdb)} (pdbqt not parsed)"
-            )
-        try:
-            router_paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-            receptor_pdbqt_path = router_paths.receptor_pdbqt(
-                variant_token, ph_token=None
-            )
-            receptor_dir_path = router_paths.receptor_dir(variant_token)
-            ph_dir = receptor_dir_path / "ph_ensemble"
-            variant_log = (variant_token or "NONE").upper()
-            log.info(
-                "[receptor.path.final] variant=%s receptor_pdbqt=%s",
-                variant_log,
-                receptor_pdbqt_path,
-            )
-            ph_enabled = 0
-            try:
-                if ph_dir.exists():
-                    next(ph_dir.iterdir())
-                    ph_enabled = 1
-            except StopIteration:
-                ph_enabled = 0
-            except Exception:
-                ph_enabled = 1 if ph_dir.exists() else 0
-            log.info(
-                "[receptor.path.ensemble] enabled=%d dir=%s",
-                ph_enabled,
-                ph_dir,
-            )
-        except Exception as exc:
-            log.warning(
-                "[receptor.path.final] variant=%s action=skip reason=%s",
-                (variant_token or "NONE").upper(),
-                exc,
-            )
-        summary_count = prepare_before_count
-        if summary_count is None and os.path.exists(str(receptor_pdb)):
-            summary_count = 0
-            with open(receptor_pdb, "r", encoding="utf-8", errors="ignore") as _handle:
-                for _line in _handle:
-                    if not _line.startswith(("ATOM  ", "HETATM")):
-                        continue
-                    _element = _line[76:78].strip().upper()
-                    if not _element:
-                        _name_field = _line[12:16].strip()
-                        _guess = []
-                        for _ch in _name_field:
-                            if _ch.isalpha():
-                                _guess.append(_ch)
-                            else:
-                                break
-                        _guess_text = "".join(_guess).upper()
-                        if len(_guess_text) >= 2 and _guess_text[:2] in ion_elements:
-                            _element = _guess_text[:2]
-                        elif _guess_text[:1] in ion_elements:
-                            _element = _guess_text[:1]
-                    if _element in ion_elements:
-                        summary_count += 1
-        if summary_count is not None:
-            summary_variant = variant_token or "legacy"
-            log.info(
-                f"[ions.clean.counts] pdb={pdb_id} variant={summary_variant} file={str(receptor_pdb)} present_pdb=metals:{summary_count}"
-            )
-        print(
-            f"[proteinprep] cleaned receptor exists={Path(receptor_pdb).is_file()} -> {receptor_pdb}"
-        )
-        return str(receptor_pdb)
-    finally:
-        _pop_ion_audit_manager(ion_audit)
-
-
-def _classify_and_rename_histidines(
-    pdb_in: Union[str, Path], pdb_out: Union[str, Path]
-) -> None:
-    """
-    Inspect each HIS residue's side-chain hydrogens and rename:
-      - HD1 only  -> HID
-      - HE2 only  -> HIE
-      - both      -> HIP
-      - neither   -> keep HIS (caller may rewrite later)
-    """
-    pdb_in, pdb_out = str(pdb_in), str(pdb_out)
-
-    residues = defaultdict(list)
-    other_lines = []
-    with open(pdb_in, "r", encoding="utf-8", errors="ignore") as f:
-        for ln in f:
-            if ln.startswith(("ATOM  ", "HETATM")):
-                chain = ln[21]
-                resseq = ln[22:26]
-                icode = ln[26]
-                resn = ln[17:20]
-                key = (chain, resseq, icode, resn)
-                residues[key].append(ln)
-            else:
-                other_lines.append(ln)
-
-    out_lines = []
-    for key, atoms in residues.items():
-        chain, resseq, icode, resn = key
-        resname = resn.strip()
-        if resname != "HIS":
-            out_lines.extend(atoms)
-            continue
-
-        names = {ln[12:16].strip().upper() for ln in atoms}
-        has_hd1 = "HD1" in names  # proton on ND1
-        has_he2 = "HE2" in names  # proton on NE2
-
-        if has_hd1 and has_he2:
-            new = "HIP"
-        elif has_hd1 and not has_he2:
-            new = "HID"
-        elif has_he2 and not has_hd1:
-            new = "HIE"
-        else:
-            new = None
-
-        if new:
-            for ln in atoms:
-                if ln.startswith(("ATOM  ", "HETATM")):
-                    out_lines.append(ln[:17] + f"{new:>3}" + ln[20:])
-                else:
-                    out_lines.append(ln)
-        else:
-            out_lines.extend(atoms)
-
-    with open(pdb_out, "w", encoding="utf-8") as w:
-        for ln in other_lines:
-            w.write(ln)
-        for ln in out_lines:
-            w.write(ln)
-
-
-def _rewrite_his_default(
-    pdb_in: Union[str, Path], pdb_out: Union[str, Path], default: str = "HIE"
-) -> None:
-    pdb_in, pdb_out = str(pdb_in), str(pdb_out)
-    default = default.upper()
-    assert default in {"HIE", "HID", "HIP"}
-    with (
-        open(pdb_in, "r", encoding="utf-8", errors="ignore") as f,
-        open(pdb_out, "w", encoding="utf-8") as w,
-    ):
-        for ln in f:
-            if ln.startswith(("ATOM  ", "HETATM")) and ln[17:20] == "HIS":
-                w.write(ln[:17] + default + ln[20:])
-            else:
-                w.write(ln)
-
-
-# =============================
-# External Tools (Meeko/ADT, Phenix, OpenBabel, Reduce)
-# =============================
-def _drop_free_ions_for_meeko(
-    pdb_in: str | Path,
-    pdb_out: str | Path,
-    banlist: set[str] | None = None,
-    *,
-    cfg: Optional[dict] = None,
-    variant: Optional[str] = None,
-    pocket_center: Optional[tuple[float, float, float]] = None,
-) -> int:
-    """
-    Remove HETATM entries for simple ions that Meeko chokes on (e.g., Na, K, Li).
-    Writes to pdb_out. Returns #atoms dropped.
-    Never drops ions explicitly retained by YAML (retain_in_receptor_resnames) that are elemental tokens.
-    Set MEEKO_DROP_VERBOSE=1 to log each dropped residue position.
-    """
-    cfg_obj: Optional[dict] = None
-    if isinstance(cfg, dict):
-        cfg_obj = cfg
-    elif isinstance(config, dict):
-        cfg_obj = config
-
-    allow_tokens, _ = _load_retain_allowlist(cfg_obj)
-    allow_set = {str(tok).strip().upper() for tok in allow_tokens if str(tok).strip()}
-    retain_ions = {r for r in _RETAIN_VARIANT if _is_element_token(r)}
-    base_ban = set(banlist) if banlist else _MEEKO_DROP_IONS
-
-    policy = _normalize_ion_policy(cfg_obj)
-    variant_token = _resolve_variant_token(cfg_obj, variant)
-    variant_label = variant_token or "legacy"
-
-    radius_cfg = 0.0
-    if cfg_obj is not None:
-        try:
-            radius_cfg = float(cfg_obj.get("HOLO_SALT_STRIP_RADIUS", 0.0) or 0.0)
-        except Exception:
-            radius_cfg = 0.0
-    radius_cfg = max(0.0, radius_cfg)
-    radius = radius_cfg if (policy == "by_variant" and variant_token == "HOLO") else 0.0
-    radius_term = f"{radius:.2f}" if radius > 0.0 else "none"
-
-    drop_metals = False
-    drop_salts = False
-    if policy == "always_strip":
-        drop_metals = True
-        drop_salts = True
-    elif policy == "by_variant":
-        if variant_token == "HOLO":
-            drop_metals = False
-            drop_salts = radius > 0.0
-        else:
-            drop_metals = True
-            drop_salts = True
-    elif policy == "never_strip":
-        drop_metals = False
-        drop_salts = False
-
-    if (
-        drop_salts
-        and radius > 0.0
-        and pocket_center is None
-        and variant_token == "HOLO"
-    ):
-        logging.warning(
-            "[ions] holo_salt_radius_set_but_no_center stage=meeko action=keep_salts radius=%.2f",
-            radius,
-        )
-        drop_salts = False
-
-    logging.info(
-        "[ions.policy] stage=meeko variant=%s drop_metals=%s drop_salts=%s radius=%s allowlist=%d",
-        variant_label,
-        drop_metals,
-        drop_salts,
-        radius_term,
-        len(allow_set),
-    )
-
-    verbose = os.environ.get("MEEKO_DROP_VERBOSE", "0") not in ("0", "false", "False")
-
-    dropped = 0
-    kept_lines: list[str] = []
-    warn_missing_center = False
-    with open(pdb_in, "r", encoding="utf-8", errors="ignore") as fh:
-        for ln in fh:
-            if not ln.startswith("HETATM"):
-                kept_lines.append(ln)
-                continue
-            res = ln[17:20].strip().upper()
-            elem = (ln[76:78].strip() or res).upper()
-            token = res or elem
-            if token in allow_set or elem in allow_set:
-                kept_lines.append(ln)
-                continue
-
-            is_metal = res in _METAL_RESNAMES or elem in _METAL_RESNAMES
-            is_salt = (
-                res in _SALT_RESNAMES
-                or elem in _SALT_RESNAMES
-                or res in base_ban
-                or elem in base_ban
-            )
-
-            remove = False
-            reason = ""
-            if policy == "never_strip":
-                remove = False
-            elif is_metal and drop_metals and (token not in retain_ions):
-                remove = True
-                reason = "meeko_strip_metal"
-            elif is_salt and drop_salts:
-                if radius > 0.0:
-                    dist = _distance_from_center(ln, pocket_center)
-                    if dist is None:
-                        warn_missing_center = True
-                        remove = False
-                    elif dist >= radius:
-                        remove = True
-                        reason = "meeko_salt_far"
-                elif (res in base_ban or elem in base_ban) and policy != "never_strip":
-                    remove = True
-                    reason = "meeko_salt_policy"
-            elif (res in base_ban or elem in base_ban) and policy == "always_strip":
-                remove = True
-                reason = "meeko_policy"
-
-            if remove:
-                dropped += 1
-                if verbose:
-                    resi = ln[22:26].strip()
-                    chain = ln[21]
-                    logging.info(
-                        "[meeko drop] res=%s chain=%s resi=%s elem=%s reason=%s",
-                        res,
-                        chain,
-                        resi,
-                        elem or res,
-                        reason or "policy",
-                    )
-                continue
-
-            kept_lines.append(ln)
-
-    if warn_missing_center and radius > 0.0 and variant_token == "HOLO":
-        logging.warning(
-            "[ions] holo_salt_radius_set_but_no_center stage=meeko action=keep_salts radius=%.2f",
-            radius,
-        )
-
-    Path(pdb_out).write_text("".join(kept_lines), encoding="utf-8")
-    logging.info(
-        "[ions.touch] stage=meeko variant=%s dropped=%d kept=%d file=%s",
-        variant_label,
-        dropped,
-        len(kept_lines),
-        pdb_out,
-    )
-    if dropped:
-        logging.warning(
-            "Meeko pre-sanitize: dropped %d monoatomics (ban=%s).",
-            dropped,
-            ",".join(sorted(base_ban - retain_ions)),
-        )
-    return dropped
-
-
-def _clean_receptor_pdbqt(pdbqt_path: Union[str, Path]) -> None:
-    """
-    Drop Reduce USER MOD lines and strip bogus AutoDock 'std' suffixes on
-    receptor PDBQT atom records. Safe no-op on missing files.
-    """
-    p = Path(pdbqt_path)
-    if not p.exists():
-        return
-    try:
-        lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except Exception as exc:
-        logging.warning("[receptor.clean] read failed for %s: %s", p, exc)
-        return
-
-    cleaned: list[str] = []
-    user_removed = 0
-    std_fixed = 0
-    std_pattern = re.compile(r"\s(?:std|new)\s*$", re.IGNORECASE)
-
-    for line in lines:
-        stripped = line.lstrip()
-        if stripped.startswith("USER  MOD"):
-            user_removed += 1
-            continue
-
-        if line.startswith(("ATOM", "HETATM")):
-            new_line, n = std_pattern.subn("", line)
-            if n:
-                std_fixed += n
-            cleaned.append(new_line)
-        else:
-            cleaned.append(line)
-
-    try:
-        p.write_text("\n".join(cleaned) + "\n", encoding="utf-8", errors="ignore")
-    except Exception as exc:
-        logging.warning("[receptor.clean] write failed for %s: %s", p, exc)
-        return
-
-    if user_removed or std_fixed:
-        logging.info(
-            "[receptor.clean] cleaned receptor PDBQT %s: user_mod_removed=%d std_suffix_fixed=%d",
-            str(p),
-            user_removed,
-            std_fixed,
-        )
-
-
-def _strip_reduce_user_lines(pdbqt_path: Union[str, Path]) -> None:
-    """Back-compat shim to the unified receptor cleaner."""
-    _clean_receptor_pdbqt(pdbqt_path)
-
-
-def run_prepare_receptor(
-    input_pdb: Union[str, Path], output_pdbqt: Union[str, Path], cfg: dict
-) -> bool:
-    """
-    Robust Meeko/ADT wrapper with:
-      â€¢ Early check for HIS tautomer ambiguity on the modern (--read_pdb) call
-      â€¢ Auto -n mapping for all truly ambiguous HIS (no HD1/HE2)
-      â€¢ Optional -a (allow_bad_res) retry on template-mismatch
-      â€¢ Heavy-handed HIS?<default> fallback
-      â€¢ ADT fallback
-    """
-    import re
-    from tempfile import NamedTemporaryFile
-
-    input_pdb = str(input_pdb)
-    output_pdbqt = str(output_pdbqt)
-    variant_token = _resolve_variant_token(cfg, cfg.get("_CURRENT_VARIANT"))
-    variant_label = variant_token or "legacy"
-    # Persist all attempt logs here (processed_pdbs/<PDB>/work) NOTE DIFF FROM _WORK_DIR
-    work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
-    # --- Helium preflight on the EXACT file we’re about to feed into Meeko pipeline
-    _work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
-    skip_meeko = False
-    try:
-        input_pdb = str(_meeko_preflight_or_fail(input_pdb, _work_dir))
-    except RuntimeError as e:
-        if str(e) == "helium_preflight_failed":
-            logging.error(
-                "Helium persists pre-Meeko; skipping Meeko and trying ADT fallback."
-            )
-            skip_meeko = True
-        else:
-            raise
-
-    drop_policy = _cfg_bool("MEEKO_DROP_FREE_IONS", True)
-    drop_list = ",".join(sorted(_MEEKO_DROP_IONS)) if _MEEKO_DROP_IONS else "none"
-    logging.info(
-        "[meeko.policy] drop_free_ions=%s variant=%s list=%s",
-        str(bool(drop_policy)).lower(),
-        variant_label,
-        drop_list,
-    )
-
-    his_default = str(cfg.get("HIS_DEFAULT", "HIE")).upper()
-    if his_default not in {"HIE", "HID", "HIP"}:
-        his_default = "HIE"
-
-    # improved truthiness parsing
-    allow_bad_res = str(cfg.get("MEEKO_ALLOW_BAD_RES", "true")).lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    default_altloc = (cfg.get("MEEKO_DEFAULT_ALTLOC") or "").strip()  # e.g. "A" or ""
-
-    def _meeko_cmd() -> list[str]:
-        """
-        Build a Meeko CLI command that is portable across machines/environments.
-        Prefer invoking by module with the current interpreter to avoid PATH/script shims.
-        """
-        import sys
-
-        # First, try module-based invocation (preferred, shim-free)
-        try:
-            import meeko  # noqa: F401
-
-            return [sys.executable, "-m", "meeko.cli.mk_prepare_receptor"]
-        except Exception:
-            pass
-
-        # Fallbacks (still avoid PATH hassles as much as possible)
-        import shutil
-        import sysconfig
-        import os
-
-        # 1) PATH (with/without .py)
-        for name in ("mk_prepare_receptor", "mk_prepare_receptor.py"):
-            exe = shutil.which(name)
-            if exe:
-                return [exe]
-        # 2) Scripts dir of the current interpreter
-        try:
-            scripts = sysconfig.get_path("scripts")
-            cand = os.path.join(scripts, "mk_prepare_receptor.py")
-            if os.path.exists(cand):
-                return [sys.executable, cand]  # run via python for consistency
-        except Exception:
-            pass
-
-        raise FileNotFoundError("Meeko CLI not found via module or script.")
-
-    def _run(cmd: List[str]) -> subprocess.CompletedProcess:
-        logging.info("Meeko: %s", " ".join(cmd))
-        r = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        (logging.info if r.returncode == 0 else logging.warning)(
-            "rc=%s\nSTDOUT:\n%s\nSTDERR:\n%s",
-            r.returncode,
-            (r.stdout or ""),
-            (r.stderr or ""),
-        )
-        return r
-
-    def _build_his_override_mapping(pdb_path: str) -> str:
-        """Return a single -n mapping like 'A:27,A:94=HIE' for HIS with no HD1/HE2."""
-        from collections import defaultdict
-
-        by_res = defaultdict(set)
-        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
-            for ln in f:
-                if not ln.startswith(("ATOM  ", "HETATM")):
-                    continue
-                if ln[17:20] != "HIS":
-                    continue
-                chain = ln[21]
-                resi = ln[22:26].strip()
-                aname = ln[12:16].strip().upper()
-                by_res[(chain, resi)].add(aname)
-        targets = []
-        for (chain, resi), names in by_res.items():
-            if ("HD1" not in names) and ("HE2" not in names):
-                try:
-                    rnum = int(resi)
-                except Exception:
-                    rnum = int(resi.strip() or "0")
-                targets.append(f"{chain}:{rnum}")
-        return (",".join(sorted(targets)) + f"={his_default}") if targets else ""
-
-    def _modern_meeko(
-        pdb_path: str,
-        extra_flags: Optional[List[str]] = None,
-        tag: Optional[str] = None,
-        work_dir_for_tag: Optional[Path] = None,
-    ) -> subprocess.CompletedProcess:
-        try:
-            cmd = _meeko_cmd() + ["--read_pdb", pdb_path, "-p", output_pdbqt]
-        except FileNotFoundError as e:
-            from types import SimpleNamespace
-
-            cp = SimpleNamespace(returncode=127, stdout="", stderr=str(e))
-            if tag and work_dir_for_tag:
-                _persist_subproc(
-                    tag, ["<meeko-not-found>"], cp, work_dir_for_tag, Path(output_pdbqt)
-                )
-            return cp
-        flags = extra_flags or []
-        cp = _run(cmd + flags)
-        if tag and work_dir_for_tag:
-            _persist_subproc(tag, cmd + flags, cp, work_dir_for_tag, Path(output_pdbqt))
-            # Inline empty-file hint for fast triage
-            try:
-                if (
-                    Path(output_pdbqt).exists()
-                    and Path(output_pdbqt).stat().st_size == 0
-                ):
-                    head, tail = _first_last_lines(
-                        work_dir_for_tag / f"{tag}.stderr.txt"
-                    )
-                    logging.warning(
-                        "[%s] receptor PDBQT is empty. head=%r tail=%r", tag, head, tail
-                    )
-            except Exception:
-                pass
-        return cp
-
-    def _legacy_meeko(
-        pdb_path: str,
-        extra_flags: Optional[List[str]] = None,
-        tag: Optional[str] = None,
-        work_dir_for_tag: Optional[Path] = None,
-    ) -> bool:
-        try:
-            base = _meeko_cmd()
-        except FileNotFoundError:
-            if tag and work_dir_for_tag:
-                from types import SimpleNamespace
-
-                _persist_subproc(
-                    tag,
-                    ["<meeko-not-found>"],
-                    SimpleNamespace(
-                        returncode=127,
-                        stdout="",
-                        stderr="mk_prepare_receptor not found",
-                    ),
-                    work_dir_for_tag,
-                    Path(output_pdbqt),
-                )
-            return False
-        flags = extra_flags or []
-
-        # try '-i' form
-        cmd_i = base + ["-i", pdb_path, "-p", output_pdbqt] + flags
-        r1 = _run(cmd_i)
-        if tag and work_dir_for_tag:
-            _persist_subproc(
-                f"{tag}_i", cmd_i, r1, work_dir_for_tag, Path(output_pdbqt)
-            )
-        if (
-            r1.returncode == 0
-            and Path(output_pdbqt).exists()
-            and Path(output_pdbqt).stat().st_size > 0
-        ):
-            return True
-
-        # try '-r/-o' form
-        cmd_r = base + ["-r", pdb_path, "-o", output_pdbqt] + flags
-        r2 = _run(cmd_r)
-        if tag and work_dir_for_tag:
-            _persist_subproc(
-                f"{tag}_ro", cmd_r, r2, work_dir_for_tag, Path(output_pdbqt)
-            )
-            try:
-                if (
-                    Path(output_pdbqt).exists()
-                    and Path(output_pdbqt).stat().st_size == 0
-                ):
-                    head, tail = _first_last_lines(
-                        work_dir_for_tag / f"{tag}_ro.stderr.txt"
-                    )
-                    logging.warning(
-                        "[%s_ro] receptor PDBQT is empty. head=%r tail=%r",
-                        tag,
-                        head,
-                        tail,
-                    )
-            except Exception:
-                pass
-        return (
-            r2.returncode == 0
-            and Path(output_pdbqt).exists()
-            and Path(output_pdbqt).stat().st_size > 0
-        )
-
-    # --- Step 0: classify HIS by existing hydrogens (best-case, no coord change)
-    with NamedTemporaryFile("w", suffix=".pdb", delete=False) as tmp1:
-        tmp1_path = tmp1.name
-    try:
-        _classify_and_rename_histidines(
-            input_pdb, tmp1_path
-        )  # leaves non-diagnostic HIS as HIS
-    except Exception as e:
-        logging.warning(
-            "HIS classify/rename step failed (continuing with original): %s", e
-        )
-        tmp1_path = input_pdb
-
-    if drop_policy:
-        logging.info(
-            "[ions.touch] stage=meeko-pre variant=%s action=pre_sanitize file=%s",
-            variant_label,
-            tmp1_path,
-        )
-        # Never drop YAML-retained elemental ions (banlist computed inside)
-        _drop_free_ions_for_meeko(
-            tmp1_path,
-            tmp1_path,
-            cfg=cfg,
-            variant=variant_token,
-            pocket_center=None,
-        )
-
-    # Preflight again on the HIS-classified file we’re actually handing to Meeko now
-    if not skip_meeko:
-        try:
-            _meeko_preflight_or_fail(
-                tmp1_path, Path(output_pdbqt).resolve().parent.parent / "work"
-            )
-        except RuntimeError as e:
-            if str(e) == "helium_preflight_failed":
-                logging.error(
-                    "Helium persists after HIS/ion tweaks; skipping Meeko and trying ADT fallback."
-                )
-                skip_meeko = True
-            else:
-                raise
-
-    work_dir = Path(output_pdbqt).resolve().parent.parent / "work"
-
-    # Build explicit commands for each attempt
-    try:
-        base_meeko = _meeko_cmd()
-    except FileNotFoundError as e:
-        base_meeko = None
-        logging.warning("Meeko CLI not found at prebuild stage: %s", e)
-
-    # Meeko modern (--read_pdb) uses the HIS-classified, ion-sanitized tmp1_path
-    if base_meeko:
-        meeko_cmd = base_meeko + ["--read_pdb", tmp1_path, "-p", output_pdbqt]
-        # Legacy single-shot form (we still capture rc/file size for logging)
-        meeko_cmd_legacy = base_meeko + ["-r", tmp1_path, "-o", output_pdbqt]
-    else:
-        meeko_cmd = None
-        meeko_cmd_legacy = None
-    adt_cmd = None
-    # Only attempt ADT if BOTH are explicitly configured and present
-    if not (
-        MGLTOOLS_PYTHON
-        and Path(MGLTOOLS_PYTHON).is_file()
-        and os.access(MGLTOOLS_PYTHON, os.X_OK)
-        and PREPARE_RECEPTOR_SCRIPT
-        and Path(PREPARE_RECEPTOR_SCRIPT).is_file()
-    ):
-        logging.info(
-            "[receptor] ADT fallback disabled (missing MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT)"
-        )
-    else:
-        # --- Step 3: ADT prepare_receptor4 fallback (only if both keys are valid)
-        adt_ok = False
-        mgltools_python = MGLTOOLS_PYTHON
-        prepare_script = PREPARE_RECEPTOR_SCRIPT
-        if (
-            mgltools_python
-            and Path(mgltools_python).is_file()
-            and os.access(mgltools_python, os.X_OK)
-            and prepare_script
-            and Path(prepare_script).is_file()
-        ):
-            allow_tokens, _ = _load_retain_allowlist(cfg)
-            logging.info(
-                "[ions.policy] stage=adt variant=%s drop_metals=%s drop_salts=%s radius=none allowlist=%d",
-                variant_label,
-                False,
-                False,
-                len(
-                    {
-                        str(tok).strip().upper()
-                        for tok in allow_tokens
-                        if str(tok).strip()
-                    }
-                ),
-            )
-            adt_cmd = [
-                mgltools_python,
-                prepare_script,
-                "-r",
-                tmp1_path,
-                "-o",
-                output_pdbqt,
-                "-A",
-                "none",
-                "-U",
-                "nphs_lps",
-            ]
-            cp = subprocess.run(adt_cmd, capture_output=True, text=True)
-            _persist_subproc(
-                "adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt)
-            )
-            if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-                _clean_receptor_pdbqt(output_pdbqt)
-                logging.info("Prepared receptor with ADT prepare_receptor4.py.")
-                # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
-                try:
-                    _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-                    _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-                    _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
-                except Exception as _e:
-                    logging.warning("[ion diff] skipped note=%s", _e)
-                try:
-                    _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="ADT")
-                except Exception as diff_exc:
-                    logging.warning(
-                        "[iondiff.pdb_pdbqt] action=skip tool=ADT reason=%s",
-                        diff_exc,
-                    )
-
-                return True
-            if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-                head, tail = _first_last_lines(
-                    work_dir / "adt_prepare_receptor4.stderr.txt"
-                )
-                logging.warning(
-                    "[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r",
-                    head,
-                    tail,
-                )
-            elif Path(output_pdbqt).exists():
-                _clean_receptor_pdbqt(output_pdbqt)
-        else:
-            logging.info(
-                "[receptor] ADT fallback disabled (MGLTOOLS_PYTHON/PREPARE_RECEPTOR_SCRIPT not set)"
-            )
-
-    # --- Step 1: Modern Meeko attempt
-    if not skip_meeko and meeko_cmd:
-        cp = subprocess.run(meeko_cmd, capture_output=True, text=True)
-        _persist_subproc("meeko_modern", meeko_cmd, cp, work_dir, Path(output_pdbqt))
-    else:
-        # If Meeko is skipped or unavailable, synthesize a "failed" result object
-        from types import SimpleNamespace
-
-        cp = SimpleNamespace(
-            returncode=127,
-            stdout="",
-            stderr=("meeko_skipped" if skip_meeko else "meeko_not_found"),
-        )
-
-    if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-        _clean_receptor_pdbqt(output_pdbqt)
-        logging.info("Prepared receptor PDBQT with modern Meeko.")
-        # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
-        try:
-            _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-            _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-            _log_ion_diff("meeko", _pdb_ions, _pdbqt_ions)
-        except Exception as _e:
-            logging.warning("[ion diff] skipped note=%s", _e)
-        try:
-            _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="Meeko")
-        except Exception as diff_exc:
-            logging.warning(
-                "[iondiff.pdb_pdbqt] action=skip tool=Meeko reason=%s", diff_exc
-            )
-        return True
-
-    if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-        head, tail = _first_last_lines(work_dir / "meeko_modern.stderr.txt")
-        logging.warning(
-            "[meeko_modern] receptor PDBQT is empty. head=%r tail=%r", head, tail
-        )
-
-    # Decide if we need an -n retry (histidine tie) based on se0
-    se0 = cp.stderr or ""
-    his_tie = ("tied for fewest missing h" in se0.lower()) and (
-        "hie" in se0.lower() and "hid" in se0.lower()
-    )
-    mapping = ""
-    if his_tie:
-        mapping = _build_his_override_mapping(tmp1_path)
-        if not mapping:
-            m = re.search(r"residue_key='([A-Za-z]):(\d+)'", se0)
-            if m:
-                mapping = f"{m.group(1)}:{int(m.group(2))}={his_default}"
-
-    # --- Step 1b: Retry with -n if needed
-    if mapping and meeko_cmd:
-        meeko_cmd_with_n = meeko_cmd + ["-n", mapping]
-        cp = subprocess.run(meeko_cmd_with_n, capture_output=True, text=True)
-        _persist_subproc(
-            "meeko_retry_nmap", meeko_cmd_with_n, cp, work_dir, Path(output_pdbqt)
-        )
-        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-            _clean_receptor_pdbqt(output_pdbqt)
-            logging.info("Prepared receptor after HIS -n mapping.")
-            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
-            try:
-                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-                _log_ion_diff("meeko_retry", _pdb_ions, _pdbqt_ions)
-            except Exception as _e:
-                logging.warning("[ion diff] skipped note=%s", _e)
-            try:
-                _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="Meeko-nmap")
-            except Exception as diff_exc:
-                logging.warning(
-                    "[iondiff.pdb_pdbqt] action=skip tool=Meeko-nmap reason=%s",
-                    diff_exc,
-                )
-
-            return True
-
-        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-            head, tail = _first_last_lines(work_dir / "meeko_retry_nmap.stderr.txt")
-            logging.warning(
-                "[meeko_retry_nmap] receptor PDBQT is empty. head=%r tail=%r",
-                head,
-                tail,
-            )
-
-    # --- Step 1c: Retry with -a allow_bad_res (and default_altloc if hinted)
-    templ_fail = (
-        ("no template matched for residue_key" in se0.lower())
-        or ("template matching failed" in se0.lower())
-        or ("template matched failed" in se0.lower())
-    )
-    extra = []
-    if (
-        meeko_cmd
-        and allow_bad_res
-        and (
-            templ_fail
-            or "allow_bad_res" in se0.lower()
-            or "recommendations" in se0.lower()
-        )
-    ):
-        extra = ["-a"]
-        if (not default_altloc) and (
-            "default_altloc" in se0.lower() or "altloc" in se0.lower()
-        ):
-            default_altloc = "A"
-            logging.warning("Assuming --default_altloc A based on Meeko hint.")
-        if default_altloc:
-            extra += ["--default_altloc", default_altloc]
-        meeko_cmd_allow_bad = meeko_cmd + extra
-        cp = subprocess.run(meeko_cmd_allow_bad, capture_output=True, text=True)
-        _persist_subproc(
-            "meeko_retry_allow_bad_res",
-            meeko_cmd_allow_bad,
-            cp,
-            work_dir,
-            Path(output_pdbqt),
-        )
-        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-            _clean_receptor_pdbqt(output_pdbqt)
-            logging.info("Prepared receptor after -a allow_bad_res.")
-            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
-            try:
-                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-                _log_ion_diff("meeko_allow_bad_res", _pdb_ions, _pdbqt_ions)
-            except Exception as _e:
-                logging.warning("[ion diff] skipped note=%s", _e)
-            try:
-                _log_pdb_pdbqt_counts_diff(
-                    input_pdb, output_pdbqt, tool="Meeko-allow_bad_res"
-                )
-            except Exception as diff_exc:
-                logging.warning(
-                    "[iondiff.pdb_pdbqt] action=skip tool=Meeko-allow_bad_res reason=%s",
-                    diff_exc,
-                )
-
-            return True
-
-        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-            head, tail = _first_last_lines(
-                work_dir / "meeko_retry_allow_bad_res.stderr.txt"
-            )
-            logging.warning(
-                "[meeko_retry_allow_bad_res] receptor PDBQT is empty. head=%r tail=%r",
-                head,
-                tail,
-            )
-    # --- Step 2: Legacy Meeko
-    if not skip_meeko and meeko_cmd_legacy:
-        cp = subprocess.run(meeko_cmd_legacy, capture_output=True, text=True)
-        _persist_subproc(
-            "meeko_legacy", meeko_cmd_legacy, cp, work_dir, Path(output_pdbqt)
-        )
-        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-            _clean_receptor_pdbqt(output_pdbqt)
-            logging.info("Prepared receptor with legacy Meeko.")
-            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
-            try:
-                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-                _log_ion_diff("meeko_legacy", _pdb_ions, _pdbqt_ions)
-            except Exception as _e:
-                logging.warning("[ion diff] skipped note=%s", _e)
-            try:
-                _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="Meeko-legacy")
-            except Exception as diff_exc:
-                logging.warning(
-                    "[iondiff.pdb_pdbqt] action=skip tool=Meeko-legacy reason=%s",
-                    diff_exc,
-                )
-
-            return True
-
-        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-            head, tail = _first_last_lines(work_dir / "meeko_legacy.stderr.txt")
-            logging.warning(
-                "[meeko_legacy] receptor PDBQT is empty. head=%r tail=%r", head, tail
-            )
-
-    # --- Step 3: ADT prepare_receptor4 fallback
-    if adt_cmd:
-        cp = subprocess.run(adt_cmd, capture_output=True, text=True)
-        _persist_subproc(
-            "adt_prepare_receptor4", adt_cmd, cp, work_dir, Path(output_pdbqt)
-        )
-        if cp.returncode == 0 and _ok_receptor_file(Path(output_pdbqt)):
-            _clean_receptor_pdbqt(output_pdbqt)
-            logging.info("Prepared receptor with ADT prepare_receptor4.py.")
-            # --- ION DIFF BLOCK: summarize ions kept vs lost in PDBQT
-            try:
-                _pdb_ions = _ion_pairs_from_pdb(input_pdb)
-                _pdbqt_ions = _ion_pairs_from_pdbqt(output_pdbqt)
-                _log_ion_diff("adt", _pdb_ions, _pdbqt_ions)
-            except Exception as _e:
-                logging.warning("[ion diff] skipped note=%s", _e)
-            try:
-                _log_pdb_pdbqt_counts_diff(input_pdb, output_pdbqt, tool="ADT")
-            except Exception as diff_exc:
-                logging.warning(
-                    "[iondiff.pdb_pdbqt] action=skip tool=ADT reason=%s",
-                    diff_exc,
-                )
-
-            return True
-
-        if Path(output_pdbqt).exists() and Path(output_pdbqt).stat().st_size == 0:
-            head, tail = _first_last_lines(
-                work_dir / "adt_prepare_receptor4.stderr.txt"
-            )
-            logging.warning(
-                "[adt_prepare_receptor4] receptor PDBQT is empty. head=%r tail=%r",
-                head,
-                tail,
-            )
-        elif Path(output_pdbqt).exists():
-            _clean_receptor_pdbqt(output_pdbqt)
-
-    if _ok_receptor_file(Path(output_pdbqt)):
-        _clean_receptor_pdbqt(output_pdbqt)
-        logging.warning(
-            "[receptor] proceeding with existing receptor PDBQT despite prep errors."
-        )
-        return True
-    return False
 
 
 def _phenix_detect() -> tuple[str, list[str] | None, dict]:
-    """
-    Return (mode, cmd_list, env) for phenix.pdbtools detection.
-    mode ∈ {'linux-path','linux-explicit','wsl-bat','unavailable'}
-    """
-    env = dict(os.environ)
-    if PHENIX_LIB_PATH:
-        env["PYTHONPATH"] = PHENIX_LIB_PATH
+    from protein_prep.phenix_tools import _phenix_detect as _impl
 
-    # 1) On PATH (native Linux installs)
-    if shutil.which("phenix.pdbtools"):
-        return ("linux-path", ["phenix.pdbtools"], env)
-
-    # 2) Explicit Linux path via PHENIX_DIR (your case)
-    if PHENIX_DIR:
-        explicit = Path(PHENIX_DIR) / "phenix.pdbtools"
-        if explicit.exists() and os.access(str(explicit), os.X_OK):
-            return ("linux-explicit", [str(explicit)], env)
-
-    # 3) Windows .bat (usable from WSL via PowerShell)
-    if PDBTOOLS_BAT and Path(PDBTOOLS_BAT).exists():
-        return ("wsl-bat", [PDBTOOLS_BAT], env)
-
-    return ("unavailable", None, env)
-
-
-def _run_and_log(
-    cmd: list[str], *, env: dict, check: bool = False
-) -> subprocess.CompletedProcess:
-    logging.info("[phenix] exec: %s", " ".join(cmd))
-    cp = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
-    )
-    if cp.stdout:
-        logging.debug("[phenix][stdout]\n%s", cp.stdout)
-    if cp.stderr:
-        logging.debug("[phenix][stderr]\n%s", cp.stderr)
-    if check and cp.returncode != 0:
-        raise subprocess.CalledProcessError(cp.returncode, cmd, cp.stdout, cp.stderr)
-    return cp
+    return _impl()
 
 
 def run_phenix_pdbtools(
@@ -6037,465 +1316,29 @@ def run_phenix_pdbtools(
     output_pdb: Union[str, Path],
     remove_waters: bool = True,
 ) -> bool:
-    """
-    Run Phenix pdbtools if available (Linux, or Windows via PowerShell under WSL).
-    Return True if successful. Always log branch as: [phenix] mode=...
-    """
-    inp = os.path.abspath(str(input_pdb)).replace("\\", "/")
-    outp = os.path.abspath(str(output_pdb)).replace("\\", "/")
+    from protein_prep.phenix_tools import run_phenix_pdbtools as _impl
 
-    mode, base_cmd, env = _phenix_detect()
-    logging.info("[phenix] mode=%s", mode)
-
-    if mode == "unavailable" or not base_cmd:
-        logging.warning("Phenix not available; skipping pdbtools polish")
-        return False
-
-    cmd = base_cmd + [inp, f"output.file_name={outp}"]
-    if remove_waters:
-        cmd.append('remove="resname HOH"')
-
-    try:
-        cp = _run_and_log(cmd, env=env, check=True)
-        if os.path.exists(outp) and os.path.getsize(outp) > 0:
-            logging.info("phenix.pdbtools wrote %s", outp)
-            return True
-        logging.warning(
-            "phenix.pdbtools finished but did not create expected output: %s", outp
-        )
-        return False
-    except Exception as e:
-        logging.error("phenix.pdbtools failed: %s", e)
-        # Diagnostic: phenix.python import iotbx (same env)
-        py_cmd = None
-        if PHENIX_DIR and (Path(PHENIX_DIR) / "phenix.python").exists():
-            py_cmd = [str(Path(PHENIX_DIR) / "phenix.python")]
-        elif shutil.which("phenix.python"):
-            py_cmd = ["phenix.python"]
-        elif PHENIX_PYTHON_BAT and Path(PHENIX_PYTHON_BAT).exists():
-            py_cmd = [PHENIX_PYTHON_BAT]
-        if py_cmd:
-            try:
-                _run_and_log(
-                    py_cmd + ["-c", "from iotbx import pdb; print('iotbx_ok')"],
-                    env=env,
-                    check=False,
-                )
-            except Exception:
-                pass
-        return False
+    return _impl(
+        input_pdb=input_pdb,
+        output_pdb=output_pdb,
+        remove_waters=remove_waters,
+    )
 
 
 def run_windows_phenix_clean_script(
     loop_fixed_pdb: Union[str, Path], nolig_dir: Union[str, Path]
 ) -> int:
-    """Call your PHENIX_CLEAN_SCRIPT using Windows Phenix Python from WSL. Returns returncode."""
-    if (
-        not PHENIX_PYTHON_BAT
-        or not Path(PHENIX_PYTHON_BAT).exists()
-        or not PHENIX_CLEAN_SCRIPT
-    ):
-        return 127
-    win_script = _win_path(PHENIX_CLEAN_SCRIPT)
-    win_in = _win_path(loop_fixed_pdb)
-    win_outdir = _win_path(nolig_dir)
-    ps = (
-        "$ErrorActionPreference='Stop';"
-        f"if (!(Test-Path '{win_outdir}')) {{ New-Item -ItemType Directory -Force -Path '{win_outdir}' | Out-Null }};"
-        f"Push-Location '{win_outdir}';"
-        f"& '{_win_path(PHENIX_PYTHON_BAT)}' '{win_script}' '{win_in}' '{win_outdir}';"
-        "Pop-Location;"
-    )
-    r = _powershell(ps)
-    return r.returncode
+    from protein_prep.phenix_tools import run_windows_phenix_clean_script as _impl
 
-
-def run_openbabel_add_h(
-    input_pdb: Union[str, Path], output_pdb: Union[str, Path]
-) -> None:
-    obabel = OPENBABEL_PATH or shutil.which("obabel")
-    if not obabel or not shutil.which(Path(obabel).name):
-        raise RuntimeError("Open Babel not found. Install or set OPENBABEL_PATH.")
-    cmd = [obabel, str(input_pdb), "-O", str(output_pdb), "-h"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"Open Babel failed:\n{r.stderr}")
-    logging.info("Open Babel hydrogenation succeeded")
-
-
-from pathlib import Path
-import shutil
-import logging
-import os
-
-
-def assign_protonation_states(
-    input_pdb: Union[str, Path],
-    output_pdb: Union[str, Path],
-    reduce_exe: Optional[str] = None,
-) -> str:
-    import uuid
-    from pathlib import Path
-
-    # --- toggles ---
-    _REDUCE_RETRY = str(os.environ.get("REDUCE_RETRY", "1")).lower() not in {
-        "0",
-        "false",
-        "no",
-    }
-    _FALLBACK_ADDH = str(os.environ.get("FALLBACK_ADDH", "1")).lower() not in {
-        "0",
-        "false",
-        "no",
-    }
-
-    input_pdb = os.path.abspath(str(input_pdb)).replace("\\", "/")
-    output_pdb = os.path.abspath(str(output_pdb)).replace("\\", "/")
-
-    # Optional precheck: very low CONECT coverage is a strong predictor of Reduce complaints.
-    try:
-        cc = conect_coverage(input_pdb)
-        if cc < 0.05:
-            logging.info("[reduce precheck] low_conect=%.2f file=%s", cc, input_pdb)
-            try:
-                # Idempotent, YAML-driven element repair
-                fix_pdb_elements(input_pdb)
-            except Exception as _e:
-                logging.warning("[reduce precheck] elemfix_skip note=%s", _e)
-    except Exception as _e:
-        logging.warning("[reduce precheck] coverage_skip note=%s", _e)
-
-    has_h = hydrogenation_status(input_pdb)[0] != "NO_H"
-    # If input already has H (e.g., from PDB2PQR), do flip/cleanup only; else do a full H build.
-    reduce_flags = ["-FLIP", "-Quiet"] if has_h else ["-BUILD", "-Quiet"]
-
-    exe = reduce_exe
-    exe_dir = os.path.dirname(exe) if exe else None
-
-    def run_reduce(in_pdb: str, stage_name: str) -> str:
-        env = dict(os.environ)
-        het = _het_dict_path()
-        if het:
-            env["REDUCE_HET_DICT"] = het
-        with open(output_pdb, "w", encoding="utf-8") as out:
-            cp = subprocess.run(
-                [exe] + reduce_flags + [in_pdb],
-                stdout=out,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-            )
-        # Persist stderr and count atoms written
-        try:
-            (Path(output_pdb).parent / f"{stage_name}.stderr.txt").write_text(
-                cp.stderr or "", encoding="utf-8"
-            )
-        except Exception:
-            pass
-        wrote_atoms = 0
-        try:
-            with open(output_pdb, "r", encoding="utf-8", errors="ignore") as fh:
-                wrote_atoms = sum(1 for ln in fh if ln.startswith(("ATOM  ", "HETATM")))
-        except Exception:
-            wrote_atoms = 0
-        logging.warning(
-            "[reduce] stage=%s rc=%s flags=%s wrote_atoms=%d",
-            stage_name,
-            cp.returncode,
-            " ".join(reduce_flags),
-            wrote_atoms,
-        )
-        return output_pdb
-
-    status_before, h0, hv0, r0 = hydrogenation_status(input_pdb)
-    logging.info(
-        "[H-Scan before] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_before, h0, hv0, r0
-    )
-    if exe is None:
-        # Caller requested to skip Reduce (e.g., nucleotides). Go straight to fallback.
-        if _FALLBACK_ADDH:
-            logging.info(
-                "[protonate] skipping Reduce by request; using OpenBabel fallback"
-            )
-            run_openbabel_add_h(input_pdb, output_pdb)
-        else:
-            # Keep as-is if fallback is disabled
-            shutil.copy(input_pdb, output_pdb)
-            logging.warning(
-                "[protonate] Reduce skipped and FALLBACK_ADDH=0; copying input"
-            )
-        # Continue into the existing post-guard checks (size/H-Scan) below
-        sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
-        if sz == 0:
-            raise RuntimeError("protonation_empty_output")
-
-        #  strict ATOM/HETATM guard (Reduce can write tiny, header-only files)
-        def _file_has_atoms(p: str) -> bool:
-            try:
-                with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                    return any(ln.startswith(("ATOM  ", "HETATM")) for ln in fh)
-            except Exception:
-                return False
-
-        if not _file_has_atoms(output_pdb):
-            logging.error(
-                "[protonate] wrote_atoms=0 after Reduce; attempting OpenBabel fallback"
-            )
-            try:
-                tmp_babel = output_pdb + ".babel.pdb"
-                run_openbabel_add_h(input_pdb, tmp_babel)
-                shutil.move(tmp_babel, output_pdb)
-                logging.warning("[fallback] openbabel applied (post-Reduce)")
-            except Exception as e:
-                logging.error(
-                    "[fallback] openbabel failed: %s; copying input→output",
-                    str(e)[:200],
-                )
-                shutil.copy(input_pdb, output_pdb)
-        status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
-        logging.info(
-            "[H-Scan after ] %s (H=%d, Heavy=%d, H/Heavy=%.2f)",
-            status_after,
-            h1,
-            hv1,
-            r1,
-        )
-        return output_pdb
-
-    # --- First attempt (default flags) ---
-    try:
-        run_reduce(input_pdb, "Reduce#1")
-    except Exception as e:
-        logging.warning(
-            "[reduce#1 fail] exe=%s het_dict=%s has_h=%s note=%s",
-            exe,
-            os.environ.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT", ""),
-            str(has_h),
-            str(e)[:200],
-        )
-        completed = False
-        # Quick element repair before a retry
-        try:
-            fix_pdb_elements(input_pdb)
-        except Exception:
-            pass
-
-        # ---  retry ladder ---
-        retried_ok = False
-        if _REDUCE_RETRY:
-            try:
-                # Second attempt: add -noflip (Reduce sometimes flips/complains on tricky H networks)
-                reduce_flags_noflip = (
-                    (["-noflip"] + reduce_flags)
-                    if "-noflip" not in reduce_flags
-                    else reduce_flags
-                )
-
-                def run_reduce_noflip(in_pdb: str, stage_name: str) -> str:
-                    env = dict(os.environ)
-                    het = env.get("REDUCE_HET_DICT") or _cfg("REDUCE_HET_DICT", "")
-                    if het:
-                        env["REDUCE_HET_DICT"] = het
-                    with open(output_pdb, "w", encoding="utf-8") as out:
-                        cp = subprocess.run(
-                            [exe] + reduce_flags_noflip + [in_pdb],
-                            stdout=out,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                            cwd=exe_dir,
-                            env=env,
-                        )
-                    (logging.info if cp.returncode == 0 else logging.warning)(
-                        "[reduce] stage=%s rc=%s flags=%r in=%s",
-                        stage_name,
-                        cp.returncode,
-                        reduce_flags_noflip,
-                        in_pdb,
-                    )
-                    if cp.returncode != 0:
-                        raise RuntimeError(
-                            f"{stage_name} reduce failed: {cp.stderr.strip()}"
-                        )
-                    return output_pdb
-
-                run_reduce_noflip(input_pdb, "Reduce#2(noflip)")
-                retried_ok = True
-                completed = True
-            except Exception as e2:
-                logging.warning("[reduce#2 fail] noflip note=%s", str(e2)[:200])
-
-        if not retried_ok:
-            # --- H-add fallback path (OpenBabel) ---
-            if _FALLBACK_ADDH:
-                try:
-                    # Guard element columns first to avoid He/column drift in fallback
-                    try:
-                        fix_pdb_elements(input_pdb)
-                    except Exception as _e_fix:
-                        logging.warning(
-                            "[element] guard before fallback failed: %s", _e_fix
-                        )
-                    logging.info(
-                        "[protonate fallback] using=OpenBabel in=%s out=%s",
-                        input_pdb,
-                        output_pdb,
-                    )
-                    run_openbabel_add_h(input_pdb, output_pdb)
-                    logging.warning("[reduce] fallback H-add applied")
-                    completed = True
-
-                except Exception as babel_error:
-                    logging.error("OpenBabel fallback failed: %s", babel_error)
-                    # Last resort: if input already had H, keep them; else raise
-                    if has_h:
-                        shutil.copy(input_pdb, output_pdb)
-                        logging.warning(
-                            "Reduce+fallback failed; keeping existing hydrogens."
-                        )
-                    else:
-                        raise
-        if not completed:
-            try:
-                # Repair element columns (YAML-driven fixer under the hood)
-                fix_pdb_elements(input_pdb)
-            except Exception:
-                pass
-            try:
-                tmp_in = (
-                    os.path.splitext(input_pdb)[0] + f"_retry_{uuid.uuid4().hex}.pdb"
-                )
-                shutil.copy(input_pdb, tmp_in)
-                try:
-                    run_reduce(tmp_in, "Reduce#3(temp)")
-                finally:
-                    try:
-                        os.remove(tmp_in)
-                    except Exception:
-                        pass
-            except Exception as e2:
-                logging.error("Reduce temp retry failed: %s", e2)
-                try:
-                    if has_h:
-                        shutil.copy(input_pdb, output_pdb)
-                        logging.warning(
-                            "Reduce failed; keeping existing hydrogens (no rebuild)."
-                        )
-                    else:
-                        logging.info(
-                            "[protonate fallback] using=OpenBabel in=%s out=%s",
-                            input_pdb,
-                            output_pdb,
-                        )
-                        run_openbabel_add_h(input_pdb, output_pdb)
-                        logging.info("Open Babel used to add hydrogens.")
-                except Exception as babel_error:
-                    logging.error("OpenBabel fallback failed: %s", babel_error)
-                    shutil.copy(input_pdb, output_pdb)
-                    logging.warning("Hydrogenation skipped; copied input to output.")
-
-    # Guard: the path we will scan must exist and be non-empty
-    sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
-    if sz == 0:
-        raise RuntimeError("protonation_empty_output")
-
-    status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
-    logging.info(
-        "[H-Scan after ] %s (H=%d, Heavy=%d, H/Heavy=%.2f)", status_after, h1, hv1, r1
-    )
-
-    if status_after == "NO_H":
-        logging.warning("Reduce produced no hydrogens; trying Open Babel fallback.")
-        try:
-            logging.info(
-                "[protonate fallback] using=OpenBabel in=%s out=%s",
-                input_pdb,
-                output_pdb,
-            )
-            tmp_babel = output_pdb + ".babel.pdb"
-            run_openbabel_add_h(input_pdb, tmp_babel)
-            shutil.move(tmp_babel, output_pdb)
-            status_after, h1, hv1, r1 = hydrogenation_status(output_pdb)
-            logging.info(
-                "[H-Scan babel] %s (H=%d, Heavy=%d, H/Heavy=%.2f)",
-                status_after,
-                h1,
-                hv1,
-                r1,
-            )
-        except Exception as e:
-            logging.error("OpenBabel fallback failed after Reduce: %s", e)
-
-        if hydrogenation_status(output_pdb)[0] == "NO_H":
-            if str(os.environ.get("ALLOW_NO_HYDROGENS", "")).lower() in (
-                "1",
-                "true",
-                "yes",
-            ):
-                logging.warning(
-                    "Continuing with NO_H due to ALLOW_NO_HYDROGENS env override."
-                )
-                # Still emit result line for grep
-                try:
-                    sz = (
-                        Path(output_pdb).stat().st_size
-                        if Path(output_pdb).exists()
-                        else 0
-                    )
-                except Exception:
-                    sz = 0
-                logging.info(
-                    "[protonate result] status=%s H=%d Heavy=%d ratio=%.2f size=%d",
-                    "NO_H",
-                    h1,
-                    hv1,
-                    r1,
-                    sz,
-                )
-                return output_pdb
-            raise RuntimeError("Protonation produced no hydrogens.")
-
-    # Final greppable result line
-    try:
-        sz = Path(output_pdb).stat().st_size if Path(output_pdb).exists() else 0
-    except Exception:
-        sz = 0
-    logging.info(
-        "[protonate result] status=%s H=%d Heavy=%d ratio=%.2f size=%d",
-        status_after,
-        h1,
-        hv1,
-        r1,
-        sz,
-    )
-
-    return output_pdb
+    return _impl(loop_fixed_pdb, nolig_dir)
 
 
 def run_molprobity_validate(
     pdb_path: Union[str, Path], work_dir: Optional[Union[str, Path]] = None
 ) -> int:
-    """
-    Try running MolProbity validation via 'phenix.molprobity' if available.
-    Returns the process return code (0 means success). Non-fatal if missing.
-    """
-    exe = shutil.which("phenix.molprobity")
-    if not exe:
-        logging.info("MolProbity not available; skipping validation.")
-        return 127
-    work = Path(work_dir or Path(pdb_path).with_suffix(".molprobity")).resolve()
-    work.mkdir(parents=True, exist_ok=True)
-    cmd = [exe, str(Path(pdb_path).resolve())]
-    logging.info("Running MolProbity: %s", " ".join(cmd))
-    r = subprocess.run(
-        cmd, cwd=str(work), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    if r.returncode != 0:
-        logging.warning(
-            "MolProbity failed (rc=%s)\nSTDERR:\n%s", r.returncode, (r.stderr or "")
-        )
-    else:
-        logging.info("MolProbity finished; results under %s", work)
-    return r.returncode
+    from protein_prep.phenix_tools import run_molprobity_validate as _impl
+
+    return _impl(pdb_path=pdb_path, work_dir=work_dir)
 
 
 # =============================

@@ -1,0 +1,78 @@
+{
+  "bigbind_dir": "data/bigbind/BigBindV1.5",
+  "train_pdb": "cp3a4_human_23_503_catalytic_0",
+  "splits": [
+    "train",
+    "val",
+    "test"
+  ],
+  "random_seed": 7,
+  "max_rows": 50000,
+  "atlas_cfg_path": null,
+  "fpocket_center_columns": [
+    "pocket_center_x",
+    "pocket_center_y",
+    "pocket_center_z"
+  ],
+  "fpocket_variant_column": "variant",
+  "fpocket_ph_column": "pH",
+  "fpocket_centers_by_pdb": {},
+  "inner_scaffold_folds": 3,
+  "model": {
+    "type": "logreg",
+    "C": 1.0,
+    "class_weight": "balanced",
+    "max_iter": 1000
+  },
+  "features": {
+    "ligand_descriptors": true,
+    "ligand_extra_descriptors": false,
+    "ligand_morgan_fp_bits": 512,
+    "pocket_fpocket": true,
+    "vina_score": false
+  },
+  "automl": {
+    "feature_variants": [
+      "baseline",
+      "ligand_only",
+      "no_fp"
+    ],
+    "model_families": [
+      "logreg",
+      "hgb"
+    ],
+    "grid": {
+      "logreg": {
+        "C": [
+          0.1,
+          1.0
+        ],
+        "penalty": [
+          "l2"
+        ],
+        "solver": [
+          "lbfgs"
+        ],
+        "class_weight": [
+          "balanced"
+        ]
+      },
+      "hgb": {
+        "max_depth": [
+          3
+        ],
+        "learning_rate": [
+          0.1
+        ],
+        "max_leaf_nodes": [
+          31
+        ],
+        "min_samples_leaf": [
+          20,
+          50
+        ]
+      }
+    }
+  },
+  "run_id": "config_txt_smoke_20260205"
+}

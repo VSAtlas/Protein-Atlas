@@ -18,6 +18,9 @@ from .docking_controls import _summarize_ions_file
 from .docking_receptor import prepare_receptor
 from .docking_utils import norm
 from path_router.path_router import Paths
+from protein_prep.holo_restore import _holo_restore_from_input_if_needed
+from protein_prep.metal_site_audit import run_metal_site_audit
+from protein_prep.receptor_prep import run_prepare_receptor
 from protein_functions import detect_active_site
 
 
@@ -215,7 +218,7 @@ def _phase2_to4_receptor_and_center(
             metals_added,
             cofactors_added,
             regen,
-        ) = protein_prep._holo_restore_from_input_if_needed(
+        ) = _holo_restore_from_input_if_needed(
             pdb_id=paths.pdb_id,
             cleaned_pdb=cleaned_pdb,
             output_pdbqt=receptor_pdbqt,
@@ -246,7 +249,7 @@ def _phase2_to4_receptor_and_center(
                 receptor_target,
             )
             try:
-                ok_after = protein_prep.run_prepare_receptor(
+                ok_after = run_prepare_receptor(
                     input_pdb=cleaned_pdb,
                     output_pdbqt=str(receptor_target),
                     cfg=cfg,
@@ -280,7 +283,7 @@ def _phase2_to4_receptor_and_center(
 
         if receptor_pdbqt:
             try:
-                protein_prep.run_metal_site_audit(
+                run_metal_site_audit(
                     pdb_id=paths.pdb_id,
                     router_paths=paths,
                     input_pdb_path=str(paths.input_pdb_path),
