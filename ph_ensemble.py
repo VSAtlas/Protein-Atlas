@@ -23,6 +23,42 @@ elog.propagate = False
 
 
 # --- minimal helpers (no external deps) ---
+def _vina_receptor_pdbqt_compatible(path: str) -> bool:
+    """
+    Conservative text check for receptor PDBQT compatibility with Vina.
+    Reject files that begin with unsupported records (e.g., COMPND/AUTHOR).
+    """
+    allowed_prefixes = (
+        "REMARK",
+        "ROOT",
+        "ENDROOT",
+        "BRANCH",
+        "ENDBRANCH",
+        "ATOM",
+        "HETATM",
+        "TER",
+        "MODEL",
+        "ENDMDL",
+        "END",
+    )
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            seen_atom = False
+            for i, ln in enumerate(fh):
+                s = ln.strip()
+                if not s:
+                    continue
+                if not s.startswith(allowed_prefixes):
+                    return False
+                if s.startswith(("ATOM", "HETATM")):
+                    seen_atom = True
+                if i >= 500:
+                    break
+        return seen_atom
+    except Exception:
+        return False
+
+
 def _sha1_of_file(path: str) -> str:
     h = hashlib.sha1()
     with open(path, "rb") as fh:
@@ -166,24 +202,28 @@ def _ph_member_job(job):
         output_pdbqt=pdbqt_path,
         cfg=automate_protein_prep.config,
     )
-    if not ok:
-        base_receptor_pdbqt = (
-            Path(cleaned_receptor_pdb)
-            .with_name(Path(cleaned_receptor_pdb).stem.replace("_cleaned", "") + ".pdbqt")
+    compatible = _vina_receptor_pdbqt_compatible(pdbqt_path)
+    if (not ok) or (not compatible):
+        base_receptor_pdbqt = Path(cleaned_receptor_pdb).with_name(
+            Path(cleaned_receptor_pdb).stem.replace("_cleaned", "") + ".pdbqt"
         )
-        if base_receptor_pdbqt.exists():
+        if base_receptor_pdbqt.exists() and _vina_receptor_pdbqt_compatible(
+            str(base_receptor_pdbqt)
+        ):
             shutil.copy2(base_receptor_pdbqt, pdbqt_path)
             elog.warning(
-                "[stage.C.pdbqt] fallback=base_receptor ph=%.2f src=%s dst=%s",
+                "[stage.C.pdbqt] fallback=base_receptor ph=%.2f reason=%s src=%s dst=%s",
                 ph,
+                "prepare_failed" if not ok else "incompatible_output",
                 base_receptor_pdbqt,
                 pdbqt_path,
             )
         else:
             shutil.copy2(withH_pdb, pdbqt_path)
             elog.warning(
-                "[stage.C.pdbqt] fallback=withH_copy ph=%.2f src=%s dst=%s",
+                "[stage.C.pdbqt] fallback=withH_copy ph=%.2f reason=%s src=%s dst=%s",
                 ph,
+                "prepare_failed" if not ok else "incompatible_output",
                 withH_pdb,
                 pdbqt_path,
             )
@@ -358,20 +398,29 @@ def build_ph_ensemble(
             threads_per_job,
             workers * threads_per_job,
         )
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            future_to_job = {pool.submit(_ph_member_job, job): job for job in jobs}
-            for fut in as_completed(future_to_job):
-                job = future_to_job[fut]
-                try:
-                    res = fut.result()
-                except Exception as exc:
-                    for other in future_to_job:
-                        if other is not fut:
-                            other.cancel()
-                    raise RuntimeError(
-                        f"pH member failed ph={job[1]:.2f} tag={job[2]}"
-                    ) from exc
-                results.append(res)
+        try:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                future_to_job = {pool.submit(_ph_member_job, job): job for job in jobs}
+                for fut in as_completed(future_to_job):
+                    job = future_to_job[fut]
+                    try:
+                        res = fut.result()
+                    except Exception as exc:
+                        for other in future_to_job:
+                            if other is not fut:
+                                other.cancel()
+                        raise RuntimeError(
+                            f"pH member failed ph={job[1]:.2f} tag={job[2]}"
+                        ) from exc
+                    results.append(res)
+        except Exception as exc:
+            elog.warning(
+                "[ph.parallel] unavailable -> serial fallback reason=%s",
+                exc,
+            )
+            results = []
+            for job in jobs:
+                results.append(_ph_member_job(job))
 
     members = []
     mi = member_index_start

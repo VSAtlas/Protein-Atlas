@@ -21,6 +21,7 @@ from ml.config import config_to_dict, load_atlas_cfg, load_config
 from ml.data.bigbind import load_train_holdout_from_bigbind
 from ml.evaluate import evaluate_holdout_metrics
 from ml.featurize import BigBindFeaturizer
+from ml.fpocket_bigbind import merge_fpocket_metrics_on_pocket, precompute_fpocket_for_bigbind_df
 from ml.modeling import train_logistic_regression
 
 
@@ -65,7 +66,7 @@ def _save_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, output_dir / "model.joblib")
 
-    (output_dir / "config_snapshot.json").write_text(
+    (output_dir / "config_snapshot.txt").write_text(
         json.dumps(config, indent=2),
         encoding="utf-8",
     )
@@ -86,6 +87,9 @@ def run_pipeline(config_path: str) -> tuple[Path, dict[str, float | int]]:
     config = load_config(config_path)
     atlas_cfg = load_atlas_cfg(config)
     np.random.seed(config.random_seed)
+    run_id = _resolve_run_id(config.run_id)
+    output_dir = Path(__file__).resolve().parent / "outputs" / run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = load_train_holdout_from_bigbind(
         bigbind_dir=config.bigbind_dir,
@@ -93,8 +97,22 @@ def run_pipeline(config_path: str) -> tuple[Path, dict[str, float | int]]:
         splits=config.splits,
         max_rows=config.max_rows,
         random_seed=config.random_seed,
+        dataset_split_mode=config.dataset_split_mode,
+        exclude_target_prefixes=config.exclude_target_prefixes,
         logger=logger,
     )
+    train_df = dataset.train_df.copy()
+    holdout_df = dataset.test_df.copy()
+    if config.features.pocket_fpocket:
+        combined = pd.concat([train_df, holdout_df], ignore_index=False)
+        metrics_df = precompute_fpocket_for_bigbind_df(
+            df=combined,
+            bigbind_root=dataset.bigbind_root,
+            atlas_cfg=atlas_cfg,
+            run_dir=output_dir,
+        )
+        train_df = merge_fpocket_metrics_on_pocket(train_df, metrics_df)
+        holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, metrics_df)
 
     featurizer = BigBindFeaturizer(
         bigbind_root=dataset.bigbind_root,
@@ -106,8 +124,16 @@ def run_pipeline(config_path: str) -> tuple[Path, dict[str, float | int]]:
         fpocket_centers_by_pdb=config.fpocket_centers_by_pdb,
         logger=logger,
     )
-    train_features = featurizer.transform(dataset.train_df)
-    holdout_features = featurizer.transform(dataset.holdout_df)
+    train_features = featurizer.transform(
+        train_df,
+        audit_dir=output_dir,
+        audit_tag="train",
+    )
+    holdout_features = featurizer.transform(
+        holdout_df,
+        audit_dir=output_dir,
+        audit_tag="holdout",
+    )
 
     logger.info(
         "[ml] Featurized train rows=%d dropped_invalid_smiles=%d",
@@ -140,10 +166,7 @@ def run_pipeline(config_path: str) -> tuple[Path, dict[str, float | int]]:
         fractions=(0.01, 0.02, 0.05, 0.10),
     )
 
-    run_id = _resolve_run_id(config.run_id)
-    output_dir = Path(__file__).resolve().parent / "outputs" / run_id
-
-    holdout_used = dataset.holdout_df.loc[holdout_features.source_index].copy()
+    holdout_used = holdout_df.loc[holdout_features.source_index].copy()
     holdout_predictions = holdout_used[
         ["split", "lig_smiles", "active", "pocket", "ex_rec_pdb"]
     ].copy()

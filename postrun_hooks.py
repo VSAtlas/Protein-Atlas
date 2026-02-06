@@ -7,7 +7,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from cli.cli_utils import _norm_pdb_id
 
@@ -156,6 +156,122 @@ def _maybe_run_scorch_rescore(
         )
     else:
         logger.info("[scorch-rescore.result] status=ok run_id=%s", run_id)
+
+
+def _maybe_run_scorch_rescore_for_pdb(
+    cfg: Mapping[str, Any],
+    run_id: str,
+    pdb_id: str,
+    *,
+    variant: Optional[str] = None,
+    ph: Optional[str] = None,
+    verbose: bool = False,
+) -> None:
+    """
+    Best-effort per-protein SCORCH rescoring. Never raises.
+    """
+    logger = logging.getLogger("scorch-rescore-hook")
+    if not run_id:
+        logger.info("[scorch-rescore.skip] reason=missing_run_id")
+        return
+    if not pdb_id:
+        logger.info("[scorch-rescore.skip] reason=missing_pdb_id run_id=%s", run_id)
+        return
+
+    raw_use = cfg.get("USE_SCORCH", False)
+    if isinstance(raw_use, bool):
+        use_scorch = raw_use
+    else:
+        use_scorch = str(raw_use).strip().lower() in {"1", "true", "yes", "on"}
+    if not use_scorch:
+        logger.info(
+            "[scorch-rescore.skip] reason=use_scorch_false run_id=%s pdb_id=%s",
+            run_id,
+            pdb_id,
+        )
+        return
+
+    repo_root = Path(__file__).resolve().parent
+    script_path = repo_root / "src/post_docking/rescoring/rescoring_scorch.py"
+    if not script_path.exists():
+        logger.warning(
+            "[scorch-rescore.skip] reason=missing_script path=%s", script_path
+        )
+        return
+
+    def _as_int(val: Any, fallback: int) -> int:
+        try:
+            return int(val)
+        except Exception:
+            return fallback
+
+    total_cpu = max(
+        1,
+        _as_int(cfg.get("CPU") or (os.cpu_count() or 1), os.cpu_count() or 1),
+    )
+    jobs = 1
+    if cfg.get("MAX_PARALLEL_JOBS") is not None:
+        jobs = max(1, min(_as_int(cfg.get("MAX_PARALLEL_JOBS"), jobs), total_cpu))
+    if cfg.get("SCORCH_JOBS") is not None:
+        jobs = max(1, min(_as_int(cfg.get("SCORCH_JOBS"), jobs), total_cpu))
+
+    threads_cfg = cfg.get("SCORCH_THREADS")
+    threads = total_cpu if threads_cfg is None else _as_int(threads_cfg, total_cpu)
+    threads = max(1, min(threads, total_cpu))
+    if jobs * threads > total_cpu:
+        threads = max(1, total_cpu // jobs)
+
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--run-id",
+        str(run_id),
+        "--repo-root",
+        str(repo_root),
+        "--pdb-id",
+        str(pdb_id),
+        "--threads",
+        str(threads),
+        "--jobs",
+        str(jobs),
+    ]
+    if variant:
+        cmd.extend(["--variant", str(variant)])
+    if ph:
+        cmd.extend(["--ph", str(ph)])
+    if verbose or logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+        cmd.append("--verbose")
+
+    logger.info(
+        "[scorch-rescore.invoke] scope=per_pdb run_id=%s pdb_id=%s variant=%s ph=%s jobs=%d threads=%d total_cpu=%d cmd=%s",
+        run_id,
+        pdb_id,
+        variant or "*",
+        ph or "*",
+        jobs,
+        threads,
+        total_cpu,
+        shlex.join(str(c) for c in cmd),
+    )
+    try:
+        proc = subprocess.run(cmd, cwd=str(repo_root), check=False)
+    except Exception:
+        logger.warning(
+            "[scorch-rescore.invoke] action=skip reason=execution_failed run_id=%s pdb_id=%s",
+            run_id,
+            pdb_id,
+            exc_info=True,
+        )
+        return
+
+    logger.info(
+        "[scorch-rescore.result] scope=per_pdb run_id=%s pdb_id=%s variant=%s ph=%s returncode=%d",
+        run_id,
+        pdb_id,
+        variant or "*",
+        ph or "*",
+        proc.returncode,
+    )
 
 
 def _log_rescore_verification(run_id: str) -> None:

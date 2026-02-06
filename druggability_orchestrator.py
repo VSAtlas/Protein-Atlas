@@ -5,8 +5,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from path_router import make_paths
-from druggability_evaluation import get_fpocket_output_root, _summarize_fpocket_info
+try:
+    from chemdb.path_router import make_paths
+except Exception:
+    try:
+        from path_router import make_paths
+    except Exception:
+        from src.path_router.path_router import make_paths
+
+from druggability_evaluation import (
+    _classify_druggability,
+    _summarize_fpocket_info,
+    get_fpocket_output_root,
+)
 
 
 @dataclass
@@ -119,6 +130,133 @@ def _tier_to_numeric(tier: str | None) -> float:
     if normalized == "C":
         return 3.0
     return 0.0
+
+
+def _parse_first_fpocket_block(
+    info_path: Path,
+) -> tuple[float, float, float, float, float] | None:
+    druggability: float | None = None
+    volume: float | None = None
+    total_sasa: float | None = None
+    polar_sasa: float | None = None
+    openness: float | None = None
+    in_pocket = False
+
+    try:
+        with info_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith("Pocket "):
+                    if in_pocket:
+                        break
+                    in_pocket = True
+                    continue
+                if not in_pocket:
+                    continue
+                if line.startswith("Druggability Score"):
+                    try:
+                        druggability = float(line.split()[-1])
+                    except Exception:
+                        pass
+                    continue
+                if line.startswith("Volume :"):
+                    try:
+                        volume = float(line.split()[-1])
+                    except Exception:
+                        pass
+                    continue
+                if line.startswith("Total SASA"):
+                    try:
+                        total_sasa = float(line.split()[-1])
+                    except Exception:
+                        pass
+                    continue
+                if line.startswith("Polar SASA"):
+                    try:
+                        polar_sasa = float(line.split()[-1])
+                    except Exception:
+                        pass
+                    continue
+                if line.startswith("Mean alp. sph. solvent access"):
+                    try:
+                        openness = float(line.split()[-1])
+                    except Exception:
+                        pass
+                    continue
+    except Exception:
+        return None
+
+    if (
+        druggability is None
+        or volume is None
+        or total_sasa is None
+        or polar_sasa is None
+        or openness is None
+        or total_sasa <= 0.0
+    ):
+        return None
+    return (
+        float(druggability),
+        float(volume),
+        float(openness),
+        float(polar_sasa / total_sasa),
+        float(total_sasa),
+    )
+
+
+def load_fpocket_metrics_for_receptor_pdb(
+    cfg: dict[str, Any],
+    receptor_pdb: Path,
+    center: tuple[float, float, float],
+    logger: logging.Logger | None = None,
+) -> dict[str, float] | None:
+    local_logger = logger or logging.getLogger("druggability.orchestrator")
+    cfg_effective = dict(cfg or {})
+    cfg_effective.setdefault(
+        "FPOCKET_OUTPUT_ROOT",
+        str(Path(__file__).resolve().parent / "f_pocket"),
+    )
+    output_root = get_fpocket_output_root(cfg_effective)
+
+    stem = receptor_pdb.stem
+    out_dir = output_root / f"{stem}_out"
+    info_path = out_dir / f"{stem}_info.txt"
+    if not info_path.exists():
+        local_logger.info(
+            "[druggability.orchestrator.receptor.skip] receptor=%s reason=missing_info path=%s",
+            receptor_pdb,
+            info_path,
+        )
+        return None
+
+    parsed = _parse_first_fpocket_block(info_path)
+    if parsed is None:
+        local_logger.info(
+            "[druggability.orchestrator.receptor.skip] receptor=%s reason=parse_failed path=%s",
+            receptor_pdb,
+            info_path,
+        )
+        return None
+
+    druggability, volume, openness, polar_fraction, _total_sasa = parsed
+    has_metal = 0.0
+    tier, _triggers = _classify_druggability(
+        druggability=druggability,
+        volume=volume,
+        openness=openness,
+        polar_frac=polar_fraction,
+        has_metal=bool(has_metal),
+    )
+    return {
+        "fpocket_druggability": float(druggability),
+        "fpocket_volume": float(volume),
+        "fpocket_openness": float(openness),
+        "fpocket_polar_fraction": float(polar_fraction),
+        "fpocket_has_metal": float(has_metal),
+        "fpocket_tier": float(_tier_to_numeric(tier)),
+    }
 
 
 def load_fpocket_metrics_for_ml(

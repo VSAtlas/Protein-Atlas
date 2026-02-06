@@ -324,7 +324,7 @@ from apo_holo_mode import (
 from debug_fs import install_debug_makedirs
 from postrun_hooks import (
     _maybe_run_dud_eval,
-    _maybe_run_scorch_rescore,
+    _maybe_run_scorch_rescore_for_pdb,
     _log_rescore_verification,
     _maybe_run_master_schema_export,
     _maybe_run_report_generation,
@@ -1558,6 +1558,23 @@ def main() -> None:
 
                     # Main per-PDB work
                     process_one_protein(cfg_for_pdb, pdb_file, stages, params)
+                    # Run SCORCH per protein immediately after docking completion.
+                    # The rescoring script handles per-protein idempotency using _DONE sentinels.
+                    try:
+                        _maybe_run_scorch_rescore_for_pdb(
+                            cfg_for_pdb,
+                            run_id,
+                            pdb_id,
+                            variant=None if variant is None else str(variant),
+                            verbose=False,
+                        )
+                    except Exception:
+                        logging.warning(
+                            "[scorch-rescore.hook] action=skip reason=unexpected_exception pdb_id=%s variant=%s",
+                            pdb_id,
+                            label,
+                            exc_info=True,
+                        )
 
                     pdb_elapsed = time.time() - pdb_start
                     try:
@@ -1718,14 +1735,6 @@ def main() -> None:
             raise
         logging.warning(
             "[mmgbsa.pipeline] action=skip reason=unexpected_exception", exc_info=True
-        )
-
-    try:
-        _maybe_run_scorch_rescore(cfg, run_id, verbose=False)
-    except Exception:
-        logging.warning(
-            "[scorch-rescore.hook] action=skip reason=unexpected_exception",
-            exc_info=True,
         )
 
     try:

@@ -10,10 +10,11 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 # Ensure repository root is in sys.path for root-level imports
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -37,6 +38,8 @@ SCORCH_ENV: str = "scorch-env"
 SCORCH_ROOT: Path | None = None
 SCORCH_TOP_FRACTION_DEFAULT = 0.15
 SCORCH_TOP_FRACTION_KEY = "SCORCH_TOP_FRACTION"
+SCORCH_DONE_DIR = "scorch"
+SCORCH_DONE_SENTINEL = "_DONE"
 DECOY_PREFIX_KEY = "DECOY_PREFIX"
 DUD_PREFIX_KEY = "DUD_PREFIX"
 DECOY_PREFIX_DEFAULT = "dud"
@@ -383,6 +386,21 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override decoy prefix (disables TEST_MODE_ENABLE-driven multi-prefix)",
     )
+    parser.add_argument(
+        "--pdb-id",
+        default=None,
+        help="Restrict rescoring to a single PDB identifier",
+    )
+    parser.add_argument(
+        "--variant",
+        default=None,
+        help="Restrict rescoring to a specific variant (e.g., APO/HOLO)",
+    )
+    parser.add_argument(
+        "--ph",
+        default=None,
+        help="Restrict rescoring to a single pH label (e.g., ph_7_0)",
+    )
     return parser.parse_args()
 
 
@@ -482,6 +500,129 @@ def discover_combos(run_root: Path, post_root: Path) -> Set[Tuple[str, str, str]
             if combo:
                 combos.add(combo)
     return combos
+
+
+def _normalized_filter_token(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    token = str(value).strip()
+    return token if token else None
+
+
+def _combo_matches_filters(
+    combo: Tuple[str, str, str],
+    *,
+    pdb_id: Optional[str] = None,
+    variant: Optional[str] = None,
+    ph: Optional[str] = None,
+) -> bool:
+    combo_pdb, combo_variant, combo_ph = combo
+    pdb_filter = _normalized_filter_token(pdb_id)
+    variant_filter = _normalized_filter_token(variant)
+    ph_filter = _normalized_filter_token(ph)
+    if pdb_filter and combo_pdb.lower() != pdb_filter.lower():
+        return False
+    if variant_filter and combo_variant.lower() != variant_filter.lower():
+        return False
+    if ph_filter and combo_ph.lower() != ph_filter.lower():
+        return False
+    return True
+
+
+def _filter_combos(
+    combos: Set[Tuple[str, str, str]],
+    *,
+    pdb_id: Optional[str] = None,
+    variant: Optional[str] = None,
+    ph: Optional[str] = None,
+) -> Set[Tuple[str, str, str]]:
+    if not (pdb_id or variant or ph):
+        return combos
+    return {
+        combo
+        for combo in combos
+        if _combo_matches_filters(combo, pdb_id=pdb_id, variant=variant, ph=ph)
+    }
+
+
+def _done_sentinel_path(post_run_root: Path, combo: Tuple[str, str, str]) -> Path:
+    pdb_id, variant, ph = combo
+    return post_run_root / pdb_id / variant / ph / SCORCH_DONE_DIR / SCORCH_DONE_SENTINEL
+
+
+def _filter_done_combos(
+    combos: Set[Tuple[str, str, str]],
+    post_run_root: Path,
+    overwrite: bool,
+    logger: logging.Logger,
+) -> Set[Tuple[str, str, str]]:
+    if overwrite or not combos:
+        return combos
+
+    grouped: Dict[Tuple[str, str], List[Tuple[str, str, str]]] = defaultdict(list)
+    for combo in combos:
+        grouped[(combo[0], combo[1])].append(combo)
+
+    pending: Set[Tuple[str, str, str]] = set()
+    skipped = 0
+    for (pdb_id, variant), ph_combos in grouped.items():
+        sorted_combos = sorted(ph_combos, key=lambda item: item[2])
+        done_flags = [_done_sentinel_path(post_run_root, c).exists() for c in sorted_combos]
+        if all(done_flags):
+            skipped += len(sorted_combos)
+            logger.info(
+                "%s action=idempotency status=skip pdb_id=%s variant=%s reason=all_ph_done n_ph=%d",
+                COMPONENT,
+                pdb_id,
+                variant,
+                len(sorted_combos),
+            )
+            continue
+        for combo, done in zip(sorted_combos, done_flags):
+            if done:
+                skipped += 1
+                logger.info(
+                    "%s action=idempotency status=skip pdb_id=%s variant=%s ph=%s reason=done_sentinel",
+                    COMPONENT,
+                    combo[0],
+                    combo[1],
+                    combo[2],
+                )
+            else:
+                pending.add(combo)
+
+    if skipped:
+        logger.info(
+            "%s action=idempotency status=ok combos_pending=%d combos_skipped=%d",
+            COMPONENT,
+            len(pending),
+            skipped,
+        )
+    return pending
+
+
+def _mark_combo_done(
+    post_run_root: Path, combo: Tuple[str, str, str], logger: logging.Logger
+) -> None:
+    done_path = _done_sentinel_path(post_run_root, combo)
+    try:
+        done_path.parent.mkdir(parents=True, exist_ok=True)
+        done_path.write_text("ok\n", encoding="utf-8")
+    except Exception as exc:
+        logger.warning(
+            "%s action=idempotency status=warn reason=write_done_failed combo=%s path=%s error=%s",
+            COMPONENT,
+            combo,
+            done_path,
+            exc,
+        )
+        return
+    logger.info(
+        "%s action=idempotency status=ok reason=write_done combo=%s path=%s",
+        COMPONENT,
+        combo,
+        done_path,
+    )
 
 
 def _collect_stage_pdbqts(ph_root: Path, stage_dir: str) -> List[Path]:
@@ -1226,6 +1367,9 @@ def _run_prep_for_scorch(
     overwrite: bool,
     logger: logging.Logger,
     decoy_prefix: Optional[str] = None,
+    pdb_id: Optional[str] = None,
+    variant: Optional[str] = None,
+    ph: Optional[str] = None,
 ) -> bool:
     cmd = [
         sys.executable,
@@ -1235,6 +1379,12 @@ def _run_prep_for_scorch(
     ]
     if decoy_prefix:
         cmd.extend(["--decoy-prefix", str(decoy_prefix)])
+    if pdb_id:
+        cmd.extend(["--pdb-id", str(pdb_id)])
+    if variant:
+        cmd.extend(["--variant", str(variant)])
+    if ph:
+        cmd.extend(["--ph", str(ph)])
     if overwrite:
         cmd.append("--overwrite")
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -1963,16 +2113,40 @@ def main() -> int:
 
     ran_pose_bust = False
     any_failed = False
+    combo_had_tasks: Set[Tuple[str, str, str]] = set()
+    combo_failed: Dict[Tuple[str, str, str], bool] = {}
 
     for idx, decoy_prefix in enumerate(decoy_prefixes):
         _set_decoy_prefix(decoy_prefix, logger)
-        combos = discover_combos(run_root, post_run_root)
+        discovered = discover_combos(run_root, post_run_root)
+        combos = _filter_combos(
+            discovered,
+            pdb_id=args.pdb_id,
+            variant=args.variant,
+            ph=args.ph,
+        )
+        combos = _filter_done_combos(combos, post_run_root, args.overwrite, logger)
         logger.info(
-            "%s action=discover status=ok combos=%d decoy_prefix=%s",
+            "%s action=discover status=ok combos_discovered=%d combos_filtered=%d decoy_prefix=%s filters[pdb_id=%s variant=%s ph=%s]",
             COMPONENT,
+            len(discovered),
             len(combos),
             decoy_prefix,
+            args.pdb_id or "*",
+            args.variant or "*",
+            args.ph or "*",
         )
+        if not combos:
+            logger.warning(
+                "%s action=discover status=skip reason=no_combos_after_filters run_id=%s decoy_prefix=%s filters[pdb_id=%s variant=%s ph=%s]",
+                COMPONENT,
+                args.run_id,
+                decoy_prefix,
+                args.pdb_id or "*",
+                args.variant or "*",
+                args.ph or "*",
+            )
+            continue
 
         if not args.skip_autofix:
             if not ran_pose_bust and _posebusters_missing(post_run_root, combos):
@@ -1985,15 +2159,28 @@ def main() -> int:
                     args.overwrite,
                     logger,
                     decoy_prefix=decoy_prefix,
+                    pdb_id=args.pdb_id,
+                    variant=args.variant,
+                    ph=args.ph,
                 )
 
-        combos = discover_combos(run_root, post_run_root)
+        discovered = discover_combos(run_root, post_run_root)
+        combos = _filter_combos(
+            discovered,
+            pdb_id=args.pdb_id,
+            variant=args.variant,
+            ph=args.ph,
+        )
+        combos = _filter_done_combos(combos, post_run_root, args.overwrite, logger)
         if not combos:
             logger.warning(
-                "%s action=discover status=skip reason=no_combos run_id=%s decoy_prefix=%s",
+                "%s action=discover status=skip reason=no_combos_after_filters run_id=%s decoy_prefix=%s filters[pdb_id=%s variant=%s ph=%s]",
                 COMPONENT,
                 args.run_id,
                 decoy_prefix,
+                args.pdb_id or "*",
+                args.variant or "*",
+                args.ph or "*",
             )
             continue
 
@@ -2014,8 +2201,11 @@ def main() -> int:
         skipped_missing_consensus = 0
         combos_with_tasks: Set[Tuple[str, str, str]] = set()
         combo_modes: Dict[Tuple[str, str, str], Set[str]] = {}
+        combo_failed_local: Dict[Tuple[str, str, str], bool] = {}
+        local_completed_combos: Set[Tuple[str, str, str]] = set()
         control_cache: Dict[str, Set[str]] = {}
         for combo in sorted(combos):
+            before_task_count = len(tasks)
             pdb_id, variant, ph = combo
             receptor = (
                 processed_root
@@ -2066,7 +2256,7 @@ def main() -> int:
                         stage_root = run_root / pdb_id / variant / ph
                     else:
                         stage_root = post_run_root / pdb_id / variant / ph
-                    stage_dirs_override: Sequence[str] = stage_dir_candidates(
+                    stage_dirs_override: Optional[Sequence[str]] = stage_dir_candidates(
                         spec.source, "dud", stage_root
                     )
                     score_csv, score_cols, higher_is_better = _score_csv_for_spec(
@@ -2129,6 +2319,7 @@ def main() -> int:
                         )
                     )
                 combo_modes.setdefault(combo, set()).add("dud")
+                combo_failed_local.setdefault(combo, False)
             if include_fda and mode_dirs["fda"]:
                 logger.info(
                     "[scorch.run] mode=fda stage_root=%s n_allowed=%d",
@@ -2196,7 +2387,9 @@ def main() -> int:
                         )
                     )
                 combo_modes.setdefault(combo, set()).add("fda")
-            combos_with_tasks.add(combo)
+                combo_failed_local.setdefault(combo, False)
+            if len(tasks) > before_task_count:
+                combos_with_tasks.add(combo)
 
         total_jobs = len(tasks)
         completed = 0
@@ -2233,6 +2426,7 @@ def main() -> int:
                     completed += 1
                 else:
                     failed_jobs += 1
+                    combo_failed_local[combo] = True
         else:
             with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
                 future_map = {
@@ -2257,13 +2451,16 @@ def main() -> int:
                 for future in as_completed(future_map):
                     try:
                         ok, _ = future.result()
+                        combo = future_map[future][1]
                         if ok:
                             completed += 1
                         else:
                             failed_jobs += 1
+                            combo_failed_local[combo] = True
                     except Exception as exc:  # defensive
                         failed_jobs += 1
                         spec, combo, run_mode = future_map[future]
+                        combo_failed_local[combo] = True
                         logger.error(
                             "%s action=score status=failed reason=worker_exception source=%s stage=%s combo=%s run_mode=%s error=%s",
                             COMPONENT,
@@ -2326,7 +2523,13 @@ def main() -> int:
                     if candidate.exists():
                         chosen_all = candidate
                         break
-            if chosen_all and rerank_consensus_with_scorch and find_consensus_csv:
+            if chosen_all and not combo_failed_local.get(combo, False):
+                local_completed_combos.add(combo)
+            if (
+                chosen_all
+                and rerank_consensus_with_scorch is not None
+                and find_consensus_csv is not None
+            ):
                 try:
                     pdb_id, variant, ph = combo
                     dock_combo_dir = run_root / pdb_id / variant / ph
@@ -2362,7 +2565,7 @@ def main() -> int:
                     )
             if fda_all and dud_all:
                 annotate_scorch_t_scores(fda_all, dud_all, logger)
-            elif chosen_all and not rerank_consensus_with_scorch:
+            elif chosen_all and rerank_consensus_with_scorch is None:
                 logger.warning(
                     "%s action=rerank status=skip reason=reranker_import_failed combo=%s",
                     COMPONENT,
@@ -2384,6 +2587,19 @@ def main() -> int:
         )
         if failed_jobs != 0:
             any_failed = True
+        for combo in combos_with_tasks:
+            combo_had_tasks.add(combo)
+            if combo not in local_completed_combos:
+                combo_failed[combo] = True
+            elif combo not in combo_failed:
+                combo_failed[combo] = False
+            if combo_failed_local.get(combo, False):
+                combo_failed[combo] = True
+
+    for combo in sorted(combo_had_tasks):
+        if combo_failed.get(combo, True):
+            continue
+        _mark_combo_done(post_run_root, combo, logger)
 
     return 1 if any_failed else 0
 

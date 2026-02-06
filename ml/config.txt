@@ -1,11 +1,13 @@
 {
   "bigbind_dir": "data/bigbind/BigBindV1.5",
   "train_pdb": "cp3a4_human_23_503_catalytic_0",
-  "splits": [
-    "train",
-    "val",
-    "test"
+    "dataset_split_mode": "standard",
+    "splits": ["sna_1_train", "sna_1_val", "sna_1_test"  "exclude_target_prefixes": [
+    "MK01_HUMAN_8_360_0",
+    "FABP4_HUMAN_2_132_0",
+    "PUR2_HUMAN_807_1010_0"
   ],
+
   "random_seed": 7,
   "max_rows": 50000,
   "atlas_cfg_path": null,

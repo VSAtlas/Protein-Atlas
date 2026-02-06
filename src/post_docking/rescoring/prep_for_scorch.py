@@ -163,6 +163,21 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Parallel workers for independent conversions (default: 1)",
     )
+    parser.add_argument(
+        "--pdb-id",
+        default=None,
+        help="Restrict prep to a single PDB identifier",
+    )
+    parser.add_argument(
+        "--variant",
+        default=None,
+        help="Restrict prep to a specific variant (e.g., APO/HOLO)",
+    )
+    parser.add_argument(
+        "--ph",
+        default=None,
+        help="Restrict prep to a single pH label (e.g., ph_7_0)",
+    )
     return parser.parse_args()
 
 
@@ -204,6 +219,34 @@ def _find_stage_parts(
     pdb_id, variant, ph = rel_parts[stage_idx - 3 : stage_idx]
     stage_dir = rel_parts[stage_idx]
     return pdb_id, variant, ph, stage_dir
+
+
+def _normalized_filter_token(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    token = str(value).strip()
+    return token if token else None
+
+
+def _task_matches_filters(
+    pdb_id: str,
+    variant: str,
+    ph: str,
+    *,
+    filter_pdb_id: Optional[str] = None,
+    filter_variant: Optional[str] = None,
+    filter_ph: Optional[str] = None,
+) -> bool:
+    pdb_filter = _normalized_filter_token(filter_pdb_id)
+    variant_filter = _normalized_filter_token(filter_variant)
+    ph_filter = _normalized_filter_token(filter_ph)
+    if pdb_filter and pdb_id.lower() != pdb_filter.lower():
+        return False
+    if variant_filter and variant.lower() != variant_filter.lower():
+        return False
+    if ph_filter and ph.lower() != ph_filter.lower():
+        return False
+    return True
 
 
 def _pose_base_from_name(name: str) -> str:
@@ -282,7 +325,13 @@ def _load_decoy_bases(
 
 
 def discover_tasks(
-    run_root: Path, post_run_root: Path, logger: logging.Logger
+    run_root: Path,
+    post_run_root: Path,
+    logger: logging.Logger,
+    *,
+    filter_pdb_id: Optional[str] = None,
+    filter_variant: Optional[str] = None,
+    filter_ph: Optional[str] = None,
 ) -> Tuple[List[LedockTask], List[Dock6Task], List[LedockTask], List[Dock6Task]]:
     prefix = _decoy_prefix_value()
     prefixes = {prefix}
@@ -312,6 +361,15 @@ def discover_tasks(
         if not stage_parts:
             continue
         pdb_id, variant, ph, stage_dir = stage_parts
+        if not _task_matches_filters(
+            pdb_id,
+            variant,
+            ph,
+            filter_pdb_id=filter_pdb_id,
+            filter_variant=filter_variant,
+            filter_ph=filter_ph,
+        ):
+            continue
         if stage_dir in ledock_decoy_dirs or stage_dir in ledock_decoy_legacy_dirs:
             output_dir = (
                 post_run_root / pdb_id / variant / ph / f"{prefix}_ledock_pdbqt"
@@ -349,6 +407,15 @@ def discover_tasks(
         if not stage_parts:
             continue
         pdb_id, variant, ph, stage_dir = stage_parts
+        if not _task_matches_filters(
+            pdb_id,
+            variant,
+            ph,
+            filter_pdb_id=filter_pdb_id,
+            filter_variant=filter_variant,
+            filter_ph=filter_ph,
+        ):
+            continue
         if stage_dir in dock6_decoy_dirs or stage_dir in dock6_decoy_legacy_dirs:
             output_dir = (
                 post_run_root / pdb_id / variant / ph / f"{prefix}_dock6_pdbqt"
@@ -1112,7 +1179,19 @@ def main() -> int:
     _migrate_dock6_pdbqt_names(post_run_root, args.overwrite, logger)
 
     ledock_tasks, dock6_tasks, ledock_dud_tasks, dock6_dud_tasks = discover_tasks(
-        run_root, post_run_root, logger
+        run_root,
+        post_run_root,
+        logger,
+        filter_pdb_id=args.pdb_id,
+        filter_variant=args.variant,
+        filter_ph=args.ph,
+    )
+    logger.info(
+        "%s action=discover_filters pdb_id=%s variant=%s ph=%s",
+        COMPONENT,
+        args.pdb_id or "*",
+        args.variant or "*",
+        args.ph or "*",
     )
     if ledock_dud_tasks:
         logger.info(

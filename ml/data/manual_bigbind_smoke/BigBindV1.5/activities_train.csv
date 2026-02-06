@@ -1,0 +1,5 @@
+lig_smiles,active,pocket,ex_rec_pdb,split
+CCO,1,TargetA/zzmanual1_A_rec_pocket.pdb,TRN1,train
+CCC,0,TargetA/zzmanual1_A_rec_pocket.pdb,TRN1,train
+c1ccccc1,1,TargetB/zzmanual2_B_rec_pocket.pdb,TRN2,train
+CCN,0,TargetB/zzmanual2_B_rec_pocket.pdb,TRN2,train

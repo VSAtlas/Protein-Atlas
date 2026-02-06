@@ -49,6 +49,7 @@ post_docked/
 # fpocket binaries/output
 fpocket
 fpocket*
+!ml/fpocket_bigbind.py
 fpocket_out/
 *.fpocket/
 

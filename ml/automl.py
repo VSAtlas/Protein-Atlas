@@ -27,6 +27,7 @@ from ml.config import FeaturesConfig, config_to_dict, load_atlas_cfg, load_confi
 from ml.data.bigbind import load_train_holdout_from_bigbind
 from ml.evaluate import DEFAULT_FRACTIONS, evaluate_holdout_metrics
 from ml.featurize import BigBindFeaturizer, FeaturizedRows
+from ml.fpocket_bigbind import merge_fpocket_metrics_on_pocket, precompute_fpocket_for_bigbind_df
 
 try:  # pragma: no cover - optional dependency
     from lightgbm import LGBMClassifier  # type: ignore[import-untyped]
@@ -651,6 +652,8 @@ def run_automl(
         splits=config.splits,
         max_rows=config.max_rows,
         random_seed=config.random_seed,
+        dataset_split_mode=config.dataset_split_mode,
+        exclude_target_prefixes=config.exclude_target_prefixes,
         logger=logger,
     )
 
@@ -661,6 +664,25 @@ def run_automl(
         if name in feature_variants
     ]
     model_families = _model_families_from_payload(raw_automl_payload)
+    run_id = _resolve_run_id(config.run_id)
+    run_dir = Path(__file__).resolve().parent / "outputs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    train_df = dataset.train_df.copy()
+    holdout_df = dataset.holdout_df.copy()
+    needs_fpocket_precompute = any(
+        feature_variants[name].pocket_fpocket for name in feature_variant_names
+    )
+    if needs_fpocket_precompute:
+        combined = pd.concat([train_df, holdout_df], ignore_index=False)
+        metrics_df = precompute_fpocket_for_bigbind_df(
+            df=combined,
+            bigbind_root=dataset.bigbind_root,
+            atlas_cfg=atlas_cfg,
+            run_dir=run_dir,
+        )
+        train_df = merge_fpocket_metrics_on_pocket(train_df, metrics_df)
+        holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, metrics_df)
 
     grid_spaces = _default_grid_spaces()
     grid_override = raw_automl_payload.get("grid")
@@ -688,8 +710,8 @@ def run_automl(
             fpocket_centers_by_pdb=config.fpocket_centers_by_pdb,
             logger=logger,
         )
-        train_rows = featurizer.transform(dataset.train_df)
-        holdout_rows = featurizer.transform(dataset.holdout_df)
+        train_rows = featurizer.transform(train_df)
+        holdout_rows = featurizer.transform(holdout_df)
         feature_cache[feature_variant_name] = (
             features,
             train_rows,
@@ -726,10 +748,6 @@ def run_automl(
             max_trials=max_trials,
         )
 
-    run_id = _resolve_run_id(config.run_id)
-    run_dir = Path(__file__).resolve().parent / "outputs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-
     trial_rows = [_materialize_trial_row(record) for record in trial_records]
     trials_df = pd.DataFrame(trial_rows)
     trials_df.to_csv(run_dir / "automl_trials.csv", index=False)
@@ -763,7 +781,7 @@ def run_automl(
         trial_record=best_trial,
         train_rows=best_train_rows,
         holdout_rows=best_holdout_rows,
-        holdout_df=dataset.holdout_df,
+        holdout_df=holdout_df,
         random_seed=config.random_seed,
     )
     best_pred_df.to_csv(run_dir / "best_holdout_predictions.csv", index=False)
@@ -807,7 +825,7 @@ def run_automl(
             trial_record=trial_record,
             train_rows=train_rows,
             holdout_rows=holdout_rows,
-            holdout_df=dataset.holdout_df,
+            holdout_df=holdout_df,
             random_seed=config.random_seed,
         )
         top_row: dict[str, Any] = {
@@ -823,17 +841,22 @@ def run_automl(
         top_rows.append(top_row)
     pd.DataFrame(top_rows).to_csv(run_dir / "top_k_holdout_report.csv", index=False)
 
-    snapshot = config_to_dict(config)
-    snapshot["automl"] = {
-        "mode": mode_norm,
-        "max_trials": int(max_trials),
-        "top_k_report": int(top_k),
-        "feature_variants": feature_variant_names,
-        "model_families": model_families,
-        "raw_payload": raw_automl_payload,
-    }
-    (run_dir / "config_snapshot.json").write_text(
-        json.dumps(snapshot, indent=2),
+    (run_dir / "config_snapshot.txt").write_text(
+        json.dumps(config_to_dict(config), indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "automl_snapshot.json").write_text(
+        json.dumps(
+            {
+                "mode": mode_norm,
+                "max_trials": int(max_trials),
+                "top_k_report": int(top_k),
+                "feature_variants": feature_variant_names,
+                "model_families": model_families,
+                "raw_payload": raw_automl_payload,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 

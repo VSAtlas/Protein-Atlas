@@ -29,10 +29,12 @@ class FeaturesConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     bigbind_dir: Path
-    train_pdb: str
+    train_pdb: str = ""
+    dataset_split_mode: str = "standard"
     random_seed: int = 42
     max_rows: int | None = None
     splits: tuple[str, ...] = ("train", "val", "test")
+    exclude_target_prefixes: tuple[str, ...] = ()
     run_id: str | None = None
     model: ModelConfig = field(default_factory=ModelConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
@@ -128,6 +130,35 @@ def _parse_centers_by_pdb(raw: Any) -> dict[str, tuple[float, float, float]]:
     return parsed
 
 
+def _normalize_prefixes(raw: Any) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple)):
+        values = [str(item).strip() for item in raw]
+    else:
+        raise ValueError(
+            "Config key 'exclude_target_prefixes' must be a string or list/tuple of strings."
+        )
+    normalized = tuple(value for value in values if value)
+    return normalized
+
+
+def _normalize_dataset_split_mode(raw: Any) -> str:
+    if raw is None:
+        return "standard"
+    mode = str(raw).strip().lower()
+    if mode in {"standard", "train_val_test"}:
+        return "standard"
+    if mode in {"legacy", "train_pdb_holdout"}:
+        return "legacy"
+    raise ValueError(
+        "Config key 'dataset_split_mode' must be one of: "
+        "standard, train_val_test, legacy, train_pdb_holdout."
+    )
+
+
 def _load_default_atlas_cfg() -> dict[str, Any]:
     try:
         from analysis.dud_eval_orchestrate import _load_default_cfg
@@ -179,8 +210,12 @@ def load_config(config_path: str | Path) -> TrainConfig:
 
     if "bigbind_dir" not in payload:
         raise KeyError("Missing required config key: bigbind_dir")
-    if "train_pdb" not in payload:
-        raise KeyError("Missing required config key: train_pdb")
+    dataset_split_mode = _normalize_dataset_split_mode(payload.get("dataset_split_mode"))
+    train_pdb_value = str(payload.get("train_pdb", "")).strip()
+    if dataset_split_mode == "legacy" and not train_pdb_value:
+        raise KeyError(
+            "Missing required config key: train_pdb when dataset_split_mode is legacy."
+        )
 
     model_payload = payload.get("model", {}) or {}
     features_payload = payload.get("features", {}) or {}
@@ -232,14 +267,17 @@ def load_config(config_path: str | Path) -> TrainConfig:
     )
     ph_column = _coerce_optional_str(payload.get("fpocket_ph_column", "pH"))
     centers_by_pdb = _parse_centers_by_pdb(payload.get("fpocket_centers_by_pdb"))
+    exclude_target_prefixes = _normalize_prefixes(payload.get("exclude_target_prefixes"))
     inner_scaffold_folds = max(2, int(payload.get("inner_scaffold_folds", 5)))
 
     return TrainConfig(
         bigbind_dir=_resolve_path(str(payload["bigbind_dir"]), base_dir=path.parent),
-        train_pdb=str(payload["train_pdb"]).strip(),
+        train_pdb=train_pdb_value,
+        dataset_split_mode=dataset_split_mode,
         random_seed=int(payload.get("random_seed", 42)),
         max_rows=_coerce_optional_int(payload.get("max_rows")),
         splits=splits,
+        exclude_target_prefixes=exclude_target_prefixes,
         run_id=(
             str(payload["run_id"]).strip()
             if payload.get("run_id") not in (None, "")
@@ -265,5 +303,6 @@ def config_to_dict(config: TrainConfig) -> dict[str, Any]:
     )
     as_data["fpocket_center_columns"] = list(config.fpocket_center_columns)
     as_data["splits"] = list(config.splits)
+    as_data["exclude_target_prefixes"] = list(config.exclude_target_prefixes)
     as_data["source_path"] = str(config.source_path) if config.source_path else None
     return as_data

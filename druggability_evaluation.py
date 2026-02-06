@@ -19,14 +19,20 @@ except Exception:  # pragma: no cover - optional dependency
     yaml = None  # type: ignore
 
 from installation import load_config
-from path_router import make_paths
+try:
+    from chemdb.path_router import make_paths
+except Exception:
+    try:
+        from path_router import make_paths
+    except Exception:
+        from src.path_router.path_router import make_paths
 
 # Load config once at import to mirror other helpers.
 config = load_config()
 
 # Defaults
 _DEFAULT_FPOCKET_EXE = Path("/home/michael/atlas/tools/fpocket/bin/fpocket")
-_DEFAULT_FPOCKET_OUTPUT_ROOT = Path(__file__).resolve().parent / "fpocket"
+_DEFAULT_FPOCKET_OUTPUT_ROOT = Path(__file__).resolve().parent / "f_pocket"
 _PROTEIN_CLASS_RULES: Optional[Dict[str, Any]] = None
 
 

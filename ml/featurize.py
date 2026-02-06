@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from scipy import sparse
 
 from druggability_orchestrator import load_fpocket_metrics_for_ml
 from ml.config import FeaturesConfig
+from ml.feature_audit import FeatureAuditWriter
 
 
 _FPOCKET_FEATURE_NAMES = (
@@ -260,6 +262,12 @@ class BigBindFeaturizer:
 
     def _row_fpocket_features(self, row: pd.Series) -> list[float]:
         zeros = [0.0] * len(_FPOCKET_FEATURE_NAMES)
+        if all(name in row.index for name in _FPOCKET_FEATURE_NAMES):
+            injected = [_safe_optional_float(row.get(name)) for name in _FPOCKET_FEATURE_NAMES]
+            if all(value is not None for value in injected):
+                self.loaded_fpocket_count += 1
+                return [_safe_float(value, default=0.0) for value in injected]
+
         pdb_id = _optional_text(row.get("ex_rec_pdb")) or _optional_text(row.get("pdb_id"))
         if not pdb_id:
             self.missing_info_count += 1
@@ -303,7 +311,13 @@ class BigBindFeaturizer:
 
         return values
 
-    def transform(self, df: pd.DataFrame) -> FeaturizedRows:
+    def transform(
+        self,
+        df: pd.DataFrame,
+        *,
+        audit_dir: Path | None = None,
+        audit_tag: str = "data",
+    ) -> FeaturizedRows:
         if df.empty:
             raise ValueError("Cannot featurize an empty dataframe.")
 
@@ -316,32 +330,64 @@ class BigBindFeaturizer:
         fp_data: list[float] = []
         dropped_invalid_smiles = 0
 
-        for idx, row in df.iterrows():
-            smiles = str(row.get("lig_smiles") or "").strip()
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is None:
-                dropped_invalid_smiles += 1
-                continue
+        audit_writer: FeatureAuditWriter | None = None
+        if audit_dir is not None:
+            audit_writer = FeatureAuditWriter(
+                audit_dir=Path(audit_dir),
+                tag=audit_tag,
+                continuous_feature_names=list(self._continuous_feature_names),
+                fp_bits=self.fingerprint_bits,
+            )
 
-            row_number = len(cont_rows)
-            cont_rows.append(self._row_continuous_features(row, mol))
-            labels.append(int(row.get("active", 0)))
-            source_index.append(int(idx))
-            murcko_scaffolds.append(_murcko_scaffold_smiles(mol))
+        try:
+            for idx, row in df.iterrows():
+                smiles = str(row.get("lig_smiles") or "").strip()
+                mol = Chem.MolFromSmiles(smiles)
+                if mol is None:
+                    dropped_invalid_smiles += 1
+                    continue
 
-            if self.fingerprint_bits > 0:
-                if self._morgan_generator is not None:
-                    fp = self._morgan_generator.GetFingerprint(mol)
-                else:
-                    fp = AllChem.GetMorganFingerprintAsBitVect(
-                        mol,
-                        radius=2,
-                        nBits=self.fingerprint_bits,
+                row_number = len(cont_rows)
+                continuous_values = self._row_continuous_features(row, mol)
+                scaffold = _murcko_scaffold_smiles(mol)
+                cont_rows.append(continuous_values)
+                labels.append(int(row.get("active", 0)))
+                source_index.append(int(idx))
+                murcko_scaffolds.append(scaffold)
+
+                onbits: list[int] = []
+                if self.fingerprint_bits > 0:
+                    if self._morgan_generator is not None:
+                        fp = self._morgan_generator.GetFingerprint(mol)
+                    else:
+                        fp = AllChem.GetMorganFingerprintAsBitVect(
+                            mol,
+                            radius=2,
+                            nBits=self.fingerprint_bits,
+                        )
+                    onbits = [int(bit) for bit in fp.GetOnBits()]
+                    for bit in onbits:
+                        fp_rows.append(row_number)
+                        fp_cols.append(bit)
+                        fp_data.append(1.0)
+
+                if audit_writer is not None:
+                    audit_writer.write_row(
+                        {
+                            "row_number": row_number,
+                            "source_index": int(idx),
+                            "active": int(row.get("active", 0)),
+                            "lig_smiles": smiles,
+                            "ex_rec_pdb": row.get("ex_rec_pdb"),
+                            "pocket": row.get("pocket"),
+                            "murcko_scaffold": scaffold,
+                        },
+                        continuous_values,
                     )
-                for bit in fp.GetOnBits():
-                    fp_rows.append(row_number)
-                    fp_cols.append(int(bit))
-                    fp_data.append(1.0)
+                    audit_writer.write_onbits(row_number, onbits)
+        finally:
+            if audit_writer is not None:
+                audit_writer.close()
 
         if not cont_rows:
             raise ValueError("No valid rows remained after SMILES parsing.")
@@ -376,6 +422,16 @@ class BigBindFeaturizer:
             X = sparse.hstack([cont_matrix, fp_matrix], format="csr", dtype=np.float32)
 
         y = np.asarray(labels, dtype=np.int32)
+        if audit_dir is not None:
+            summary_payload = {
+                "dropped_invalid_smiles": int(dropped_invalid_smiles),
+                "number_of_rows_written": int(n_rows),
+                "fingerprint_bits": int(self.fingerprint_bits),
+                "continuous_feature_names": list(self._continuous_feature_names),
+            }
+            summary_path = Path(audit_dir) / f"feature_audit_{audit_tag}_summary.json"
+            summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+
         return FeaturizedRows(
             X=X,
             y=y,

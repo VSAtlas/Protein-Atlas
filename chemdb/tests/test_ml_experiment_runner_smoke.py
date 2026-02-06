@@ -120,6 +120,24 @@ def test_experiment_runner_smoke(monkeypatch, tmp_path):
 
     assert results_path.exists()
     assert not results.empty
+    assert (output_dir / "features_train_baseline.csv").exists()
+    assert (output_dir / "features_holdout_baseline.csv").exists()
+    assert (output_dir / "morgan_onbits_train_baseline.csv").exists()
+    assert (output_dir / "morgan_onbits_holdout_baseline.csv").exists()
+    assert (output_dir / "features_all_variants.csv").exists()
+    assert (output_dir / "morgan_onbits_all_variants.csv").exists()
+    all_features = pd.read_csv(output_dir / "features_all_variants.csv")
+    all_onbits = pd.read_csv(output_dir / "morgan_onbits_all_variants.csv")
+    assert {"variant", "split", "row_number"}.issubset(set(all_features.columns))
+    assert {"variant", "split", "row_number", "bit"}.issubset(set(all_onbits.columns))
+    assert set(all_features["split"].unique().tolist()) == {"train", "holdout"}
+    assert set(all_features["variant"].unique().tolist()) == {
+        "baseline",
+        "ligand_only",
+        "pocket_only",
+        "no_fp",
+        "add_ligand_extras",
+    }
 
     produced = set(results["variant"].tolist())
     assert produced == {
@@ -129,3 +147,5 @@ def test_experiment_runner_smoke(monkeypatch, tmp_path):
         "no_fp",
         "add_ligand_extras",
     }
+    baseline = results.loc[results["variant"] == "baseline"].iloc[0]
+    assert int(baseline["fpocket_loaded_count"]) > 0
