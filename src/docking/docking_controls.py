@@ -685,7 +685,7 @@ def select_center_via_control_redock(
     # collect prepped control pdbqts (per-protein dir and global output dir)
     prepped_dirs = [
         paths.prepped_ligands_dir,
-        _Path(str(cfg.get("OUTPUT_LIGANDS_DIR", ""))) / paths.pdb_id,
+        _Path(str(cfg.get("PREPPED_LIGANDS_DIR", ""))) / paths.pdb_id,
     ]
     cand_pdbqts = []
     logger.info(
@@ -757,15 +757,12 @@ def select_center_via_control_redock(
 
     cpu_total = int(cfg.get("CPU", os.cpu_count() or 1) or 1)
     cpu_total = max(1, cpu_total)
-    max_parallel = int(cfg.get("MAX_PARALLEL_JOBS", 1) or 1)
-    max_parallel = max(1, max_parallel)
-    workers = max(1, min(cpu_total, max_parallel))
+    workers = max(1, min(cpu_total, len(cand_pdbqts)))
     job_threads = max(1, min(threads_per_vina, max(1, cpu_total // workers)))
     total_threads = workers * job_threads
     logger.info(
-        "[ctrl.parallel] CPU=%d MAX_PARALLEL_JOBS=%d workers=%d threads_per_job=%d total_threads=%d",
+        "[ctrl.parallel] CPU=%d workers=%d threads_per_job=%d total_threads=%d",
         cpu_total,
-        max_parallel,
         workers,
         job_threads,
         total_threads,

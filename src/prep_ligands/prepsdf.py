@@ -14,9 +14,7 @@ def decompress_sdf_gz_files():
     ligand_dir = Path(ligand_dir_str).expanduser().resolve()
 
     output_dir_str = (
-        cfg.get("LIGAND_EXTRACTED_DIR")
-        or cfg.get("EXTRACTED_LIGANDS_DIR")
-        or str(ligand_dir.parent / "extracted_ligands")
+        cfg.get("EXTRACTED_LIGANDS_DIR") or str(ligand_dir.parent / "extracted_ligands")
     )
     output_dir = Path(output_dir_str).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

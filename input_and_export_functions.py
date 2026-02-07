@@ -7,12 +7,25 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from distutils.util import strtobool
 from typing import Any, Dict, Optional
 
 import pandas as pd  # type: ignore[import-untyped]
 import sitecustomize  # noqa: F401  # ensure HOME is writable for micromamba/pytest sandboxes
+from config import normalize as _cfg_norm  # type: ignore[import-not-found]
+from config.normalize import (  # type: ignore[import-not-found]
+    default_base_dir as _default_base_dir,
+    default_dirs as _default_dirs,
+    default_runtime as _default_runtime,
+    default_tools as _default_tools,
+    normalize_config,
+)
 from path_router import make_paths  # type: ignore[import-not-found]
+
+# Backward-compatible helper re-exports used across the codebase.
+_to_bool = _cfg_norm._to_bool
+_to_int = _cfg_norm._to_int
+_to_float = _cfg_norm._to_float
+which_or_exists = _cfg_norm.which_or_exists
 
 # -------------------------
 # OS guards (Windows-only)
@@ -31,228 +44,6 @@ except Exception:
 
 
 # -------------------------
-# Small helpers
-# -------------------------
-def _to_bool(x):
-    try:
-        return bool(strtobool(str(x)))
-    except Exception:
-        return False
-
-
-def _to_int(x, default=None):
-    try:
-        return int(x)
-    except Exception:
-        return default
-
-
-def _to_float(x, default=None):
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-
-def which_or_exists(candidates):
-    """
-    Return the first path that exists (if absolute),
-    or the first found on PATH via shutil.which.
-    """
-    for c in candidates:
-        p = Path(str(c))
-        if p.is_absolute() and p.exists():
-            return str(p)
-        w = shutil.which(p.name)
-        if w:
-            return w
-    return None
-
-
-# -------------------------
-# Defaults for BRCF layout
-# -------------------------
-def _default_base_dir() -> Path:
-    # env wins; else directory of this file
-    return Path(
-        os.environ.get("PROTEIN_AUTOMATION_DIR", Path(__file__).resolve().parent)
-    )
-
-
-def _default_dirs(base: Path) -> Dict[str, str]:
-    """
-    Opinionated defaults that match BRCF layout:
-      /stor/home/<user>/atlas/code/protein_automation/{subdirs}
-    """
-    return {
-        "OVERALL_DIR": str(base),
-        "INPUT_DIR": str(base / "input_pdbs"),
-        "PROTEIN_DIR": str(base / "pdbqts"),
-        "LIGAND_DIR": str(base / "input_ligands"),
-        "LIGAND_EXTRACTED_DIR": str(base / "extracted_ligands"),
-        "LIGANDS_MOL2_DIR": str(base / "ligands_mol2"),
-        "OUTPUT_LIGANDS_DIR": str(base / "prepped_ligands"),
-        "OUTPUT_DIR": str(base / "processed_pdbs"),
-        "PDBQT_DIR": str(base / "pdbqts"),
-        "DOCKED_DIR": str(base / "docked"),
-        # p2rank
-        "P2RANK_OUTPUT_DIR": str(base / "p2rank_out"),
-        # cleanup script (kept in repo)
-        "PHENIX_CLEAN_SCRIPT": str(base / "phenix_clean.py"),
-    }
-
-
-def _default_tools() -> Dict[str, str]:
-    """
-    Tool defaults prefer environment & PATH.
-    """
-    base = _default_base_dir()
-    scorch_root = base.parent.parent / "tools" / "SCORCH"
-    if (scorch_root / "scorch.py").exists():
-        scorch_script_default = str(scorch_root / "scorch.py")
-    else:
-        scorch_script_default = which_or_exists(["scorch.py"])
-
-    return {
-        "VINA_PATH": which_or_exists(["vina"]),
-        "VINA_EXE": which_or_exists(["vina"]),
-        "GNINA_EXE": which_or_exists(["gnina"]),
-        "OPENBABEL_PATH": which_or_exists(["obabel"]),
-        "PYMOL_PATH": which_or_exists(["pymol"]),
-        "REDUCE_EXE": which_or_exists(["reduce"]),
-        # prefer env MGLTOOLS_* if set; otherwise try ADFRsuite pythonsh on PATH
-        "MGLTOOLS_PYTHON": os.environ.get("MGL_PYTHON")
-        or which_or_exists(["pythonsh"]),
-        "PREPARE_LIGAND_SCRIPT": os.environ.get("PREPARE_LIGAND_SCRIPT")
-        or which_or_exists(["prepare_ligand4.py"]),
-        "PREPARE_RECEPTOR_SCRIPT": os.environ.get("PREPARE_RECEPTOR_SCRIPT")
-        or which_or_exists(["prepare_receptor4.py"]),
-        # p2rank: either absolute prank or found on PATH
-        "P2RANK_PATH": shutil.which("prank") or "prank",
-        # SCORCH: optional rescoring stage, default to sibling tools checkout
-        "SCORCH_SCRIPT": os.environ.get("SCORCH_SCRIPT") or scorch_script_default,
-        "SCORCH_ENV": os.environ.get("SCORCH_ENV") or "scorch-env",
-    }
-
-
-def _default_runtime() -> Dict[str, Any]:
-    return {
-        "CPU_ONLY": True,
-        "CPU": os.cpu_count() or 8,
-        "MAX_PARALLEL_JOBS": max(1, (os.cpu_count() or 8) // 2),
-        "FORCE_REPROCESS": False,
-        "DOCKING_MODE": "discovery",
-        "QUIET_CONSOLE": False,
-        "FILTER_INVALID": False,
-        # docking/recenter knobs
-        "EARLY_RECENTER_RATIO": 0.70,
-        "EARLY_RECENTER_MIN_EVAL": 10,
-        "EARLY_RECENTER_FAR_A": 15.0,
-        "EARLY_RECENTER_MEDIAN_A": 10.0,
-        "ALLOW_BOX_EXPAND": True,
-        "MAX_RECENTER_ATTEMPTS": 3,
-        # pocket evaluation (optional)
-        "POCKET_EVAL": False,
-        "POCKET_EVAL_MAX_CALIBRATORS": 0,
-        "POCKET_EVAL_SEED": 0,
-        "POCKET_EVAL_FOLDS": 5,
-        "POCKET_EVAL_DATASET_ENABLE": True,
-        "POCKET_EVAL_DATASET_FORMATS": "csv",
-        "POCKET_EVAL_DATASET_WIDE_ENABLE": False,
-        "POCKET_EVAL_SPLITS_ENABLE": True,
-        "POCKET_EVAL_SPLIT_GROUP_KEY": "ligand_id",
-        "POCKET_EVAL_SPLIT_STRATEGY": "auto",
-        "POCKET_EVAL_SPLIT_FOLDS": 0,
-        "POCKET_EVAL_ENSEMBLE_ENABLE": False,
-        "POCKET_EVAL_CV_ENABLE": False,
-        "POCKET_EVAL_CV_TOP_M": 2,
-        "POCKET_EVAL_CV_REQUIRE_SCORES": True,
-        "POCKET_EVAL_ORACLE_ENABLE": False,
-        # calibrator sampling / evaluation
-        "CALIBRATOR_SAMPLING_POLICY": "stratified_scaffold",
-        "CALIBRATOR_SAMPLING_SEED": None,
-        "CALIBRATOR_TEST_FRACTION": 0.20,
-        "CALIBRATOR_REMAINDER_EVAL_FRACTION": 0.00,
-        "CALIBRATOR_POSITIVE_CLASS": "strong",
-        "CALIBRATOR_NEGATIVE_CLASS": "weak",
-        "CALIBRATOR_METRICS_TOP_FRACS": "0.01,0.005",
-        "CALIBRATOR_SET_TABLE_FORMAT": "parquet",
-        # control-centering knobs
-        "CONTROL_CENTER_POLICY": "best_redock",
-        "CONTROL_CENTER_CLOSE_MAX_A": 8.0,
-        "CTRL_REDOCK_EXHAUSTIVENESS": 32,
-        "CTRL_REDOCK_NMODES": 9,
-        # --- benchmark policy knobs ---
-        "BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY": True,
-        "BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING": False,
-        # --- MMGBSA receptor prep ---
-        "MMGBSA_STRIP_METALS": True,
-        "MMGBSA_WATER_POLICY": "ACTIVE_SITE",
-        "MMGBSA_WATER_KEEP_RADIUS_A": 6.0,
-        "MMGBSA_WATER_USE_ALIASES": True,
-        "MMGBSA_METAL_USE_ALIASES": True,
-        "MMGBSA_TOPOLOGY_PREP_ENABLED": True,
-        "MMGBSA_TLEAP_RUN": True,
-        "MMGBSA_TOPOLOGY_DIRNAME": "mmgbsa_topologies",
-        "MMGBSA_AMBERTOOLS_PREFIX": "",
-        "MMGBSA_CPPTRAJ_ENABLED": True,
-        "MMGBSA_CPPTRAJ_RUN": True,
-        "MMGBSA_TRAJOUT_NAME": "mdcrd",
-        "MMGBSA_TRAJOUT_FORMAT": "mdcrd",
-        "MMGBSA_TRAJIN_SOURCE": "INPCRD",
-        "MMGBSA_TRAJIN_PATH": "",
-        "MMGBSA_TRAJIN_FORMAT": "inpcrd",
-        "MMGBSA_TRAJ_STARTFRAME": 1,
-        "MMGBSA_TRAJ_ENDFRAME": 1,
-        "MMGBSA_TRAJ_INTERVAL": 1,
-        "MMGBSA_MMPBSA_ENABLED": True,
-        "MMGBSA_MMPBSA_RUN": True,
-        "MMGBSA_MMPBSA_STARTFRAME": 1,
-        "MMGBSA_MMPBSA_ENDFRAME": 1,
-        "MMGBSA_MMPBSA_INTERVAL": 1,
-        "MMGBSA_MMPBSA_VERBOSE": 2,
-        "MMGBSA_GB_IGB": 5,
-        "MMGBSA_GB_SALTCON": 0.150,
-        "MMGBSA_MMPBSA_INPUT_NAME": "mmpbsa.in",
-        "MMGBSA_MMPBSA_LOG_NAME": "mmpbsa.log",
-        "MMGBSA_MMPBSA_OUT_DAT": "FINAL_RESULTS_MMPBSA.dat",
-        "MMGBSA_MMPBSA_OUT_CSV": "FINAL_RESULTS_MMPBSA.csv",
-        "MMGBSA_DEFAULT_TRAJ_NAME": "mdcrd",
-        "MMGBSA_ENABLED": True,
-        "MMGBSA_KEEP_WATERS": True,
-        "MMGBSA_WATER_KEEP_RADIUS": 6.0,
-        "MMGBSA_KEEP_METALS": False,
-        "MMGBSA_METAL_RETAIN_TOKENS": "",
-        "MMGBSA_WATER_RETAIN_TOKENS": "",
-        "MMGBSA_RECEPTOR_FORCE": False,
-        "MMGBSA_FORCE": False,
-        "MMGBSA_STRICT": False,
-        "MMGBSA_LIGAND_AT": "gaff2",
-        "MMGBSA_LIGAND_CHARGE_METHOD": "bcc",
-        "MMGBSA_LIGAND_PRIMARY_CHARGE_METHOD": "bcc",
-        "MMGBSA_LIGAND_FALLBACK_CHARGE_METHOD": "gas",
-        "MMGBSA_LIGAND_NOMINAL_NET_CHARGE": 0,
-        "MMGBSA_LIGAND_BCC_CHARGE_SWEEP": "-1,1",
-        "MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2": False,
-        "MMGBSA_LIGAND_FORCE": False,
-        "MMGBSA_RDKit_VALIDATE": True,
-        "MMGBSA_RDKit_RADICAL_LOWCONF_THRESHOLD": 1,
-        "MMGBSA_LIGAND_NET_CHARGE": 0,
-        "MMGBSA_LIGAND_SQM_LEVEL": 2,
-        "MMGBSA_INPUT_STAGE_DIR": "stage1",
-        "MMGBSA_MAX_LIGANDS": 1,
-        "MMGBSA_RERANKED_TOP_PCT": 0.0,
-        "MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK": 6.0,
-        "MMGBSA_TLEAP_ENABLED": True,
-        "MMGBSA_TLEAP_FORCE": False,
-        "MMGBSA_GENERAL_STARTFRAME": 1,
-        "MMGBSA_GENERAL_ENDFRAME": 1,
-        "MMGBSA_GENERAL_INTERVAL": 1,
-        "MMGBSA_GENERAL_VERBOSE": 2,
-    }
-
-
-# -------------------------
 # Config loading & validation
 # -------------------------
 _ALLOWED_ENV_OVERRIDES = {
@@ -260,9 +51,13 @@ _ALLOWED_ENV_OVERRIDES = {
     "VINA_PATH",
     "GNINA_EXE",
     "OPENBABEL_PATH",
+    "MGLTOOLS_PATH",
+    "MGLTOOLS_DIR",
     "MGLTOOLS_PYTHON",
     "PREPARE_LIGAND_SCRIPT",
     "PREPARE_RECEPTOR_SCRIPT",
+    "PREPARE_LIGAND4",
+    "PYMOL_EXE",
     "PYMOL_PATH",
     "P2RANK_PATH",
     "PHENIX_DIR",
@@ -273,13 +68,25 @@ _ALLOWED_ENV_OVERRIDES = {
     "PDBQT_DIR",
     "DOCKED_DIR",
     "LIGAND_DIR",
+    "EXTRACTED_LIGANDS_DIR",
     "LIGAND_EXTRACTED_DIR",
     "LIGANDS_MOL2_DIR",
+    "PREPPED_LIGANDS_DIR",
     "OUTPUT_LIGANDS_DIR",
+    "PREPPED_LIGANDS_ROOT",
+    "REDUCE_LOCAL_CANDIDATE",
+    "REDUCE_HET_DICT",
+    "DOCK6_EXE",
+    "DMS_EXE",
+    "SPHGEN_EXE",
+    "SPHERE_SELECTOR_EXE",
+    "SHOWBOX_EXE",
+    "GRID_EXE",
+    "DOCK6_VDW_DEFN_FILE",
     "P2RANK_OUTPUT_DIR",
+    "CONFIGS_DIR",
     "CPU",
     "CPU_ONLY",
-    "MAX_PARALLEL_JOBS",
     "DOCKING_MODE",
     "REDUCE_EXE",
     "USE_MEEKO",
@@ -528,11 +335,11 @@ def load_config(
       3) environment variables (allowed set only)
     Then expand {OVERALL_DIR}/$OVERALL_DIR inside string values.
     """
-    base = base_dir or _default_base_dir()
+    base = base_dir or _default_base_dir(reference_file=__file__)
 
     cfg: Dict[str, Any] = {}
     cfg.update(_default_dirs(base))
-    cfg.update(_default_tools())
+    cfg.update(_default_tools(base))
     cfg.update(_default_runtime())
 
     # overlay config file
@@ -566,121 +373,7 @@ def load_config(
         if (K in cfg or K in _ALLOWED_ENV_OVERRIDES) and v:
             cfg[K] = v
 
-    # type coercion (before expansion is fine)
-    for k in [
-        "CPU_ONLY",
-        "FORCE_REPROCESS",
-        "ALLOW_BOX_EXPAND",
-        "QUIET_CONSOLE",
-        "FILTER_INVALID",
-        "USE_MEEKO",
-        "USE_DOCK6",
-        "use_dock6",
-        "DEEPCOY_SEED_PER_CHUNK",
-        "DEEPCOY_KEEP_CHUNKS",
-        "DEEPCOY_USE_ARGMAX_GENERATION",
-        "DEEPCOY_TRY_DIFFERENT_STARTING",
-        "DEEPCOY_SOURCE_AUDIT",
-        "DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN",
-        "MMGBSA_STRIP_METALS",
-        "MMGBSA_WATER_USE_ALIASES",
-        "MMGBSA_METAL_USE_ALIASES",
-        "MMGBSA_TOPOLOGY_PREP_ENABLED",
-        "MMGBSA_TLEAP_RUN",
-        "MMGBSA_CPPTRAJ_ENABLED",
-        "MMGBSA_CPPTRAJ_RUN",
-        "MMGBSA_MMPBSA_ENABLED",
-        "MMGBSA_MMPBSA_RUN",
-        "MMGBSA_ENABLED",
-        "MMGBSA_KEEP_WATERS",
-        "MMGBSA_KEEP_METALS",
-        "MMGBSA_RECEPTOR_FORCE",
-        "MMGBSA_FORCE",
-        "MMGBSA_STRICT",
-        "MMGBSA_TLEAP_ENABLED",
-        "MMGBSA_TLEAP_FORCE",
-        "MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2",
-        "MMGBSA_LIGAND_FORCE",
-        "MMGBSA_RDKit_VALIDATE",
-        "POCKET_EVAL",
-        "POCKET_EVAL_DATASET_ENABLE",
-        "POCKET_EVAL_DATASET_WIDE_ENABLE",
-        "POCKET_EVAL_SPLITS_ENABLE",
-        "POCKET_EVAL_ENSEMBLE_ENABLE",
-        "POCKET_EVAL_CV_ENABLE",
-        "POCKET_EVAL_CV_REQUIRE_SCORES",
-        "POCKET_EVAL_ORACLE_ENABLE",
-    ]:
-        if k in cfg:
-            cfg[k] = _to_bool(cfg[k])
-
-    if ("USE_DOCK6" in cfg) or ("use_dock6" in cfg):
-        dock6_flag = _to_bool(cfg.get("USE_DOCK6", cfg.get("use_dock6")))
-        cfg["USE_DOCK6"] = dock6_flag
-        cfg["use_dock6"] = dock6_flag
-
-    for k in [
-        "MAX_PARALLEL_JOBS",
-        "CPU",
-        "MAX_RECENTER_ATTEMPTS",
-        "EARLY_RECENTER_MIN_EVAL",
-        "CTRL_REDOCK_EXHAUSTIVENESS",
-        "CTRL_REDOCK_NMODES",
-        "DEEPCOY_DECOYS_PER_ACTIVE",
-        "DEEPCOY_CHUNK_SIZE",
-        "DEEPCOY_BASE_SEED",
-        "DEEPCOY_NUM_DIFFERENT_STARTING",
-        "DEEPCOY_NUM_SAMPLES",
-        "DEEPCOY_SOURCE_AUDIT_MAX_LINES",
-        "DEEPCOY_CHEMBL_MAX_PAGES",
-        "DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM",
-        "MMGBSA_TRAJ_STARTFRAME",
-        "MMGBSA_TRAJ_ENDFRAME",
-        "MMGBSA_TRAJ_INTERVAL",
-        "MMGBSA_MMPBSA_STARTFRAME",
-        "MMGBSA_MMPBSA_ENDFRAME",
-        "MMGBSA_MMPBSA_INTERVAL",
-        "MMGBSA_MMPBSA_VERBOSE",
-        "MMGBSA_GB_IGB",
-        "MMGBSA_LIGAND_SQM_LEVEL",
-        "MMGBSA_RDKit_RADICAL_LOWCONF_THRESHOLD",
-        "MMGBSA_MAX_LIGANDS",
-        "MMGBSA_RERANKED_TOP_PCT",
-        "MMGBSA_GENERAL_STARTFRAME",
-        "MMGBSA_GENERAL_ENDFRAME",
-        "MMGBSA_GENERAL_INTERVAL",
-        "MMGBSA_GENERAL_VERBOSE",
-        "POCKET_EVAL_MAX_CALIBRATORS",
-        "POCKET_EVAL_SEED",
-        "POCKET_EVAL_FOLDS",
-        "POCKET_EVAL_SPLIT_FOLDS",
-        "POCKET_EVAL_CV_TOP_M",
-        "CALIBRATOR_SAMPLING_SEED",
-    ]:
-        if k in cfg:
-            cfg[k] = _to_int(cfg[k], cfg[k])
-
-    for k in [
-        "EARLY_RECENTER_RATIO",
-        "EARLY_RECENTER_FAR_A",
-        "EARLY_RECENTER_MEDIAN_A",
-        "CONTROL_CENTER_CLOSE_MAX_A",
-        "MMGBSA_WATER_KEEP_RADIUS_A",
-        "MMGBSA_WATER_KEEP_RADIUS",
-        "MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK",
-        "MMGBSA_RERANKED_TOP_PCT",
-        "MMGBSA_GB_SALTCON",
-        "CALIBRATOR_TEST_FRACTION",
-        "CALIBRATOR_REMAINDER_EVAL_FRACTION",
-    ]:
-        if k in cfg:
-            cfg[k] = _to_float(cfg[k], cfg[k])
-
-    # normalize mode
-    cfg["DOCKING_MODE"] = str(cfg.get("DOCKING_MODE", "discovery")).lower()
-
-    # now expand {OVERALL_DIR}/$OVERALL_DIR appearances
-    cfg = _expand_all_vars(cfg)
+    cfg = normalize_config(cfg)
 
     return cfg
 
@@ -699,8 +392,8 @@ def validate_config(cfg: Dict[str, Any]):
         "MGLTOOLS_PYTHON",
         "PREPARE_RECEPTOR_SCRIPT",
         "VINA_EXE",
-        "MAX_PARALLEL_JOBS",
-        "PYMOL_PATH",
+        "CPU",
+        "PYMOL_EXE",
     ]
     missing = [k for k in required_keys if not cfg.get(k)]
     if missing:
@@ -717,10 +410,11 @@ def validate_config(cfg: Dict[str, Any]):
         "OUTPUT_DIR",
         "PDBQT_DIR",
         "DOCKED_DIR",
-        "OUTPUT_LIGANDS_DIR",
-        "LIGAND_EXTRACTED_DIR",
+        "PREPPED_LIGANDS_DIR",
+        "EXTRACTED_LIGANDS_DIR",
         "LIGANDS_MOL2_DIR",
         "P2RANK_OUTPUT_DIR",
+        "CONFIGS_DIR",
     ]
     for path_key in create_keys:
         p = Path(cfg[path_key])

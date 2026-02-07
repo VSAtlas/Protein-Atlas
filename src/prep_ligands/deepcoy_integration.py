@@ -37,7 +37,7 @@ def apply_deepcoy_defaults(cfg: Dict[str, str]) -> None:
         "DEEPCOY_OUT_ROOT",
         os.path.join(
             cfg.get(
-                "LIGAND_EXTRACTED_DIR",
+                "EXTRACTED_LIGANDS_DIR",
                 "/home/michael/atlas/code/protein_automation/extracted_ligands",
             ),
             "deepcoy",

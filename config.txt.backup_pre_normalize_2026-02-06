@@ -1,16 +1,40 @@
 OVERALL_DIR=/home/michael/atlas/code/protein_automation
 
+# Core I/O directories
+INPUT_DIR=${OVERALL_DIR}/input_pdbs
+LIGAND_DIR=${OVERALL_DIR}/input_ligands
+
+LIGAND_EXTRACTED_DIR=${OVERALL_DIR}/extracted_ligands
+EXTRACTED_LIGANDS_DIR=${OVERALL_DIR}/extracted_ligands
+
+LIGANDS_MOL2_DIR=${OVERALL_DIR}/ligands_mol2
+
+OUTPUT_LIGANDS_DIR=${OVERALL_DIR}/prepped_ligands
+PREPPED_LIGANDS_DIR=${OVERALL_DIR}/prepped_ligands
+PREPPED_LIGANDS_ROOT=${OVERALL_DIR}/prepped_ligands
+
+OUTPUT_DIR=${OVERALL_DIR}/processed_pdbs
+PDBQT_DIR=${OVERALL_DIR}/pdbqts
+DOCKED_DIR=${OVERALL_DIR}/docked
 PATHWAY_ORGANISM=Homo sapiens
 pathway_catalyst_only=true
 
 # P2Rank
 P2RANK_PATH=/home/michael/atlas/tools/p2rank/bin/p2rank.jar
+P2RANK_OUTPUT_DIR=${OVERALL_DIR}/p2rank_out
 
 # PROPKA (env-local)
 PROPKA_EXE=/home/michael/atlas/micromamba/envs/docking-env/bin/propka3
 
 # MGLTools / AutoDockTools
 MGLTOOLS_PATH=/home/michael/atlas/tools/MGLTOOLS-1.5.7
+MGLTOOLS_DIR=/home/michael/atlas/tools/MGLTOOLS-1.5.7
+MGLTOOLS_PYTHON=/home/michael/atlas/tools/MGLTOOLS-1.5.7/bin/pythonsh
+
+PREPARE_RECEPTOR_SCRIPT=/home/michael/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py
+PREPARE_LIGAND_SCRIPT=/home/michael/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+PREPARE_LIGAND4=/home/michael/atlas/tools/MGLTOOLS-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py
+
 ADFRSUITE_BIN=/home/michael/atlas/tools/ADFRsuite/bin
 
 # Phenix
@@ -20,9 +44,17 @@ PHENIX_CLEAN_SCRIPT=${OVERALL_DIR}/phenix_clean.py
 
 # Reduce
 REDUCE_EXE=/home/michael/atlas/tools/reduce/reduce_src/reduce
+REDUCE_LOCAL_CANDIDATE=/home/michael/atlas/tools/reduce/reduce_src/reduce
+REDUCE_HET_DICT=/home/michael/atlas/tools/reduce/reduce_wwPDB_het_dict.txt
 
 # DOCK6 surface generator
-DOCK6_EXE=/home/michael/atlas/tools/dock6/bin/dock6
+DOCK6_EXE = /home/michael/atlas/tools/dock6/bin/dock6
+DMS_EXE=/home/michael/atlas/tools/dms/bin/dms
+SPHGEN_EXE=/home/michael/atlas/tools/dock6/bin/sphgen
+SPHERE_SELECTOR_EXE=/home/michael/atlas/tools/dock6/bin/sphere_selector
+SHOWBOX_EXE=/home/michael/atlas/tools/dock6/bin/showbox
+GRID_EXE=/home/michael/atlas/tools/dock6/bin/grid
+DOCK6_VDW_DEFN_FILE=/home/michael/atlas/tools/dock6/parameters/vdw_AMBER_parm99.defn
 
 #LeDock
 LEPRO_EXE=/home/michael/atlas/tools/ledock/lepro_linux_x86
@@ -59,14 +91,49 @@ DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN=true
 USE_DEEPCOY=false
 
 FPOCKET_EXE=/home/michael/atlas/tools/fpocket/bin/fpocket
-FPOCKET_FORCE_RETRY_EMPTY=true
 
+USE_PROTEIN_DRUGGABILITY = false
+
+DRUGGABILITY_TIER_A_DRUGGABILITY_MIN = 0.90
+DRUGGABILITY_TIER_A_OPENNESS_MAX     = 0.55
+DRUGGABILITY_TIER_A_POLAR_FRAC_MAX   = 0.38
+
+DRUGGABILITY_TIER_B_DRUGGABILITY_MIN = 0.30
+DRUGGABILITY_TIER_B_DRUGGABILITY_MAX = 0.90
+DRUGGABILITY_TIER_B_OPENNESS_MIN     = 0.55
+DRUGGABILITY_TIER_B_OPENNESS_MAX     = 0.65
+DRUGGABILITY_TIER_B_POLAR_FRAC_MIN   = 0.45
+DRUGGABILITY_TIER_B_POLAR_FRAC_MAX   = 0.60
+
+DRUGGABILITY_TIER_C_DRUGGABILITY_MAX = 0.02
+DRUGGABILITY_TIER_C_OPENNESS_MIN     = 0.65
+DRUGGABILITY_TIER_C_POLAR_FRAC_MIN   = 0.60
+
+# --- Protein family difficulty prior (druggability + family integration) ---
+USE_PROTEIN_FAMILY_PRIOR = true
+
+# Family-tier keyword heuristics 
+FAMILY_PRIOR_TIER_A_KEYWORDS = kinase;protein kinase;tyrosine kinase;serine/threonine kinase;cdk;mapk;thymidylate synthase;dihydrofolate reductase;dehydrogenase;reductase;androgen receptor;estrogen receptor;thyroid hormone receptor
+FAMILY_PRIOR_TIER_B_KEYWORDS = protease;trypsin;thrombin;factor vii;factor x;plasmin;metalloprotease;gpcr;g-protein coupled receptor;adrenergic receptor;cytochrome p450;cyp2c9;ion channel
+FAMILY_PRIOR_TIER_C_KEYWORDS = hsp90;heat shock protein 90;chaperone;comt;catechol o-methyltransferase;farnesyl pyrophosphate synthase;fpps;fpps;metalloenzyme
+
+# Optional EC-prefix clues for families (e.g. 3.4.21 for serine proteases).
+# Leave empty or trim as needed; these are best-effort hints only.
+FAMILY_PRIOR_TIER_A_EC_PREFIXES = 2.7.10;2.7.11;2.7.12
+FAMILY_PRIOR_TIER_B_EC_PREFIXES = 3.4.21;3.4.23;3.4.24
+FAMILY_PRIOR_TIER_C_EC_PREFIXES = 1.14.13;1.14.14
+
+
+PYMOL_PATH=pymol
 PYMOL_EXE=pymol
 
 CPU_ONLY=True
 CPU=110
+MAX_PARALLEL_JOBS=110
 FORCE_REPROCESS=True
 DOCKING_MODE=polypharmacology
+FINAL_STAGE_POLY = stage3
+FINAL_STAGE_DISC = stage5
 
 EARLY_RECENTER_RATIO=0.70
 EARLY_RECENTER_MIN_EVAL=10
@@ -334,6 +401,15 @@ POSE_DIST_SURFACE_MAX_A=8.0
 POSE_DIST_CENTROID_MAX_A=6.0
 POSE_HBOND_MAX_A=3.5
 POSE_RMSD_TOL_A=2.0
+POSE_MAX_MODELS=
+
+# --- Ligand prep artifacts & knobs ---
+LIGAND_STATUS_LOG_BASENAME=ligand_prep_status.tsv
+LIGPREP_INTERMEDIATES_DIRNAME=intermediates
+LIGPREP_REFERENCE_DIRNAME=reference
+LIGPREP_QUARANTINE_DIRNAME=quarantine
+MALFORMED_LOG_BASENAME=malformed_ligands.txt
+
 USE_RDKIT_FOR_3D=true
 OBABEL_THREADS=50
 OBABEL_TIMEOUT_S=900
@@ -368,6 +444,13 @@ HEATMAP_COLOR_MIN=black
 HEATMAP_COLOR_MID=green
 HEATMAP_COLOR_MID2=orange
 HEATMAP_COLOR_MAX=red
+
+# --- Single-ligand (optional) ---
+SINGLE_LIGAND = 
+SINGLE_LIGAND_SEARCH_ORDER = fda_library,per_protein,global
+SINGLE_LIGAND_SKIP_GLOBAL = true
+SINGLE_LIGAND_ALLOW_PREFIX = false
+SINGLE_LIGAND_MANIFEST_ONLY=True
 
 
 # --- Library subfolder selection ---

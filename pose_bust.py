@@ -1181,19 +1181,12 @@ def main() -> int:
         return 1
 
     cpu_cfg = cfg.get("CPU")
-    max_jobs_cfg = cfg.get("MAX_PARALLEL_JOBS")
-
     try:
         cpu_limit = int(cpu_cfg) if cpu_cfg is not None else (os.cpu_count() or 1)
     except Exception:
         cpu_limit = os.cpu_count() or 1
 
-    try:
-        max_jobs_limit = int(max_jobs_cfg) if max_jobs_cfg is not None else cpu_limit
-    except Exception:
-        max_jobs_limit = cpu_limit
-
-    GLOBAL_MAX_WORKERS = max(1, min(cpu_limit, max_jobs_limit, os.cpu_count() or 1))
+    GLOBAL_MAX_WORKERS = max(1, min(cpu_limit, os.cpu_count() or 1))
 
     if args.workers is None or args.workers <= 0:
         convert_workers = GLOBAL_MAX_WORKERS

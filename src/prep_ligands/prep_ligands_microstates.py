@@ -494,7 +494,7 @@ def enumerate_ligands_for_docking(
 
     library_name = (library_base or "ligprep").lower()
 
-    prepped_root_env = (os.environ.get("PREPPED_LIGANDS_ROOT", "") or "").strip()
+    prepped_root_env = (os.environ.get("PREPPED_LIGANDS_DIR", "") or "").strip()
     if prepped_root_env:
         prepped_root = Path(prepped_root_env).resolve()
     else:

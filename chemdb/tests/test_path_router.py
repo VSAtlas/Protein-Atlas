@@ -21,9 +21,9 @@ from path_router.path_router import (
     ph_ensemble_dir,
     docked_dir,
     make_paths,
-    _read_basic_config,
     _default_config_path,
 )
+from input_and_export_functions import load_config
 
 # Optional helpers: not all versions of path_router export these
 try:
@@ -54,33 +54,16 @@ TEST_RUN_ID = "test_run"
 
 def _load_cfg() -> dict[str, str]:
     """
-    Load config.txt in the same way path_router does, but make sure we expand
-    ${OVERALL_DIR} and friends so tests don't accidentally create directories
-    like ${OVERALL_DIR}/... under the repo root.
+    Load config.txt through the shared loader + normalizer so minimal root-only
+    configs still provide fully derived path keys.
     """
     cfg_path = _default_config_path()
-    cfg = _read_basic_config(cfg_path)
+    cfg = load_config(config_path=str(cfg_path), base_dir=cfg_path.parent)
     assert cfg, f"Config seems empty or missing: {cfg_path}"
 
     # Baseline required keys
     for key in ("OVERALL_DIR", "INPUT_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
         assert key in cfg, f"Missing required key {key!r} in config"
-
-    # Prefer path_router's own token expansion if available
-    if _expand_tokens is not None:
-        cfg = _expand_tokens(cfg)  # type: ignore[call-arg]
-    else:
-        # Fallback: use env-style expansion, bootstrapping OVERALL_DIR from cfg
-        over = cfg.get("OVERALL_DIR")
-        if over:
-            os.environ.setdefault("OVERALL_DIR", over)
-        expanded: dict[str, str] = {}
-        for k, v in cfg.items():
-            if isinstance(v, str):
-                expanded[k] = os.path.expandvars(v)
-            else:
-                expanded[k] = v
-        cfg = expanded
 
     # Make sure some ligand-related keys exist for make_paths
     for key in ("LIGANDS_MOL2_DIR", "PREPPED_LIGANDS_DIR"):

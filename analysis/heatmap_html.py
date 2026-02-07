@@ -182,7 +182,7 @@ def _is_finite(value: Optional[float]) -> bool:
     return value is not None and math.isfinite(value)
 
 
-def _parse_t_selected(value: Any) -> Optional[float]:
+def _parse_selected_score(value: Any) -> Optional[float]:
     try:
         parsed = float(value)
     except Exception:
@@ -296,8 +296,13 @@ def _load_heatmap_rows_csv(
     with input_csv.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         fieldnames = reader.fieldnames or []
-        if "t_selected" not in fieldnames:
-            raise ValueError("Missing required column: t_selected")
+        selected_col = ""
+        if "z_selected" in fieldnames:
+            selected_col = "z_selected"
+        elif "t_selected" in fieldnames:
+            selected_col = "t_selected"
+        if not selected_col:
+            raise ValueError("Missing required column: z_selected (or legacy t_selected)")
         has_target_id = "target_id" in fieldnames
         if not has_target_id:
             required_cols = {"pdb_id", "variant", "ph_label"}
@@ -313,8 +318,10 @@ def _load_heatmap_rows_csv(
 
         rows: List[Dict[str, Any]] = []
         for row in reader:
-            t_val = _parse_t_selected(row.get("t_selected"))
-            if t_val is None:
+            z_val = _parse_selected_score(row.get(selected_col))
+            if z_val is None and selected_col != "t_selected":
+                z_val = _parse_selected_score(row.get("t_selected"))
+            if z_val is None:
                 continue
             if not include_decoys and "is_decoy" in fieldnames:
                 decoy_flag = _is_truthy_value(row.get("is_decoy"))
@@ -355,14 +362,14 @@ def _load_heatmap_rows_csv(
             ):
                 continue
 
-            row["t_selected"] = t_val
+            row["z_selected"] = z_val
             row["ligand_name"] = ligand_name
             row["target_id"] = target_id
             row["pdb_id"] = pdb_id
             rows.append(row)
 
     if not rows:
-        raise ValueError("No usable t_selected values found in input CSV")
+        raise ValueError("No usable z_selected values found in input CSV")
     return rows
 
 
@@ -384,8 +391,13 @@ def _load_heatmap_rows_parquet(
 
     dataset = ds.dataset(str(input_path), format="parquet", partitioning="hive")
     schema_names = set(dataset.schema.names)
-    if "t_selected" not in schema_names:
-        raise ValueError("Missing required column: t_selected")
+    selected_col = ""
+    if "z_selected" in schema_names:
+        selected_col = "z_selected"
+    elif "t_selected" in schema_names:
+        selected_col = "t_selected"
+    if not selected_col:
+        raise ValueError("Missing required column: z_selected (or legacy t_selected)")
 
     has_target_id = "target_id" in schema_names
     has_pdb_id = "pdb_id" in schema_names
@@ -400,7 +412,7 @@ def _load_heatmap_rows_parquet(
     if not has_ligand_display and not has_ligand_base:
         raise ValueError("Missing ligand_display/ligand_base columns in input parquet")
 
-    scan_columns: List[str] = ["t_selected"]
+    scan_columns: List[str] = [selected_col]
     for col in ("target_id", "pdb_id", "variant", "ph_label"):
         if col in schema_names and col not in scan_columns:
             scan_columns.append(col)
@@ -425,8 +437,10 @@ def _load_heatmap_rows_parquet(
         payload = batch.to_pydict()
         n_rows = batch.num_rows
         for idx in range(n_rows):
-            t_val = _parse_t_selected(payload["t_selected"][idx])
-            if t_val is None:
+            z_val = _parse_selected_score(payload[selected_col][idx])
+            if z_val is None and selected_col != "t_selected" and "t_selected" in payload:
+                z_val = _parse_selected_score(payload["t_selected"][idx])
+            if z_val is None:
                 continue
 
             if not include_decoys and "is_decoy" in payload:
@@ -474,7 +488,7 @@ def _load_heatmap_rows_parquet(
                 continue
 
             row: Dict[str, Any] = {
-                "t_selected": t_val,
+                "z_selected": z_val,
                 "ligand_name": ligand_name,
                 "target_id": target_id,
                 "pdb_id": pdb_id,
@@ -492,7 +506,7 @@ def _load_heatmap_rows_parquet(
             rows.append(row)
 
     if not rows:
-        raise ValueError("No usable t_selected values found in input parquet")
+        raise ValueError("No usable z_selected values found in input parquet")
     return rows
 
 
@@ -520,15 +534,17 @@ def _aggregate_rows(
         ligand_name = row.get("ligand_name") or ""
         target_id = row.get("target_id") or ""
         target_label = row.get("target_label") or target_id
-        t_val = row.get("t_selected")
-        if not _is_finite(t_val):
+        z_val = row.get("z_selected")
+        if not _is_finite(cast(Optional[float], z_val)):
+            z_val = _parse_selected_score(row.get("t_selected"))
+        if not _is_finite(cast(Optional[float], z_val)):
             continue
-        t_val = cast(float, t_val)
+        z_val = cast(float, z_val)
         key = (ligand_name, target_label)
         existing = agg.get(key)
-        if existing is None or t_val > existing["t_selected"]:
+        if existing is None or z_val > existing["z_selected"]:
             agg[key] = {
-                "t_selected": t_val,
+                "z_selected": z_val,
                 "ligand_name": ligand_name,
                 "target_id": target_label,
                 "target_raw": _normalize_text(target_id),
@@ -539,8 +555,8 @@ def _aggregate_rows(
                 "library": _normalize_text(row.get("library")),
             }
         current_max = ligand_max.get(ligand_name)
-        if current_max is None or t_val > current_max:
-            ligand_max[ligand_name] = t_val
+        if current_max is None or z_val > current_max:
+            ligand_max[ligand_name] = z_val
     return agg, ligand_max
 
 
@@ -554,7 +570,7 @@ def _build_matrix(
         row = []
         for target in target_order:
             entry = agg.get((ligand, target))
-            row.append(entry["t_selected"] if entry else None)
+            row.append(entry["z_selected"] if entry else None)
         matrix.append(row)
     return matrix
 
@@ -845,7 +861,7 @@ def _render_clustergrammer_html(
             continue
         key = f"{_clustergrammer_key(ligand)}||{_clustergrammer_key(target)}"
         meta_entry: Dict[str, str] = {
-            "t_selected": _format_value(cast(Optional[float], cell.get("t_selected"))),
+            "z_selected": _format_value(cast(Optional[float], cell.get("z_selected"))),
             "ligand_raw": ligand,
             "target_raw": _normalize_text(cell.get("target_raw")) or target,
         }
@@ -1053,7 +1069,7 @@ def _render_clustergrammer_html(
         "      var lines = [\n"
         "        \"ligand: \" + rowName,\n"
         "        \"target: \" + colName,\n"
-        "        \"t_selected: \" + (meta && meta.t_selected ? meta.t_selected : \"NA\")\n"
+        "        \"z_selected: \" + (meta && (meta.z_selected || meta.t_selected) ? (meta.z_selected || meta.t_selected) : \"NA\")\n"
         "      ];\n"
         "      if (meta && meta.rank) lines.push(\"rank: \" + meta.rank);\n"
         "      if (meta && meta.pct_rank) lines.push(\"pct_rank: \" + meta.pct_rank);\n"
@@ -1308,17 +1324,17 @@ def render_interactive_heatmap_html(
         row_cells: List[str] = []
         for target in col_labels:
             cell = agg.get((ligand, target))
-            t_val = cell["t_selected"] if cell else None
-            color = _value_to_color(t_val, heatmap_breaks, heatmap_colors, scale_min, scale_max)
+            z_val = cell["z_selected"] if cell else None
+            color = _value_to_color(z_val, heatmap_breaks, heatmap_colors, scale_min, scale_max)
             tooltip_lines = [
                 f"ligand: {ligand}",
                 f"target: {target}",
-                f"t_selected: {_format_value(t_val)}",
+                f"z_selected: {_format_value(z_val)}",
             ]
             data_attrs = {
                 "ligand": ligand,
                 "target": target,
-                "t_selected": _format_value(t_val),
+                "z_selected": _format_value(z_val),
             }
             if cell:
                 for key in (
@@ -1442,7 +1458,7 @@ def render_interactive_heatmap_html(
         "        var lines = [\n"
         "          \"ligand: \" + (cell.dataset.ligand || \"\"),\n"
         "          \"target: \" + (cell.dataset.target || \"\"),\n"
-        "          \"t_selected: \" + (cell.dataset.tSelected || \"\")\n"
+        "          \"z_selected: \" + (cell.dataset.zSelected || cell.dataset.tSelected || \"\")\n"
         "        ];\n"
         "        if (cell.dataset.rank) lines.push(\"rank: \" + cell.dataset.rank);\n"
         "        if (cell.dataset.pctRank) lines.push(\"pct_rank: \" + cell.dataset.pctRank);\n"

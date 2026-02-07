@@ -9,9 +9,13 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from activesite import norm
-from input_and_export_functions import _to_bool
 from prep_ligands.library_index import LibraryIndex
 from path_router import Paths
+
+_SINGLE_ALLOW_PREFIX = False
+_SINGLE_SKIP_GLOBAL = True
+_SINGLE_MANIFEST_ONLY = True
+_SINGLE_ORDER = ["fda_library", "per_protein"]
 
 
 # [single-index] Deduplicate manifest roots and retain stable ordering.
@@ -36,10 +40,7 @@ def _dedupe_manifest_roots(seq) -> list[Path]:
 def _ensure_single_ligand_index(
     cfg: Dict, paths: Paths, logger: logging.Logger
 ) -> None:
-    cfg.setdefault(
-        "OUTPUT_LIGANDS_DIR",
-        cfg.get("PREPPED_LIGANDS_DIR") or cfg.get("PREPPED_LIGANDS_ROOT"),
-    )
+    cfg.setdefault("PREPPED_LIGANDS_DIR", str(paths.prepped_ligands_dir.parent))
 
     per_roots = _dedupe_manifest_roots(
         [
@@ -48,8 +49,6 @@ def _ensure_single_ligand_index(
     )
     library_roots = _dedupe_manifest_roots(
         [
-            cfg.get("OUTPUT_LIGANDS_DIR"),
-            cfg.get("PREPPED_LIGANDS_ROOT"),
             cfg.get("PREPPED_LIGANDS_DIR"),
         ]
     )
@@ -105,15 +104,9 @@ def _resolve_single_ligand(
     if not selector:
         return None
 
-    allow_prefix = _to_bool(str(cfg.get("SINGLE_LIGAND_ALLOW_PREFIX", "false")))
-    raw_order = str(
-        cfg.get("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global")
-    )
-    order = ["fda_library", "per_protein", "global"]
-    skip_global = bool(cfg.get("SINGLE_LIGAND_SKIP_GLOBAL", True))
-    if skip_global:
-        order = [scope for scope in order if scope != "global"]
-    manifest_only = _to_bool(str(cfg.get("SINGLE_LIGAND_MANIFEST_ONLY", True)))
+    allow_prefix = _SINGLE_ALLOW_PREFIX
+    skip_global = _SINGLE_SKIP_GLOBAL
+    manifest_only = _SINGLE_MANIFEST_ONLY
     suggestions_cap = int(cfg.get("SINGLE_LIGAND_SUGGESTIONS", 5) or 5)
 
     per_roots = _dedupe_manifest_roots(cfg.get("_LIB_INDEX_PER_ROOTS", []))
@@ -122,15 +115,17 @@ def _resolve_single_ligand(
     lib_index = cfg.get("_LIB_INDEX")
     has_index = isinstance(lib_index, LibraryIndex)
 
-    output_ligands_dir = cfg.get("OUTPUT_LIGANDS_DIR")
+    prepped_ligands_dir = cfg.get("PREPPED_LIGANDS_DIR")
     fda_root = (
-        Path(output_ligands_dir).joinpath("fda_library") if output_ligands_dir else None
+        Path(prepped_ligands_dir).joinpath("fda_library")
+        if prepped_ligands_dir
+        else None
     )
     name_map: Optional[dict[str, set[str]]] = None
     fda_logged = False
     key = _norm_name_key(selector)
 
-    effective_order = order
+    effective_order = list(_SINGLE_ORDER)
     use_manifest = has_index and (
         bool(per_roots) or (not skip_global and bool(library_roots))
     )
@@ -138,7 +133,7 @@ def _resolve_single_ligand(
     logger.info(
         "[single.debug] selector=%s raw_order=%s order=%s skip_global=%s manifest_only=%s has_index=%s use_manifest=%s per_roots=%s lib_roots=%s allow_prefix=%s",
         selector,
-        raw_order,
+        "fixed",
         effective_order,
         skip_global,
         manifest_only,

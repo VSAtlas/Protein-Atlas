@@ -165,12 +165,12 @@ def fold_legacy_layout(pdb_id: str, output_root) -> None:
 
 def _expose_ligand_intermediates_for_debug(pdb_id: str, ligands_raw: Path) -> None:
     """
-    If PREPPED_LIGANDS_ROOT is configured, create/update:
-      <PREPPED_LIGANDS_ROOT>/<PDB>/intermediates -> <processed_pdbs>/<PDB>/ligands_raw
+    If PREPPED_LIGANDS_DIR is configured, create/update:
+      <PREPPED_LIGANDS_DIR>/<PDB>/intermediates -> <processed_pdbs>/<PDB>/ligands_raw
     so intermediates (sanitized PDB, MOL2) are visible next to final PDBQTs.
     """
     try:
-        prepped_root = _cfg_env_or_default("PREPPED_LIGANDS_ROOT", "")
+        prepped_root = _cfg_env_or_default("PREPPED_LIGANDS_DIR", "")
         if not prepped_root:
             return
         dst_dir = _as_path(prepped_root) / pdb_id.upper()
@@ -234,7 +234,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--expose-intermediates",
         nargs=2,
-        metavar=("PROCESSED_ROOT", "PREPPED_LIGANDS_ROOT"),
+        metavar=("PROCESSED_ROOT", "PREPPED_LIGANDS_DIR"),
         help="Create/refresh prepped_ligands/<PDB>/intermediates symlinks for all PDBs.",
     )
     parser.add_argument(
@@ -334,9 +334,9 @@ if __name__ == "__main__":
             os.environ["EXTRACT_TEST"] = "1"
 
         cfg = read_config()
-        ligand_extracted_dir = Path(cfg["LIGAND_EXTRACTED_DIR"]).resolve()
+        ligand_extracted_dir = Path(cfg["EXTRACTED_LIGANDS_DIR"]).resolve()
         ligands_mol2_dir = Path(cfg["LIGANDS_MOL2_DIR"]).resolve()
-        output_ligands_dir = Path(cfg["OUTPUT_LIGANDS_DIR"]).resolve()
+        output_ligands_dir = Path(cfg["PREPPED_LIGANDS_DIR"]).resolve()
 
         prep_ligands_from_pdb(
             ligand_extracted_dir, ligands_mol2_dir, output_ligands_dir
@@ -361,7 +361,7 @@ if __name__ == "__main__":
     if args.expose_intermediates:
         proc_root = Path(args.expose_intermediates[0]).resolve()
         prepped_root = Path(args.expose_intermediates[1]).resolve()
-        os.environ["PREPPED_LIGANDS_ROOT"] = str(prepped_root)
+        os.environ["PREPPED_LIGANDS_DIR"] = str(prepped_root)
         for pdb_dir in sorted(proc_root.iterdir()):
             if not pdb_dir.is_dir():
                 continue

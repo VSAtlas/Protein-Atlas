@@ -417,8 +417,7 @@ def run_dock6_for_stage(
     n_lig = len(ligand_items)
 
     cpu = int(cfg.get("CPU", os.cpu_count() or 1))
-    max_jobs = int(cfg.get("MAX_PARALLEL_JOBS", cpu))
-    n_workers_cap = max(1, min(cpu, max_jobs, n_lig))
+    n_workers_cap = max(1, min(cpu, n_lig))
 
     raw_chunks = int(cfg.get("DOCK6_CHUNK_SIZE", 0) or 0)
     if raw_chunks > 0:

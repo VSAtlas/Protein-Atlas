@@ -1151,9 +1151,9 @@ def _bulk_init_config_and_paths(
         ("MGLTOOLS_PYTHON", mgltools_python),
         ("MGLTOOLS_PATH", mgltools_path),
         ("OPENBABEL_PATH", obabel_exe),
-        ("LIGAND_EXTRACTED_DIR", ligand_extracted_dir),
+        ("EXTRACTED_LIGANDS_DIR", ligand_extracted_dir),
         ("LIGANDS_MOL2_DIR", ligands_mol2_dir),
-        ("OUTPUT_LIGANDS_DIR", output_ligands_dir),
+        ("PREPPED_LIGANDS_DIR", output_ligands_dir),
     ]:
         if not str(p).strip():
             raise RuntimeError(f"Config value missing/empty: {label}")
@@ -1162,7 +1162,7 @@ def _bulk_init_config_and_paths(
     prepare_script = _resolve_prepare_ligand4(mgltools_path, cfg)
     if not prepare_script.exists():
         raise FileNotFoundError(
-            f"prepare_ligand4.py not found at {prepare_script} (set PREPARE_LIGAND4 in config.txt)"
+            f"prepare_ligand4.py not found at {prepare_script} (set PREPARE_LIGAND_SCRIPT in config.txt)"
         )
     prepare_script_short = get_short_path_name(str(prepare_script.resolve()))
 
@@ -1993,12 +1993,12 @@ def prep_ligands_with_mgltools(
             pdb_id: str, ligands_raw: Path
         ) -> None:
             """
-            If PREPPED_LIGANDS_ROOT is configured, create/update:
-              <PREPPED_LIGANDS_ROOT>/<PDB>/intermediates -> <processed_pdbs>/<PDB>/ligands_raw
+            If PREPPED_LIGANDS_DIR is configured, create/update:
+              <PREPPED_LIGANDS_DIR>/<PDB>/intermediates -> <processed_pdbs>/<PDB>/ligands_raw
             so intermediates (sanitized PDB, MOL2) are visible next to final PDBQTs.
             """
             try:
-                prepped_root = _cfg_env_or_default("PREPPED_LIGANDS_ROOT", "")
+                prepped_root = _cfg_env_or_default("PREPPED_LIGANDS_DIR", "")
                 if not prepped_root:
                     return
                 dst_dir = _as_path(prepped_root) / pdb_id.upper()

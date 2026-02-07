@@ -884,9 +884,9 @@ def run_fpocket_for_explicit_pocket(
     )
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             cmd,
-            check=True,
+            check=False,
             cwd=str(receptor_path.parent),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -899,14 +899,39 @@ def run_fpocket_for_explicit_pocket(
             exc,
         )
         return None
+    if int(result.returncode) != 0:
+        stderr_tail = (result.stderr or "").strip().splitlines()
+        logger.warning(
+            "[druggability.fpocket.error] pdb=%s reason=fpocket_failed rc=%s stderr_tail=%s",
+            receptor_path,
+            result.returncode,
+            stderr_tail[-1] if stderr_tail else "",
+        )
+        return None
 
     src_out_dir = receptor_path.parent / f"{stem}_out"
     if not src_out_dir.exists():
-        logger.warning(
-            "[druggability.fpocket.skip] pdb=%s reason=missing_output path=%s",
+        combined_text = f"{(result.stdout or '').lower()}\n{(result.stderr or '').lower()}"
+        if "no pockets found" in combined_text or "no pocket to refine" in combined_text:
+            logger.info(
+                "[druggability.fpocket.skip] pdb=%s reason=no_pockets",
+                receptor_path,
+            )
+        else:
+            logger.warning(
+                "[druggability.fpocket.skip] pdb=%s reason=missing_output path=%s",
+                receptor_path,
+                src_out_dir,
+            )
+        return None
+    src_info_path = src_out_dir / f"{stem}_info.txt"
+    if not src_info_path.exists() or src_info_path.stat().st_size <= 0:
+        logger.info(
+            "[druggability.fpocket.skip] pdb=%s reason=empty_info path=%s",
             receptor_path,
-            src_out_dir,
+            src_info_path,
         )
+        shutil.rmtree(src_out_dir, ignore_errors=True)
         return None
 
     dst_root = get_fpocket_output_root(cfg)

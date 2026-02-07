@@ -142,9 +142,7 @@ def compute_allowed_library_roots(
     tokens = tokens_override or parse_test_libraries(cfg)
 
     base_root = Path(
-        cfg.get("OUTPUT_LIGANDS_DIR")
-        or cfg.get("PREPPED_LIGANDS_ROOT")
-        or "prepped_ligands"
+        cfg.get("PREPPED_LIGANDS_DIR") or "prepped_ligands"
     )
     subdir_default = str(cfg.get("LIBRARY_SUBDIR_DEFAULT", "fda_library"))
     hmdb_subdir_raw = str(cfg.get("HMDB_LIBRARY_SUBDIR", "hmdb"))

@@ -223,9 +223,9 @@ def run_ligand_pipeline_subrun(ctx: ProteinDockingContext, subrun: SubrunSpec) -
 
         prepped_control_pdbqts = []
         scan_roots = [paths.prepped_ligands_dir]
-        if cfg.get("OUTPUT_LIGANDS_DIR"):
+        if cfg.get("PREPPED_LIGANDS_DIR"):
             try:
-                out_root = Path(cfg["OUTPUT_LIGANDS_DIR"])
+                out_root = Path(cfg["PREPPED_LIGANDS_DIR"])
                 if out_root.exists():
                     scan_roots.append(out_root)
             except Exception:

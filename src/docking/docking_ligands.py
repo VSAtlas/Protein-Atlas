@@ -257,9 +257,7 @@ def ensure_deepcoy_decoy_pdbqts(
     test_map = _coerce_test_map(cfg.get("TEST_LIBRARY_MAP", {}))
     mapped_value = (test_map or {}).get(pdb_id.upper())
     base_root = Path(
-        cfg.get("OUTPUT_LIGANDS_DIR")
-        or cfg.get("PREPPED_LIGANDS_ROOT")
-        or "prepped_ligands"
+        cfg.get("PREPPED_LIGANDS_DIR") or "prepped_ligands"
     )
     mapped_root = base_root / mapped_value if mapped_value else None
     run_mode_val = (run_mode or "").lower()
@@ -1160,7 +1158,7 @@ def prepare_and_filter_ligands(
         return [], {}, {}
 
     global_root = (
-        Path(cfg["OUTPUT_LIGANDS_DIR"]) if cfg.get("OUTPUT_LIGANDS_DIR") else None
+        Path(cfg["PREPPED_LIGANDS_DIR"]) if cfg.get("PREPPED_LIGANDS_DIR") else None
     )
 
     valid_pdbqt: Dict[str, Path] = {}

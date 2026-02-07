@@ -120,7 +120,6 @@ def _prefix_has_tool(prefix: Path, tool: str) -> bool:
 def _resolve_global_cpu_limit(cfg: object | None) -> Optional[int]:
     candidates = [
         _cfg_get(cfg, "CPU", None),
-        _cfg_get(cfg, "MAX_PARALLEL_JOBS", None),
         os.environ.get("CPU"),
     ]
     for candidate in candidates:

@@ -139,11 +139,12 @@ DUD-Only Runtime Mode:
 Single-ligand mode:
   --single PATTERN
       Enable SINGLE_LIGAND mode and restrict docking to a single ligand
-      whose name contains PATTERN. The search order is controlled by:
-        SINGLE_LIGAND_SEARCH_ORDER
-        SINGLE_LIGAND_ALLOW_PREFIX
-        SINGLE_LIGAND_MANIFEST_ONLY
-      as defined in the YAML config. When combined with multiple PDBs,
+      whose name contains PATTERN. Lookup policy is fixed in code:
+        - search order: fda_library, per_protein
+        - global search disabled
+        - prefix matching disabled
+        - manifest-only mode enabled
+      When combined with multiple PDBs,
       the pipeline will dock the same ligand (if found) across all
       selected proteins in parallel.
 
@@ -826,8 +827,6 @@ def _smoke_emit_config_demo() -> None:
             "OUTPUT_DIR": smoke_root / "processed_pdbs",
             "DOCKED_DIR": smoke_root / "docked",
             "PREPPED_LIGANDS_DIR": smoke_root / "prepped_ligands",
-            "OUTPUT_LIGANDS_DIR": smoke_root / "prepped_ligands",
-            "PREPPED_LIGANDS_ROOT": smoke_root / "prepped_ligands",
             "LIGANDS_MOL2_DIR": smoke_root / "ligands_mol2",
             "CONFIGS_DIR": smoke_root / "configs",
         }
@@ -1245,9 +1244,6 @@ def main() -> None:
 
     # --- Single-ligand config (ported) ---------------------------------------
     cfg.setdefault("SINGLE_LIGAND", "")
-    cfg.setdefault("SINGLE_LIGAND_SEARCH_ORDER", "fda_library,per_protein,global")
-    cfg.setdefault("SINGLE_LIGAND_ALLOW_PREFIX", False)
-    cfg.setdefault("SINGLE_LIGAND_MANIFEST_ONLY", True)
     cfg.setdefault("SINGLE_LIGAND_SUGGESTIONS", 5)
     cfg.setdefault("ALLOW_FDA_FALLBACK", False)
     cfg.setdefault("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
@@ -1693,7 +1689,7 @@ def main() -> None:
 
                 def _cfg_for_pdb() -> ConfigDict:
                     cfg_local = cfg_v.copy()
-                    cfg_local["MAX_PARALLEL_JOBS"] = 1
+                    cfg_local["CPU"] = 1
                     return cfg_local
 
                 with ThreadPoolExecutor(max_workers=max_pdb_workers) as pool:

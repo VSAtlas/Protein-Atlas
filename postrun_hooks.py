@@ -96,15 +96,10 @@ def _maybe_run_scorch_rescore(
         except Exception:
             return fallback
 
-    total_cpu = _as_int(
-        cfg.get("CPU") or cfg.get("MAX_PARALLEL_JOBS") or (os.cpu_count() or 1),
-        os.cpu_count() or 1,
-    )
-    max_jobs_cfg = _as_int(cfg.get("MAX_PARALLEL_JOBS") or total_cpu, total_cpu)
+    total_cpu = _as_int(cfg.get("CPU") or (os.cpu_count() or 1), os.cpu_count() or 1)
     total_cpu = max(1, total_cpu)
-    max_jobs_cfg = max(1, max_jobs_cfg)
 
-    jobs = max(1, min(max_jobs_cfg, total_cpu))
+    jobs = total_cpu
     threads = max(1, total_cpu // jobs)
 
     scorch_jobs = cfg.get("SCORCH_JOBS")
@@ -210,8 +205,6 @@ def _maybe_run_scorch_rescore_for_pdb(
         _as_int(cfg.get("CPU") or (os.cpu_count() or 1), os.cpu_count() or 1),
     )
     jobs = 1
-    if cfg.get("MAX_PARALLEL_JOBS") is not None:
-        jobs = max(1, min(_as_int(cfg.get("MAX_PARALLEL_JOBS"), jobs), total_cpu))
     if cfg.get("SCORCH_JOBS") is not None:
         jobs = max(1, min(_as_int(cfg.get("SCORCH_JOBS"), jobs), total_cpu))
 

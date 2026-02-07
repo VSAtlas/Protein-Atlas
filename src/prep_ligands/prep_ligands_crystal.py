@@ -265,7 +265,7 @@ def prep_ligands_from_pdb(
     prepare_script = _resolve_prepare_ligand4(mgltools_path, config)
     if not prepare_script.exists():
         raise FileNotFoundError(
-            f"prepare_ligand4.py not found at {prepare_script} (set PREPARE_LIGAND4 in config.txt)"
+            f"prepare_ligand4.py not found at {prepare_script} (set PREPARE_LIGAND_SCRIPT in config.txt)"
         )
     prepare_script_short = get_short_path_name(str(prepare_script.resolve()))
 

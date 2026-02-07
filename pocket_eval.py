@@ -580,7 +580,7 @@ def get_calibration_set_for_pdb(
             )
             return cached_rows
 
-    extracted_root = Path(cfg.get("LIGAND_EXTRACTED_DIR", DEFAULT_OUT_ROOT))
+    extracted_root = Path(cfg.get("EXTRACTED_LIGANDS_DIR", DEFAULT_OUT_ROOT))
     extracted_dir = extracted_root / f"{pdb_norm}_calibrator"
     labels = None
     if force_calibrator:
@@ -895,13 +895,12 @@ def _calc_vina_parallel_workers(
     # Match src/docking/docking_stage_runner.py:run_one_stage worker computation.
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     cpu = int(cfg.get("CPU", os.cpu_count() or 1))
-    max_jobs = int(cfg.get("MAX_PARALLEL_JOBS", cpu))
-    max_workers = min(max_jobs, ligand_count)
+    max_workers = min(cpu, ligand_count)
     if max_workers < 1:
         max_workers = 1
-    if max_jobs == 1 and ligand_count > 0:
+    if cpu == 1 and ligand_count > 0:
         logger.info(
-            "[pocket-eval] MAX_PARALLEL_JOBS=1 forcing max_workers=1 for %d ligands",
+            "[pocket-eval] CPU=1 forcing max_workers=1 for %d ligands",
             ligand_count,
         )
     return max_workers, threads_per_vina
@@ -927,12 +926,6 @@ def _calc_global_vina_workers(
     cpu_total = int(cfg.get("CPU", os.cpu_count() or 1))
     threads_per_vina = max(1, int(cfg.get("THREADS_PER_VINA", 1)))
     max_workers = max(1, cpu_total // threads_per_vina)
-    max_parallel_cfg = cfg.get("MAX_PARALLEL_JOBS")
-    if max_parallel_cfg is not None:
-        try:
-            max_workers = min(max_workers, int(max_parallel_cfg))
-        except Exception:
-            pass
     max_workers = min(max_workers, max(1, int(task_count)))
     logger.info(
         "[pocket-eval] calibrator_global_workers tasks=%d max_workers=%d threads_per_vina=%d cpu_total=%d",
@@ -1712,7 +1705,7 @@ def select_pocket_with_eval(
 
     prep_root = paths.prepped_ligands_dir.parent / f"{pdb_norm}_calibrator"
     prep_dir = prep_root
-    extracted_root = Path(cfg.get("LIGAND_EXTRACTED_DIR", DEFAULT_OUT_ROOT))
+    extracted_root = Path(cfg.get("EXTRACTED_LIGANDS_DIR", DEFAULT_OUT_ROOT))
     extracted_dir = extracted_root / f"{pdb_norm}_calibrator"
     extracted_dir.mkdir(parents=True, exist_ok=True)
     prepared, prep_report = prepare_calibrator_ligands(

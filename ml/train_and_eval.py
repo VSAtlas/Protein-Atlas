@@ -37,6 +37,7 @@ from ml.metrics_extra import (
     save_reliability_plot,
 )
 from ml.models import build_model
+from ml.output_views import write_truncated_views_for_run_dir
 from ml.pipeline import run_two_stage_pipeline
 from ml.pocket_features import POCKET_FEATURE_COLUMNS
 from ml.registry import (
@@ -769,6 +770,7 @@ def run_pipeline(config_path: str) -> tuple[Path, dict[str, float | int]]:
             },
         )
 
+    write_truncated_views_for_run_dir(output_dir)
     return output_dir, metrics
 
 

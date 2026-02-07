@@ -609,8 +609,7 @@ def run_ledock_for_stage(
     n_lig = len(ligand_items)
 
     cpu = int(cfg.get("CPU", os.cpu_count() or 1))
-    max_jobs = int(cfg.get("MAX_PARALLEL_JOBS", cpu))
-    n_workers_cap = max(1, min(cpu, max_jobs, n_lig))
+    n_workers_cap = max(1, min(cpu, n_lig))
 
     # LEDOCK_CHUNK_SIZE is a target number of batches; fall back to worker count when unset.
     raw_chunks = int(cfg.get("LEDOCK_CHUNK_SIZE", 0) or 0)

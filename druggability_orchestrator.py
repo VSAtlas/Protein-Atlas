@@ -224,8 +224,15 @@ def load_fpocket_metrics_for_receptor_pdb(
     out_dir = output_root / f"{stem}_out"
     info_path = out_dir / f"{stem}_info.txt"
     if not info_path.exists():
-        local_logger.info(
+        local_logger.debug(
             "[druggability.orchestrator.receptor.skip] receptor=%s reason=missing_info path=%s",
+            receptor_pdb,
+            info_path,
+        )
+        return None
+    if info_path.stat().st_size <= 0:
+        local_logger.debug(
+            "[druggability.orchestrator.receptor.skip] receptor=%s reason=empty_info path=%s",
             receptor_pdb,
             info_path,
         )
@@ -233,7 +240,7 @@ def load_fpocket_metrics_for_receptor_pdb(
 
     parsed = _parse_first_fpocket_block(info_path)
     if parsed is None:
-        local_logger.info(
+        local_logger.debug(
             "[druggability.orchestrator.receptor.skip] receptor=%s reason=parse_failed path=%s",
             receptor_pdb,
             info_path,

@@ -1816,13 +1816,13 @@ def build_report(
         top_lines = []
         for idx, entry in enumerate(top_entries, start=1):
             target_display = _clean_text(entry.get("pdb_id"))
-            t_text = _format_num(entry.get("t_selected"), ".6g")
+            z_text = _format_num(entry.get("t_selected"), ".6g")
             p_text = _format_pct_display(
                 entry.get("pct_rank"),
                 max(2, pct_display_decimals),
                 min_nonzero_pct=0.01,
             )
-            top_lines.append(f"{idx}) {target_display}  t={t_text}  pct={p_text}")
+            top_lines.append(f"{idx}) {target_display}  z={z_text}  pct={p_text}")
         top_targets_text = "\n".join(top_lines) if top_lines else "—"
 
         tail_entries = entries_sorted[top_targets_n:]
@@ -2383,13 +2383,10 @@ def _write_html_report(
     tbody tr:hover {{ background: var(--highlight); }}
     th.num, td.num {{ text-align: right; }}
     .highlights-table th, .highlights-table td {{ vertical-align: top; }}
-    .highlights-table th, .highlights-table td {{ border-right: 1px solid var(--border); }}
-    .highlights-table th:last-child, .highlights-table td:last-child {{ border-right: none; }}
     .highlights-table .best-pct {{
       white-space: nowrap;
       min-width: 7.5rem;
       padding-right: 14px;
-      border-right: 2px solid #d6dde8;
     }}
     .highlights-table .top-targets-col {{
       min-width: 22rem;
@@ -2588,7 +2585,7 @@ def _write_heatmap_input_csv(
         "ligand_base",
         "ligand_display",
         "library",
-        "t_selected",
+        "z_selected",
         "pose_valid_any",
         "pose_invalid_reason_top",
         "rank",
@@ -2626,7 +2623,7 @@ def _write_heatmap_input_csv(
                     "ligand_base": _clean_text(row.get("ligand_base")),
                     "ligand_display": display,
                     "library": _clean_text(row.get("library")),
-                    "t_selected": _clean_text(row.get("t_selected")),
+                    "z_selected": _clean_text(row.get("t_selected")),
                     "pose_valid_any": _clean_text(row.get("pose_valid_any")),
                     "pose_invalid_reason_top": _clean_text(
                         row.get("pose_invalid_reason_top")

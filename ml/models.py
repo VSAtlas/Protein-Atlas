@@ -9,6 +9,11 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 
 try:  # pragma: no cover - optional dependency
+    import pandas as pd  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover - optional dependency
+    pd = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
     from lightgbm import LGBMClassifier, LGBMRanker  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - optional dependency
     LGBMClassifier = None  # type: ignore[assignment]
@@ -21,8 +26,27 @@ except Exception:  # pragma: no cover - optional dependency
     XGBRanker = None  # type: ignore[assignment]
 
 
-def _as_model_input(X: sparse.csr_matrix, *, requires_dense: bool) -> sparse.csr_matrix | np.ndarray:
-    return X.toarray() if requires_dense else X
+def _as_model_input(
+    X: sparse.csr_matrix,
+    *,
+    requires_dense: bool,
+    with_column_names: bool = False,
+) -> sparse.csr_matrix | np.ndarray | Any:
+    base_input: sparse.csr_matrix | np.ndarray = X.toarray() if requires_dense else X
+    if not with_column_names or pd is None:
+        return base_input
+
+    if sparse.issparse(base_input):
+        n_features = int(base_input.shape[1])
+        columns = [f"Column_{idx}" for idx in range(n_features)]
+        return pd.DataFrame.sparse.from_spmatrix(base_input, columns=columns)
+
+    arr = np.asarray(base_input)
+    n_features = int(arr.shape[1]) if arr.ndim == 2 else 1
+    columns = [f"Column_{idx}" for idx in range(n_features)]
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    return pd.DataFrame(arr, columns=columns)
 
 
 def _clip_probabilities(p: np.ndarray, *, eps: float = 1e-8) -> np.ndarray:
@@ -39,6 +63,7 @@ class _BaseWrapper:
     estimator: Any
     requires_dense: bool = False
     is_ranker: bool = False
+    use_column_named_frame: bool = False
 
     @staticmethod
     def _group_sizes(query_groups: np.ndarray | None) -> list[int] | None:
@@ -77,7 +102,15 @@ class _BaseWrapper:
                 fit_kwargs["group"] = group_sizes
         if self.is_ranker and "group" not in fit_kwargs:
             raise ValueError("Ranker models require query_groups for fit().")
-        self.estimator.fit(_as_model_input(X, requires_dense=self.requires_dense), y, **fit_kwargs)
+        self.estimator.fit(
+            _as_model_input(
+                X,
+                requires_dense=self.requires_dense,
+                with_column_names=self.use_column_named_frame,
+            ),
+            y,
+            **fit_kwargs,
+        )
         return self
 
     def predict_proba(self, X: sparse.csr_matrix) -> np.ndarray:
@@ -85,7 +118,13 @@ class _BaseWrapper:
             raw = self.raw_score(X)
             p = 1.0 / (1.0 + np.exp(-np.asarray(raw, dtype=float)))
             return np.vstack([1.0 - p, p]).T
-        probs = self.estimator.predict_proba(_as_model_input(X, requires_dense=self.requires_dense))
+        probs = self.estimator.predict_proba(
+            _as_model_input(
+                X,
+                requires_dense=self.requires_dense,
+                with_column_names=self.use_column_named_frame,
+            )
+        )
         probs_arr = np.asarray(probs, dtype=float)
         if probs_arr.ndim != 2 or probs_arr.shape[1] < 2:
             raise ValueError("Expected predict_proba output with shape (n_rows, >=2).")
@@ -95,7 +134,11 @@ class _BaseWrapper:
         if hasattr(self.estimator, "decision_function"):
             raw = np.asarray(
                 self.estimator.decision_function(
-                    _as_model_input(X, requires_dense=self.requires_dense)
+                    _as_model_input(
+                        X,
+                        requires_dense=self.requires_dense,
+                        with_column_names=self.use_column_named_frame,
+                    )
                 ),
                 dtype=float,
             )
@@ -107,7 +150,11 @@ class _BaseWrapper:
             try:
                 raw_margin = np.asarray(
                     self.estimator.predict(
-                        _as_model_input(X, requires_dense=self.requires_dense),
+                        _as_model_input(
+                            X,
+                            requires_dense=self.requires_dense,
+                            with_column_names=self.use_column_named_frame,
+                        ),
                         output_margin=True,
                     ),
                     dtype=float,
@@ -192,7 +239,11 @@ def build_model(
             random_state=int(random_seed),
             verbosity=-1,
         )
-        return LightGBMWrapper(estimator=estimator, requires_dense=False)
+        return LightGBMWrapper(
+            estimator=estimator,
+            requires_dense=False,
+            use_column_named_frame=True,
+        )
 
     if family in {"xgboost", "xgb"}:
         if XGBClassifier is None:
@@ -233,7 +284,12 @@ def build_model(
             random_state=int(random_seed),
             verbosity=-1,
         )
-        return LightGBMRankerWrapper(estimator=estimator, requires_dense=False, is_ranker=True)
+        return LightGBMRankerWrapper(
+            estimator=estimator,
+            requires_dense=False,
+            is_ranker=True,
+            use_column_named_frame=True,
+        )
 
     if family in {"xgboost_rank", "xgb_rank", "xgboost_ranker"}:
         if XGBRanker is None:

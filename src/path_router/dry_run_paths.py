@@ -14,12 +14,7 @@ def make(cfg, pdb_id="1T46", pdb_file="1T46.pdb"):
         input_root=Path(cfg["INPUT_DIR"]),
         processed_root=Path(cfg["OUTPUT_DIR"]),
         docked_root=Path(cfg["DOCKED_DIR"]),
-        prepped_root=Path(
-            cfg.get(
-                "PREPPED_LIGANDS_DIR",
-                cfg.get("OUTPUT_LIGANDS_DIR", cfg.get("PREPPED_LIGANDS_ROOT", "")),
-            )
-        ),
+        prepped_root=Path(cfg["PREPPED_LIGANDS_DIR"]),
         ligands_mol2_root=Path(cfg["LIGANDS_MOL2_DIR"]),
         configs_root=Path(cfg.get("CONFIGS_DIR", Path(cfg["OVERALL_DIR"]) / "configs")),
         root_pdb_dir=Path(cfg["OUTPUT_DIR"]) / pdb_id,

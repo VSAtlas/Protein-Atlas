@@ -30,7 +30,7 @@ def _collect_control_pdbqts(
     if not stems_lower:
         return []
     roots = [paths.prepped_ligands_dir]
-    out_root = cfg.get("OUTPUT_LIGANDS_DIR")
+    out_root = cfg.get("PREPPED_LIGANDS_DIR")
     try:
         if out_root:
             roots.append(Path(out_root) / paths.pdb_id)

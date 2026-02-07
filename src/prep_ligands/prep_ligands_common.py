@@ -1296,8 +1296,8 @@ def _resolve_obabel_exe(obabel_cfg: str) -> str:
 
 
 def _resolve_prepare_ligand4(mgltools_path: str, cfg: Dict[str, str]) -> Path:
-    """Support PREPARE_LIGAND4 override; probe Windows-style and Linux-style locations."""
-    override = cfg.get("PREPARE_LIGAND4")
+    """Support PREPARE_LIGAND_SCRIPT override; probe Windows-style and Linux-style locations."""
+    override = cfg.get("PREPARE_LIGAND_SCRIPT")
     if override:
         pp = Path(override)
         if pp.exists():

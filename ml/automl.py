@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import itertools
 import logging
+import threading
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +38,7 @@ from ml.fpocket_bigbind import merge_fpocket_metrics_on_pocket, precompute_fpock
 from ml.hard_negatives import merge_hard_negatives
 from ml.labels import derive_sample_weight
 from ml.models import build_model
+from ml.output_views import write_truncated_views_for_run_dir
 from ml.registry import (
     append_registry_index,
     collect_env_versions,
@@ -55,6 +58,16 @@ _FEATURE_VARIANT_ORDER = (
     "add_both",
 )
 _DEFAULT_MODEL_FAMILIES = ("logreg", "lightgbm", "xgboost")
+
+FeatureCacheEntry = tuple[
+    FeaturesConfig,
+    FeaturizedRows,  # train
+    FeaturizedRows,  # validation
+    FeaturizedRows,  # test
+    dict[str, int],  # fpocket stats
+    np.ndarray | None,  # train query groups
+    np.ndarray | None,  # train sample weights
+]
 
 
 def _setup_logging() -> logging.Logger:
@@ -152,6 +165,40 @@ def _default_grid_spaces() -> dict[str, dict[str, list[Any]]]:
         },
     }
     return spaces
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if value in (None, "", "none", "null"):
+        return None
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _resolve_parallel_workers(
+    *,
+    automl_payload: dict[str, Any],
+    atlas_cfg: dict[str, Any],
+) -> int:
+    for key in ("max_workers", "workers", "n_jobs"):
+        parsed = _coerce_positive_int(automl_payload.get(key))
+        if parsed is not None:
+            return parsed
+    for key in ("ML_AUTOML_WORKERS", "ML_WORKERS", "CPU"):
+        parsed = _coerce_positive_int(atlas_cfg.get(key))
+        if parsed is not None:
+            return parsed
+    return 1
+
+
+def _resolve_fpocket_workers(atlas_cfg: dict[str, Any]) -> int:
+    for key in ("ML_FPOCKET_WORKERS", "ML_WORKERS", "CPU"):
+        parsed = _coerce_positive_int(atlas_cfg.get(key))
+        if parsed is not None:
+            return parsed
+    return 1
 
 
 def _build_feature_variants(base_features: FeaturesConfig) -> dict[str, FeaturesConfig]:
@@ -571,72 +618,97 @@ def _run_grid_search(
     model_families: list[str],
     calibration_options: list[tuple[bool, str]],
     grid_spaces: dict[str, dict[str, list[Any]]],
-    feature_cache: dict[
-        str,
-        tuple[
-            FeaturesConfig,
-            FeaturizedRows,
-            FeaturizedRows,
-            dict[str, int],
-            np.ndarray | None,
-            np.ndarray | None,
-        ],
-    ],
+    feature_cache: dict[str, FeatureCacheEntry],
     random_seed: int,
     inner_scaffold_folds: int,
     calibration_cv_folds: int,
     calibration_seed: int,
+    parallel_workers: int = 1,
 ) -> list[dict[str, Any]]:
-    trial_records: list[dict[str, Any]] = []
+    trial_specs: list[tuple[int, str, str, dict[str, Any], bool, str]] = []
     trial_id = 0
     for feature_variant_name in feature_variant_names:
-        train_rows = feature_cache[feature_variant_name][1]
-        train_query_groups = feature_cache[feature_variant_name][4]
-        train_sample_weight = feature_cache[feature_variant_name][5]
         for model_family in model_families:
             if model_family not in grid_spaces:
                 continue
             for params in _iter_grid_param_sets(grid_spaces[model_family]):
                 for calibration_enabled, calibration_method in calibration_options:
-                    record: dict[str, Any] = {
-                        "trial_id": trial_id,
-                        "mode": "grid",
-                        "status": "ok",
-                        "feature_variant": feature_variant_name,
-                        "features": asdict(feature_variants[feature_variant_name]),
-                        "model_family": model_family,
-                        "model_params": dict(params),
-                        "calibration_enabled": bool(calibration_enabled),
-                        "calibration_method": str(calibration_method),
-                        "inner_metrics": {},
-                        "error": "",
-                    }
-                    trial_id += 1
-                    try:
-                        inner_metrics = _inner_cv_metrics(
-                            X=train_rows.X,
-                            y=train_rows.y,
-                            murcko_scaffolds=train_rows.murcko_scaffolds,
-                            model_family=model_family,
-                            model_params=params,
-                            calibration_enabled=bool(calibration_enabled),
-                            calibration_method=str(calibration_method),
-                            calibration_cv_folds=calibration_cv_folds,
-                            calibration_seed=calibration_seed,
-                            random_seed=random_seed,
-                            n_splits_requested=inner_scaffold_folds,
-                            ranking_query_groups=train_query_groups,
-                            sample_weight=train_sample_weight,
+                    trial_specs.append(
+                        (
+                            trial_id,
+                            feature_variant_name,
+                            model_family,
+                            dict(params),
+                            bool(calibration_enabled),
+                            str(calibration_method),
                         )
-                        if int(inner_metrics.get("inner_folds", 0)) <= 0:
-                            record["status"] = "skipped"
-                            record["error"] = "no_valid_inner_folds"
-                        record["inner_metrics"] = inner_metrics
-                    except Exception as exc:
-                        record["status"] = "failed"
-                        record["error"] = f"{type(exc).__name__}: {exc}"
-                    trial_records.append(record)
-    return trial_records
+                    )
+                    trial_id += 1
+
+    def _evaluate_trial(spec: tuple[int, str, str, dict[str, Any], bool, str]) -> dict[str, Any]:
+        (
+            trial_id_local,
+            feature_variant_name,
+            model_family,
+            params,
+            calibration_enabled,
+            calibration_method,
+        ) = spec
+        train_rows = feature_cache[feature_variant_name][1]
+        train_query_groups = feature_cache[feature_variant_name][5]
+        train_sample_weight = feature_cache[feature_variant_name][6]
+        record: dict[str, Any] = {
+            "trial_id": trial_id_local,
+            "mode": "grid",
+            "status": "ok",
+            "feature_variant": feature_variant_name,
+            "features": asdict(feature_variants[feature_variant_name]),
+            "model_family": model_family,
+            "model_params": dict(params),
+            "calibration_enabled": calibration_enabled,
+            "calibration_method": calibration_method,
+            "inner_metrics": {},
+            "error": "",
+        }
+        try:
+            inner_metrics = _inner_cv_metrics(
+                X=train_rows.X,
+                y=train_rows.y,
+                murcko_scaffolds=train_rows.murcko_scaffolds,
+                model_family=model_family,
+                model_params=params,
+                calibration_enabled=calibration_enabled,
+                calibration_method=calibration_method,
+                calibration_cv_folds=calibration_cv_folds,
+                calibration_seed=calibration_seed,
+                random_seed=random_seed,
+                n_splits_requested=inner_scaffold_folds,
+                ranking_query_groups=train_query_groups,
+                sample_weight=train_sample_weight,
+            )
+            if int(inner_metrics.get("inner_folds", 0)) <= 0:
+                record["status"] = "skipped"
+                record["error"] = "no_valid_inner_folds"
+            record["inner_metrics"] = inner_metrics
+        except Exception as exc:
+            record["status"] = "failed"
+            record["error"] = f"{type(exc).__name__}: {exc}"
+        return record
+
+    workers = min(max(1, int(parallel_workers)), max(1, len(trial_specs)))
+    if workers <= 1 or len(trial_specs) <= 1:
+        return [_evaluate_trial(spec) for spec in trial_specs]
+
+    ordered_records: list[dict[str, Any] | None] = [None] * len(trial_specs)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ml-grid") as pool:
+        future_to_trial_id = {
+            pool.submit(_evaluate_trial, spec): spec[0]
+            for spec in trial_specs
+        }
+        for future in as_completed(future_to_trial_id):
+            trial_id_local = future_to_trial_id[future]
+            ordered_records[trial_id_local] = future.result()
+    return [record for record in ordered_records if record is not None]
 
 
 def _run_optuna_search(
@@ -645,22 +717,13 @@ def _run_optuna_search(
     feature_variants: dict[str, FeaturesConfig],
     model_families: list[str],
     calibration_options: list[tuple[bool, str]],
-    feature_cache: dict[
-        str,
-        tuple[
-            FeaturesConfig,
-            FeaturizedRows,
-            FeaturizedRows,
-            dict[str, int],
-            np.ndarray | None,
-            np.ndarray | None,
-        ],
-    ],
+    feature_cache: dict[str, FeatureCacheEntry],
     random_seed: int,
     inner_scaffold_folds: int,
     calibration_cv_folds: int,
     calibration_seed: int,
     max_trials: int,
+    parallel_workers: int = 1,
 ) -> list[dict[str, Any]]:
     try:
         import optuna  # type: ignore[import-untyped]
@@ -671,7 +734,20 @@ def _run_optuna_search(
         ) from exc
 
     trial_records: list[dict[str, Any]] = []
+    trial_records_lock = threading.Lock()
     best_inner_ef1 = {"value": float("-inf")}
+    best_inner_lock = threading.Lock()
+    calibration_choice_map: dict[str, tuple[bool, str]] = {}
+    calibration_choice_labels: list[str] = []
+    for enabled, method in calibration_options:
+        label = f"{'enabled' if enabled else 'disabled'}::{str(method).strip().lower()}"
+        if label in calibration_choice_map:
+            continue
+        calibration_choice_map[label] = (bool(enabled), str(method).strip().lower())
+        calibration_choice_labels.append(label)
+    if not calibration_choice_labels:
+        calibration_choice_labels = ["disabled::sigmoid"]
+        calibration_choice_map = {"disabled::sigmoid": (False, "sigmoid")}
 
     def objective(trial) -> float:  # type: ignore[no-untyped-def]
         feature_variant_name = trial.suggest_categorical(
@@ -679,10 +755,11 @@ def _run_optuna_search(
             feature_variant_names,
         )
         model_family = trial.suggest_categorical("model_family", model_families)
-        calibration_enabled, calibration_method = trial.suggest_categorical(
+        calibration_choice = trial.suggest_categorical(
             "calibration_option",
-            calibration_options,
+            calibration_choice_labels,
         )
+        calibration_enabled, calibration_method = calibration_choice_map[calibration_choice]
 
         if model_family == "logreg":
             params = {
@@ -764,11 +841,12 @@ def _run_optuna_search(
             "inner_metrics": {},
             "error": "",
         }
-        trial_records.append(record)
+        with trial_records_lock:
+            trial_records.append(record)
 
         train_rows = feature_cache[feature_variant_name][1]
-        train_query_groups = feature_cache[feature_variant_name][4]
-        train_sample_weight = feature_cache[feature_variant_name][5]
+        train_query_groups = feature_cache[feature_variant_name][5]
+        train_sample_weight = feature_cache[feature_variant_name][6]
         splits = _group_splits(
             train_rows.murcko_scaffolds,
             train_rows.y,
@@ -863,8 +941,9 @@ def _run_optuna_search(
             return float("-inf")
 
         ef1 = _metric_for_sort(inner_metrics.get("inner_mean_EF@1%"))
-        if ef1 > best_inner_ef1["value"]:
-            best_inner_ef1["value"] = ef1
+        with best_inner_lock:
+            if ef1 > best_inner_ef1["value"]:
+                best_inner_ef1["value"] = ef1
 
         pr_auc_mean = _metric_for_sort(inner_metrics.get("inner_mean_PR_AUC"))
         return ef1 + (1e-6 * pr_auc_mean)
@@ -872,7 +951,11 @@ def _run_optuna_search(
     sampler = optuna.samplers.TPESampler(seed=int(random_seed))
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=1)
     study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
-    study.optimize(objective, n_trials=int(max_trials))
+    study.optimize(
+        objective,
+        n_trials=int(max_trials),
+        n_jobs=max(1, int(parallel_workers)),
+    )
     return trial_records
 
 
@@ -913,12 +996,23 @@ def run_automl(
         default_enabled=bool(config.calibration_enabled),
         default_method=str(config.calibration_method),
     )
+    trial_workers = _resolve_parallel_workers(
+        automl_payload=raw_automl_payload,
+        atlas_cfg=atlas_cfg,
+    )
+    fpocket_workers = _resolve_fpocket_workers(atlas_cfg)
     run_id = _resolve_run_id(config.run_id)
     run_dir = Path(__file__).resolve().parent / "outputs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "[ml.automl.parallel] trial_workers=%d fpocket_workers=%d",
+        trial_workers,
+        fpocket_workers,
+    )
 
     train_df = dataset.train_df.copy()
-    holdout_df = dataset.holdout_df.copy()
+    val_df = dataset.val_df.copy()
+    test_df = dataset.test_df.copy()
     if config.hard_negatives.enabled:
         group_key = str(config.rank.group_key if config.rank.enabled else "target")
         train_df = merge_hard_negatives(
@@ -937,15 +1031,17 @@ def run_automl(
         for name in feature_variant_names
     )
     if needs_fpocket_precompute:
-        combined = pd.concat([train_df, holdout_df], ignore_index=False)
+        combined = pd.concat([train_df, val_df, test_df], ignore_index=False)
         fpocket_metrics_df = precompute_fpocket_for_bigbind_df(
             df=combined,
             bigbind_root=dataset.bigbind_root,
             atlas_cfg=atlas_cfg,
             run_dir=run_dir,
+            max_workers=fpocket_workers,
         )
         train_df = merge_fpocket_metrics_on_pocket(train_df, fpocket_metrics_df)
-        holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, fpocket_metrics_df)
+        val_df = merge_fpocket_metrics_on_pocket(val_df, fpocket_metrics_df)
+        test_df = merge_fpocket_metrics_on_pocket(test_df, fpocket_metrics_df)
 
     grid_spaces = _default_grid_spaces()
     grid_override = raw_automl_payload.get("grid")
@@ -966,17 +1062,7 @@ def run_automl(
                     fallback=grid_spaces[family],
                 )
 
-    feature_cache: dict[
-        str,
-        tuple[
-            FeaturesConfig,
-            FeaturizedRows,
-            FeaturizedRows,
-            dict[str, int],
-            np.ndarray | None,
-            np.ndarray | None,
-        ],
-    ] = {}
+    feature_cache: dict[str, FeatureCacheEntry] = {}
     for feature_variant_name in feature_variant_names:
         features = feature_variants[feature_variant_name]
         featurizer = BigBindFeaturizer(
@@ -990,7 +1076,8 @@ def run_automl(
             logger=logger,
         )
         train_rows = featurizer.transform(train_df)
-        holdout_rows = featurizer.transform(holdout_df)
+        val_rows = featurizer.transform(val_df)
+        test_rows = featurizer.transform(test_df)
         train_used = train_df.loc[train_rows.source_index].copy()
         train_query_groups = (
             _compute_query_groups(train_used, str(config.rank.group_key))
@@ -1005,7 +1092,8 @@ def run_automl(
         feature_cache[feature_variant_name] = (
             features,
             train_rows,
-            holdout_rows,
+            val_rows,
+            test_rows,
             {
                 "fpocket_loaded_count": int(featurizer.loaded_fpocket_count),
                 "fpocket_missing_center_count": int(featurizer.missing_center_count),
@@ -1031,6 +1119,7 @@ def run_automl(
             inner_scaffold_folds=config.inner_scaffold_folds,
             calibration_cv_folds=config.calibration_cv_folds,
             calibration_seed=config.calibration_seed,
+            parallel_workers=trial_workers,
         )
     else:
         trial_records = _run_optuna_search(
@@ -1044,6 +1133,7 @@ def run_automl(
             calibration_cv_folds=config.calibration_cv_folds,
             calibration_seed=config.calibration_seed,
             max_trials=max_trials,
+            parallel_workers=trial_workers,
         )
 
     trial_rows = [_materialize_trial_row(record) for record in trial_records]
@@ -1064,9 +1154,10 @@ def run_automl(
 
     best_variant_name = str(best_trial["feature_variant"])
     best_train_rows = feature_cache[best_variant_name][1]
-    best_holdout_rows = feature_cache[best_variant_name][2]
-    best_train_query_groups = feature_cache[best_variant_name][4]
-    best_train_sample_weight = feature_cache[best_variant_name][5]
+    best_val_rows = feature_cache[best_variant_name][2]
+    best_test_rows = feature_cache[best_variant_name][3]
+    best_train_query_groups = feature_cache[best_variant_name][5]
+    best_train_sample_weight = feature_cache[best_variant_name][6]
 
     best_model = _fit_model(
         model_family=str(best_trial["model_family"]),
@@ -1079,24 +1170,53 @@ def run_automl(
     )
     joblib.dump(best_model, run_dir / "best_model.joblib")
 
-    best_holdout_metrics, best_pred_df = _evaluate_holdout_trial(
+    best_val_metrics, best_val_pred_df = _evaluate_holdout_trial(
         trial_record=best_trial,
         train_rows=best_train_rows,
-        holdout_rows=best_holdout_rows,
-        holdout_df=holdout_df,
+        holdout_rows=best_val_rows,
+        holdout_df=val_df,
         random_seed=config.random_seed,
         calibration_cv_folds=config.calibration_cv_folds,
         calibration_seed=config.calibration_seed,
         train_query_groups=best_train_query_groups,
         sample_weight=best_train_sample_weight,
     )
+    best_test_metrics, best_pred_df = _evaluate_holdout_trial(
+        trial_record=best_trial,
+        train_rows=best_train_rows,
+        holdout_rows=best_test_rows,
+        holdout_df=test_df,
+        random_seed=config.random_seed,
+        calibration_cv_folds=config.calibration_cv_folds,
+        calibration_seed=config.calibration_seed,
+        train_query_groups=best_train_query_groups,
+        sample_weight=best_train_sample_weight,
+    )
+    best_val_pred_df.to_csv(run_dir / "best_validation_predictions.csv", index=False)
+    pd.DataFrame([best_val_metrics]).to_csv(
+        run_dir / "best_validation_report.csv",
+        index=False,
+    )
+    (run_dir / "best_validation_report.json").write_text(
+        json.dumps(best_val_metrics, indent=2),
+        encoding="utf-8",
+    )
     best_pred_df.to_csv(run_dir / "best_holdout_predictions.csv", index=False)
-    pd.DataFrame([best_holdout_metrics]).to_csv(
+    best_pred_df.to_csv(run_dir / "best_test_predictions.csv", index=False)
+    pd.DataFrame([best_test_metrics]).to_csv(
         run_dir / "best_holdout_report.csv",
         index=False,
     )
+    pd.DataFrame([best_test_metrics]).to_csv(
+        run_dir / "best_test_report.csv",
+        index=False,
+    )
     (run_dir / "best_holdout_report.json").write_text(
-        json.dumps(best_holdout_metrics, indent=2),
+        json.dumps(best_test_metrics, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "best_test_report.json").write_text(
+        json.dumps(best_test_metrics, indent=2),
         encoding="utf-8",
     )
 
@@ -1110,12 +1230,15 @@ def run_automl(
         "calibration_method": str(best_trial.get("calibration_method", "sigmoid")),
         "model_params": dict(best_trial["model_params"]),
         "inner_metrics": dict(best_trial["inner_metrics"]),
-        "holdout_metrics": dict(best_holdout_metrics),
-        "fpocket_stats": dict(feature_cache[best_variant_name][3]),
+        "selection_metrics": dict(best_val_metrics),
+        "holdout_metrics": dict(best_test_metrics),
+        "fpocket_stats": dict(feature_cache[best_variant_name][4]),
         "search_space": {
             "feature_variants": feature_variant_names,
             "model_families": model_families,
         },
+        "selection_split": "val",
+        "final_eval_split": "test",
     }
     (run_dir / "best_trial.json").write_text(
         json.dumps(best_trial_payload, indent=2),
@@ -1129,13 +1252,13 @@ def run_automl(
         variant_name = str(trial_record["feature_variant"])
         train_rows = feature_cache[variant_name][1]
         holdout_rows = feature_cache[variant_name][2]
-        train_query_groups = feature_cache[variant_name][4]
-        train_sample_weight = feature_cache[variant_name][5]
+        train_query_groups = feature_cache[variant_name][5]
+        train_sample_weight = feature_cache[variant_name][6]
         holdout_metrics, _ = _evaluate_holdout_trial(
             trial_record=trial_record,
             train_rows=train_rows,
             holdout_rows=holdout_rows,
-            holdout_df=holdout_df,
+            holdout_df=val_df,
             random_seed=config.random_seed,
             calibration_cv_folds=config.calibration_cv_folds,
             calibration_seed=config.calibration_seed,
@@ -1156,6 +1279,7 @@ def run_automl(
         top_row.update({f"holdout_{k}": v for k, v in holdout_metrics.items()})
         top_rows.append(top_row)
     pd.DataFrame(top_rows).to_csv(run_dir / "top_k_holdout_report.csv", index=False)
+    pd.DataFrame(top_rows).to_csv(run_dir / "top_k_validation_report.csv", index=False)
 
     (run_dir / "config_snapshot.txt").write_text(
         json.dumps(config_to_dict(config), indent=2),
@@ -1167,6 +1291,7 @@ def run_automl(
                 "mode": mode_norm,
                 "max_trials": int(max_trials),
                 "top_k_report": int(top_k),
+                "top_k_report_split": "val",
                 "feature_variants": feature_variant_names,
                 "model_families": model_families,
                 "calibration_options": calibration_options,
@@ -1180,13 +1305,14 @@ def run_automl(
         json.dumps(config_to_dict(config), indent=2),
         encoding="utf-8",
     )
+    write_truncated_views_for_run_dir(run_dir)
 
     if config.registry_enabled:
         repo_root = Path(__file__).resolve().parents[1]
         feature_columns = [f"f{i}" for i in range(int(best_train_rows.X.shape[1]))]
         dataset_hash = compute_dataset_hash(
             train_df=train_df.loc[best_train_rows.source_index].copy(),
-            holdout_df=holdout_df.loc[best_holdout_rows.source_index].copy(),
+            holdout_df=test_df.loc[best_test_rows.source_index].copy(),
             feature_columns=feature_columns,
             config_snapshot=config_to_dict(config),
         )
@@ -1204,7 +1330,8 @@ def run_automl(
             "rank_enabled": bool(config.rank.enabled),
             "rank_group_key": str(config.rank.group_key),
             "hard_negatives": config_to_dict(config).get("hard_negatives", {}),
-            "holdout_metrics": dict(best_holdout_metrics),
+            "selection_metrics": dict(best_val_metrics),
+            "holdout_metrics": dict(best_test_metrics),
             "fpocket_cache_keys_used": _collect_fpocket_cache_keys_from_df(fpocket_metrics_df),
             "environment": collect_env_versions(),
         }
@@ -1219,8 +1346,8 @@ def run_automl(
                 "model_family": registry_record["best_model_family"],
                 "calibration_enabled": int(registry_record["calibration_enabled"]),
                 "calibration_method": registry_record["calibration_method"],
-                "holdout_PR_AUC": float(best_holdout_metrics.get("PR_AUC", float("nan"))),
-                "holdout_EF@1%": float(best_holdout_metrics.get("EF@1%", float("nan"))),
+                "holdout_PR_AUC": float(best_test_metrics.get("PR_AUC", float("nan"))),
+                "holdout_EF@1%": float(best_test_metrics.get("EF@1%", float("nan"))),
             },
         )
 

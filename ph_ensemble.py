@@ -367,8 +367,7 @@ def build_ph_ensemble(
         )
 
     cpu = int(os.getenv("CPU", os.cpu_count() or 1))
-    max_parallel = int(os.getenv("MAX_PARALLEL_JOBS", cpu))
-    workers = min(n_ph, max_parallel, cpu)
+    workers = min(n_ph, cpu)
     if workers < 1:
         workers = 1
     threads_per_job = 1
@@ -390,9 +389,8 @@ def build_ph_ensemble(
             results.append(_ph_member_job(job))
     else:
         elog.info(
-            "[ph.parallel] CPU=%d MAX_PARALLEL_JOBS=%d n_ph=%d workers=%d threads_per_job=%d total_threads=%d",
+            "[ph.parallel] CPU=%d n_ph=%d workers=%d threads_per_job=%d total_threads=%d",
             cpu,
-            max_parallel,
             n_ph,
             workers,
             threads_per_job,

@@ -373,7 +373,7 @@ def final_pose_validation_and_screenshots(
                 # -- PyMOL screenshot block (Option A: -r + -d python) --
                 cap_py = Path(__file__).with_name("capture_pose.py")
 
-                py_cfg = str(cfg.get("PYMOL_PATH", "")).strip()
+                py_cfg = str(cfg.get("PYMOL_EXE", "")).strip()
                 pymol_exe = (
                     py_cfg
                     if (py_cfg and Path(py_cfg).is_file())

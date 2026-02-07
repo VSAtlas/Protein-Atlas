@@ -417,9 +417,7 @@ def _prepped_search_dirs_for(pdb_id: str) -> list[Path]:
     """
     base_overall = Path(DEFAULT_DOCKED_ROOT).parent
     processed_root = Path(_cfg.get("OUTPUT_DIR") or (base_overall / "processed_pdbs"))
-    lib_root = Path(
-        _cfg.get("OUTPUT_LIGANDS_DIR") or (base_overall / "prepped_ligands")
-    )
+    lib_root = Path(_cfg.get("PREPPED_LIGANDS_DIR") or (base_overall / "prepped_ligands"))
 
     dirs: list[Path] = []
     # per-PDB prepped ligands

@@ -59,7 +59,7 @@ def _phase5b_controls_and_control_redock(
         logger.warning("[controls] prepped_extracted=false err=%s", e)
 
     ctrl_pdbqts: list[Path] = []
-    for root in {paths.prepped_ligands_dir, Path(cfg["OUTPUT_LIGANDS_DIR"])}:
+    for root in {paths.prepped_ligands_dir, Path(cfg["PREPPED_LIGANDS_DIR"])}:
         if root.exists():
             ctrl_pdbqts.extend(root.glob("*.pdbqt"))
 

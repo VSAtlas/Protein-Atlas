@@ -595,9 +595,7 @@ class Paths:
     input_root: Path  # INPUT_DIR  (input_pdbs/)
     processed_root: Path  # OUTPUT_DIR (processed_pdbs/)
     docked_root: Path  # DOCKED_DIR (docked/[RUN_ID]/)
-    prepped_root: (
-        Path  # PREPPED_LIGANDS_DIR / OUTPUT_LIGANDS_DIR / PREPPED_LIGANDS_ROOT
-    )
+    prepped_root: Path  # PREPPED_LIGANDS_DIR
     ligands_mol2_root: Path  # LIGANDS_MOL2_DIR
     configs_root: Path  # default OVERALL_DIR/configs (unless CONFIGS_DIR supplied)
 
@@ -702,10 +700,10 @@ class Paths:
         return d
 
     # Optional legacy global extracted ligands root (if present in cfg).
-    # Historically some code used EXTRACTED_LIGANDS_DIR/<PDB>/ or LIGAND_EXTRACTED_DIR/<PDB>/.
+    # Historically some code used EXTRACTED_LIGANDS_DIR/<PDB>/.
     def legacy_extracted_ligands_dir(self) -> Optional[Path]:
         """
-        Legacy (optional): <EXTRACTED_LIGANDS_DIR or LIGAND_EXTRACTED_DIR>/<PDB>/
+        Legacy (optional): <EXTRACTED_LIGANDS_DIR>/<PDB>/
         Note: canonical location is processed_pdbs/<PDB>/ligands_raw/.
         """
         return None  # kept as a stub to avoid reintroducing legacy in new code
@@ -836,13 +834,7 @@ def make_paths(cfg: Dict, base_id: str, pdb_file: str) -> Paths:
         if docked_root.name != run_id:
             docked_root = docked_root / run_id
 
-    # Prepped ligands: pick the first present among synonymous keys
-    prepped_root = Path(
-        cfg.get("PREPPED_LIGANDS_DIR")
-        or cfg.get("OUTPUT_LIGANDS_DIR")
-        or cfg.get("PREPPED_LIGANDS_ROOT")
-        or (over_root / "prepped_ligands")
-    )
+    prepped_root = Path(cfg.get("PREPPED_LIGANDS_DIR", over_root / "prepped_ligands"))
 
     ligands_mol2_root = Path(cfg.get("LIGANDS_MOL2_DIR", over_root / "ligands_mol2"))
 

@@ -813,8 +813,7 @@ def run_gnina_for_stage(
     """
     threads_per_vina = int(cfg.get("THREADS_PER_VINA", 1))
     cpu = int(cfg.get("CPU", os.cpu_count() or 1))
-    max_jobs = int(cfg.get("MAX_PARALLEL_JOBS", cpu))
-    max_workers = min(max_jobs, len(ligands)) if ligands else 1
+    max_workers = min(cpu, len(ligands)) if ligands else 1
     if max_workers < 1:
         max_workers = 1
 

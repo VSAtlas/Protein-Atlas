@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import json
 import logging
@@ -31,6 +32,7 @@ from ml.fpocket_bigbind import merge_fpocket_metrics_on_pocket, precompute_fpock
 from ml.hard_negatives import merge_hard_negatives
 from ml.labels import apply_label_smoothing, derive_sample_weight
 from ml.models import build_model
+from ml.output_views import write_truncated_views_for_run_dir
 from ml.registry import (
     append_registry_index,
     collect_env_versions,
@@ -51,6 +53,32 @@ _FEATURE_AUDIT_META_COLUMNS = (
     "pocket",
     "murcko_scaffold",
 )
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if value in (None, "", "none", "null"):
+        return None
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _resolve_variant_worker_count(atlas_cfg: dict[str, Any]) -> int:
+    for key in ("ML_EXPERIMENT_WORKERS", "ML_WORKERS", "CPU"):
+        parsed = _coerce_positive_int(atlas_cfg.get(key))
+        if parsed is not None:
+            return parsed
+    return 1
+
+
+def _resolve_fpocket_worker_count(atlas_cfg: dict[str, Any]) -> int:
+    for key in ("ML_FPOCKET_WORKERS", "ML_WORKERS", "CPU"):
+        parsed = _coerce_positive_int(atlas_cfg.get(key))
+        if parsed is not None:
+            return parsed
+    return 1
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -353,11 +381,10 @@ def _run_variant(
     train_df: pd.DataFrame,
     holdout_df: pd.DataFrame,
     output_dir: Path,
-    consolidated_feature_columns: list[str],
     atlas_cfg: dict[str, Any],
     config,
     logger: logging.Logger,
-) -> dict[str, float | int | str]:
+) -> tuple[dict[str, float | int | str], str]:
     safe_variant = re.sub(r"[^A-Za-z0-9_-]+", "_", variant_name.strip()) or "variant"
     featurizer = BigBindFeaturizer(
         bigbind_root=bigbind_root,
@@ -379,13 +406,6 @@ def _run_variant(
         audit_dir=output_dir,
         audit_tag=f"holdout_{safe_variant}",
     )
-    _append_variant_audits_to_consolidated(
-        output_dir=output_dir,
-        variant_name=variant_name,
-        safe_variant=safe_variant,
-        feature_columns=consolidated_feature_columns,
-    )
-
     model_family = str(getattr(config, "model_family", "logreg")).strip().lower()
     if model_family == "lgbm":
         model_family = "lightgbm"
@@ -500,7 +520,7 @@ def _run_variant(
     }
     row.update(inner_metrics)
     row.update({f"holdout_{key}": value for key, value in holdout_metrics.items()})
-    return row
+    return row, safe_variant
 
 
 def run_feature_ablation_experiments(
@@ -554,32 +574,82 @@ def run_feature_ablation_experiments(
         (features.pocket_fpocket or features.pocket_features)
         for _, features in feature_variants
     ):
+        fpocket_workers = _resolve_fpocket_worker_count(atlas_cfg)
         combined = pd.concat([train_df, holdout_df], ignore_index=False)
         fpocket_metrics_df = precompute_fpocket_for_bigbind_df(
             df=combined,
             bigbind_root=dataset.bigbind_root,
             atlas_cfg=atlas_cfg,
             run_dir=output_dir,
+            max_workers=fpocket_workers,
         )
         train_df = merge_fpocket_metrics_on_pocket(train_df, fpocket_metrics_df)
         holdout_df = merge_fpocket_metrics_on_pocket(holdout_df, fpocket_metrics_df)
 
+    order_by_variant = {name: idx for idx, (name, _) in enumerate(feature_variants)}
     rows: list[dict[str, float | int | str]] = []
-    for variant_name, features in feature_variants:
-        logger.info("[ml.experiment] running variant=%s", variant_name)
-        rows.append(
-            _run_variant(
+    variant_audit_files: list[tuple[str, str]] = []
+
+    variant_workers = _resolve_variant_worker_count(atlas_cfg)
+    variant_workers = min(max(1, variant_workers), max(1, len(feature_variants)))
+
+    if variant_workers <= 1:
+        for variant_name, features in feature_variants:
+            logger.info("[ml.experiment] running variant=%s", variant_name)
+            row, safe_variant = _run_variant(
                 variant_name=variant_name,
                 features=features,
                 bigbind_root=dataset.bigbind_root,
                 train_df=train_df,
                 holdout_df=holdout_df,
                 output_dir=output_dir,
-                consolidated_feature_columns=consolidated_feature_columns,
                 atlas_cfg=atlas_cfg,
                 config=config,
                 logger=logger,
             )
+            rows.append(row)
+            variant_audit_files.append((variant_name, safe_variant))
+    else:
+        logger.info(
+            "[ml.experiment.parallel] workers=%d variants=%d",
+            variant_workers,
+            len(feature_variants),
+        )
+        with ThreadPoolExecutor(
+            max_workers=variant_workers,
+            thread_name_prefix="ml-experiment",
+        ) as pool:
+            future_to_variant = {}
+            for variant_name, features in feature_variants:
+                logger.info("[ml.experiment] queue variant=%s", variant_name)
+                future = pool.submit(
+                    _run_variant,
+                    variant_name=variant_name,
+                    features=features,
+                    bigbind_root=dataset.bigbind_root,
+                    train_df=train_df,
+                    holdout_df=holdout_df,
+                    output_dir=output_dir,
+                    atlas_cfg=atlas_cfg,
+                    config=config,
+                    logger=logger,
+                )
+                future_to_variant[future] = variant_name
+            for future in as_completed(future_to_variant):
+                variant_name = future_to_variant[future]
+                row, safe_variant = future.result()
+                rows.append(row)
+                variant_audit_files.append((variant_name, safe_variant))
+                logger.info("[ml.experiment] completed variant=%s", variant_name)
+
+    rows.sort(key=lambda item: order_by_variant.get(str(item.get("variant")), 10**6))
+    variant_audit_files.sort(key=lambda item: order_by_variant.get(item[0], 10**6))
+    for variant_name, safe_variant in variant_audit_files:
+        _append_variant_audits_to_consolidated(
+            output_dir=output_dir,
+            variant_name=variant_name,
+            safe_variant=safe_variant,
+            feature_columns=consolidated_feature_columns,
         )
 
     results_df = pd.DataFrame(rows)
@@ -624,6 +694,7 @@ def run_feature_ablation_experiments(
             },
         )
 
+    write_truncated_views_for_run_dir(output_dir)
     return output_dir, results_df
 
 
