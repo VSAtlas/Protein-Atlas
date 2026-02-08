@@ -1,2 +1,0 @@
-pdb_id,variant,ph_label,n_rows,n_fda,n_decoy,n_controls,n_pose_valid,pose_valid_rate,mean_t_selected,max_t_selected,ef1,roc_auc_adj
-TEST,HOLO,pH7_0,18,5,4,4,0,0.000,0.452,1.723,,

@@ -84,6 +84,96 @@ parse_num <- function(value, default_value) {
   v
 }
 
+parse_scale_mode <- function(value) {
+  if (is.null(value)) {
+    return("fixed")
+  }
+  v <- tolower(trimws(value))
+  if (v %in% c("fixed", "quantile")) {
+    return(v)
+  }
+  "fixed"
+}
+
+parse_quantile_value <- function(value, default_value) {
+  parsed <- parse_num(value, default_value)
+  if (is.na(parsed) || !is.finite(parsed)) {
+    return(default_value)
+  }
+  if (parsed < 0) {
+    return(0)
+  }
+  if (parsed > 1) {
+    return(1)
+  }
+  parsed
+}
+
+parse_quantile_params <- function(config_path) {
+  q_low <- parse_quantile_value(
+    read_config_value(config_path, "HEATMAP_QUANTILE_LOW"),
+    0.02
+  )
+  q_mid2 <- parse_quantile_value(
+    read_config_value(config_path, "HEATMAP_QUANTILE_MID2"),
+    0.85
+  )
+  q_high <- parse_quantile_value(
+    read_config_value(config_path, "HEATMAP_QUANTILE_HIGH"),
+    0.98
+  )
+  if (!(q_low < q_mid2 && q_mid2 < q_high)) {
+    q_low <- 0.02
+    q_mid2 <- 0.85
+    q_high <- 0.98
+  }
+  list(q_low = q_low, q_mid2 = q_mid2, q_high = q_high)
+}
+
+is_increasing_breaks <- function(breaks) {
+  isTRUE(
+    breaks$scale_min < breaks$scale_mid &&
+      breaks$scale_mid < breaks$scale_mid2 &&
+      breaks$scale_mid2 < breaks$scale_max
+  )
+}
+
+widen_breaks_epsilon <- function(breaks) {
+  if (is_increasing_breaks(breaks)) {
+    return(list(ok = TRUE, breaks = breaks, widened = FALSE))
+  }
+  start <- breaks$scale_min
+  end <- breaks$scale_max
+  if (!is.finite(start) || !is.finite(end) || end <= start) {
+    return(list(ok = FALSE, breaks = breaks, widened = FALSE))
+  }
+  eps <- max(abs(end - start) * 1e-6, 1e-9)
+  widened <- breaks
+  if (widened$scale_mid <= widened$scale_min) {
+    widened$scale_mid <- widened$scale_min + eps
+  }
+  if (widened$scale_mid2 <= widened$scale_mid) {
+    widened$scale_mid2 <- widened$scale_mid + eps
+  }
+  if (widened$scale_max <= widened$scale_mid2) {
+    widened$scale_max <- widened$scale_mid2 + eps
+  }
+  if (!is_increasing_breaks(widened)) {
+    return(list(ok = FALSE, breaks = breaks, widened = FALSE))
+  }
+  list(ok = TRUE, breaks = widened, widened = TRUE)
+}
+
+format_breaks <- function(breaks) {
+  sprintf(
+    "min=%.6g mid=%.6g mid2=%.6g max=%.6g",
+    breaks$scale_min,
+    breaks$scale_mid,
+    breaks$scale_mid2,
+    breaks$scale_max
+  )
+}
+
 read_color <- function(value, default_value) {
   if (is.null(value)) {
     return(default_value)
@@ -97,14 +187,16 @@ read_color <- function(value, default_value) {
 
 config_path <- file.path(repo_root, "config.txt")
 use_dendrogram <- parse_bool(read_config_value(config_path, "USE_DENDROGRAM"), TRUE)
+requested_scale_mode <- parse_scale_mode(read_config_value(config_path, "HEATMAP_SCALE_MODE"))
+quantile_params <- parse_quantile_params(config_path)
 
-scale_min <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MIN"), -3)
+scale_min <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MIN"), -2)
 scale_mid <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MID"), 0)
-scale_max <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MAX"), 3)
+scale_max <- parse_num(read_config_value(config_path, "HEATMAP_SCALE_MAX"), 2)
 if (!(scale_min < scale_mid && scale_mid < scale_max)) {
-  scale_min <- -3
+  scale_min <- -2
   scale_mid <- 0
-  scale_max <- 3
+  scale_max <- 2
 }
 
 scale_mid2 <- parse_num(
@@ -114,11 +206,17 @@ scale_mid2 <- parse_num(
 if (!(scale_mid < scale_mid2 && scale_mid2 < scale_max)) {
   scale_mid2 <- (scale_mid + scale_max) / 2
 }
+fixed_breaks <- list(
+  scale_min = scale_min,
+  scale_mid = scale_mid,
+  scale_mid2 = scale_mid2,
+  scale_max = scale_max
+)
 
-color_low <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MIN"), "green")
-color_mid <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MID"), "black")
-color_mid2 <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MID2"), "orange")
-color_high <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MAX"), "red")
+color_low <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MIN"), "#2166ac")
+color_mid <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MID"), "#f7f7f7")
+color_mid2 <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MID2"), "#f4a582")
+color_high <- read_color(read_config_value(config_path, "HEATMAP_COLOR_MAX"), "#b2182b")
 
 input_path <- NULL
 if (!is.null(opts[["in"]]) && nzchar(opts[["in"]])) {
@@ -239,6 +337,73 @@ if (nrow(mat) == 0 || ncol(mat) == 0) {
   stop("Heatmap matrix is empty after filtering")
 }
 
+finite_values <- as.numeric(mat[is.finite(mat)])
+n_finite <- length(finite_values)
+quantile_breaks <- NULL
+scale_mode <- "fixed"
+fallback_reason <- NULL
+quantile_widened <- FALSE
+
+if (requested_scale_mode == "quantile") {
+  if (n_finite < 10) {
+    fallback_reason <- "n_finite_lt_10"
+  } else {
+    quantile_breaks <- list(
+      scale_min = as.numeric(quantile(finite_values, quantile_params$q_low, names = FALSE, type = 7)),
+      scale_mid = as.numeric(quantile(finite_values, 0.5, names = FALSE, type = 7)),
+      scale_mid2 = as.numeric(quantile(finite_values, quantile_params$q_mid2, names = FALSE, type = 7)),
+      scale_max = as.numeric(quantile(finite_values, quantile_params$q_high, names = FALSE, type = 7))
+    )
+    if (quantile_breaks$scale_min == quantile_breaks$scale_max) {
+      fallback_reason <- "quantile_min_eq_max"
+    } else {
+      widened <- widen_breaks_epsilon(quantile_breaks)
+      if (!isTRUE(widened$ok)) {
+        fallback_reason <- "quantile_non_increasing_breaks"
+      } else {
+        quantile_breaks <- widened$breaks
+        quantile_widened <- isTRUE(widened$widened)
+        scale_mode <- "quantile"
+      }
+    }
+  }
+}
+
+chosen_breaks <- fixed_breaks
+if (scale_mode == "quantile" && !is.null(quantile_breaks)) {
+  chosen_breaks <- quantile_breaks
+}
+scale_min <- chosen_breaks$scale_min
+scale_mid <- chosen_breaks$scale_mid
+scale_mid2 <- chosen_breaks$scale_mid2
+scale_max <- chosen_breaks$scale_max
+
+if (!is.null(fallback_reason) && requested_scale_mode == "quantile") {
+  warning(
+    sprintf(
+      "heatmap action=scale_breaks_fallback requested_mode=quantile reason=%s n=%d q_low=%.4f q_mid2=%.4f q_high=%.4f using=fixed breaks=%s",
+      fallback_reason,
+      n_finite,
+      quantile_params$q_low,
+      quantile_params$q_mid2,
+      quantile_params$q_high,
+      format_breaks(fixed_breaks)
+    )
+  )
+} else {
+  message(
+    sprintf(
+      "heatmap action=scale_breaks mode=%s n=%d q_low=%.4f q_mid2=%.4f q_high=%.4f breaks=%s",
+      scale_mode,
+      n_finite,
+      quantile_params$q_low,
+      quantile_params$q_mid2,
+      quantile_params$q_high,
+      format_breaks(chosen_breaks)
+    )
+  )
+}
+
 total_steps <- 100L
 span_low <- max(scale_mid - scale_min, 0)
 span_mid <- max(scale_mid2 - scale_mid, 0)
@@ -306,3 +471,34 @@ pheatmap(
   main = plot_title
 )
 dev.off()
+
+sidecar_path <- paste0(out_path, ".scale.txt")
+sidecar_lines <- c(
+  sprintf("scale_mode=%s", scale_mode),
+  sprintf("requested_scale_mode=%s", requested_scale_mode),
+  sprintf("n_finite=%d", n_finite),
+  sprintf("q_low=%.10g", quantile_params$q_low),
+  sprintf("q_mid2=%.10g", quantile_params$q_mid2),
+  sprintf("q_high=%.10g", quantile_params$q_high),
+  sprintf("chosen_scale_min=%.10g", chosen_breaks$scale_min),
+  sprintf("chosen_scale_mid=%.10g", chosen_breaks$scale_mid),
+  sprintf("chosen_scale_mid2=%.10g", chosen_breaks$scale_mid2),
+  sprintf("chosen_scale_max=%.10g", chosen_breaks$scale_max),
+  sprintf("fixed_scale_min=%.10g", fixed_breaks$scale_min),
+  sprintf("fixed_scale_mid=%.10g", fixed_breaks$scale_mid),
+  sprintf("fixed_scale_mid2=%.10g", fixed_breaks$scale_mid2),
+  sprintf("fixed_scale_max=%.10g", fixed_breaks$scale_max),
+  sprintf("quantile_widened=%s", ifelse(quantile_widened, "true", "false")),
+  sprintf("fallback_reason=%s", ifelse(is.null(fallback_reason), "", fallback_reason))
+)
+if (!is.null(quantile_breaks)) {
+  sidecar_lines <- c(
+    sidecar_lines,
+    sprintf("quantile_scale_min=%.10g", quantile_breaks$scale_min),
+    sprintf("quantile_scale_mid=%.10g", quantile_breaks$scale_mid),
+    sprintf("quantile_scale_mid2=%.10g", quantile_breaks$scale_mid2),
+    sprintf("quantile_scale_max=%.10g", quantile_breaks$scale_max)
+  )
+}
+writeLines(sidecar_lines, con = sidecar_path)
+message(sprintf("heatmap action=scale_sidecar path=%s", sidecar_path))
