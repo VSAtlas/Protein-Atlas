@@ -110,3 +110,7 @@ fpocket/
 f_pocket/
 f_pocket_manual/
 ml/data/manual_bigbind_smoke/
+
+# Large local artifacts
+prepped_ligands.tar.zst
+*.tar.zst
