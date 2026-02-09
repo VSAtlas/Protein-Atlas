@@ -203,6 +203,8 @@ def default_tools(base: Path) -> Dict[str, Any]:
         "VINA_EXE": which_or_exists(["vina"]),
         "GNINA_EXE": which_or_exists(["gnina"]),
         "OPENBABEL_PATH": which_or_exists(["obabel"]),
+        "PROPKA_EXE": os.environ.get("PROPKA_EXE")
+        or which_or_exists(["propka3"]),
         "PYMOL_EXE": which_or_exists(["pymol"]),
         "REDUCE_EXE": which_or_exists(["reduce"]),
         "DOCK6_EXE": which_or_exists(["dock6"]),

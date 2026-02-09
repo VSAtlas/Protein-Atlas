@@ -41,3 +41,4 @@
 * **Smoke Test:** `python main.py --test -fast --test-fda`
 * **Rescoring:** `python -m post_docking.rescoring.rescoring_scorch --run-id <ID> --overwrite`
 * **Tests:** `pytest chemdb/tests/test_path_router.py -q`
+* micromamba activate docking-env  

@@ -6,9 +6,6 @@ pathway_catalyst_only=true
 # P2Rank
 P2RANK_PATH=prank
 
-# PROPKA (env-local)
-PROPKA_EXE=propka3
-
 # MGLTools / AutoDockTools
 MGLTOOLS_PATH=
 ADFRSUITE_BIN=
@@ -28,11 +25,6 @@ DOCK6_EXE=dock6
 LEPRO_EXE=lepro
 # Vina wrapper
 VINA_EXE=${OVERALL_DIR}/vina1.sh
-
-# Open Babel (env-local)
-OPENBABEL_PATH=obabel
-BABEL_LIBDIR=
-BABEL_DATADIR=
 
 # DeepCoy (env-local)
 DEEPCOY_PYTHON=python

@@ -115,3 +115,6 @@ ml/data/manual_bigbind_smoke/
 # Large local artifacts
 prepped_ligands.tar.zst
 *.tar.zst
+
+# local runtime config
+config.txt
