@@ -32,10 +32,7 @@ except ModuleNotFoundError:
 
 # Try to import canonical_ligand_base from rescore_reranker
 try:
-    try:
-        from post_docking.rescoring.rescore_reranker import canonical_ligand_base
-    except ImportError:
-        from rescore_reranker import canonical_ligand_base
+    from post_docking.rescoring.rescore_reranker import canonical_ligand_base
 except ImportError:
     # Fallback if import fails (should not happen if rescore_reranker is in path)
     def canonical_ligand_base(lig: str) -> str:

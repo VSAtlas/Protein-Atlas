@@ -8,7 +8,7 @@ DEEPCOY_ROOT = REPO_ROOT / "DeepCoy_duds"
 if str(DEEPCOY_ROOT) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_ROOT))
 
-import generate_dud_library as deepcoy_lib  # type: ignore  # noqa: E402
+from DeepCoy_duds import generate_dud_library as deepcoy_lib  # type: ignore  # noqa: E402
 
 
 @pytest.mark.parametrize("actives_max", [3])

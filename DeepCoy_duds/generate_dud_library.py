@@ -20,7 +20,7 @@ if str(REPO_ROOT / "src") not in sys.path:
 import requests
 from rdkit import Chem
 from rdkit.Chem import AllChem
-from external_sources import (
+from DeepCoy_duds.external_sources import (
     SourceAudit,
     _record_audit,
     fetch_bindingdb_smiles,

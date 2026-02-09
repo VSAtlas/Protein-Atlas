@@ -7,7 +7,7 @@ DEEPCOY_DIR = REPO_ROOT / "DeepCoy_duds"
 if str(DEEPCOY_DIR) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_DIR))
 
-from generate_dud_library import write_provenance_files  # noqa: E402
+from DeepCoy_duds.generate_dud_library import write_provenance_files  # noqa: E402
 
 
 def test_provenance_files_include_sources_and_urls(tmp_path):

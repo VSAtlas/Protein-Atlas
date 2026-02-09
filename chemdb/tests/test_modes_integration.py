@@ -43,7 +43,7 @@ from docking.library_mode import compute_allowed_library_roots  # noqa: E402
 from input_and_export_functions import load_inputs  # noqa: E402
 from path_router import docked_dir, load_ph_tags, make_paths  # noqa: E402
 from docking.ph_ensemble_docking import enumerate_ligands_for_ph_context  # noqa: E402
-from testdata_hmdb_test_library import ensure_hmdb_test_library, infer_ligand_roots  # noqa: E402
+from chemdb.tests.testdata_hmdb_test_library import ensure_hmdb_test_library, infer_ligand_roots  # noqa: E402
 
 
 def _build_env(

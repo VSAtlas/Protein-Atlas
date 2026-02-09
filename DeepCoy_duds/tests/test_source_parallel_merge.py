@@ -1,4 +1,4 @@
-from generate_dud_library import query_external_sources
+from DeepCoy_duds.generate_dud_library import query_external_sources
 
 
 def make_opts():

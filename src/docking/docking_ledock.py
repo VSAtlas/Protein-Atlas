@@ -19,7 +19,7 @@ from dud_eval import (
     guess_score_col,
 )
 from input_and_export_functions import _to_bool, write_score_summary_to_csv
-from .docking_utils import norm, run_completion_audit
+from docking.docking_utils import norm, run_completion_audit
 from path_router.path_router import make_paths, ph_ensemble_dir
 from prep_docking.prep_for_ledock import (
     ensure_ledock_receptor,

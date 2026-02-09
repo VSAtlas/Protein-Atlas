@@ -1,4 +1,5 @@
 import csv
+import importlib
 import math
 import os
 import re
@@ -33,8 +34,8 @@ which_or_exists = _cfg_norm.which_or_exists
 IS_WINDOWS = sys.platform.startswith("win")
 try:
     if IS_WINDOWS:
-        import win32api  # type: ignore
-        import win32file  # type: ignore
+        win32api = importlib.import_module("win32api")  # type: ignore[assignment]
+        win32file = importlib.import_module("win32file")  # type: ignore[assignment]
     else:
         win32api = None
         win32file = None

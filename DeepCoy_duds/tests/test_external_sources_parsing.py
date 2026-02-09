@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from external_sources import (
+from DeepCoy_duds.external_sources import (
     _parse_bindingdb_entries,
     filter_chembl_activity,
     parse_chembl_molecule,

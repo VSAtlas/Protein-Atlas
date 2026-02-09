@@ -2,19 +2,36 @@
 
 
 from __future__ import absolute_import, division, print_function
+import importlib
 from six.moves import cPickle as pickle
 from six.moves import range
 
-try:
-    import gobject
-except ImportError:
-    gobject = None
 import sys
+
+
+def _optional_gobject():
+    try:
+        return importlib.import_module("gobject")
+    except Exception:
+        return None
+
+
+def _require_gtk():
+    try:
+        return importlib.import_module("gtk")
+    except Exception as exc:
+        raise RuntimeError(
+            "GTK is required for MolProbity GUI. Install with: "
+            "conda install -c conda-forge pygobject gtk2"
+        ) from exc
+
+
+gobject = _optional_gobject()
 
 
 class coot_extension_gui(object):
     def __init__(self, title):
-        import gtk
+        gtk = _require_gtk()
 
         self.window = gtk.Window(gtk.WINDOW_TOPLEVEL)
         scrolled_win = gtk.ScrolledWindow()
@@ -28,7 +45,7 @@ class coot_extension_gui(object):
         scrolled_win.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
 
     def finish_window(self):
-        import gtk
+        gtk = _require_gtk()
 
         self.outside_vbox.set_border_width(2)
         ok_button = gtk.Button("  Close  ")
@@ -49,7 +66,7 @@ class coot_extension_gui(object):
         return False
 
     def create_property_lists(self, data):
-        import gtk
+        gtk = _require_gtk()
 
         for data_key in self.data_keys:
             outlier_list = data[data_key]
@@ -134,7 +151,7 @@ class coot_molprobity_todo_list_gui(coot_extension_gui):
         self.finish_window()
 
     def add_top_widgets(self, data_key, box):
-        import gtk
+        gtk = _require_gtk()
 
         if data_key == "probe":
             hbox = gtk.HBox(False, 2)
@@ -179,7 +196,7 @@ class residue_properties_list(object):
         assert len(columns) == (len(column_types) - 1)
         if (len(rows) > 0) and (len(rows[0]) != len(column_types)):
             raise RuntimeError("Wrong number of rows:\n%s" % str(rows[0]))
-        import gtk
+        gtk = _require_gtk()
 
         self.liststore = gtk.ListStore(*column_types)
         self.listmodel = gtk.TreeModelSort(self.liststore)
@@ -288,6 +305,7 @@ data["probe"] = [
     (" A 138  TYR  HE1", " A 289  GLU  HG3", -0.438, (36.238, 9.759, 27.558)),
     (" A   9  PRO  HA ", " A  12  LEU HD12", -0.418, (13.846, 27.394, 32.331)),
 ]
-handle_read_draw_probe_dots_unformatted("molprobity_probe.txt", 0, 0)
-show_probe_dots(True, True)
-gui = coot_molprobity_todo_list_gui(data=data)
+if __name__ == "__main__":
+    handle_read_draw_probe_dots_unformatted("molprobity_probe.txt", 0, 0)
+    show_probe_dots(True, True)
+    gui = coot_molprobity_todo_list_gui(data=data)

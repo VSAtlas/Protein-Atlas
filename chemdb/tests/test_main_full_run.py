@@ -47,7 +47,6 @@ SCENARIOS = [
         {
             "APO_HOLO_MODE": "legacy",
             "PH_ENSEMBLE": "1",
-            "PH_LIGAND_MODE": "context_window",
         },
     ),
     (
@@ -55,7 +54,6 @@ SCENARIOS = [
         {
             "APO_HOLO_MODE": "APO",
             "PH_ENSEMBLE": "1",
-            "PH_LIGAND_MODE": "context_window",
         },
     ),
     (
@@ -63,7 +61,6 @@ SCENARIOS = [
         {
             "APO_HOLO_MODE": "HOLO",
             "PH_ENSEMBLE": "1",
-            "PH_LIGAND_MODE": "context_window",
         },
     ),
 ]

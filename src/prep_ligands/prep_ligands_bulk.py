@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import logging
 import concurrent.futures
+import importlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Dict, Set, Any
 import re
@@ -238,8 +239,7 @@ def _to_parent_mol(m: Chem.Mol) -> Optional[Chem.Mol]:
 
 # Optional pKa/logD dependency: try to import, else fall back to cLogP
 try:
-    from pkasolver import pkasolver as _pka
-
+    _pka = importlib.import_module("pkasolver").pkasolver
     _HAS_PKASOLVER = True
 except Exception:
     _pka = None

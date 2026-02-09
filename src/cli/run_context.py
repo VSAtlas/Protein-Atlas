@@ -8,7 +8,7 @@ import os
 from typing import Any, Mapping
 
 from run_manifest import load_run_manifest
-from .cli_utils import _cli_val
+from cli.cli_utils import _cli_val
 
 
 def _resolve_run_id(argv: list[str]) -> str:

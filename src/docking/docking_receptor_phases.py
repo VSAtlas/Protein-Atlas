@@ -14,9 +14,9 @@ from apo_holo_mode import (
     delete_variant_trees,
     file_sha1,
 )
-from .docking_controls import _summarize_ions_file
-from .docking_receptor import prepare_receptor
-from .docking_utils import norm
+from docking.docking_controls import _summarize_ions_file
+from docking.docking_receptor import prepare_receptor
+from docking.docking_utils import norm
 from path_router.path_router import Paths
 from protein_prep.holo_restore import _holo_restore_from_input_if_needed
 from protein_prep.metal_site_audit import run_metal_site_audit

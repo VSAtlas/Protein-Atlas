@@ -5,10 +5,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_utils import norm
-from .docking_ligands import select_ligands_for_next
-from .docking_ledock import should_run_ledock_for_target
-from .docking_dock6 import should_run_dock6_for_target
+from docking.docking_utils import norm
+from docking.docking_ligands import select_ligands_for_next
+from docking.docking_ledock import should_run_ledock_for_target
+from docking.docking_dock6 import should_run_dock6_for_target
 
 
 def _apply_force_carry_and_doping(

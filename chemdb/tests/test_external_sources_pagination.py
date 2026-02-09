@@ -6,7 +6,7 @@ DEEPCOY_DIR = REPO_ROOT / "DeepCoy_duds"
 if str(DEEPCOY_DIR) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_DIR))
 
-import external_sources as ext  # noqa: E402
+from DeepCoy_duds import external_sources as ext  # noqa: E402
 
 
 def test_get_json_paged_follows_next_and_audits(monkeypatch):

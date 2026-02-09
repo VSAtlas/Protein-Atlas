@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_subrun_selection import _use_ledock, _use_dock6
+from docking.docking_subrun_selection import _use_ledock, _use_dock6
 from druggability_evaluation import evaluate_druggability_for_active_site
 from druggability_orchestrator import decide_engine_policy
 from path_router.path_router import Paths, docked_dir

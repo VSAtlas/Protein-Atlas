@@ -24,10 +24,10 @@ if str(REPO_ROOT) not in sys.path:
 from input_and_export_functions import load_config
 
 try:
-    try:
-        from .rescore_reranker import find_consensus_csv, rerank_consensus_with_scorch
-    except (ImportError, ValueError, SystemError):
-        from rescore_reranker import find_consensus_csv, rerank_consensus_with_scorch
+    from post_docking.rescoring.rescore_reranker import (
+        find_consensus_csv,
+        rerank_consensus_with_scorch,
+    )
 except Exception:  # pragma: no cover - optional dependency
     find_consensus_csv = None
     rerank_consensus_with_scorch = None

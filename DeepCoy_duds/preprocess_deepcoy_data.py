@@ -8,10 +8,9 @@ import multiprocessing as mp
 
 import numpy as np
 
-from DeepCoy import DenseGGNNChemModel
-from data_augmentation import construct_incremental_graph_freqs
-import utils
-
+from DeepCoy_duds.DeepCoy import DenseGGNNChemModel
+from DeepCoy_duds.data_augmentation import construct_incremental_graph_freqs
+from DeepCoy_duds import utils
 
 def parse_args():
     parser = argparse.ArgumentParser(

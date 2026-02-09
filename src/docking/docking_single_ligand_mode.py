@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_ligands import _count_heavy_atoms_from_pdbqt
-from .library_mode import compute_allowed_library_roots
+from docking.docking_ligands import _count_heavy_atoms_from_pdbqt
+from docking.library_mode import compute_allowed_library_roots
 from input_and_export_functions import _to_bool
 from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
 from single_ligand_index import (

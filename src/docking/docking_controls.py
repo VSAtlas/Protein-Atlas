@@ -12,13 +12,13 @@ from typing import Any, Optional, Tuple, Mapping
 
 import numpy as np
 
-from .docking_vina import emit_vina_config
+from docking.docking_vina import emit_vina_config
 from path_router.path_router import Paths, docked_dir, receptor_file
 from protein_functions import detect_active_site
-from .run_vina import run_docking_task
+from docking.run_vina import run_docking_task
 
-from .docking_ligands import _is_readable_ref, compute_rmsd
-from .pose_validation import compute_redock_rmsd
+from docking.docking_ligands import _is_readable_ref, compute_rmsd
+from docking.pose_validation import compute_redock_rmsd
 
 
 def _canonical_ctrl_base_from_stem(stem: str) -> str:
@@ -545,7 +545,7 @@ def select_center_via_control_redock(
     import numpy as _np
     import math as _math
     from pathlib import Path as _Path
-    from .run_vina import run_docking_task as _run_dock
+    from docking.run_vina import run_docking_task as _run_dock
 
     def _find_control_pdbs(d: _Path) -> list[_Path]:
         return sorted([p for p in d.glob("*.pdb") if p.is_file()])

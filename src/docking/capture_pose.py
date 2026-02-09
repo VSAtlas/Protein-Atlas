@@ -1319,7 +1319,10 @@ def _cli_render_active_site(
     try:
         from pymol import cmd
     except Exception as e:
-        raise RuntimeError("PyMOL (pymol2) is required to render.") from e
+        raise RuntimeError(
+            "PyMOL is required to render poses. Install with: "
+            "conda install -c conda-forge pymol-open-source"
+        ) from e
 
     rec_obj = "receptor"
     lig_obj = "ligand"

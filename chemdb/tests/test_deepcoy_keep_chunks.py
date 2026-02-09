@@ -6,7 +6,7 @@ DEEPCOY_ROOT = REPO_ROOT / "DeepCoy_duds"
 if str(DEEPCOY_ROOT) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_ROOT))
 
-from generate_dud_library import (  # type: ignore  # noqa: E402
+from DeepCoy_duds.generate_dud_library import (  # type: ignore  # noqa: E402
     prepare_deepcoy_chunks,
     resolve_deepcoy_chunk_roots,
 )

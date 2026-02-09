@@ -4,8 +4,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .docking_control_redock import _control_centers_by_ph
-from .docking_controls import (
+from docking.docking_control_redock import _control_centers_by_ph
+from docking.docking_controls import (
     build_control_lookup,
     extract_ligands_to_nolig,
 )

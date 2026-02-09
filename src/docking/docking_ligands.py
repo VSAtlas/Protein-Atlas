@@ -16,14 +16,14 @@ from rdkit import Chem, rdBase
 from rdkit.Chem import FilterCatalog, rdFMCS, rdMolAlign
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
-from .library_mode import (
+from docking.library_mode import (
     _coerce_test_map,
     _parse_test_libraries_value,
     compute_allowed_library_roots,
     is_truthy,
     parse_test_libraries,
 )
-from .pose_validation import compute_redock_rmsd
+from docking.pose_validation import compute_redock_rmsd
 from prep_ligands.library_index import LibraryIndex
 from path_router.path_router import Paths
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb

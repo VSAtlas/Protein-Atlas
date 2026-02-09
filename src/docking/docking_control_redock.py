@@ -7,18 +7,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from path_router.path_router import Paths, docked_dir, receptor_file, load_ph_tags
-from .docking_vina import emit_vina_config
-from .run_vina import run_docking_task
-from .docking_controls import select_center_via_control_redock
+from docking.docking_vina import emit_vina_config
+from docking.run_vina import run_docking_task
+from docking.docking_controls import select_center_via_control_redock
 from run_manifest import emit_pocket_detection_event, PocketDetectionEvent
 from druggability_orchestrator import decide_engine_policy
-from .docking_gnina import should_run_gnina_for_target, run_gnina_for_stage
-from .docking_ledock import (
+from docking.docking_gnina import should_run_gnina_for_target, run_gnina_for_stage
+from docking.docking_ledock import (
     should_run_ledock_for_target,
     ensure_ledock_receptor,
     run_ledock_for_stage,
 )
-from .docking_dock6 import should_run_dock6_for_target, run_dock6_for_stage
+from docking.docking_dock6 import should_run_dock6_for_target, run_dock6_for_stage
 from prep_docking.prep_for_ledock import ensure_mol2_for_ledock
 import prep_docking.prep_dock6 as prep_dock6
 

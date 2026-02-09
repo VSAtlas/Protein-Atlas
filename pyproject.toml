@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protein-automation"
+version = "0.1.0"
+description = "Atlas docking and post-docking pipeline"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+include-package-data = false
+py-modules = [
+  "activesite",
+  "apo_holo_mode",
+  "automate_protein_prep",
+  "benchmark_auto_analysis",
+  "benchmark_mode",
+  "cap_driver",
+  "checkpoints",
+  "chemdbl_calibrator",
+  "data_analysis",
+  "debug_fs",
+  "druggability_evaluation",
+  "druggability_orchestrator",
+  "dud_eval",
+  "generate_skeletons",
+  "identify_ligand",
+  "input_and_export_functions",
+  "installation",
+  "ligand_pocket",
+  "logger_setup",
+  "logging_topics",
+  "main",
+  "massinstall",
+  "molprobity_coot",
+  "p2rank_pocket",
+  "pathway_resolver",
+  "pdb_fixer",
+  "ph_ensemble",
+  "phenix_clean",
+  "pocket_eval",
+  "pocket_policy",
+  "pose_bust",
+  "postrun_hooks",
+  "propka_wire",
+  "protein_functions",
+  "record_data",
+  "run_manifest",
+  "single_ligand_index",
+  "sitecustomize",
+]
+packages = [
+  "docking",
+  "path_router",
+  "cli",
+  "prep_ligands",
+  "prep_docking",
+  "post_docking",
+  "post_docking.rescoring",
+  "post_docking.mmgbsa",
+  "protein_prep",
+  "config",
+  "analysis",
+  "calibrator",
+  "chemdb",
+  "DeepCoy_duds",
+  "DeepCoy_duds.evaluation",
+]
+
+[tool.setuptools.package-dir]
+docking = "src/docking"
+path_router = "src/path_router"
+cli = "src/cli"
+prep_ligands = "src/prep_ligands"
+prep_docking = "src/prep_docking"
+post_docking = "src/post_docking"
+protein_prep = "src/protein_prep"
+config = "src/config"
+analysis = "analysis"
+calibrator = "calibrator"
+chemdb = "chemdb"
+DeepCoy_duds = "DeepCoy_duds"

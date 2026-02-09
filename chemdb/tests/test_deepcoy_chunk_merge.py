@@ -5,7 +5,7 @@ DEEPCOY_DIR = Path(__file__).resolve().parents[2] / "DeepCoy_duds"
 if str(DEEPCOY_DIR) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_DIR))
 
-from generate_dud_library import merge_deepcoy_outputs, prepare_deepcoy_chunks  # noqa: E402
+from DeepCoy_duds.generate_dud_library import merge_deepcoy_outputs, prepare_deepcoy_chunks  # noqa: E402
 
 
 def _write_actives(tmp_path: Path, lines):

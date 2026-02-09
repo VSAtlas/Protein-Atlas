@@ -9,7 +9,7 @@ import json
 
 _log = logging.getLogger("vina")
 
-from .docking_utils import write_failure_marker
+from docking.docking_utils import write_failure_marker
 from input_and_export_functions import extract_best_score
 
 try:

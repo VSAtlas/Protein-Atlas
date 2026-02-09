@@ -13,8 +13,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 from sklearn.model_selection import StratifiedKFold
 
-import sascorer
-
+from DeepCoy_duds.evaluation import sascorer
 
 # CALC FUNCTIONS
 def calc_props_dude(smiles):

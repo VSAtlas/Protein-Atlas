@@ -1,5 +1,5 @@
 run_id: test_run
-generated_at: '2026-02-06T23:46:14.523998Z'
+generated_at: '2026-02-09T15:38:27.909414Z'
 sources:
   master_rows_csv: data/test_run/fda_master_rows.csv
   manifest_yaml: manifests/test_run/run_manifest.yaml
@@ -29,9 +29,9 @@ targets:
           sigma: null
           n: null
         scorch:
-          mu: 0.00120848
-          sigma: 0.000550871
-          n: 3
+          mu: null
+          sigma: null
+          n: null
       fdr_stats:
         score_field: consensus_score
         n_decoys: 5
@@ -74,9 +74,9 @@ targets:
           sigma: null
           n: null
         scorch:
-          mu: 0.00325689
-          sigma: 0.00426441
-          n: 4
+          mu: null
+          sigma: null
+          n: null
       fdr_stats:
         score_field: consensus_score
         n_decoys: 5

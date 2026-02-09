@@ -13,7 +13,7 @@ from path_router.path_router import (
     receptor_file as router_receptor_file,
 )
 from input_and_export_functions import write_score_summary_to_csv
-from .pose_validation import compute_self_rmsd
+from docking.pose_validation import compute_self_rmsd
 
 # Engine-specific home for Vina config emission and CSV writing.
 

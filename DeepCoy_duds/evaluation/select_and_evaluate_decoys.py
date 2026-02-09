@@ -24,10 +24,8 @@ from rdkit import Chem
 from rdkit.Chem import DataStructs
 from rdkit.Chem import AllChem
 
-import decoy_utils
-
-import sascorer
-
+from DeepCoy_duds.evaluation import decoy_utils
+from DeepCoy_duds.evaluation import sascorer
 from joblib import Parallel, delayed
 from docopt import docopt
 

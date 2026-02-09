@@ -1,1 +1,2 @@
-"""chemdb package."""
+"""Chemical database helper package."""
+

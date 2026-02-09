@@ -7,31 +7,31 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_consensus_score import compute_consensus_for_variant_ph
-from .docking_dock6 import (
+from docking.docking_consensus_score import compute_consensus_for_variant_ph
+from docking.docking_dock6 import (
     run_dock6_for_stage,
     write_dock6_scores_csv,
 )
-from .docking_gnina import (
+from docking.docking_gnina import (
     annotate_gnina_fda_long_csv_with_t_scores_vs_decoys,
     run_gnina_for_stage,
     write_gnina_scores_csv,
 )
-from .docking_ledock import (
+from docking.docking_ledock import (
     annotate_ledock_fda_long_csv_with_t_scores_vs_decoys,
     run_ledock_for_stage,
     write_ledock_scores_csv,
 )
-from .docking_ligands import compute_stage_membership_from_scores
-from .library_mode import parse_test_libraries
-from .docking_subrun_selection import _use_dock6, _use_ledock
-from .docking_utils import (
+from docking.docking_ligands import compute_stage_membership_from_scores
+from docking.library_mode import parse_test_libraries
+from docking.docking_subrun_selection import _use_dock6, _use_ledock
+from docking.docking_utils import (
     _fingerprint_stage,
     _write_audit_json,
     final_pose_validation_and_screenshots,
     norm,
 )
-from .docking_vina import write_scores_csv
+from docking.docking_vina import write_scores_csv
 from input_and_export_functions import (
     annotate_fda_long_csv_with_t_scores_vs_decoys,
     record_score,
@@ -825,7 +825,7 @@ def finalize_ph_subrun(
     if run_mode == "fda" and has_dud:
         decoy_csv_prefix = "dud_"
         try:
-            from .docking_subruns import subruns_for_tokens
+            from docking.docking_subruns import subruns_for_tokens
 
             for subrun in subruns_for_tokens(tokens_now):
                 if subrun.run_mode == "dud":

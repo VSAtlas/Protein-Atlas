@@ -6,7 +6,7 @@ DEEPCOY_DIR = REPO_ROOT / "DeepCoy_duds"
 if str(DEEPCOY_DIR) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_DIR))
 
-from generate_dud_library import (  # noqa: E402
+from DeepCoy_duds.generate_dud_library import (  # noqa: E402
     DEFAULT_SOURCES,
     build_source_audit_lines,
     _filter_known_sources,

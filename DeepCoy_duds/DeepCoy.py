@@ -20,23 +20,51 @@ Options:
 
 from docopt import docopt
 from collections import defaultdict, deque
+import importlib
 import numpy as np
 
-try:
-    import tensorflow.compat.v1 as tf
-
-    tf.disable_v2_behavior()
-except Exception:
-    import tensorflow as tf
 import sys
 import traceback
 import pdb
 import os
-from GGNN_DeepCoy import ChemModel
-from utils import *
+from DeepCoy_duds.GGNN_DeepCoy import ChemModel
+from DeepCoy_duds.utils import *
 import random
 from rdkit import Chem
-from data_augmentation import *
+from DeepCoy_duds.data_augmentation import *
+
+
+def _load_tensorflow():
+    try:
+        tf_mod = importlib.import_module("tensorflow.compat.v1")
+        tf_mod.disable_v2_behavior()
+        return tf_mod
+    except Exception:
+        try:
+            return importlib.import_module("tensorflow")
+        except Exception as exc:
+            raise RuntimeError(
+                "TensorFlow is required for DeepCoy model execution. Install with: "
+                "conda install -c conda-forge tensorflow"
+            ) from exc
+
+
+_TF_CACHE = None
+
+
+def _get_tf():
+    global _TF_CACHE
+    if _TF_CACHE is None:
+        _TF_CACHE = _load_tensorflow()
+    return _TF_CACHE
+
+
+class _TFProxy:
+    def __getattr__(self, name):
+        return getattr(_get_tf(), name)
+
+
+tf = _TFProxy()
 
 """
 Comments provide the expected tensor shapes where helpful.

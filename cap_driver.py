@@ -1,11 +1,21 @@
 # cap_driver.py (PyMOL-safe CLI wrapper)
+import importlib
 import os
 import sys
 from pathlib import Path
-from pymol import cmd
 from docking.capture_pose import (
     capture_pose,
 )  # expects kwargs: label_top_n_res, label_cutoff, viewport, transparent
+
+
+def _require_pymol_cmd():
+    try:
+        return importlib.import_module("pymol").cmd
+    except Exception as exc:
+        raise RuntimeError(
+            "PyMOL is required for capture rendering. Install with: "
+            "conda install -c conda-forge pymol-open-source"
+        ) from exc
 
 
 def _posargs(argv):
@@ -33,6 +43,7 @@ def _get_bool(name, default):
 
 
 def main():
+    cmd = _require_pymol_cmd()
     # Keep PyMOL-safe parsing: first strip PyMOL flags from sys.argv
     pos = _posargs(sys.argv[1:])
     if len(pos) < 3:

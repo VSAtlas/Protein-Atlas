@@ -4,8 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-import utils
-
+from DeepCoy_duds import utils
 
 def parse_args():
     parser = argparse.ArgumentParser(

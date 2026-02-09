@@ -1,1 +1,2 @@
-"""Calibrator package for ChEMBL label export."""
+"""Calibration helper package."""
+

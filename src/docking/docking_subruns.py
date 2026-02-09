@@ -8,18 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .docking_subrun_selection import (
+from docking.docking_subrun_selection import (
     _split_controls_and_noncontrols,
 )
-from .docking_single_ligand_mode import resolve_single_ligand_or_prepare
-from .docking_ph_subruns import resolve_ph_tags_and_root, enumerate_ph_ligands_if_needed
-from .docking_plan_only import maybe_handle_no_library_docking
-from .docking_vina_multistage import run_multistage_vina
-from .docking_subrun_finalize import finalize_ph_subrun
+from docking.docking_single_ligand_mode import resolve_single_ligand_or_prepare
+from docking.docking_ph_subruns import resolve_ph_tags_and_root, enumerate_ph_ligands_if_needed
+from docking.docking_plan_only import maybe_handle_no_library_docking
+from docking.docking_vina_multistage import run_multistage_vina
+from docking.docking_subrun_finalize import finalize_ph_subrun
 
 from apo_holo_mode import _record_apo_holo_usage
-from .docking_utils import norm
-from .fallback_recenter import (
+from docking.docking_utils import norm
+from docking.fallback_recenter import (
     RecenterParams,
 )
 from path_router.path_router import Paths, docked_dir, receptor_file
@@ -27,11 +27,11 @@ from run_manifest import (
     update_manifest_for_protein_failure,
     update_manifest_for_protein_start,
 )
-from .docking_ligands import (
+from docking.docking_ligands import (
     _count_heavy_atoms_from_pdbqt,
     prepare_and_filter_ligands,
 )
-from .library_mode import _parse_test_libraries_value
+from docking.library_mode import _parse_test_libraries_value
 
 
 @dataclass

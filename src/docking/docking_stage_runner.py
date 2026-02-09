@@ -12,21 +12,21 @@ from typing import Any, Dict, List, Optional, Tuple
 from tqdm import tqdm
 from rdkit.Chem import rdMolAlign
 
-from .docking_vina import emit_vina_config
-from .docking_ligands import _read_any_lig, validate_ligand
-from .docking_utils import norm
-from .fallback_recenter import (
+from docking.docking_vina import emit_vina_config
+from docking.docking_ligands import _read_any_lig, validate_ligand
+from docking.docking_utils import norm
+from docking.fallback_recenter import (
     BudgetGuard,
     attempt_fallback_recenter,
     validate_first_valid_pose,
 )
-from .pose_validation import (
+from docking.pose_validation import (
     compute_self_rmsd,
     extract_surface_atoms,
     filter_and_rewrite_poses_by_rmsd,
 )
 from run_manifest import update_manifest_for_docking_stage
-from .run_vina import run_docking_task
+from docking.run_vina import run_docking_task
 
 
 def _map_reason_to_category(reason: str) -> str:

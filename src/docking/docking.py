@@ -15,18 +15,18 @@ from path_router.path_router import Paths, make_paths
 from protein_functions import detect_active_site
 from run_manifest import update_manifest_for_docking_overall
 
-from . import docking as _docking
-from . import docking_controls
-from .docking_control_centering_phase import _phase5b_controls_and_control_redock
-from .docking_control_redock import (
+from docking import docking as _docking
+from docking import docking_controls
+from docking.docking_control_centering_phase import _phase5b_controls_and_control_redock
+from docking.docking_control_redock import (
     _collect_control_pdbqts,
     run_control_docking_multi_engine,
 )
-from .docking_controls import (
+from docking.docking_controls import (
     _summarize_ions_file,
     _is_readable_ref,
 )
-from .docking_ligands import (
+from docking.docking_ligands import (
     select_ligands_for_next,
     _coerce_test_map,
     _resolve_test_mode,
@@ -34,19 +34,19 @@ from .docking_ligands import (
     compute_rmsd,
     validate_ligand,
 )
-from .library_mode import parse_test_libraries
-from .docking_ph_ensemble_phase import _phase5_ph_ensemble_global
-from .docking_receptor_phases import _phase2_to4_receptor_and_center
-from .docking_stage_runner import RetryManager, run_one_stage, _map_reason_to_category
-from .docking_subruns import (
+from docking.library_mode import parse_test_libraries
+from docking.docking_ph_ensemble_phase import _phase5_ph_ensemble_global
+from docking.docking_receptor_phases import _phase2_to4_receptor_and_center
+from docking.docking_stage_runner import RetryManager, run_one_stage, _map_reason_to_category
+from docking.docking_subruns import (
     ProteinDockingContext,
     SubrunSpec,
     subruns_for_tokens,
     run_ligand_pipeline_subrun,
 )
-from .docking_utils import norm
-from .docking_vina import emit_vina_config
-from .fallback_recenter import RecenterParams
+from docking.docking_utils import norm
+from docking.docking_vina import emit_vina_config
+from docking.fallback_recenter import RecenterParams
 from druggability_evaluation import evaluate_druggability_for_active_site
 
 # Bridge functions for docking helpers

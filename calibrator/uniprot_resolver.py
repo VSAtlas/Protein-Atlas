@@ -16,7 +16,7 @@ if str(DEEPCOY_PATH) not in sys.path:
     sys.path.insert(0, str(DEEPCOY_PATH))
 
 try:
-    from generate_dud_library import get_uniprot_and_ec
+    from DeepCoy_duds.generate_dud_library import get_uniprot_and_ec
 except ImportError:
     get_uniprot_and_ec = None
 
