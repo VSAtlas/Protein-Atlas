@@ -428,6 +428,33 @@ def _derive_from_overall(cfg: Dict[str, Any]) -> None:
         cfg["PHENIX_CLEAN_SCRIPT"] = str(base / "phenix_clean.py")
 
 
+def _repair_missing_overall_dir(cfg: Dict[str, Any], explicit: set[str]) -> None:
+    overall = cfg.get("OVERALL_DIR")
+    if _is_blank(overall):
+        cfg["OVERALL_DIR"] = str(default_base_dir())
+        return
+
+    overall_path = Path(str(overall)).expanduser()
+    if overall_path.exists():
+        cfg["OVERALL_DIR"] = str(overall_path)
+        return
+
+    fallback = default_base_dir()
+    _LOG.warning(
+        "Configured OVERALL_DIR does not exist (%s); falling back to %s",
+        overall_path,
+        fallback,
+    )
+    cfg["OVERALL_DIR"] = str(fallback)
+
+    # Treat repaired OVERALL_DIR as non-explicit for derived path keys so they can
+    # follow the corrected repo root when stale machine-specific values are present.
+    explicit.discard("OVERALL_DIR")
+    for key in _OVERALL_DERIVED:
+        explicit.discard(key)
+    explicit.discard("PHENIX_CLEAN_SCRIPT")
+
+
 def _derive_mgltools(cfg: Dict[str, Any], explicit: set[str]) -> None:
     mgl_root = cfg.get("MGLTOOLS_PATH")
     mgl_explicit = "MGLTOOLS_PATH" in explicit or "MGLTOOLS_DIR" in explicit
@@ -544,6 +571,50 @@ def _derive_dock6(cfg: Dict[str, Any]) -> None:
         cfg["DMS_EXE"] = str(sibling) if sibling.exists() else (shutil.which("dms") or str(sibling))
 
 
+def _repair_missing_tool_paths(cfg: Dict[str, Any]) -> None:
+    tool_keys = {
+        "VINA_EXE": "vina",
+        "GNINA_EXE": "gnina",
+        "OPENBABEL_PATH": "obabel",
+        "PYMOL_EXE": "pymol",
+        "REDUCE_EXE": "reduce",
+        "DOCK6_EXE": "dock6",
+        "DMS_EXE": "dms",
+        "SPHGEN_EXE": "sphgen",
+        "SPHERE_SELECTOR_EXE": "sphere_selector",
+        "SHOWBOX_EXE": "showbox",
+        "GRID_EXE": "grid",
+        "LEPRO_EXE": "lepro",
+        "FPOCKET_EXE": "fpocket",
+        "PROPKA_EXE": "propka3",
+        "DEEPCOY_PYTHON": "python",
+        "P2RANK_PATH": "prank",
+        "MGLTOOLS_PYTHON": "pythonsh",
+        "PREPARE_RECEPTOR_SCRIPT": "prepare_receptor4.py",
+        "PREPARE_LIGAND_SCRIPT": "prepare_ligand4.py",
+    }
+    for key, binary in tool_keys.items():
+        raw = cfg.get(key)
+        if _is_blank(raw):
+            continue
+        text = str(raw).strip()
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            continue
+        if path.exists():
+            cfg[key] = str(path)
+            continue
+        resolved = shutil.which(binary)
+        if resolved:
+            _LOG.warning(
+                "Configured %s path does not exist (%s); falling back to PATH (%s)",
+                key,
+                path,
+                resolved,
+            )
+            cfg[key] = resolved
+
+
 def _expand_value(value: str, cfg: Dict[str, Any]) -> str:
     def _replace(match: re.Match[str]) -> str:
         key = (match.group(1) or "").upper()
@@ -618,10 +689,12 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     normalized: Dict[str, Any] = dict(cfg or {})
     explicit = _explicit_keys(normalized)
     _adopt_aliases(normalized)
+    _repair_missing_overall_dir(normalized, explicit)
     _derive_from_overall(normalized)
     _derive_mgltools(normalized, explicit)
     _derive_reduce(normalized)
     _derive_dock6(normalized)
+    _repair_missing_tool_paths(normalized)
 
     if _is_blank(normalized.get("PYMOL_EXE")):
         normalized["PYMOL_EXE"] = shutil.which("pymol")

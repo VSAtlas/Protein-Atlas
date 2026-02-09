@@ -368,11 +368,63 @@ def _prefix_has_tool(prefix: Path, tool: str) -> bool:
 
 
 def _resolve_micromamba() -> Optional[Path]:
-    preferred = Path("/home/michael/atlas/micromamba/bin/micromamba")
-    if preferred.is_file():
-        return preferred
+    env_mm = os.environ.get("MICROMAMBA_EXE")
+    if env_mm:
+        env_path = Path(env_mm).expanduser()
+        if env_path.is_file():
+            return env_path
     found = shutil.which("micromamba")
-    return Path(found) if found else None
+    if found:
+        return Path(found)
+    home_candidate = Path.home() / "micromamba" / "bin" / "micromamba"
+    if home_candidate.is_file():
+        return home_candidate
+    return None
+
+
+def _common_ambertools_prefixes(cfg: Optional[object]) -> list[Path]:
+    candidates: list[Path] = []
+    env_candidates = [
+        os.environ.get("MMGBSA_AMBERTOOLS_PREFIX"),
+        os.environ.get("AMBERTOOLS_PREFIX"),
+        os.environ.get("CONDA_PREFIX"),
+    ]
+    for raw in env_candidates:
+        if raw:
+            candidates.append(Path(raw).expanduser())
+
+    if cfg is not None:
+        try:
+            overall = cfg.get("OVERALL_DIR")
+        except Exception:
+            overall = getattr(cfg, "OVERALL_DIR", None)
+        if overall:
+            base = Path(str(overall)).expanduser().resolve().parent
+            candidates.append(base / "tools" / "envs" / "ambertools")
+
+    mamba_root = os.environ.get("MAMBA_ROOT_PREFIX")
+    if mamba_root:
+        candidates.append(Path(mamba_root).expanduser() / "envs" / "AmberTools25")
+
+    home = Path.home()
+    candidates.extend(
+        [
+            home / "tools" / "envs" / "ambertools",
+            home / "micromamba" / "envs" / "AmberTools25",
+            home / "miniconda3" / "envs" / "AmberTools25",
+            home / "anaconda3" / "envs" / "AmberTools25",
+        ]
+    )
+
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
 
 
 def _resolve_ambertools_prefix(cfg: Optional[object]) -> Optional[str]:
@@ -424,11 +476,7 @@ def _select_tleap_runner(logger: logging.Logger) -> Tuple[List[str], str, str]:
     if tleap_path:
         return [], tleap_path, "PATH"
 
-    common_prefixes = [
-        Path("/home/atlas/micromamba/envs/AmberTools25"),
-        Path("/home/michael/atlas/tools/envs/ambertools"),
-        Path("/home/michael/atlas/micromamba/envs/AmberTools25"),
-    ]
+    common_prefixes = _common_ambertools_prefixes(cfg)
     for prefix in common_prefixes:
         if _prefix_has_tool(prefix, "tleap") and not _looks_like_pkgs_cache(prefix):
             micromamba = _resolve_micromamba()

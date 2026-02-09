@@ -30,9 +30,9 @@ from DeepCoy_duds.external_sources import (
 )
 from input_and_export_functions import load_config
 
-DEFAULT_INPUT_PDB_DIR = "/home/michael/atlas/code/protein_automation/input_pdbs"
+DEFAULT_INPUT_PDB_DIR = str(REPO_ROOT / "input_pdbs")
 DEFAULT_OUT_ROOT = "../extracted_ligands/deepcoy"
-DEFAULT_DEEPCOY_PYTHON = "/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python"
+DEFAULT_DEEPCOY_PYTHON = os.environ.get("DEEPCOY_PYTHON") or sys.executable
 PDB_EXTENSIONS = [".pdb", ".ent", ".cif", ".pdb.gz", ".cif.gz"]
 CONFIG_FILE_NAME = "config.txt"
 EC_PATTERN = re.compile(r"^(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)\.(?:\d+|-)$")

@@ -326,6 +326,31 @@ def _expand_all_vars(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _resolve_config_path(config_path: str, base_dir: Path) -> Path:
+    requested = Path(config_path)
+    candidates: list[Path] = []
+    if requested.is_absolute():
+        candidates.append(requested)
+    else:
+        candidates.append(requested)
+        candidates.append(base_dir / requested)
+
+    for cand in candidates:
+        if cand.exists():
+            return cand
+
+    # Backward-compatible fallback for new clones that only have config.example.txt.
+    if requested.name == "config.txt":
+        alt_name = "config.example.txt"
+        alt_candidates = [cand.with_name(alt_name) for cand in candidates]
+        for cand in alt_candidates:
+            if cand.exists():
+                return cand
+
+    # Keep old behavior: return requested path even if missing.
+    return candidates[0]
+
+
 def load_config(
     config_path: str = "config.txt", base_dir: Path | None = None
 ) -> Dict[str, Any]:
@@ -335,8 +360,10 @@ def load_config(
       2) config.txt (key=value, optional)
       3) environment variables (allowed set only)
     Then expand {OVERALL_DIR}/$OVERALL_DIR inside string values.
+    If config.txt is missing, fall back to config.example.txt when present.
     """
     base = base_dir or _default_base_dir(reference_file=__file__)
+    resolved_config_path = _resolve_config_path(config_path, base)
 
     cfg: Dict[str, Any] = {}
     cfg.update(_default_dirs(base))
@@ -344,7 +371,7 @@ def load_config(
     cfg.update(_default_runtime())
 
     # overlay config file
-    file_cfg = _parse_kv_config(Path(config_path))
+    file_cfg = _parse_kv_config(resolved_config_path)
 
     # --- preserve multi-line TEST_LIBRARY_MAP block ---
     try:
@@ -353,7 +380,7 @@ def load_config(
             s = raw.strip()
             # If it looks like a dict but was truncated to one line, re-extract the full brace block
             if s.startswith("{") and not s.endswith("}"):
-                txt = Path(config_path).read_text(encoding="utf-8", errors="ignore")
+                txt = resolved_config_path.read_text(encoding="utf-8", errors="ignore")
                 key_idx = txt.find("TEST_LIBRARY_MAP")
                 if key_idx != -1:
                     block = _extract_brace_block(txt, key_idx, "{", "}")

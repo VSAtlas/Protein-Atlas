@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -275,7 +276,7 @@ def get_lepro_exe(cfg: Dict[str, Any]) -> str:
             if isinstance(file_cfg, dict):
                 candidate = file_cfg.get("LEPRO_EXE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/ledock/lepro_linux_x86"
+        candidate = shutil.which("lepro") or "lepro"
     logger = logging.getLogger("ledock.lepro")
     logger.info("[ledock.lepro.exe] path=%s", candidate)
     return str(candidate)

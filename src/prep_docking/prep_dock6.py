@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
@@ -18,8 +19,7 @@ def _resolve_dms_exe(cfg: dict, logger: logging.Logger) -> str:
     Precedence:
       1) cfg["DMS_EXE"] if set
       2) cfg["_FILE_CFG"]["DMS_EXE"] if present
-      3) hard-coded /home/michael/atlas/tools/dms/bin/dms
-      4) default to "dms" on PATH
+      3) default to "dms" on PATH
     """
     candidate = None
     if isinstance(cfg, dict):
@@ -28,7 +28,7 @@ def _resolve_dms_exe(cfg: dict, logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("DMS_EXE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dms/bin/dms"
+        candidate = shutil.which("dms") or "dms"
 
     # If the preferred path is missing, fall back to PATH to avoid hard failures in dev sandboxes.
     try:
@@ -48,8 +48,7 @@ def _resolve_sphgen_exe(cfg: dict, logger: logging.Logger) -> str:
     Precedence:
       1) cfg["SPHGEN_EXE"] if set
       2) cfg["_FILE_CFG"]["SPHGEN_EXE"] if present
-      3) hard-coded /home/michael/atlas/tools/dock6/bin/sphgen
-      4) default to "sphgen" on PATH
+      3) default to "sphgen" on PATH
     """
     candidate = None
     if isinstance(cfg, dict):
@@ -58,7 +57,7 @@ def _resolve_sphgen_exe(cfg: dict, logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("SPHGEN_EXE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/bin/sphgen"
+        candidate = shutil.which("sphgen") or "sphgen"
 
     # If the preferred path is missing, fall back to PATH to avoid hard failures in dev sandboxes.
     try:
@@ -79,7 +78,12 @@ def _resolve_sphere_selector_exe(cfg: dict, logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("SPHERE_SELECTOR_EXE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/bin/sphere_selector"
+        candidate = shutil.which("sphere_selector") or "sphere_selector"
+    try:
+        if not Path(candidate).exists():
+            candidate = "sphere_selector"
+    except Exception:
+        candidate = "sphere_selector"
     logger.info("[dock6.sphere_selector.exe] path=%s", candidate)
     return str(candidate)
 
@@ -92,7 +96,12 @@ def _resolve_showbox_exe(cfg: dict, logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("SHOWBOX_EXE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/bin/showbox"
+        candidate = shutil.which("showbox") or "showbox"
+    try:
+        if not Path(candidate).exists():
+            candidate = "showbox"
+    except Exception:
+        candidate = "showbox"
     logger.info("[dock6.showbox.exe] path=%s", candidate)
     return str(candidate)
 
@@ -105,7 +114,7 @@ def _resolve_grid_exe(cfg: dict, logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("GRID_EXE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/bin/grid"
+        candidate = shutil.which("grid") or "grid"
 
     try:
         if not Path(candidate).exists():
@@ -125,7 +134,17 @@ def _resolve_vdw_defn_path(cfg: dict, logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("DOCK6_VDW_DEFN_FILE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/parameters/vdw_AMBER_parm99.defn"
+        dock6_exe = None
+        if isinstance(cfg, dict):
+            dock6_exe = cfg.get("DOCK6_EXE") or None
+        if dock6_exe:
+            dock6_path = Path(str(dock6_exe)).expanduser()
+            if dock6_path.is_absolute():
+                candidate = str(
+                    dock6_path.parent.parent / "parameters" / "vdw_AMBER_parm99.defn"
+                )
+        if not candidate:
+            candidate = "vdw_AMBER_parm99.defn"
 
     try:
         if not Path(candidate).exists():

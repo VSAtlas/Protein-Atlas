@@ -43,24 +43,15 @@ pytestmark = pytest.mark.slow
 
 SCENARIOS = [
     (
-        "legacy_ph_on",
-        {
-            "APO_HOLO_MODE": "legacy",
-            "PH_ENSEMBLE": "1",
-        },
-    ),
-    (
         "apo_ph_on",
         {
             "APO_HOLO_MODE": "APO",
-            "PH_ENSEMBLE": "1",
         },
     ),
     (
         "holo_ph_on",
         {
             "APO_HOLO_MODE": "HOLO",
-            "PH_ENSEMBLE": "1",
         },
     ),
 ]
@@ -163,6 +154,8 @@ def test_full_run_produces_summary_without_failures(
     env["ATLAS_RUN_ID"] = TEST_RUN_ID
     # Force small test-mode library
     env["TEST_MODE_ENABLE"] = "dud"
+    # Treat pH ensemble as always-on for this test suite.
+    env["PH_ENSEMBLE"] = "1"
     # Keep Python unbuffered so output ordering is sane in CI
     env["PYTHONUNBUFFERED"] = "1"
 

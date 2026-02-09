@@ -52,10 +52,17 @@ def ensure_deepcoy_decoy_sdfs(
     }
 
     pdb_up = pdb_id.upper()
+    overall_dir = Path(
+        str(
+            cfg.get("OVERALL_DIR")
+            or os.environ.get("PROTEIN_AUTOMATION_DIR")
+            or Path(__file__).resolve().parents[2]
+        )
+    )
     deepcoy_dir = Path(
         cfg.get(
             "DEEPCOY_DUDS_DIR",
-            "/home/michael/atlas/code/protein_automation/DeepCoy_duds",
+            os.environ.get("DEEPCOY_DUDS_DIR", str(overall_dir / "DeepCoy_duds")),
         )
     )
     out_root = Path(
@@ -67,12 +74,12 @@ def ensure_deepcoy_decoy_sdfs(
     input_pdb_dir = Path(
         cfg.get(
             "DEEPCOY_INPUT_PDB_DIR",
-            "/home/michael/atlas/code/protein_automation/input_pdbs",
+            cfg.get("INPUT_DIR", str(overall_dir / "input_pdbs")),
         )
     )
     deepcoy_python = cfg.get(
         "DEEPCOY_PYTHON",
-        "/home/michael/atlas/anaconda3/envs/DeepCoy-env-cpu/bin/python",
+        os.environ.get("DEEPCOY_PYTHON", sys.executable),
     )
     fb_map = cfg.get("_DEEPCOY_FALLBACK_SMILES_BY_PDB", {})
     fallback_smiles = None

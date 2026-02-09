@@ -39,6 +39,7 @@ logs/
 # Run manifests
 /manifests/
 analysis/out/
+/size_artifacts/
 
 # Ignore generated analysis output
 /analysis/difficulty/

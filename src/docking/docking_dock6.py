@@ -24,7 +24,7 @@ def _get_dock6_exe(cfg: Dict[str, Any], logger: Optional[logging.Logger] = None)
         if not candidate and isinstance(file_cfg, dict):
             candidate = str(file_cfg.get("DOCK6_EXE") or "").strip() or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/bin/dock6"
+        candidate = shutil.which("dock6") or "dock6"
     if candidate and not Path(candidate).exists():
         log.warning("[dock6.exe.missing] candidate=%s falling_back_to=dock6", candidate)
         candidate = "dock6"
@@ -40,7 +40,13 @@ def _get_vdw_defn_file(cfg: Dict[str, Any], logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("DOCK6_VDW_DEFN_FILE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/parameters/vdw_AMBER_parm99.defn"
+        dock6_exe = _get_dock6_exe(cfg, logger)
+        if dock6_exe and Path(dock6_exe).is_absolute():
+            candidate = str(
+                Path(dock6_exe).parent.parent / "parameters" / "vdw_AMBER_parm99.defn"
+            )
+        else:
+            candidate = "vdw_AMBER_parm99.defn"
     logger.info("[dock6.vdw_defn] path=%s", candidate)
     return str(candidate)
 
@@ -53,7 +59,11 @@ def _get_flex_defn_file(cfg: Dict[str, Any], logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("DOCK6_FLEX_DEFN_FILE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/parameters/flex.defn"
+        dock6_exe = _get_dock6_exe(cfg, logger)
+        if dock6_exe and Path(dock6_exe).is_absolute():
+            candidate = str(Path(dock6_exe).parent.parent / "parameters" / "flex.defn")
+        else:
+            candidate = "flex.defn"
     logger.info("[dock6.flex_defn] path=%s", candidate)
     return str(candidate)
 
@@ -66,7 +76,13 @@ def _get_flex_drive_file(cfg: Dict[str, Any], logger: logging.Logger) -> str:
         if not candidate and isinstance(file_cfg, dict):
             candidate = file_cfg.get("DOCK6_FLEX_DRIVE_FILE") or None
     if not candidate:
-        candidate = "/home/michael/atlas/tools/dock6/parameters/flex_drive.tbl"
+        dock6_exe = _get_dock6_exe(cfg, logger)
+        if dock6_exe and Path(dock6_exe).is_absolute():
+            candidate = str(
+                Path(dock6_exe).parent.parent / "parameters" / "flex_drive.tbl"
+            )
+        else:
+            candidate = "flex_drive.tbl"
     logger.info("[dock6.flex_drive] path=%s", candidate)
     return str(candidate)
 
