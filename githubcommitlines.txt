@@ -37,6 +37,10 @@ Reset
 cd /home/atlas/code/protein_automation   && git fetch origin   && git reset --hard origin/main   && git clean -fd
 
 
+or
+git fetch origin
+git reset --hard origin/main
+
 
 
 

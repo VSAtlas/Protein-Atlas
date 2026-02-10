@@ -1,0 +1,212 @@
+2026-02-09 17:35:37,248 - INFO - root - [probe.root] root-logger INFO now visible
+[run] log_file=/work2/11040/mpg2352/atlas/code/protein_automation/logs/main_20260209_173537.log run_id=20260209_173537
+2026-02-09 17:35:37,249 - INFO - root - [aliases.summary] mode=LEGACY keep={waters:2, cofactors:51, elements:48}
+2026-02-09 17:35:37,250 - INFO - run - [cfg.reset] run_dir=/work2/11040/mpg2352/atlas/code/protein_automation/configs/20260209_173537 removed=0
+2026-02-09 17:35:37,251 - INFO - path_router - [router.debug] kind=run_logs_dir path=/work2/11040/mpg2352/atlas/code/protein_automation/docked/20260209_173537/logs
+2026-02-09 17:35:37,252 - INFO - root - [run.log] pipeline_log=/work2/11040/mpg2352/atlas/code/protein_automation/docked/20260209_173537/logs/pipeline.log
+[cfg.run] run_id=20260209_173537 run_dir=/work2/11040/mpg2352/atlas/code/protein_automation/configs/20260209_173537
+[ph.mode] PH_ENSEMBLE=True
+2026-02-09 17:35:37,307 - INFO - lib-manifest - [lib-manifest.scan] build_on_scan=true
+[config] FAST_MODE effective=True (exhaustiveness=1)
+current docking mode is  polypharmacology
+[config] SPECIFIED_PROTEINS effective=['TEST'] (precedence: CLI>ENV>CFG)
+[filter.proteins] mode=on requested=1 present=1 missing=0 ? ['TEST']
+Selected proteins (Specified Proteins Mode): TEST
+Working directory: /work2/11040/mpg2352/atlas/code/protein_automation
+Loaded config keys: ['OVERALL_DIR', 'PHENIX_CLEAN_SCRIPT', 'VINA_PATH', 'VINA_EXE', 'GNINA_EXE', 'OPENBABEL_PATH', 'PROPKA_EXE', 'PYMOL_EXE', 'REDUCE_EXE', 'DOCK6_EXE', 'MGLTOOLS_PATH', 'MGLTOOLS_PYTHON', 'PREPARE_LIGAND_SCRIPT', 'PREPARE_RECEPTOR_SCRIPT', 'P2RANK_PATH', 'SCORCH_SCRIPT', 'SCORCH_ENV', 'CPU_ONLY', 'CPU', 'FORCE_REPROCESS', 'DOCKING_MODE', 'QUIET_CONSOLE', 'FILTER_INVALID', 'EARLY_RECENTER_RATIO', 'EARLY_RECENTER_MIN_EVAL', 'EARLY_RECENTER_FAR_A', 'EARLY_RECENTER_MEDIAN_A', 'ALLOW_BOX_EXPAND', 'MAX_RECENTER_ATTEMPTS', 'POCKET_EVAL', 'POCKET_EVAL_MAX_CALIBRATORS', 'POCKET_EVAL_SEED', 'POCKET_EVAL_FOLDS', 'POCKET_EVAL_DATASET_ENABLE', 'POCKET_EVAL_DATASET_FORMATS', 'POCKET_EVAL_DATASET_WIDE_ENABLE', 'POCKET_EVAL_SPLITS_ENABLE', 'POCKET_EVAL_SPLIT_GROUP_KEY', 'POCKET_EVAL_SPLIT_STRATEGY', 'POCKET_EVAL_SPLIT_FOLDS', 'POCKET_EVAL_ENSEMBLE_ENABLE', 'POCKET_EVAL_CV_ENABLE', 'POCKET_EVAL_CV_TOP_M', 'POCKET_EVAL_CV_REQUIRE_SCORES', 'POCKET_EVAL_ORACLE_ENABLE', 'CALIBRATOR_SAMPLING_POLICY', 'CALIBRATOR_SAMPLING_SEED', 'CALIBRATOR_TEST_FRACTION', 'CALIBRATOR_REMAINDER_EVAL_FRACTION', 'CALIBRATOR_POSITIVE_CLASS', 'CALIBRATOR_NEGATIVE_CLASS', 'CALIBRATOR_METRICS_TOP_FRACS', 'CALIBRATOR_SET_TABLE_FORMAT', 'CONTROL_CENTER_POLICY', 'CONTROL_CENTER_CLOSE_MAX_A', 'CTRL_REDOCK_EXHAUSTIVENESS', 'CTRL_REDOCK_NMODES', 'BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY', 'BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING', 'MMGBSA_STRIP_METALS', 'MMGBSA_WATER_POLICY', 'MMGBSA_WATER_KEEP_RADIUS_A', 'MMGBSA_WATER_USE_ALIASES', 'MMGBSA_METAL_USE_ALIASES', 'MMGBSA_TOPOLOGY_PREP_ENABLED', 'MMGBSA_TLEAP_RUN', 'MMGBSA_TOPOLOGY_DIRNAME', 'MMGBSA_AMBERTOOLS_PREFIX', 'MMGBSA_CPPTRAJ_ENABLED', 'MMGBSA_CPPTRAJ_RUN', 'MMGBSA_TRAJOUT_NAME', 'MMGBSA_TRAJOUT_FORMAT', 'MMGBSA_TRAJIN_SOURCE', 'MMGBSA_TRAJIN_PATH', 'MMGBSA_TRAJIN_FORMAT', 'MMGBSA_TRAJ_STARTFRAME', 'MMGBSA_TRAJ_ENDFRAME', 'MMGBSA_TRAJ_INTERVAL', 'MMGBSA_MMPBSA_ENABLED', 'MMGBSA_MMPBSA_RUN', 'MMGBSA_MMPBSA_STARTFRAME', 'MMGBSA_MMPBSA_ENDFRAME', 'MMGBSA_MMPBSA_INTERVAL', 'MMGBSA_MMPBSA_VERBOSE', 'MMGBSA_GB_IGB', 'MMGBSA_GB_SALTCON', 'MMGBSA_MMPBSA_INPUT_NAME', 'MMGBSA_MMPBSA_LOG_NAME', 'MMGBSA_MMPBSA_OUT_DAT', 'MMGBSA_MMPBSA_OUT_CSV', 'MMGBSA_DEFAULT_TRAJ_NAME', 'MMGBSA_ENABLED', 'MMGBSA_KEEP_WATERS', 'MMGBSA_WATER_KEEP_RADIUS', 'MMGBSA_KEEP_METALS', 'MMGBSA_METAL_RETAIN_TOKENS', 'MMGBSA_WATER_RETAIN_TOKENS', 'MMGBSA_RECEPTOR_FORCE', 'MMGBSA_FORCE', 'MMGBSA_STRICT', 'MMGBSA_LIGAND_AT', 'MMGBSA_LIGAND_CHARGE_METHOD', 'MMGBSA_LIGAND_PRIMARY_CHARGE_METHOD', 'MMGBSA_LIGAND_FALLBACK_CHARGE_METHOD', 'MMGBSA_LIGAND_NOMINAL_NET_CHARGE', 'MMGBSA_LIGAND_BCC_CHARGE_SWEEP', 'MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2', 'MMGBSA_LIGAND_FORCE', 'MMGBSA_RDKit_VALIDATE', 'MMGBSA_RDKit_RADICAL_LOWCONF_THRESHOLD', 'MMGBSA_LIGAND_NET_CHARGE', 'MMGBSA_LIGAND_SQM_LEVEL', 'MMGBSA_INPUT_STAGE_DIR', 'MMGBSA_MAX_LIGANDS', 'MMGBSA_RERANKED_TOP_PCT', 'MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK', 'MMGBSA_TLEAP_ENABLED', 'MMGBSA_TLEAP_FORCE', 'MMGBSA_GENERAL_STARTFRAME', 'MMGBSA_GENERAL_ENDFRAME', 'MMGBSA_GENERAL_INTERVAL', 'MMGBSA_GENERAL_VERBOSE', 'PATHWAY_ORGANISM', 'PATHWAY_CATALYST_ONLY', 'ADFRSUITE_BIN', 'PHENIX_DIR', 'PHENIX_LIB_PATH', 'LEPRO_EXE', 'DEEPCOY_PYTHON', 'DEEPCOY_DECOYS_PER_ACTIVE', 'ACTIVES_MAX', 'DEEPCOY_CHUNK_SIZE', 'DEEPCOY_BASE_SEED', 'DEEPCOY_SEED_PER_CHUNK', 'DEEPCOY_USE_ARGMAX_GENERATION', 'DEEPCOY_TRY_DIFFERENT_STARTING', 'DEEPCOY_NUM_DIFFERENT_STARTING', 'DEEPCOY_KEEP_CHUNKS', 'DEEPCOY_SOURCES', 'DEEPCOY_ACTIVE_SOURCES', 'DEEPCOY_SOURCE_AUDIT', 'DEEPCOY_SOURCE_AUDIT_MAX_LINES', 'CHEMBL_RELATIONSHIP_TYPE_STRICT', 'CHEMBL_FALLBACK_RELAX_RELATIONSHIP', 'CHEMBL_FALLBACK_ACTIVITY_BY_TARGET', 'CHEMBL_ACTIVITY_LIMIT', 'DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM', 'DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN', 'USE_DEEPCOY', 'FPOCKET_EXE', 'FPOCKET_FORCE_RETRY_EMPTY', 'REMOVE_WATERS', 'KEEP_WATERS_WITHIN_A', 'WATER_KEEP_POLICY', 'AMBERTOOLS_PREFIX', 'MMGBSA_MD_ENABLED', 'MMGBSA_MD_TEMP0', 'MMGBSA_MD_HEAT_PS', 'MMGBSA_MD_EQUIL_PS', 'MMGBSA_MD_PROD_PS', 'MMGBSA_MD_FRAME_STRIDE_PS', 'MMGBSA_MD_NREPLICATES', 'MMGBSA_MD_MPI_RANKS', 'MMGBSA_FRAME_AGG', 'MMGBSA_FRAME_LIMIT', 'MMGBSA_MD_BASE_SEED', 'MMGBSA_MD_SEED_MODE', 'MMGBSA_MD_RESTRAIN_PROTEIN_HEAVY', 'MMGBSA_MD_RESTRAINT_WT', 'MMGBSA_MD_RESTRAINT_MASK', 'MMGBSA_RDKIT_VALIDATE', 'MMGBSA_RDKIT_RADICAL_LOWCONF_THRESHOLD', 'MMGBSA_TLEAP_STRIP_NTERM_H', 'MMGBSA_TLEAP_INSERT_TER_ON_CHAINBREAK', 'MMGBSA_TLEAP_CHAINBREAK_CN_MAX_A', 'MMGBSA_TLEAP_STRIP_ALL_H', 'MMGBSA_TLEAP_WATER_MODEL', 'MMGBSA_TLEAP_MAP_HOH_TO_WAT', 'MD_FIVE_REPLICATE', 'APO_HOLO_MODE', 'PH_ENSEMBLE', 'USE_GNINA', 'USE_LEDOCK', 'USE_DOCK6', 'USE_SCORCH', 'SCORCH_WEIGHT', 'CNN_WEIGHT', 'SCORCH_TOP_FRACTION', 'CNN_TOP_FRACTION', 'CHAIN_PRUNE', 'CHAIN_POCKET_RADIUS_ANG', 'CHAIN_CONTACT_DIST_ANG', 'CHAIN_MIN_CONTACTS', 'CHAIN_KEEP_LIST', 'CHAIN_LOG_DECISIONS', 'FDA_MAPPING_CSV', 'BENCH_ANALYSIS_OUTDIR', 'BENCH_ONLY_EXTRACTED_CTRL_AND_RDK', 'BENCH_STAGE_NAME', 'NOLIG_CLEANED_PATTERN', 'DEFER_PYMOL', 'PYMOL_DEFER_QUEUE', 'PYMOL_PARALLEL', 'PYMOL_RENDER_WORKERS', 'PYMOL_RENDER_SOFT_CAP', 'PYMOL_RENDER_MODE', 'VIEWPORT_W', 'VIEWPORT_H', 'SURFACE_TRANSPARENCY', 'LABEL_TOP_N_RES', 'LABEL_CUTOFF_ANG', 'PYMOL_IMAGE_VARIANTS', 'PYMOL_IMAGE_INCLUDE_NATIVE', 'SCORE_TOL_KCAL', 'CENTER_TOL_A', 'RMSD_TOL_A', 'ANALYSIS_HTML_EXPECTED_ONLY', 'DEDUP_ID_PREFIX', 'DEDUP_ID_WIDTH', 'DEDUP_ID_SEED', 'BOX_SIZE_MAX_A', 'LOGS_DIR', 'IDENTIFY_LOG_BASENAME', 'IDENTIFY_MAPPING_CSV', 'IDENTIFY_UNMAPPED_CSV', 'IDENTIFY_MAX_WORKERS', 'IDENTIFY_HTTP_WORKERS', 'VINA_VERBOSITY', 'METABO_USE_SCAFFOLD_MATCH', 'METABO_FINGERPRINT_RADIUS', 'METABO_FINGERPRINT_BITS', 'PHENIX_CLEAN_OUTDIR', 'PHENIX_CLEAN_SUFFIX', 'POSE_CLASH_THRESHOLD_A', 'POSE_CLASH_TOLERANCE', 'POSE_DIST_SURFACE_MAX_A', 'POSE_DIST_CENTROID_MAX_A', 'POSE_HBOND_MAX_A', 'POSE_RMSD_TOL_A', 'USE_RDKIT_FOR_3D', 'OBABEL_THREADS', 'OBABEL_TIMEOUT_S', 'LIGPREP_CHUNK_SIZE', 'LIGPREP_PH', 'KEEP_NONPOLAR_H', 'MAX_HEAVY_ATOMS', 'MIN_ATOMS_FOR_DOCKING', 'MIN_PARENT_HEAVY', 'VINA_TIMEOUT_SEC', 'FILTER_VINA_STDOUT', 'DISCOVERY_SELECTION_PCTS', 'POLYPHARM_SELECTION_PCTS', 'PERCENT_SEARCHED', 'USE_DENDROGRAM', 'REPORT_TOP_N', 'REPORT_EXTENDED_TOP_N', 'REPORT_OFFLINE_ASSETS', 'REPORT_INLINE_ASSETS', 'REPORT_LIGAND_PAGE_PREFIX', 'HEATMAP_SCALE_MODE', 'HEATMAP_QUANTILE_LOW', 'HEATMAP_QUANTILE_MID2', 'HEATMAP_QUANTILE_HIGH', 'HEATMAP_SCALE_MIN', 'HEATMAP_SCALE_MID', 'HEATMAP_SCALE_MID2', 'HEATMAP_SCALE_MAX', 'HEATMAP_COLOR_MIN', 'HEATMAP_COLOR_MID', 'HEATMAP_COLOR_MID2', 'HEATMAP_COLOR_MAX', 'LIBRARY_SUBDIR_DEFAULT', 'TEST_MODE_ENABLE', 'TEST_LIBRARY_MAP', 'SPECIFIED_PROTEINS', 'LOG_LEVEL_FILE', 'LOG_LEVEL_CONSOLE', 'LOG_TOPICS', '_FILE_CFG', 'INPUT_DIR', 'LIGAND_DIR', 'EXTRACTED_LIGANDS_DIR', 'LIGANDS_MOL2_DIR', 'PREPPED_LIGANDS_DIR', 'OUTPUT_DIR', 'PDBQT_DIR', 'DOCKED_DIR', 'P2RANK_OUTPUT_DIR', 'CONFIGS_DIR', 'PROTEIN_DIR', 'REDUCE_LOCAL_CANDIDATE', 'REDUCE_HET_DICT', 'SPHGEN_EXE', 'SPHERE_SELECTOR_EXE', 'SHOWBOX_EXE', 'GRID_EXE', 'DOCK6_VDW_DEFN_FILE', 'DMS_EXE', 'use_dock6', 'LIGAND_EXTRACTED_DIR', 'OUTPUT_LIGANDS_DIR', 'PREPPED_LIGANDS_ROOT', 'PREPARE_LIGAND4', 'MGLTOOLS_DIR', 'PYMOL_PATH', 'RUN_ID', 'PH_RADIUS', 'PH_LIGAND_MODE', 'RESET_CONFIGS', 'CONFIG_RUN_DIR', 'SINGLE_LIGAND', 'SINGLE_LIGAND_SUGGESTIONS', 'ALLOW_FDA_FALLBACK', 'LIBRARY_MANIFEST_FILENAME', 'LIBRARY_MANIFEST_BUILD_ON_SCAN', '_EFFECTIVE_SINGLE_LIGAND', 'HMDB_LIBRARY_SUBDIR', 'DEEPCOY_DUDS_DIR', 'DEEPCOY_INPUT_PDB_DIR', 'DEEPCOY_OUT_ROOT', 'DEEPCOY_WORK_ROOT', 'DEEPCOY_ENABLE_AUTOGEN_SDF', 'DEEPCOY_ENABLE_AUTOGEN_PDBQT', 'DEEPCOY_FALLBACK_SMILES', 'DEEPCOY_RESTRICT_DATA', 'DEEPCOY_PREPPED_SUBDIR', 'DEEPCOY_LIGPREP_FORCE', 'DEEPCOY_USE_AS_DUD_LIBRARY', 'DEEPCOY_FORCE', 'TEST_FDA_LIBRARY_SUBDIR', 'FAST_MODE', 'FORCE_CALIBRATOR', 'CONTROL_CONSENSUS', 'NO_LIBRARY_DOCKING', 'CENTER_MODE', 'CONTROL_BLACKLIST', 'CONTROL_MIN_HEAVY_ATOMS', 'CONTROL_ANCHOR_MIN_VALID_RATE', 'ALLOW_SWITCH_FROM_CONTROL', 'REQUIRE_CONTROL_FAILURE_TO_SWITCH', 'SWITCH_AWAY_FROM_CONTROL_MIN_BOOST', 'CONTROL_LOCK_SCORE_MAX', 'CONTROL_LOCK_MIN_HITS', 'CONTROL_LOCK_CENTER_MAX_DIST', 'CLUSTER_EPS_ANG', 'SWITCH_VALID_RATE_MIN', 'SWITCH_SCORE_IMPROVE_MIN', 'SWITCH_LE_GAIN_MIN', 'SWITCH_SCORE_THRESHOLD', 'SWITCH_SCORE_HYSTERESIS', 'MAX_GLOBAL_CENTER_SWITCHES', 'THREADS_PER_VINA', 'RMSD_FILTER_ANG', 'RMSD_MAX_MODELS', 'RETRY_NEAR_MISS', 'RETRY_EXHAUST_MULT', 'RETRY_DIST_THRESH', 'RETRY_SCORE_THRESH', 'ADAPTIVE_SHRINK_ENABLE', 'ADAPTIVE_SHRINK_MEDIAN_MAX', 'ADAPTIVE_SHRINK_DEC', 'ADAPTIVE_SHRINK_MIN_BOX', 'CHECKPOINT_ENABLE', 'PAINS_NAMES', 'RECEPTOR_SANITY_CHECK', 'AUDIT_JSON', 'SELF_RMSD_MAX_ANG', 'SELF_RMSD_REQUIRE_FOR_CONTROLS', 'EARLY_EXIT_MAX_MODELS', 'MAX_RETRY_SECONDS_PER_LIGAND', '_EFFECTIVE_SPECIFIED_PROTEINS', '_TEST_LIBRARY_CANONICAL']
+Proteins queued: 1
+2026-02-09 17:35:37,317 - INFO - root - [apo-holo.debug] env.APO_HOLO_MODE_raw=None cfg.APO_HOLO_MODE_raw='holo'
+2026-02-09 17:35:37,318 - INFO - root - [apo-holo] mode=holo expanded=['HOLO']
+2026-02-09 17:35:37,318 - INFO - root - [apo-holo] cfg_token_raw='holo' resolved_mode=holo variants=['HOLO']
+2026-02-09 17:35:37,318 - INFO - root - [apo-holo] router_legacy=False ph_enabled=True
+2026-02-09 17:35:37,318 - INFO - root - [apo-holo] normalized_mode_token=holo
+2026-02-09 17:35:37,318 - INFO - root - [apo-holo] resolved mode=holo variants=['HOLO'] cfg_token='holo'
+2026-02-09 17:35:37,326 - INFO - root - [apo-holo] failed log directory: /work2/11040/mpg2352/atlas/code/protein_automation/failed
+2026-02-09 17:35:37,326 - INFO - root - [apo-holo] start_variant mode=holo variant_label=holo env_token=HOLO
+Processing Proteins (holo):   0%|          | 0/1 [00:00<?, ?protein/s]2026-02-09 17:35:37,339 - INFO - [paths] base_id=TEST -> pdb_id=TEST
+2026-02-09 17:35:37,340 - INFO - Processing protein: TEST.pdb (id=TEST)
+2026-02-09 17:35:37,340 - INFO - [ions.input.counts] pdb=TEST file=/work2/11040/mpg2352/atlas/code/protein_automation/input_pdbs/TEST.pdb present_pdb=C:4,N:1,O:1,ZN:1
+2026-02-09 17:35:37,340 - INFO - path_router - [router.debug] variant_in='HOLO' norm='HOLO' legacy_flag=False
+2026-02-09 17:35:37,340 - INFO - path_router - [router.debug] variant_in='HOLO' norm='HOLO' legacy_flag=False
+2026-02-09 17:35:37,340 - INFO - [receptor.path] pdb=TEST variant=HOLO cleaned_pdb=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb exists=True
+2026-02-09 17:35:37,340 - INFO - [receptor.path] pdb=TEST variant=HOLO receptor_pdbqt=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST.pdbqt exists=True
+2026-02-09 17:35:37,340 - INFO - [ph.debug] calling prepare_receptor; PH_ENSEMBLE=True
+2026-02-09 17:35:37,340 - INFO - path_router - [router.debug] variant_in='HOLO' norm='HOLO' legacy_flag=False
+2026-02-09 17:35:37,340 - INFO - path_router - [router.debug] variant_in='HOLO' norm='HOLO' legacy_flag=False
+2026-02-09 17:35:37,340 - INFO - FORCE_REPROCESS=True | cleaned_exists=True receptor_exists=True
+2026-02-09 17:35:37,340 - INFO - [ph_ensemble] enabling ensemble mode: A2_SKIP_PDB2PQR=1 for cleaning stage
+2026-02-09 17:35:37,342 - INFO - [prep.id] clean_pdb stem=TEST -> base_id=TEST
+2026-02-09 17:35:37,342 - INFO - [prep.paths] protein_root=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO receptor=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor nolig=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/nolig work=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work
+2026-02-09 17:35:37,342 - INFO - [receptor.clean.location] path=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb variant=HOLO variant_scoped=True
+2026-02-09 17:35:37,343 - INFO - [proteinprep] entering clean_pdb pdb_file=/work2/11040/mpg2352/atlas/code/protein_automation/input_pdbs/TEST.pdb output_root=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs
+2026-02-09 17:35:37,343 - INFO - (1) elemfix BEFORE: metals=1 file=/work2/11040/mpg2352/atlas/code/protein_automation/input_pdbs/TEST.pdb
+2026-02-09 17:35:37,343 - INFO - root - [ions.breadcrumb] stage=input file=input_pdbs/TEST.pdb metals={ZN:1,HG:0,MG:0,FE:0,MN:0,CO:0,NI:0,CU:0,CD:0,CA:0} waters=0 simple_ions={NA:0,K:0,CL:0,BR:0,I:0} other_het=1
+2026-02-09 17:35:37,345 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_working.pdb rewrite_atoms=True
+2026-02-09 17:35:37,346 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_working.pdb
+2026-02-09 17:35:37,347 - INFO - root - [helium] stage=post_write step=copy_working file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_working.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,348 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb rewrite_atoms=False
+2026-02-09 17:35:37,349 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb
+2026-02-09 17:35:37,349 - INFO - root - [helium] stage=post_write step=altloc_filter file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb He->H=-1 residual_He=0
+2026-02-09 17:35:37,349 - INFO - root - Filtered altLocs in /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_working.pdb → /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb (removed 0 alternates)
+2026-02-09 17:35:37,349 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb rewrite_atoms=True
+2026-02-09 17:35:37,351 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb
+2026-02-09 17:35:37,351 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb rewrite_atoms=True
+2026-02-09 17:35:37,352 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb
+2026-02-09 17:35:37,353 - INFO - root - [helium] stage=post_write step=elemfix_filtered file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,353 - INFO - Early text-level element fix applied to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb
+2026-02-09 17:35:37,353 - INFO - root - [extract.check] file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb candidate_resnames=LIG,ZN
+2026-02-09 17:35:37,354 - WARNING - root - [extract.violation] file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb will_extract_retain_list=ZN
+2026-02-09 17:35:37,355 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/ligands_raw/LIG_A301.pdb rewrite_atoms=False
+2026-02-09 17:35:37,356 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/ligands_raw/LIG_A301.pdb
+2026-02-09 17:35:37,360 - INFO - root - Extracted 1 ligand residues to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/ligands_raw
+2026-02-09 17:35:37,360 - INFO - root - [ions.probe] stage=extract_ligands file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered.pdb totals=1 sample=ZN:1
+2026-02-09 17:35:37,362 - INFO - root - # chain  CA  near  min_d  contacts  keep  reason
+2026-02-09 17:35:37,362 - INFO - root -   A      2   yes     0.68    0       yes   near_pocket
+2026-02-09 17:35:37,362 - INFO - root - [chain_prune] kept=A dropped=- reason=see_table
+2026-02-09 17:35:37,363 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered_pruned.pdb rewrite_atoms=False
+2026-02-09 17:35:37,364 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered_pruned.pdb
+2026-02-09 17:35:37,365 - INFO - root - [helium] stage=post_write step=chain_pruned file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered_pruned.pdb He->H=-1 residual_He=0
+2026-02-09 17:35:37,365 - INFO - [chain_prune] using pruned source for step (4): /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered_pruned.pdb
+2026-02-09 17:35:37,365 - INFO - root - [ions.breadcrumb] stage=strip_nsr_before file=processed_pdbs/TEST/HOLO/raw/TEST_filtered_pruned.pdb metals={ZN:1,HG:0,MG:0,FE:0,MN:0,CO:0,NI:0,CU:0,CD:0,CA:0} waters=0 simple_ions={NA:0,K:0,CL:0,BR:0,I:0} other_het=1
+2026-02-09 17:35:37,365 - INFO - root - [ions.probe] stage=strip_nonstandard phase=before file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered_pruned.pdb totals=1 sample=ZN:1
+2026-02-09 17:35:37,365 - INFO - (5) strip_nonstandard BEFORE: metals=1 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/raw/TEST_filtered_pruned.pdb
+2026-02-09 17:35:37,366 - INFO - root - [aliases.bind] water_set=2 cofactor_set=51 elem_tokens=48
+2026-02-09 17:35:37,366 - INFO - root - [stripnsr.before] variant=HOLO ions_res=LIG:6,ZN:1 ions_elem=C:4,N:1,O:1,ZN:1
+2026-02-09 17:35:37,366 - INFO - root - [water.policy] mode=LEGACY policy=site_only waters_kept_rule_applied=true
+2026-02-09 17:35:37,366 - INFO - root - [ion.keep] token=ZN source=elem_tokens_canonical
+2026-02-09 17:35:37,367 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_stripped.pdb rewrite_atoms=False
+2026-02-09 17:35:37,369 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_stripped.pdb
+2026-02-09 17:35:37,369 - INFO - root - [helium] stage=post_write step=strip_nonstandard file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_stripped.pdb He->H=-1 residual_He=0
+2026-02-09 17:35:37,369 - INFO - root - [stripnsr.after] variant=HOLO ions_res=ZN:1 ions_elem=ZN:1 removed_total=0
+2026-02-09 17:35:37,369 - INFO - root - [stripnsr.diff] kept=ZN stripped=none
+2026-02-09 17:35:37,370 - INFO - root - Removed nonstandard residues (YAML-driven): ['LIG']
+2026-02-09 17:35:37,370 - INFO - root - Estimated pocket center: (4.50, 1.50, 3.00)
+2026-02-09 17:35:37,370 - INFO - root - [ions.probe] stage=strip_nonstandard phase=after file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_stripped.pdb totals=1 sample=ZN:1
+2026-02-09 17:35:37,370 - INFO - root - [ions.breadcrumb] stage=strip_nsr_after file=processed_pdbs/TEST/HOLO/work/TEST_stripped.pdb metals={ZN:1,HG:0,MG:0,FE:0,MN:0,CO:0,NI:0,CU:0,CD:0,CA:0} waters=0 simple_ions={NA:0,K:0,CL:0,BR:0,I:0} other_het=0
+2026-02-09 17:35:37,370 - INFO - Removed 1 nonstandard residue lines.
+2026-02-09 17:35:37,370 - INFO - (5) strip_nonstandard AFTER:  metals=1 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_stripped.pdb
+Saved fixed PDB to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb
+2026-02-09 17:35:37,373 - INFO - root - [ions.probe] stage=elemfix file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb totals=1 sample=ZN:1
+2026-02-09 17:35:37,373 - INFO - root - [Elem histogram TEST_elemfix.pdb] {'C': 6, 'N': 3, 'O': 2}
+2026-02-09 17:35:37,373 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb rewrite_atoms=True
+2026-02-09 17:35:37,374 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb
+2026-02-09 17:35:37,375 - INFO - root - [helium] stage=post_write step=elemfix_before_modeller file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,375 - INFO - (1) elemfix AFTER:  metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb
+2026-02-09 17:35:37,375 - INFO - (2) modeller_fill BEFORE: metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb
+2026-02-09 17:35:37,388 - WARNING - root - MODELLER not available; skipping loop completion: check_lice_E> Invalid license key: XXXX
+Go to https://salilab.org/modeller/ to get a license key,
+and then set the 'license' variable to it in the file
+/scratch/11040/mpg2352/micromamba/envs/docking-env/lib/modeller-10.7/modlib/modeller/config.py
+
+Saved fixed PDB to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb
+2026-02-09 17:35:37,390 - INFO - root - [ions.breadcrumb] stage=modeller file=processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb metals={ZN:1,HG:0,MG:0,FE:0,MN:0,CO:0,NI:0,CU:0,CD:0,CA:0} waters=0 simple_ions={NA:0,K:0,CL:0,BR:0,I:0} other_het=0
+2026-02-09 17:35:37,390 - INFO - root - [ions.probe] stage=modeller file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb totals=1 sample=ZN:1
+2026-02-09 17:35:37,391 - INFO - root - [Elem histogram TEST_elemfix.pdb] {'C': 6, 'N': 3, 'O': 2}
+2026-02-09 17:35:37,391 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb rewrite_atoms=True
+2026-02-09 17:35:37,392 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb
+2026-02-09 17:35:37,392 - INFO - root - [helium] stage=post_write step=elemfix_after_modeller file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,392 - INFO - (2) modeller_fill AFTER:  metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb
+2026-02-09 17:35:37,394 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb rewrite_atoms=True
+2026-02-09 17:35:37,395 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,395 - INFO - root - [helium] stage=post_write step=phenix_or_copy_receptor file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,395 - INFO - (6) phenix_clean AFTER:  metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,395 - INFO - [proteinprep] steps: Reduce=deferred Phenix=False MODELLER=False
+2026-02-09 17:35:37,396 - INFO - [proteinprep] modeller_out=none (kept /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_elemfix.pdb)
+2026-02-09 17:35:37,399 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_debulked.pdb rewrite_atoms=False
+2026-02-09 17:35:37,400 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_debulked.pdb
+2026-02-09 17:35:37,400 - INFO - root - [helium] stage=post_write step=hydrogen_cleanup file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_debulked.pdb He->H=-1 residual_He=0
+2026-02-09 17:35:37,400 - INFO - (3) validate BEFORE: metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_debulked.pdb
+2026-02-09 17:35:37,402 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb rewrite_atoms=True
+2026-02-09 17:35:37,403 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+2026-02-09 17:35:37,403 - INFO - root - [helium] stage=post_write step=chain_validate file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,403 - INFO - (3) validate AFTER:  metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+2026-02-09 17:35:37,403 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb rewrite_atoms=True
+2026-02-09 17:35:37,405 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+2026-02-09 17:35:37,405 - INFO - [elem-fix] file=TEST_validated.pdb stage=preflight He->H=0
+2026-02-09 17:35:37,405 - INFO - root - [Elem histogram TEST_validated.pdb] {'C': 6, 'N': 3, 'O': 2}
+2026-02-09 17:35:37,406 - WARNING - propka_wire - pdb2pqr not found on PATH; skipping pre-protonation.
+2026-02-09 17:35:37,406 - WARNING - root - PDB2PQR unavailable/failed; Reduce will build hydrogens.
+2026-02-09 17:35:37,406 - INFO - (4) reduce BEFORE: metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+2026-02-09 17:35:37,406 - INFO - root - [reduce precheck] low_conect=0.00 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+Saved fixed PDB to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+2026-02-09 17:35:37,408 - INFO - root - [H-Scan before] NO_H (H=0, Heavy=11, H/Heavy=0.00)
+2026-02-09 17:35:37,410 - WARNING - root - [reduce#1 fail] exe=reduce het_dict=/work2/11040/mpg2352/atlas/tools/reduce/reduce_wwPDB_het_dict.txt has_h=False note=[Errno 2] No such file or directory: 'reduce'
+Saved fixed PDB to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+2026-02-09 17:35:37,412 - WARNING - root - [reduce#2 fail] noflip note=[Errno 2] No such file or directory: ''
+Saved fixed PDB to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb
+2026-02-09 17:35:37,414 - INFO - root - [protonate fallback] using=OpenBabel in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_validated.pdb out=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb
+2026-02-09 17:35:37,419 - WARNING - root - [reduce] fallback H-add applied
+2026-02-09 17:35:37,419 - INFO - root - [H-Scan after ] SUSPECT_LOW_H (H=2, Heavy=11, H/Heavy=0.18)
+2026-02-09 17:35:37,419 - INFO - root - [protonate result] status=SUSPECT_LOW_H H=2 Heavy=11 ratio=0.18 size=1129
+2026-02-09 17:35:37,419 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb rewrite_atoms=True
+2026-02-09 17:35:37,421 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb
+2026-02-09 17:35:37,421 - INFO - root - [helium] stage=post_write step=reduce_or_fallback file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,421 - INFO - root - [ions.probe] stage=reduce file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb totals=1 sample=ZN:1
+[proteinprep] Reduce/alt_protonation wrote=True -> /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb
+2026-02-09 17:35:37,421 - INFO - (4) reduce AFTER:  metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb
+Saved fixed PDB to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb
+2026-02-09 17:35:37,423 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb rewrite_atoms=True
+2026-02-09 17:35:37,424 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb
+2026-02-09 17:35:37,425 - INFO - root - [helium] stage=post_write step=elemfix_after_reduce file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,425 - INFO - root - [Elem histogram TEST_reduced.pdb] {'C': 6, 'H': 2, 'N': 3, 'O': 2}
+2026-02-09 17:35:37,425 - INFO - root - [peptide-ion check] offenders=[] peptidey_n=44 ionic_tokens_n=48
+2026-02-09 17:35:37,425 - INFO - [ions.policy] stage=receptor_write variant=HOLO source=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb target=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb reason=copy_reduced_to_cleaned
+2026-02-09 17:35:37,425 - INFO - [ions.counts.before] stage=receptor_write file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/TEST_reduced.pdb metals=ZN:1
+2026-02-09 17:35:37,427 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb rewrite_atoms=True
+2026-02-09 17:35:37,428 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,428 - INFO - root - [helium] stage=post_write step=promote_receptor_copy file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,429 - INFO - root - [ions.probe] stage=receptor_write file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb totals=1 sample=ZN:1
+2026-02-09 17:35:37,429 - INFO - [ions.counts.after] stage=receptor_write file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb metals=ZN:1
+2026-02-09 17:35:37,429 - INFO - [ions.receptor.copy] action=write_cleaned kept=1 stripped=0 changed=0
+Saved fixed PDB to /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,431 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb rewrite_atoms=True
+2026-02-09 17:35:37,432 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,432 - INFO - root - [helium] stage=post_write step=elemfix_final_receptor file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb He->H=0 residual_He=0
+2026-02-09 17:35:37,432 - INFO - root - [Elem histogram TEST_cleaned.pdb] {'C': 6, 'H': 2, 'N': 3, 'O': 2}
+2026-02-09 17:35:37,432 - INFO - Cleaned receptor: /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,432 - INFO - (7) prepare_receptor4 BEFORE: metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,432 - INFO - (7) prepare_receptor4 AFTER:  metals=0 file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb (pdbqt not parsed)
+2026-02-09 17:35:37,433 - INFO - path_router - [router.debug] variant_in='HOLO' norm='HOLO' legacy_flag=False
+2026-02-09 17:35:37,433 - INFO - path_router - [router.debug] variant_in='HOLO' norm='HOLO' legacy_flag=False
+2026-02-09 17:35:37,433 - INFO - [receptor.path.final] variant=HOLO receptor_pdbqt=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST.pdbqt
+2026-02-09 17:35:37,433 - INFO - [receptor.path.ensemble] enabled=0 dir=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/ph_ensemble
+2026-02-09 17:35:37,433 - INFO - [ions.clean.counts] pdb=TEST variant=HOLO file=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb present_pdb=metals:0
+[proteinprep] cleaned receptor exists=True -> /work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,434 - INFO - root - [elemfix] in=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb rewrite_atoms=False
+2026-02-09 17:35:37,435 - INFO - root - [elemfix] done=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/receptor/TEST_cleaned.pdb
+2026-02-09 17:35:37,436 - INFO - root - [meeko.policy] drop_free_ions=true variant=HOLO list=K,LI,NA
+2026-02-09 17:35:37,436 - INFO - root - [ions.touch] stage=meeko-pre variant=HOLO action=pre_sanitize file=/tmp/tmpq5dabs9t.pdb
+2026-02-09 17:35:37,437 - INFO - root - [ions.cfg] retain_tokens=2FE,3CO,3NI,4FE,ACE,ADP,AG,AL,AMP,AT,ATP,AU,BA,BR,BTN,CA,CA++,CA1,CA2,CA2+,CAL,CD,CE,CES,CL,CO,CO2+,COA,CS,CTP,CU,CU1,CU2,CU2+,DOD,DY,ER,EU,F,F3S,F4S,FAD,FADH,FE,FE2,FE2+,FE3,FE3+,FES,FMN,FMNH,GD,GDP,GTP,H2O,HEA,HEB,HEC,HEM,HEME,HG,HO,HOH,I,K,K+,LA,LI,LU,MAG,MG,MG2+,MGD,MGN,MN,MN2+,MO,MPT,MSE,NA,NA+,NAD,NADH,NADP,NAP,ND,NI,NI2+,NME,NMN,PB,PD,PLP,PM,POT,PR,PT,PTR,PYL,RB,RH,RU,RUB,SAH,SAM,SEC,SEP,SF4,SM,SOD,SOL,SR,TB,TH,TIP,TIP3,TM,TPO,TPP,TTP,U,UTP,WAT,YB,ZN,ZN2,ZN2+ source=aliases
+2026-02-09 17:35:37,437 - INFO - root - [ions.policy] stage=meeko variant=HOLO drop_metals=False drop_salts=False radius=none allowlist=127
+2026-02-09 17:35:37,437 - INFO - root - [ions.touch] stage=meeko variant=HOLO dropped=0 kept=15 file=/tmp/tmpq5dabs9t.pdb
+2026-02-09 17:35:37,438 - INFO - root - [elemfix] in=/tmp/tmpq5dabs9t.pdb rewrite_atoms=False
+2026-02-09 17:35:37,438 - INFO - root - [elemfix] done=/tmp/tmpq5dabs9t.pdb
+2026-02-09 17:35:37,755 - INFO - root - [receptor] ADT fallback disabled (missing MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT)
+2026-02-09 17:35:39,235 - INFO - root - [receptor-attempt meeko_modern] rc=1 exists=True size=480 stderr=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/meeko_modern.stderr.txt
+2026-02-09 17:35:40,740 - INFO - root - [receptor-attempt meeko_retry_allow_bad_res] rc=0 exists=True size=480 stderr=/work2/11040/mpg2352/atlas/code/protein_automation/processed_pdbs/TEST/HOLO/work/meeko_retry_allow_bad_res.stderr.txt
+2026-02-09 17:35:40,742 - INFO - root - Prepared receptor after -a allow_bad_res.
+2026-02-09 17:35:40,743 - INFO - root - [ions.diff.pdb↔pdbqt.meeko_allow_bad_res] kept=0 stripped=1 detail=ZN:A:10
+2026-02-09 17:35:40,743 - WARNING - root - [ion diff] present_pdb=[('ZN', 'A:10')] missing_in_pdbqt=[('ZN', 'A:10')]
+2026-02-09 17:35:40,743 - WARNING - root - [ion lost] [('ZN', 'A:10')]
+2026-02-09 17:35:40,743 - INFO - root - [iondiff.pdb_pdbqt] tool=Meeko-allow_bad_res kept=none lost=ZN:1 added=none
+2026-02-09 17:35:40,744 - WARNING - Receptor sanity check failed (too few atoms or zero coords).
+2026-02-09 17:35:40,744 - INFO - [receptor.clean.provenance] created_by=clean_failed
+2026-02-09 17:35:40,744 - WARNING - Skipping protein due to prep failure.
+2026-02-09 17:35:40,744 - INFO - scorch-rescore-hook - [scorch-rescore.invoke] scope=per_pdb run_id=20260209_173537 pdb_id=TEST variant=HOLO ph=* jobs=1 threads=110 total_cpu=110 cmd=/work2/11040/mpg2352/.mamba/envs/docking-env/bin/python /work2/11040/mpg2352/atlas/code/protein_automation/src/post_docking/rescoring/rescoring_scorch.py --run-id 20260209_173537 --repo-root /work2/11040/mpg2352/atlas/code/protein_automation --pdb-id TEST --threads 110 --jobs 1 --variant HOLO --verbose
+2026-02-09 17:35:41,251 - INFO - scorch-rescore-hook - [scorch-rescore.result] scope=per_pdb run_id=20260209_173537 pdb_id=TEST variant=HOLO ph=* returncode=1
+Processing Proteins (holo): 100%|##########| 1/1 [00:03<00:00,  3.97s/protein]Processing Proteins (holo): 100%|##########| 1/1 [00:03<00:00,  3.97s/protein]
+
+All proteins processed in 0.07 minutes.
+
+No proteins recorded as failed.
+2026-02-09 17:35:41,307 - INFO - mmgbsa.pipeline - [mmgbsa.pipeline] action=skip reason=disabled
+2026-02-09 17:35:41,307 - INFO - dud-eval - [dud-eval.filter] pdb_id=TEST
+2026-02-09 17:35:41,307 - INFO - dud-eval - [dud-eval.run] cmd=/work2/11040/mpg2352/.mamba/envs/docking-env/bin/python /work2/11040/mpg2352/atlas/code/protein_automation/analysis/dud_eval.py --run-id 20260209_173537 --docked-root docked --out-dir analysis/dud_eval --pdb-id TEST
+2026-02-09 17:35:42,898 - INFO - dud-eval - [dud-eval.done] run_id=20260209_173537 returncode=0 out_root=analysis/dud_eval
+2026-02-09 17:35:42,899 - INFO - master-schema-export - [master-export.run] cmd=/work2/11040/mpg2352/.mamba/envs/docking-env/bin/python -m analysis.master_schema_export --run-id 20260209_173537 --repo-root /work2/11040/mpg2352/atlas/code/protein_automation --overwrite
+2026-02-09 17:35:42,962 - INFO - master-schema-export - [master-export.done] run_id=20260209_173537 returncode=0
+2026-02-09 17:35:42,962 - INFO - run-report-hook - [report.run] cmd=/work2/11040/mpg2352/.mamba/envs/docking-env/bin/python -m analysis.run_report --run-id 20260209_173537 --repo-root /work2/11040/mpg2352/atlas/code/protein_automation --overwrite
+2026-02-09 17:35:43,131 - WARNING - run-report-hook - [report.fail] run_id=20260209_173537 returncode=1
+2026-02-09 17:35:43,134 - WARNING - post-run-checks - [post-check.consensus] reason=missing_files run_id=20260209_173537
+2026-02-09 17:35:43,134 - WARNING - post-run-checks - [post-check.scorch] reason=missing_files run_id=20260209_173537
+Log -> /work2/11040/mpg2352/atlas/code/protein_automation/logs/main_20260209_173537.log

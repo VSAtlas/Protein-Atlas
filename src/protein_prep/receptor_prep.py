@@ -709,22 +709,31 @@ def run_prepare_receptor(
     else:
         meeko_cmd = None
         meeko_cmd_legacy = None
+
+    mgltools_python = str(
+        os.environ.get("MGLTOOLS_PYTHON")
+        or cfg.get("MGLTOOLS_PYTHON")
+        or _cfg("MGLTOOLS_PYTHON", "")
+    )
+    prepare_script = str(
+        os.environ.get("PREPARE_RECEPTOR_SCRIPT")
+        or cfg.get("PREPARE_RECEPTOR_SCRIPT")
+        or _cfg("PREPARE_RECEPTOR_SCRIPT", "")
+    )
     adt_cmd = None
     # Only attempt ADT if BOTH are explicitly configured and present
     if not (
-        MGLTOOLS_PYTHON
-        and Path(MGLTOOLS_PYTHON).is_file()
-        and os.access(MGLTOOLS_PYTHON, os.X_OK)
-        and PREPARE_RECEPTOR_SCRIPT
-        and Path(PREPARE_RECEPTOR_SCRIPT).is_file()
+        mgltools_python
+        and Path(mgltools_python).is_file()
+        and os.access(mgltools_python, os.X_OK)
+        and prepare_script
+        and Path(prepare_script).is_file()
     ):
         logging.info(
             "[receptor] ADT fallback disabled (missing MGLTOOLS_PYTHON or PREPARE_RECEPTOR_SCRIPT)"
         )
     else:
         # --- Step 3: ADT prepare_receptor4 fallback (only if both keys are valid)
-        mgltools_python = MGLTOOLS_PYTHON
-        prepare_script = PREPARE_RECEPTOR_SCRIPT
         if (
             mgltools_python
             and Path(mgltools_python).is_file()

@@ -87,7 +87,12 @@ def test_run_prepare_receptor_uses_adt_fallback_after_meeko_failure(tmp_path, mo
 
     monkeypatch.setattr(receptor_prep, "run_subprocess_capture", fake_run)
 
-    cfg = {"HIS_DEFAULT": "HIE", "MEEKO_ALLOW_BAD_RES": "true"}
+    cfg = {
+        "HIS_DEFAULT": "HIE",
+        "MEEKO_ALLOW_BAD_RES": "true",
+        "MGLTOOLS_PYTHON": str(fake_python),
+        "PREPARE_RECEPTOR_SCRIPT": str(fake_script),
+    }
     ok = receptor_prep.run_prepare_receptor(str(input_pdb), str(output_pdbqt), cfg)
 
     assert ok is True

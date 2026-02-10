@@ -177,6 +177,18 @@ No-library docking mode:
       but it will SKIP docking for DUD/FDA libraries. This is useful
       when you only want control validation and planned ligand lists.
 
+Artifact retention:
+  --retain
+      Force artifact retention on for this run.
+
+  --noretain
+      Force artifact retention off for this run.
+
+  --retainmode MODE
+      Force artifact retention mode. Allowed:
+        rerun_safe | minimal_disk
+      Cannot be combined with --noretain.
+
 Apo/holo and variants:
   The apo/holo mode and variant list are resolved from the YAML
   configuration (APO_HOLO_MODE) and possibly env variables. This
@@ -200,6 +212,14 @@ Environment variables (summary):
 
   NO_LIBRARY_DOCKING
       Fallback for --no-docking when CLI is not used.
+
+  ARTIFACT_RETENTION
+      Artifact retention mode:
+        rerun_safe | minimal_disk | off
+      Precedence: CLI (--retain/--noretain/--retainmode)
+                  > ENV (ARTIFACT_RETENTION)
+                  > CFG (ARTIFACT_RETENTION)
+                  > default (rerun_safe)
 
   SINGLE_LIGAND
       Fallback pattern for --single when no CLI arg is given.
@@ -254,6 +274,7 @@ import os
 import shutil
 import shlex
 import subprocess
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Mapping
@@ -279,6 +300,7 @@ from run_manifest import (
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from input_and_export_functions import (
     load_inputs,
@@ -336,6 +358,7 @@ from postrun_hooks import (
     _log_rescore_verification,
     _maybe_run_master_schema_export,
     _maybe_run_report_generation,
+    _maybe_run_artifact_retention_for_pdb,
 )
 
 # Install debug wrappers for Path.mkdir and os.makedirs at import time,
@@ -365,6 +388,62 @@ def _bench2_enabled(argv: list[str]) -> bool:
 def _dude_enabled(argv: list[str]) -> bool:
     """Check if -dude or --dude is present in arguments."""
     return _cli_has(argv, "-dude") or _cli_has(argv, "--dude")
+
+
+def _normalize_artifact_retention_mode(raw: Any) -> str:
+    token = str(raw or "").strip().lower().replace("-", "_")
+    if token in {"", "rerunsafe", "rerun_safe"}:
+        return "rerun_safe"
+    if token in {"minimaldisk", "minimal_disk"}:
+        return "minimal_disk"
+    if token in {"off", "none", "false", "0", "disabled", "disable"}:
+        return "off"
+    return "rerun_safe"
+
+
+def _resolve_artifact_retention_mode(
+    cfg: Mapping[str, Any], argv: list[str]
+) -> tuple[str, str]:
+    cli_retain = _cli_has(argv, "--retain")
+    cli_noretain = _cli_has(argv, "--noretain")
+    cli_has_mode = _cli_has(argv, "--retainmode")
+    cli_mode_raw = _cli_val(argv, "--retainmode")
+    if cli_has_mode and not cli_mode_raw:
+        print("ERROR: --retainmode requires a value", file=sys.stderr)
+        sys.exit(2)
+
+    if cli_noretain and (cli_retain or cli_mode_raw):
+        print(
+            "ERROR: --noretain cannot be combined with --retain or --retainmode",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if cli_mode_raw:
+        mode = _normalize_artifact_retention_mode(cli_mode_raw)
+        if mode == "off":
+            print(
+                "ERROR: --retainmode must be rerun_safe or minimal_disk",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        return mode, "CLI(--retainmode)"
+
+    if cli_noretain:
+        return "off", "CLI(--noretain)"
+
+    if cli_retain:
+        return "rerun_safe", "CLI(--retain)"
+
+    env_raw = os.environ.get("ARTIFACT_RETENTION")
+    if env_raw is not None and str(env_raw).strip():
+        return _normalize_artifact_retention_mode(env_raw), "ENV(ARTIFACT_RETENTION)"
+
+    cfg_raw = cfg.get("ARTIFACT_RETENTION")
+    if cfg_raw is not None and str(cfg_raw).strip():
+        return _normalize_artifact_retention_mode(cfg_raw), "CFG(ARTIFACT_RETENTION)"
+
+    return "rerun_safe", "DEFAULT"
 
 
 def _apply_bench_overrides(cfg: ConfigDict) -> None:
@@ -1380,6 +1459,13 @@ def main() -> None:
             "(controls-only; skip DUD/FDA docking, but still enumerate ligands)"
         )
 
+    # --- Artifact retention mode (CLI > ENV > CFG > default) ---
+    retention_mode, retention_source = _resolve_artifact_retention_mode(cfg, sys.argv)
+    cfg["ARTIFACT_RETENTION"] = retention_mode
+    print(
+        f"[config] ARTIFACT_RETENTION effective={retention_mode} source={retention_source}"
+    )
+
     # --- Center selection knobs (safe defaults) ---
     cfg.setdefault(
         "CENTER_MODE", "control-first"
@@ -1526,6 +1612,7 @@ def main() -> None:
     logging.info("[apo-holo] failed log directory: %s", failed_root)
 
     failed_entries = []  # (pdb_id, variant_label, log_path, exc_type, exc_msg)
+    retention_lock = threading.Lock()
 
     for variant in variants:
         # Make variant visible to any module still reading env (legacy compatibility)
@@ -1622,6 +1709,21 @@ def main() -> None:
                     except Exception:
                         logging.warning(
                             "Failed to update run_manifest for success of %s (%s)",
+                            pdb_id,
+                            label,
+                            exc_info=True,
+                        )
+
+                    try:
+                        _maybe_run_artifact_retention_for_pdb(
+                            cfg_for_pdb,
+                            run_id,
+                            pdb_id,
+                            lock=retention_lock,
+                        )
+                    except Exception:
+                        logging.warning(
+                            "[artifact-retention.hook] action=skip reason=unexpected_exception pdb_id=%s variant=%s",
                             pdb_id,
                             label,
                             exc_info=True,
@@ -1753,7 +1855,9 @@ def main() -> None:
         failed_lookup = {(entry[0], entry[1]) for entry in failed_entries}
         for variant in variants:
             label = "legacy" if variant is None else str(variant).lower()
-            variant_token = None if variant is None else str(variant).upper()
+            mmgbsa_variant_token: str | None = (
+                None if variant is None else str(variant).upper()
+            )
             legacy_mode = variant is None
             for pdb_file in pdb_files:
                 pdb_id = os.path.splitext(os.path.basename(pdb_file))[0].upper()
@@ -1763,7 +1867,7 @@ def main() -> None:
                     cfg,
                     pdb_file,
                     pdb_id,
-                    variant_token,
+                    mmgbsa_variant_token,
                     run_id,
                     test_mode,
                     legacy_mode,
