@@ -50,8 +50,6 @@ class GroupKey:
     pdb_id: str
     variant: str
     ph: str
-    stage_dir: str
-    mode: str
 
     def as_dict(self) -> Dict[str, str]:
         return {
@@ -60,14 +58,12 @@ class GroupKey:
             "pdb_id": self.pdb_id,
             "variant": self.variant,
             "ph": self.ph,
-            "stage_dir": self.stage_dir,
-            "mode": self.mode,
         }
 
     def group_id(self) -> str:
         return (
             f"run={self.run_id}|source={self.source_root}|pdb={self.pdb_id}|"
-            f"variant={self.variant}|ph={self.ph}|stage={self.stage_dir}|mode={self.mode}"
+            f"variant={self.variant}|ph={self.ph}"
         )
 
 
@@ -77,6 +73,8 @@ class CandidateFile:
     original_path: Path
     member_name: str
     file_type: str
+    stage_dir: str
+    mode: str
 
 
 @dataclass
@@ -251,24 +249,24 @@ def _parse_group_fields(
         ph = parts[idx]
         idx += 1
 
-    stage_dir = "root"
-    for piece in parts[idx:-1]:
-        if piece.lower().startswith("stage"):
-            stage_dir = piece
-            break
-    if stage_dir == "root" and len(parts) >= 2:
-        stage_dir = parts[-2]
-
-    mode = _infer_mode(parts)
     return GroupKey(
         run_id=run_id,
         source_root=source_root,
         pdb_id=pdb_id,
         variant=variant,
         ph=ph,
-        stage_dir=stage_dir,
-        mode=mode,
     )
+
+
+def _infer_stage_dir(parts: Sequence[str]) -> str:
+    stage_dir = "root"
+    for piece in parts[2:-1]:
+        if piece.lower().startswith("stage"):
+            stage_dir = piece
+            break
+    if stage_dir == "root" and len(parts) >= 2:
+        stage_dir = parts[-2]
+    return stage_dir
 
 
 def _hash_file(path: Path) -> str:
@@ -283,27 +281,37 @@ def _hash_file(path: Path) -> str:
 
 
 def _hash_files(paths: Sequence[Path], threads: int) -> Dict[Path, str]:
+    def _hash_one(path: Path) -> Tuple[Path, Optional[str]]:
+        try:
+            return path, _hash_file(path)
+        except OSError:
+            return path, None
+
     if threads <= 1 or len(paths) <= 1:
-        return {p: _hash_file(p) for p in paths}
+        out_single: Dict[Path, str] = {}
+        for p in paths:
+            _, sha = _hash_one(p)
+            if sha:
+                out_single[p] = sha
+        return out_single
 
     out: Dict[Path, str] = {}
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        for p, sha in zip(paths, pool.map(_hash_file, paths)):
-            out[p] = sha
+        for p, sha in pool.map(_hash_one, paths):
+            if sha:
+                out[p] = sha
     return out
 
 
-def _archive_group_paths(archive_root: Path, key: GroupKey) -> Tuple[Path, Path]:
+def _archive_group_path(archive_root: Path, key: GroupKey) -> Path:
     group_dir = (
         archive_root
         / _safe_token(key.source_root)
         / _safe_token(key.pdb_id)
         / _safe_token(key.variant)
         / _safe_token(key.ph)
-        / _safe_token(key.stage_dir)
-        / _safe_token(key.mode)
     )
-    return group_dir / _ARCHIVE_FILENAME, group_dir / _MANIFEST_FILENAME
+    return group_dir / _ARCHIVE_FILENAME
 
 
 def _write_tar(
@@ -382,31 +390,6 @@ def _verify_archive(
     return (len(errors) == 0), errors
 
 
-def _write_manifest(
-    manifest_path: Path,
-    *,
-    key: GroupKey,
-    archive_path: Path,
-    entries: Sequence[Dict[str, Any]],
-    verified: bool,
-    verify_errors: Sequence[str],
-) -> None:
-    payload = {
-        "schema_version": 1,
-        "generated_at": _utc_now(),
-        "group": key.as_dict(),
-        "group_id": key.group_id(),
-        "archive_path": str(archive_path),
-        "manifest_path": str(manifest_path),
-        "entry_count": len(entries),
-        "verified": bool(verified),
-        "verify_errors": list(verify_errors),
-        "entries": list(entries),
-    }
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
-
-
 def _load_manifest(manifest_path: Path) -> Dict[str, Any]:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -475,6 +458,8 @@ def _discover_candidates(
                 original_path=abs_path,
                 member_name=member_name,
                 file_type=_file_type(abs_path),
+                stage_dir=_infer_stage_dir(rel.parts),
+                mode=_infer_mode(rel.parts),
             )
             groups.setdefault(key, []).append(item)
 
@@ -521,38 +506,41 @@ def _collect_extra_minimal_disk_files(
     return out
 
 
-def _refresh_run_index(archive_root: Path, run_id: str, mode: str) -> None:
-    manifests = sorted(archive_root.rglob(_MANIFEST_FILENAME))
-    groups: List[Dict[str, Any]] = []
-    for manifest_path in manifests:
-        try:
-            data = _load_manifest(manifest_path)
-        except Exception:
-            continue
-        group = data.get("group") or {}
-        groups.append(
-            {
-                "group_id": data.get("group_id"),
-                "group": group,
-                "archive_path": data.get("archive_path"),
-                "manifest_path": str(manifest_path),
-                "entry_count": data.get("entry_count", 0),
-                "verified": bool(data.get("verified", False)),
-            }
-        )
+def _load_run_index(index_path: Path) -> Dict[str, Any]:
+    if not index_path.exists():
+        return {"schema_version": 2, "groups": []}
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"schema_version": 2, "groups": []}
+    if not isinstance(data, dict):
+        return {"schema_version": 2, "groups": []}
+    groups = data.get("groups")
+    if not isinstance(groups, list):
+        data["groups"] = []
+    return data
 
+
+def _write_run_index(
+    index_path: Path,
+    *,
+    run_id: str,
+    mode: str,
+    groups_map: Mapping[str, Dict[str, Any]],
+) -> None:
+    groups = [groups_map[k] for k in sorted(groups_map.keys())]
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": _utc_now(),
         "run_id": run_id,
         "mode": mode,
         "group_count": len(groups),
         "groups": groups,
     }
-    (archive_root / _INDEX_FILENAME).write_text(
-        json.dumps(payload, indent=2, sort_keys=False),
-        encoding="utf-8",
-    )
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = index_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
+    os.replace(tmp, index_path)
 
 
 def _build_entries(
@@ -564,20 +552,26 @@ def _build_entries(
     hashes = _hash_files(paths, threads=threads)
     entries: List[Dict[str, Any]] = []
     for f in files:
-        st = f.original_path.stat()
+        sha = hashes.get(f.original_path)
+        if not sha:
+            continue
+        try:
+            st = f.original_path.stat()
+        except OSError:
+            continue
         entry = {
             "run_id": f.key.run_id,
             "pdb_id": f.key.pdb_id,
             "variant": f.key.variant,
             "ph": f.key.ph,
-            "stage_dir": f.key.stage_dir,
-            "mode": f.key.mode,
+            "stage_dir": f.stage_dir,
+            "mode": f.mode,
             "original_path": str(f.original_path),
             "archive_path": str(archive_path),
             "member_name": f.member_name,
             "size_bytes": int(st.st_size),
             "mtime": float(st.st_mtime),
-            "sha256": hashes[f.original_path],
+            "sha256": sha,
             "file_type": f.file_type,
         }
         entries.append(entry)
@@ -606,6 +600,34 @@ def _resolve_run_roots(
     run_docked = docked_base if docked_base.name == run_id else docked_base / run_id
     run_post = post_base if post_base.name == run_id else post_base / run_id
     return docked_base, post_base, run_docked, run_post
+
+
+def _resolve_archive_path(raw_path: Any, base_dir: Path) -> Path:
+    p = Path(str(raw_path or "").strip()).expanduser()
+    if not p.is_absolute():
+        p = (base_dir / p).resolve()
+    else:
+        p = p.resolve()
+    return p
+
+
+def _build_group_record(
+    *,
+    key: GroupKey,
+    archive_path: Path,
+    entries: Sequence[Dict[str, Any]],
+    verified: bool,
+    verify_errors: Sequence[str],
+) -> Dict[str, Any]:
+    return {
+        "group_id": key.group_id(),
+        "group": key.as_dict(),
+        "archive_path": str(archive_path),
+        "entry_count": len(entries),
+        "verified": bool(verified),
+        "verify_errors": list(verify_errors),
+        "entries": list(entries),
+    }
 
 
 def _run_retention(args: argparse.Namespace) -> int:
@@ -670,41 +692,101 @@ def _run_retention(args: argparse.Namespace) -> int:
         logger.info("[artifact-retention.summary] %s", json.dumps(stats.as_dict(), sort_keys=True))
         return 0
 
+    index_path = archive_root / _INDEX_FILENAME
+    index_payload = _load_run_index(index_path)
+    index_groups_raw = index_payload.get("groups") or []
+    index_groups = index_groups_raw if isinstance(index_groups_raw, list) else []
+    groups_map: Dict[str, Dict[str, Any]] = {}
+    for item in index_groups:
+        if not isinstance(item, dict):
+            continue
+        group_id = str(item.get("group_id", "")).strip()
+        if not group_id:
+            continue
+        groups_map[group_id] = dict(item)
+
     if args.verify_only:
-        manifests = sorted(archive_root.rglob(_MANIFEST_FILENAME))
-        if not manifests:
-            logger.warning(
-                "[artifact-retention.verify] run_id=%s status=empty archive_root=%s",
-                run_id,
-                archive_root,
-            )
-        for manifest_path in manifests:
-            try:
-                payload = _load_manifest(manifest_path)
-            except Exception:
-                stats.groups_failed += 1
-                continue
-            archive_path = Path(str(payload.get("archive_path", "")))
-            entries = payload.get("entries") or []
-            if not archive_path.is_absolute():
-                archive_path = (manifest_path.parent / archive_path).resolve()
-            ok, verify_errors = _verify_archive(archive_path, entries)
-            if ok:
-                stats.groups_verified += 1
-                logger.info(
-                    "[artifact-retention.verify] status=ok manifest=%s archive=%s entries=%d",
-                    manifest_path,
-                    archive_path,
-                    len(entries),
+        if index_groups:
+            for item in index_groups:
+                if not isinstance(item, dict):
+                    continue
+                group_id = str(item.get("group_id", "")).strip() or "(missing_group_id)"
+                archive_path = _resolve_archive_path(item.get("archive_path", ""), archive_root)
+                entries = item.get("entries")
+                if not isinstance(entries, list):
+                    entries = []
+                if not entries:
+                    manifest_text = str(item.get("manifest_path", "")).strip()
+                    if manifest_text:
+                        try:
+                            manifest_payload = _load_manifest(Path(manifest_text).resolve())
+                            entries = manifest_payload.get("entries") or []
+                        except Exception:
+                            stats.groups_failed += 1
+                            logger.error(
+                                "[artifact-retention.verify] status=failed group_id=%s reason=legacy_manifest_unreadable",
+                                group_id,
+                            )
+                            continue
+                if not entries:
+                    stats.groups_skipped += 1
+                    logger.warning(
+                        "[artifact-retention.verify] status=skip group_id=%s reason=missing_entries",
+                        group_id,
+                    )
+                    continue
+                ok, verify_errors = _verify_archive(archive_path, entries)
+                if ok:
+                    stats.groups_verified += 1
+                    logger.info(
+                        "[artifact-retention.verify] status=ok group_id=%s archive=%s entries=%d",
+                        group_id,
+                        archive_path,
+                        len(entries),
+                    )
+                else:
+                    stats.groups_failed += 1
+                    logger.error(
+                        "[artifact-retention.verify] status=failed group_id=%s archive=%s errors=%s",
+                        group_id,
+                        archive_path,
+                        ";".join(verify_errors[:10]),
+                    )
+        else:
+            manifests = sorted(archive_root.rglob(_MANIFEST_FILENAME))
+            if not manifests:
+                logger.warning(
+                    "[artifact-retention.verify] run_id=%s status=empty archive_root=%s",
+                    run_id,
+                    archive_root,
                 )
-            else:
-                stats.groups_failed += 1
-                logger.error(
-                    "[artifact-retention.verify] status=failed manifest=%s archive=%s errors=%s",
-                    manifest_path,
-                    archive_path,
-                    ";".join(verify_errors[:10]),
-                )
+            for manifest_path in manifests:
+                try:
+                    payload = _load_manifest(manifest_path)
+                except Exception:
+                    stats.groups_failed += 1
+                    continue
+                archive_path = Path(str(payload.get("archive_path", "")))
+                entries = payload.get("entries") or []
+                if not archive_path.is_absolute():
+                    archive_path = (manifest_path.parent / archive_path).resolve()
+                ok, verify_errors = _verify_archive(archive_path, entries)
+                if ok:
+                    stats.groups_verified += 1
+                    logger.info(
+                        "[artifact-retention.verify] status=ok manifest=%s archive=%s entries=%d",
+                        manifest_path,
+                        archive_path,
+                        len(entries),
+                    )
+                else:
+                    stats.groups_failed += 1
+                    logger.error(
+                        "[artifact-retention.verify] status=failed manifest=%s archive=%s errors=%s",
+                        manifest_path,
+                        archive_path,
+                        ";".join(verify_errors[:10]),
+                    )
         logger.info("[artifact-retention.summary] %s", json.dumps(stats.as_dict(), sort_keys=True))
         return 0 if stats.groups_failed == 0 else 1
 
@@ -722,61 +804,89 @@ def _run_retention(args: argparse.Namespace) -> int:
 
     for key in sorted(groups.keys(), key=lambda k: k.group_id()):
         files = groups[key]
-        archive_path, manifest_path = _archive_group_paths(archive_root, key)
+        archive_path = _archive_group_path(archive_root, key)
         stats.groups_planned += 1
         discovered_members = {item.member_name for item in files}
+        existing = groups_map.get(key.group_id()) or {}
+        existing_entries_raw = existing.get("entries")
+        existing_entries = (
+            existing_entries_raw if isinstance(existing_entries_raw, list) else []
+        )
+        existing_members = {
+            str(entry.get("member_name", ""))
+            for entry in existing_entries
+            if isinstance(entry, dict)
+        }
+        existing_archive = _resolve_archive_path(
+            existing.get("archive_path", archive_path),
+            archive_root,
+        )
 
-        if (
-            not args.overwrite
-            and archive_path.exists()
-            and manifest_path.exists()
-        ):
-            try:
-                payload = _load_manifest(manifest_path)
-                manifest_entries = payload.get("entries") or []
-                manifest_members = {
-                    str(entry.get("member_name", ""))
-                    for entry in manifest_entries
-                    if isinstance(entry, dict)
-                }
-                manifest_matches = (
-                    len(manifest_entries) == len(files)
-                    and manifest_members == discovered_members
-                )
-                if bool(payload.get("verified", False)) and manifest_matches:
-                    stats.groups_skipped += 1
-                    stats.files_skipped += len(files)
-                    logger.info(
-                        "[artifact-retention.group] action=skip group_id=%s reason=already_archived_verified files=%d",
-                        key.group_id(),
-                        len(files),
-                    )
-                    continue
-                if bool(payload.get("verified", False)) and not manifest_matches:
-                    logger.warning(
-                        "[artifact-retention.group] action=rebuild group_id=%s reason=manifest_mismatch discovered=%d manifest=%d",
-                        key.group_id(),
-                        len(files),
-                        len(manifest_entries),
-                    )
-            except Exception:
+        if not args.overwrite and bool(existing.get("verified", False)) and existing_entries:
+            manifest_matches = (
+                len(existing_entries) == len(files)
+                and existing_members == discovered_members
+            )
+            if not existing_archive.exists():
                 logger.warning(
-                    "[artifact-retention.group] action=rebuild group_id=%s reason=manifest_unreadable",
+                    "[artifact-retention.group] action=rebuild group_id=%s reason=archive_missing",
                     key.group_id(),
                 )
-
-        entries = _build_entries(files, archive_path=archive_path, threads=max(1, int(args.threads)))
-        path_by_member = {item.member_name: item.original_path for item in files}
+            elif manifest_matches:
+                stats.groups_skipped += 1
+                stats.files_skipped += len(files)
+                logger.info(
+                    "[artifact-retention.group] action=skip group_id=%s reason=already_archived_verified files=%d",
+                    key.group_id(),
+                    len(files),
+                )
+                continue
+            else:
+                logger.warning(
+                    "[artifact-retention.group] action=rebuild group_id=%s reason=manifest_mismatch discovered=%d manifest=%d",
+                    key.group_id(),
+                    len(files),
+                    len(existing_entries),
+                )
 
         if args.dry_run:
             logger.info(
-                "[artifact-retention.group] action=dry_run_plan group_id=%s files=%d archive=%s manifest=%s",
+                "[artifact-retention.group] action=dry_run_plan group_id=%s files=%d archive=%s index=%s",
                 key.group_id(),
                 len(files),
                 archive_path,
-                manifest_path,
+                index_path,
             )
             continue
+
+        entries = _build_entries(
+            files,
+            archive_path=archive_path,
+            threads=max(1, int(args.threads)),
+        )
+        if len(entries) != len(files):
+            vanished = len(files) - len(entries)
+            if vanished > 0:
+                stats.files_skipped += vanished
+                logger.warning(
+                    "[artifact-retention.group] action=partial group_id=%s reason=files_missing_during_hash_or_stat discovered=%d stable=%d",
+                    key.group_id(),
+                    len(files),
+                    len(entries),
+                )
+        if not entries:
+            stats.groups_skipped += 1
+            logger.info(
+                "[artifact-retention.group] action=skip group_id=%s reason=no_stable_files",
+                key.group_id(),
+            )
+            continue
+        stable_members = {str(entry["member_name"]) for entry in entries}
+        path_by_member = {
+            item.member_name: item.original_path
+            for item in files
+            if item.member_name in stable_members
+        }
 
         archive_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_tar = archive_path.with_suffix(".tar.tmp")
@@ -784,15 +894,12 @@ def _run_retention(args: argparse.Namespace) -> int:
             tmp_tar.unlink()
         if archive_path.exists() and args.overwrite:
             archive_path.unlink()
-        if manifest_path.exists() and args.overwrite:
-            manifest_path.unlink()
 
         try:
             _write_tar(entries=entries, path_by_member=path_by_member, tar_path=tmp_tar)
             _compress_tar_to_zst(tmp_tar, archive_path=archive_path, threads=max(1, int(args.threads)))
             ok, verify_errors = _verify_archive(archive_path, entries)
-            _write_manifest(
-                manifest_path,
+            groups_map[key.group_id()] = _build_group_record(
                 key=key,
                 archive_path=archive_path,
                 entries=entries,
@@ -801,7 +908,7 @@ def _run_retention(args: argparse.Namespace) -> int:
             )
             if not ok:
                 stats.groups_failed += 1
-                stats.files_failed += len(files)
+                stats.files_failed += len(entries)
                 logger.error(
                     "[artifact-retention.group] status=failed group_id=%s reason=verify_failed errors=%s",
                     key.group_id(),
@@ -811,21 +918,28 @@ def _run_retention(args: argparse.Namespace) -> int:
 
             stats.groups_archived += 1
             stats.groups_verified += 1
-            stats.files_archived += len(files)
-            to_delete = [item.original_path for item in files]
+            stats.files_archived += len(entries)
+            to_delete = list(path_by_member.values())
             deleted, failed = _delete_files(to_delete)
             stats.files_deleted += deleted
             stats.files_failed += failed
             logger.info(
                 "[artifact-retention.group] status=ok group_id=%s archived=%d deleted=%d delete_failed=%d",
                 key.group_id(),
-                len(files),
+                len(entries),
                 deleted,
                 failed,
             )
         except Exception as exc:
+            groups_map[key.group_id()] = _build_group_record(
+                key=key,
+                archive_path=archive_path,
+                entries=entries,
+                verified=False,
+                verify_errors=[f"exception:{exc}"],
+            )
             stats.groups_failed += 1
-            stats.files_failed += len(files)
+            stats.files_failed += len(entries)
             logger.exception(
                 "[artifact-retention.group] status=failed group_id=%s reason=exception err=%s",
                 key.group_id(),
@@ -856,7 +970,12 @@ def _run_retention(args: argparse.Namespace) -> int:
         )
 
     if not args.dry_run:
-        _refresh_run_index(archive_root, run_id=run_id, mode=mode)
+        _write_run_index(
+            index_path,
+            run_id=run_id,
+            mode=mode,
+            groups_map=groups_map,
+        )
 
     logger.info("[artifact-retention.summary] %s", json.dumps(stats.as_dict(), sort_keys=True))
     return 0 if stats.groups_failed == 0 else 1
@@ -883,8 +1002,8 @@ def _is_restore_target_safe(
 
 def _restore_archive(
     archive_path: Path,
-    manifest_path: Path,
     *,
+    payload_label: str,
     payload: Mapping[str, Any],
     allowed_root_a: Path,
     allowed_root_b: Path,
@@ -892,7 +1011,7 @@ def _restore_archive(
 ) -> Tuple[int, int]:
     entries = payload.get("entries") or []
     if not isinstance(entries, list):
-        raise RuntimeError(f"invalid manifest entries: {manifest_path}")
+        raise RuntimeError(f"invalid restore entries: {payload_label}")
 
     restored = 0
     failed = 0
@@ -942,44 +1061,147 @@ def _restore_archive(
     return restored, failed
 
 
-def _resolve_restore_target(args: argparse.Namespace, run_id: Optional[str]) -> Tuple[Path, Path]:
-    if args.archive:
-        archive_path = Path(args.archive).resolve()
-        manifest_path = archive_path.with_suffix("").with_suffix(".manifest.json")
-        if archive_path.name.endswith(".tar.zst"):
-            manifest_path = archive_path.with_name(_MANIFEST_FILENAME)
-        if args.manifest:
-            manifest_path = Path(args.manifest).resolve()
-        return archive_path, manifest_path
-
-    if not args.restore_group or not run_id:
-        raise SystemExit("--restore requires --archive <path> or --restore-group <group-id> with --run-id")
-
-    repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parents[2]
+def _resolve_archive_root_for_run(args: argparse.Namespace, run_id: str) -> Path:
+    repo_root = (
+        Path(args.repo_root).resolve()
+        if args.repo_root
+        else Path(__file__).resolve().parents[2]
+    )
     cfg: Dict[str, Any] = {}
     try:
         cfg = dict(load_inputs())
     except Exception:
         cfg = {}
-
-    overall = Path(str(cfg.get("OVERALL_DIR", repo_root))).resolve()
-    docked_base = (
-        Path(args.docked_root).resolve()
-        if args.docked_root
-        else Path(str(cfg.get("DOCKED_DIR", overall / "docked"))).resolve()
+    _, _, run_docked, _ = _resolve_run_roots(
+        args,
+        repo_root=repo_root,
+        cfg=cfg,
+        run_id=run_id,
     )
-    run_docked = docked_base if docked_base.name == run_id else docked_base / run_id
-    archive_root = run_docked / _ARCHIVE_ROOT_NAME
-    index_path = archive_root / _INDEX_FILENAME
-    if not index_path.exists():
-        raise SystemExit(f"missing run-level index: {index_path}")
-    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-    for item in index_payload.get("groups", []):
-        if str(item.get("group_id")) == str(args.restore_group):
-            archive_path = Path(str(item.get("archive_path"))).resolve()
-            manifest_path = Path(str(item.get("manifest_path"))).resolve()
-            return archive_path, manifest_path
-    raise SystemExit(f"group not found in index: {args.restore_group}")
+    return run_docked / _ARCHIVE_ROOT_NAME
+
+
+def _infer_run_id_from_archive_path(archive_path: Path) -> Optional[str]:
+    parts = archive_path.resolve().parts
+    for root_name in ("docked", "post_docked"):
+        if root_name in parts:
+            idx = parts.index(root_name)
+            if idx + 1 < len(parts):
+                token = str(parts[idx + 1]).strip()
+                if token:
+                    return token
+    return None
+
+
+def _resolve_restore_payload(
+    args: argparse.Namespace,
+    run_id: Optional[str],
+) -> Tuple[Path, Dict[str, Any], str]:
+    if args.restore_group:
+        if not run_id:
+            raise SystemExit("--restore-group requires --run-id")
+        archive_root = _resolve_archive_root_for_run(args, run_id)
+        index_path = archive_root / _INDEX_FILENAME
+        if not index_path.exists():
+            raise SystemExit(f"missing run-level index: {index_path}")
+        index_payload = _load_run_index(index_path)
+        for item in index_payload.get("groups", []):
+            if str(item.get("group_id")) != str(args.restore_group):
+                continue
+            archive_path = _resolve_archive_path(item.get("archive_path", ""), archive_root)
+            entries = item.get("entries")
+            if isinstance(entries, list) and entries:
+                payload = {
+                    "group": item.get("group") or {},
+                    "group_id": item.get("group_id"),
+                    "archive_path": str(archive_path),
+                    "entries": entries,
+                }
+                return archive_path, payload, f"{index_path}#{args.restore_group}"
+            manifest_text = str(item.get("manifest_path", "")).strip()
+            if manifest_text:
+                manifest_path = Path(manifest_text).resolve()
+                if not manifest_path.exists():
+                    raise SystemExit(f"legacy manifest not found: {manifest_path}")
+                return archive_path, _load_manifest(manifest_path), str(manifest_path)
+            raise SystemExit(f"group has no restore metadata: {args.restore_group}")
+        raise SystemExit(f"group not found in index: {args.restore_group}")
+
+    if not args.archive:
+        raise SystemExit("--restore requires --archive <path> or --restore-group <group-id> with --run-id")
+
+    archive_path = Path(args.archive).resolve()
+    if args.manifest:
+        manifest_path = Path(args.manifest).resolve()
+        if not manifest_path.exists():
+            raise SystemExit(f"manifest not found: {manifest_path}")
+        return archive_path, _load_manifest(manifest_path), str(manifest_path)
+
+    candidate_run_id = run_id or _infer_run_id_from_archive_path(archive_path)
+    if candidate_run_id:
+        archive_root = _resolve_archive_root_for_run(args, candidate_run_id)
+        index_path = archive_root / _INDEX_FILENAME
+        if index_path.exists():
+            index_payload = _load_run_index(index_path)
+            archive_norm = archive_path.resolve()
+            for item in index_payload.get("groups", []):
+                item_archive = _resolve_archive_path(item.get("archive_path", ""), archive_root)
+                if item_archive != archive_norm:
+                    continue
+                entries = item.get("entries")
+                if isinstance(entries, list) and entries:
+                    payload = {
+                        "group": item.get("group") or {},
+                        "group_id": item.get("group_id"),
+                        "archive_path": str(archive_path),
+                        "entries": entries,
+                    }
+                    return archive_path, payload, f"{index_path}#{item.get('group_id')}"
+                manifest_text = str(item.get("manifest_path", "")).strip()
+                if manifest_text:
+                    manifest_path = Path(manifest_text).resolve()
+                    if manifest_path.exists():
+                        return archive_path, _load_manifest(manifest_path), str(manifest_path)
+
+    legacy_manifest = archive_path.with_name(_MANIFEST_FILENAME)
+    if legacy_manifest.exists():
+        return archive_path, _load_manifest(legacy_manifest), str(legacy_manifest)
+    raise SystemExit(
+        f"unable to resolve restore metadata for archive: {archive_path}; "
+        "use --manifest or --restore-group with --run-id"
+    )
+
+
+def _filter_restore_entries(
+    entries: Sequence[Dict[str, Any]],
+    *,
+    stage: Optional[str],
+    mode: Optional[str],
+    path_globs: Sequence[str],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    wanted_stage = str(stage or "").strip()
+    wanted_mode = str(mode or "").strip().lower()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if wanted_stage and str(entry.get("stage_dir", "")) != wanted_stage:
+            continue
+        entry_mode = str(entry.get("mode", "")).strip().lower()
+        if wanted_mode and entry_mode != wanted_mode:
+            continue
+        if path_globs:
+            member = str(entry.get("member_name", ""))
+            original = str(entry.get("original_path", ""))
+            matched = False
+            for pat in path_globs:
+                if fnmatch.fnmatch(member, pat) or fnmatch.fnmatch(original, pat):
+                    matched = True
+                    break
+            if not matched:
+                continue
+        out.append(entry)
+    return out
 
 
 def _run_restore(args: argparse.Namespace) -> int:
@@ -993,12 +1215,9 @@ def _run_restore(args: argparse.Namespace) -> int:
         return 1
 
     run_id = str(args.run_id or "").strip() or None
-    archive_path, manifest_path = _resolve_restore_target(args, run_id=run_id)
+    archive_path, payload, payload_label = _resolve_restore_payload(args, run_id=run_id)
     if not archive_path.exists():
         raise SystemExit(f"archive not found: {archive_path}")
-    if not manifest_path.exists():
-        raise SystemExit(f"manifest not found: {manifest_path}")
-    payload = _load_manifest(manifest_path)
     payload_run_id = _normalize_run_id(payload.get("group", {}).get("run_id") or "")
     if not payload_run_id:
         payload_run_id = _normalize_run_id(
@@ -1025,10 +1244,24 @@ def _run_restore(args: argparse.Namespace) -> int:
         run_id=effective_run_id,
     )
 
+    all_entries = payload.get("entries") or []
+    if not isinstance(all_entries, list):
+        raise SystemExit("restore payload has invalid entries")
+    selected_entries = _filter_restore_entries(
+        all_entries,
+        stage=args.restore_stage,
+        mode=args.restore_mode,
+        path_globs=list(args.restore_path_glob or []),
+    )
+    if not selected_entries:
+        raise SystemExit("no entries matched restore filters")
+    restore_payload = dict(payload)
+    restore_payload["entries"] = selected_entries
+
     restored, failed = _restore_archive(
         archive_path,
-        manifest_path,
-        payload=payload,
+        payload_label=payload_label,
+        payload=restore_payload,
         allowed_root_a=run_docked,
         allowed_root_b=run_post,
         logger=logger,
@@ -1036,7 +1269,8 @@ def _run_restore(args: argparse.Namespace) -> int:
     payload = {
         "action": "restore",
         "archive": str(archive_path),
-        "manifest": str(manifest_path),
+        "restore_source": payload_label,
+        "entries_selected": len(selected_entries),
         "restored": restored,
         "failed": failed,
     }
@@ -1074,11 +1308,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Glob exclude filter matched against archive member path (repeatable)",
     )
     ap.add_argument("--threads", type=int, default=max(1, os.cpu_count() or 1), help="Worker count for hashing/compression")
-    ap.add_argument("--verify-only", action="store_true", help="Verify existing archives/manifests only")
+    ap.add_argument("--verify-only", action="store_true", help="Verify existing archives from run index/manifests only")
     ap.add_argument("--restore", action="store_true", help="Restore files from one archive group")
     ap.add_argument("--archive", help="Archive file path for --restore")
     ap.add_argument("--manifest", help="Manifest JSON path for --restore (optional with --archive)")
     ap.add_argument("--restore-group", help="Group id from archive_index.json for --restore")
+    ap.add_argument("--restore-stage", help="Optional stage_dir filter when restoring")
+    ap.add_argument("--restore-mode", help="Optional mode filter when restoring")
+    ap.add_argument(
+        "--restore-path-glob",
+        action="append",
+        default=[],
+        help="Optional glob filter for member_name/original_path when restoring (repeatable)",
+    )
     ap.add_argument("--repo-root", help="Override repository root (defaults from this module path)")
     ap.add_argument("--docked-root", help="Override docked root (run-id appended unless already present)")
     ap.add_argument("--post-docked-root", help="Override post_docked root (run-id appended unless already present)")

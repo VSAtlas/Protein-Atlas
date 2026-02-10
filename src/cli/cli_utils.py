@@ -171,16 +171,13 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
             pass
 
     # --- QoL: --XIAP / -XIAP style (exact length, 4-char alnum) ---
-    blocked_qol_flags = {
-        "test",
-    }
+    # Keep -test/--test compatibility for smoke-test workflows where
+    # TEST is a real input PDB id. Longer flags like --test-fda are
+    # unaffected by the length checks below.
     for tok in argv:
         low = tok.lower()
         # don't treat command flags as PDB short-form tokens
         if low in ("fast", "-fast", "--fast", "-dude", "--dude"):
-            continue
-        norm = low.lstrip("-")
-        if norm in blocked_qol_flags:
             continue
         if (tok.startswith("--") and len(tok) == 6) or (
             tok.startswith("-") and len(tok) == 5

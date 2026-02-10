@@ -1,6 +1,7 @@
 """Common ligand prep helpers shared between bulk and crystal workflows."""
 
 import ctypes
+import importlib
 import logging
 import os
 import re
@@ -9,16 +10,11 @@ import subprocess
 import sys
 from ctypes import create_unicode_buffer, wintypes
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from types import ModuleType
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 from collections import defaultdict
 
-from pdb_fixer import (
-    assert_no_helium_in_pdbqt,
-    get_atom_rules,
-    rules_version,
-    scan_helium_counts,
-)
 from rdkit import Chem
 from input_and_export_functions import load_config
 
@@ -34,6 +30,35 @@ from prep_ligands.prep_ligands_bulk_sdf import _run_obabel
 
 logger = logging.getLogger(__name__)
 _SANITIZED_RUN = re.compile(r"(?:\.sanitized){2,}")
+_PDB_FIXER_MOD: ModuleType | None = None
+
+
+def _get_pdb_fixer() -> ModuleType:
+    global _PDB_FIXER_MOD
+    if _PDB_FIXER_MOD is None:
+        _PDB_FIXER_MOD = importlib.import_module("pdb_fixer")
+    return _PDB_FIXER_MOD
+
+
+def assert_no_helium_in_pdbqt(
+    lines: List[str], ligand_name: str
+) -> Tuple[List[str], int, str]:
+    return cast(
+        Tuple[List[str], int, str],
+        _get_pdb_fixer().assert_no_helium_in_pdbqt(lines, ligand_name),
+    )
+
+
+def get_atom_rules() -> Dict[str, Any]:
+    return cast(Dict[str, Any], _get_pdb_fixer().get_atom_rules())
+
+
+def rules_version() -> str:
+    return cast(str, _get_pdb_fixer().rules_version())
+
+
+def scan_helium_counts(lines: List[str]) -> int:
+    return cast(int, _get_pdb_fixer().scan_helium_counts(lines))
 
 
 def collapse_sanitized_tokens(name: str) -> str:
@@ -84,7 +109,11 @@ STANDARD_AMINO_ACIDS = {
 }
 
 try:
-    from chemdb.chem_alias_db import EXCLUDE_HET_IDS as EXCLUDE_CRYSTAL_ADDITIVES
+    _chem_alias_db = importlib.import_module("chemdb.chem_alias_db")
+    _exclude_ids = getattr(_chem_alias_db, "EXCLUDE_HET_IDS", None)
+    if _exclude_ids is None:
+        raise AttributeError("EXCLUDE_HET_IDS not found")
+    EXCLUDE_CRYSTAL_ADDITIVES = {str(x).upper() for x in _exclude_ids}
 except Exception as e:
     logging.warning(
         f"[prep_ligands_common] Failed to import EXCLUDE_HET_IDS from chemdb.chem_alias_db: {e}. "

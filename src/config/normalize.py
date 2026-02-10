@@ -20,6 +20,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "MGLTOOLS_PATH": ("MGLTOOLS_DIR",),
     "PYMOL_EXE": ("PYMOL_PATH",),
     "REDUCE_EXE": ("REDUCE_LOCAL_CANDIDATE",),
+    "SCORCH": ("SCORCH_SCRIPT",),
     "CPU": ("MAX_PARALLEL_JOBS",),
 }
 
@@ -218,7 +219,9 @@ def default_tools(base: Path) -> Dict[str, Any]:
         "PREPARE_RECEPTOR_SCRIPT": os.environ.get("PREPARE_RECEPTOR_SCRIPT")
         or which_or_exists(["prepare_receptor4.py"]),
         "P2RANK_PATH": shutil.which("prank") or "prank",
-        "SCORCH_SCRIPT": os.environ.get("SCORCH_SCRIPT") or scorch_script_default,
+        "SCORCH": os.environ.get("SCORCH")
+        or os.environ.get("SCORCH_SCRIPT")
+        or scorch_script_default,
         "SCORCH_ENV": os.environ.get("SCORCH_ENV") or "scorch-env",
     }
 
@@ -463,17 +466,15 @@ def _derive_mgltools(cfg: Dict[str, Any], explicit: set[str]) -> None:
     if not _is_blank(mgl_root):
         mgl_path = Path(str(mgl_root)).expanduser()
         cfg["MGLTOOLS_PATH"] = str(mgl_path)
-        # If user explicitly configured derived script paths, keep them; otherwise derive.
-        if "MGLTOOLS_PYTHON" not in explicit:
-            cfg["MGLTOOLS_PYTHON"] = str(mgl_path / "bin" / "pythonsh")
-        if "PREPARE_RECEPTOR_SCRIPT" not in explicit:
-            cfg["PREPARE_RECEPTOR_SCRIPT"] = str(
-                mgl_path
-                / "MGLToolsPckgs"
-                / "AutoDockTools"
-                / "Utilities24"
-                / "prepare_receptor4.py"
-            )
+        # Canonical behavior: derive ADT paths from MGLTOOLS_PATH for portability.
+        cfg["MGLTOOLS_PYTHON"] = str(mgl_path / "bin" / "pythonsh")
+        cfg["PREPARE_RECEPTOR_SCRIPT"] = str(
+            mgl_path
+            / "MGLToolsPckgs"
+            / "AutoDockTools"
+            / "Utilities24"
+            / "prepare_receptor4.py"
+        )
         if (
             "PREPARE_LIGAND_SCRIPT" not in explicit
             and "PREPARE_LIGAND4" not in explicit
@@ -489,15 +490,22 @@ def _derive_mgltools(cfg: Dict[str, Any], explicit: set[str]) -> None:
         if _is_blank(cfg.get("MGLTOOLS_PATH")) and mgl_explicit:
             cfg["MGLTOOLS_PATH"] = str(mgl_root).strip()
 
+    # Runtime env variables intentionally remain highest-priority overrides.
+    env_mgl_python = os.environ.get("MGLTOOLS_PYTHON") or os.environ.get("MGL_PYTHON")
+    if not _is_blank(env_mgl_python):
+        cfg["MGLTOOLS_PYTHON"] = env_mgl_python
+    env_prepare_receptor = os.environ.get("PREPARE_RECEPTOR_SCRIPT")
+    if not _is_blank(env_prepare_receptor):
+        cfg["PREPARE_RECEPTOR_SCRIPT"] = env_prepare_receptor
+
     if _is_blank(cfg.get("MGLTOOLS_PYTHON")):
         cfg["MGLTOOLS_PYTHON"] = (
-            os.environ.get("MGLTOOLS_PYTHON")
-            or os.environ.get("MGL_PYTHON")
+            env_mgl_python
             or shutil.which("pythonsh")
         )
     if _is_blank(cfg.get("PREPARE_RECEPTOR_SCRIPT")):
         cfg["PREPARE_RECEPTOR_SCRIPT"] = (
-            os.environ.get("PREPARE_RECEPTOR_SCRIPT")
+            env_prepare_receptor
             or shutil.which("prepare_receptor4.py")
         )
     if _is_blank(cfg.get("PREPARE_LIGAND_SCRIPT")):
@@ -594,6 +602,7 @@ def _repair_missing_tool_paths(cfg: Dict[str, Any]) -> None:
         "MGLTOOLS_PYTHON": "pythonsh",
         "PREPARE_RECEPTOR_SCRIPT": "prepare_receptor4.py",
         "PREPARE_LIGAND_SCRIPT": "prepare_ligand4.py",
+        "SCORCH": "scorch.py",
     }
     for key, binary in tool_keys.items():
         raw = cfg.get(key)

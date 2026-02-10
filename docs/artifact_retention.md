@@ -53,14 +53,17 @@ CSV outputs are always kept unarchived.
 ## Grouping and Manifest
 
 Archive key:
-- `run_id`, `source_root`, `pdb_id`, `variant`, `ph`, `stage_dir`, `mode`
+- `run_id`, `source_root`, `pdb_id`, `variant`, `ph`
 
 Each group has:
 - `artifacts.tar.zst`
-- `artifacts.manifest.json`
 
-Run-level index:
+Run-level manifest/index (single file per run):
 - `docked/<RUN_ID>/_artifact_archives/archive_index.json`
+
+The run-level index contains all group records and per-entry metadata
+(including `stage_dir` and `mode`), so per-archive manifests are no longer
+written for new runs.
 
 Manifest entry fields:
 - `run_id`, `pdb_id`, `variant`, `ph`, `stage_dir`, `mode`
@@ -83,8 +86,9 @@ Manifest entry fields:
 
 ## Safety and Edge Cases
 
-- Verified-manifest mismatch handling: if discovered files do not match verified manifest members, the group is rebuilt instead of skipped.
+- Verified-index mismatch handling: if discovered files do not match verified index members, the group is rebuilt instead of skipped.
 - Tool preflight: retention checks `tar`, `zstd`, and `tar --zstd` support before any archive/delete work. On failure, it skips safely.
+- Legacy compatibility: verify/restore can still read old per-archive manifests.
 - Restore hardening:
   - rejects empty targets
   - rejects directory targets
@@ -113,6 +117,9 @@ Useful flags:
 - `--verify-only`
 - `--restore --archive <path>`
 - `--restore --run-id <RUN_ID> --restore-group <group-id>`
+- `--restore-stage <stage_dir>`
+- `--restore-mode <mode>`
+- `--restore-path-glob <glob>` (repeatable)
 
 ## Restore
 
@@ -130,5 +137,5 @@ By group id:
 python -m post_docking.artifact_retention \
   --restore \
   --run-id <RUN_ID> \
-  --restore-group "run=<RUN_ID>|source=docked|pdb=...|variant=...|ph=...|stage=...|mode=..."
+  --restore-group "run=<RUN_ID>|source=docked|pdb=...|variant=...|ph=..."
 ```

@@ -32,6 +32,7 @@
 **Log Rules:** Do NOT read raw logs. Use the summarizer.
 * **Crash Scan:** `python analysis/summarize_run_errors.py <RUN_ID> --recent-hours 48 --top 5`
 * **Deep Scan:** `python analysis/summarize_run_errors.py <RUN_ID> --deep --top 10`
+** If you find a bug, add a regression test to replicate it. Then fix the bug, run the regression test to ensure it passes.
 
 **Data Rules:** Do NOT `cat` CSVs.
 * **Inspect:** `csvstat <file>` (Stats/Columns) or `csvlook <file> | head` (Table View).

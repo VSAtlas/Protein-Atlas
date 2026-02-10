@@ -118,3 +118,6 @@ prepped_ligands.tar.zst
 
 # local runtime config
 config.txt
+
+# large ligand archive
+prepped_ligands.tar.zst

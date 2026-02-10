@@ -367,8 +367,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threads",
         type=int,
-        default=16,
-        help="Threads passed to SCORCH (default: 16)",
+        default=1,
+        help="Threads passed to SCORCH (default: 1)",
     )
     parser.add_argument(
         "--jobs",
@@ -441,7 +441,7 @@ def _preflight(cfg: Dict[str, object], logger: logging.Logger) -> bool:
         )
         return False
 
-    script_cfg = cfg.get("SCORCH_SCRIPT")
+    script_cfg = cfg.get("SCORCH") or cfg.get("SCORCH_SCRIPT")
     env_cfg = cfg.get("SCORCH_ENV")
 
     if script_cfg:
@@ -452,7 +452,7 @@ def _preflight(cfg: Dict[str, object], logger: logging.Logger) -> bool:
 
     if not SCORCH_SCRIPT:
         logger.error(
-            "%s action=preflight status=failed reason=missing_scorch_script_cfg",
+            "%s action=preflight status=failed reason=missing_scorch_cfg",
             COMPONENT,
         )
         return False
@@ -2082,6 +2082,28 @@ def main() -> int:
             args.run_id,
         )
         return 0
+
+    try:
+        cpu_threads = max(1, int(cfg.get("CPU", os.cpu_count() or 1)))
+    except Exception:
+        cpu_threads = max(1, os.cpu_count() or 1)
+    if args.threads != 1:
+        logger.info(
+            "%s action=threads source=CPU requested=%d effective=%d",
+            COMPONENT,
+            args.threads,
+            1,
+        )
+    args.threads = 1
+    if args.jobs != cpu_threads:
+        logger.info(
+            "%s action=jobs source=CPU cpu=%d requested=%d effective=%d",
+            COMPONENT,
+            cpu_threads,
+            args.jobs,
+            cpu_threads,
+        )
+    args.jobs = cpu_threads
 
     if not _preflight(cfg, logger):
         return 1

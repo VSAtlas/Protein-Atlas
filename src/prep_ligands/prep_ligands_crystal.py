@@ -4,15 +4,11 @@ import re
 import shutil
 import subprocess
 import contextlib
+import importlib
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from types import ModuleType
+from typing import Any, Callable, Dict, List, Optional, Set, cast
 
-from pdb_fixer import (
-    assert_no_helium_in_hydrogen_names,
-    fix_pdb_elements,
-    fix_element_columns_in_file,
-    rules_version,
-)
 from rdkit import Chem, rdBase
 
 from prep_ligands.prep_ligands_common import (
@@ -49,6 +45,40 @@ from prep_ligands.prep_ligands_common import (
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.+-]+")
 _EXTRACTED_LIGAND_NAME_EXCLUDES = ("nolig", "phenix_clean", "phenix-clean")
+_PDB_FIXER_MOD: ModuleType | None = None
+
+
+def _get_pdb_fixer() -> ModuleType:
+    global _PDB_FIXER_MOD
+    if _PDB_FIXER_MOD is None:
+        _PDB_FIXER_MOD = importlib.import_module("pdb_fixer")
+    return _PDB_FIXER_MOD
+
+
+def assert_no_helium_in_hydrogen_names(text: str) -> tuple[str, int]:
+    return cast(
+        tuple[str, int],
+        _get_pdb_fixer().assert_no_helium_in_hydrogen_names(text),
+    )
+
+
+def fix_pdb_elements(path: str) -> None:
+    _get_pdb_fixer().fix_pdb_elements(path)
+
+
+def fix_element_columns_in_file(path: str, rewrite_atoms: bool = False) -> None:
+    _get_pdb_fixer().fix_element_columns_in_file(path, rewrite_atoms=rewrite_atoms)
+
+
+def rules_version() -> str:
+    return cast(str, _get_pdb_fixer().rules_version())
+
+
+def _write_mol2_via_rdkit(mol: Chem.Mol, out_path: Path) -> None:
+    writer = getattr(Chem, "MolToMol2File", None)
+    if not callable(writer):
+        raise AttributeError("RDKit MolToMol2File is unavailable in this build")
+    cast(Callable[[Any, str], None], writer)(mol, str(out_path))
 
 
 def _rdkit_quiet_logs():
@@ -181,19 +211,18 @@ def prep_ligands_from_pdb(
         if p.suffix.lower() == ".pdb" and p.exists():
             direct_paths.append(p.resolve())
 
+    missing: Set[str] = set()
     if direct_paths:
         pdb_files = sorted(set(direct_paths))
         print(
             f"[ligprep-extracted] direct-path mode count={len(pdb_files)} keep={','.join(p.stem for p in pdb_files)}"
         )
-        missing = set()  # nothing to match; we used the paths verbatim
     else:
         # Fall back to recursive discovery under the configured root
         pdb_files = sorted(root.rglob("*.pdb"))
         logging.info(f"Found {len(pdb_files)} PDB ligand file(s) under {root}")
 
         # If subset requested by name/stem, filter against discovered set
-        missing: Set[str] = set()
         if requested_only:
             by_stem: Dict[str, List[Path]] = {}
             by_name: Dict[str, List[Path]] = {}
@@ -255,7 +284,7 @@ def prep_ligands_from_pdb(
 
     if not mgltools_python or not mgltools_path or not obabel_exe_cfg:
         raise RuntimeError(
-            "Missing paths in config.txt: MGLTOOLS_PYTHON, MGLTOOLS_PATH, OPENBABEL_PATH"
+            "Missing required tool paths: MGLTOOLS_PATH and OPENBABEL_PATH (MGLTOOLS_PYTHON is derived from MGLTOOLS_PATH)"
         )
 
     obabel_exe = obabel_exe_cfg
@@ -433,7 +462,7 @@ def prep_ligands_from_pdb(
         try:
             pre_txt = sanitized.read_text(encoding="utf-8", errors="ignore")
         except Exception:
-            pre_txt = None
+            pre_txt = ""
         try:
             fix_element_columns_in_file(str(sanitized), rewrite_atoms=False)
             fixed_txt, nname = assert_no_helium_in_hydrogen_names(
@@ -441,11 +470,16 @@ def prep_ligands_from_pdb(
             )
             if nname > 0:
                 sanitized.write_text(fixed_txt, encoding="utf-8")
+            post_txt = (
+                fixed_txt
+                if nname > 0
+                else sanitized.read_text(encoding="utf-8", errors="ignore")
+            )
             _log_elem_fix_summary(
                 sanitized,
                 stage="preflight",
                 before_text=pre_txt,
-                after_text=fixed_txt if nname > 0 else None,
+                after_text=post_txt,
             )
         except Exception as e:
             logging.warning(f"[elements] preflight failed for {sanitized.name}: {e}")
@@ -473,10 +507,12 @@ def prep_ligands_from_pdb(
                             Chem.SanitizeMol(m_chk)
                         except Exception:
                             pass
-                        reason = _matches_counterion(m_chk) or (
-                            _looks_like_buffer_salt(m_chk) and "buffer_like"
-                        )
-                        if reason:
+                        counterion_reason = _matches_counterion(m_chk)
+                        if counterion_reason:
+                            reason = counterion_reason
+                            flag_buffer = True
+                        elif _looks_like_buffer_salt(m_chk):
+                            reason = "buffer_like"
                             flag_buffer = True
                         if (
                             not flag_buffer
@@ -626,7 +662,7 @@ def prep_ligands_from_pdb(
                 except Exception:
                     pass
                 protoA = sanitized.with_suffix(".protoA.mol2")
-                Chem.MolToMol2File(mH, str(protoA))
+                _write_mol2_via_rdkit(mH, protoA)
                 if protoA.exists() and protoA.stat().st_size > 100:
                     proto_mol2 = str(protoA)
                     h_strategy_label.append("RDKit-AddHs")
@@ -658,10 +694,10 @@ def prep_ligands_from_pdb(
                 if p.exists() and p.stat().st_size > 100:
                     cands.append((p, _count_explicit_H_in_mol2(p)))
             if cands:
-                best, bestH = max(cands, key=lambda t: t[1])
+                best, best_h_count = max(cands, key=lambda t: t[1])
                 proto_mol2 = str(best)
                 logging.info(
-                    f"[choose-mol2] picked={best.name} H={bestH} "
+                    f"[choose-mol2] picked={best.name} H={best_h_count} "
                     f"others={[(x[0].name, x[1]) for x in cands]}"
                 )
             else:
@@ -683,16 +719,16 @@ def prep_ligands_from_pdb(
 
             proto_mol2 = ""
             mol2_for_mgl_path: Path | None = None
-            bestH: int = -1
+            selected_h_count: int = -1
 
             if cands_paths:
                 counts = [(p, _count_explicit_H_in_mol2(p)) for p in cands_paths]
-                mol2_for_mgl_path, bestH = max(counts, key=lambda t: t[1])
+                mol2_for_mgl_path, selected_h_count = max(counts, key=lambda t: t[1])
                 proto_mol2 = str(mol2_for_mgl_path)
                 logging.info(
                     "[choose-mol2] picked=%s H=%s others=%s",
                     mol2_for_mgl_path.name,
-                    bestH,
+                    selected_h_count,
                     [(p.name, h) for p, h in counts],
                 )
             else:
@@ -765,7 +801,7 @@ def prep_ligands_from_pdb(
                     "[std:extracted] standardization skipped due to error: %s", e
                 )
 
-            ok_write, status = _prepare_one(
+            _prepared_name, status = _prepare_one(
                 mgltools_python_short,
                 prepare_script_short,
                 Path(proto_mol2),

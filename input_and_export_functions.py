@@ -151,6 +151,7 @@ _ALLOWED_ENV_OVERRIDES = {
     # DOCK6 follow-up toggle
     "USE_DOCK6",
     # SCORCH rescoring knobs
+    "SCORCH",
     "SCORCH_SCRIPT",
     "SCORCH_ENV",
     # MMGBSA receptor prep knobs

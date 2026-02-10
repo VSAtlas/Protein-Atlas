@@ -100,17 +100,7 @@ def _maybe_run_scorch_rescore(
     total_cpu = max(1, total_cpu)
 
     jobs = total_cpu
-    threads = max(1, total_cpu // jobs)
-
-    scorch_jobs = cfg.get("SCORCH_JOBS")
-    scorch_threads = cfg.get("SCORCH_THREADS")
-    if scorch_jobs is not None:
-        jobs = max(1, min(_as_int(scorch_jobs, jobs), total_cpu))
-        threads = max(1, total_cpu // jobs)
-    if scorch_threads is not None:
-        threads = max(1, min(_as_int(scorch_threads, threads), total_cpu))
-        if jobs * threads > total_cpu:
-            threads = max(1, total_cpu // jobs)
+    threads = 1
 
     cmd = [
         sys.executable,
@@ -204,15 +194,8 @@ def _maybe_run_scorch_rescore_for_pdb(
         1,
         _as_int(cfg.get("CPU") or (os.cpu_count() or 1), os.cpu_count() or 1),
     )
-    jobs = 1
-    if cfg.get("SCORCH_JOBS") is not None:
-        jobs = max(1, min(_as_int(cfg.get("SCORCH_JOBS"), jobs), total_cpu))
-
-    threads_cfg = cfg.get("SCORCH_THREADS")
-    threads = total_cpu if threads_cfg is None else _as_int(threads_cfg, total_cpu)
-    threads = max(1, min(threads, total_cpu))
-    if jobs * threads > total_cpu:
-        threads = max(1, total_cpu // jobs)
+    jobs = total_cpu
+    threads = 1
 
     cmd = [
         sys.executable,
@@ -455,15 +438,11 @@ def _invoke_artifact_retention(
     include_globs = _to_globs(cfg.get("ARTIFACT_RETENTION_INCLUDE_GLOB"))
     exclude_globs = _to_globs(cfg.get("ARTIFACT_RETENTION_EXCLUDE_GLOB"))
 
-    threads_raw = cfg.get("ARTIFACT_RETENTION_THREADS")
+    threads_raw = cfg.get("CPU")
     try:
-        threads = (
-            max(1, int(threads_raw))
-            if threads_raw is not None
-            else max(1, os.cpu_count() or 1)
-        )
+        threads = max(1, int(threads_raw)) if threads_raw is not None else 1
     except Exception:
-        threads = max(1, os.cpu_count() or 1)
+        threads = 1
 
     repo_root = Path(__file__).resolve().parent
     cmd = [

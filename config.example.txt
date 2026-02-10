@@ -8,6 +8,7 @@ P2RANK_PATH=prank
 
 # MGLTools / AutoDockTools
 MGLTOOLS_PATH=
+# MGLTOOLS_PYTHON and PREPARE_RECEPTOR_SCRIPT are derived from MGLTOOLS_PATH.
 ADFRSUITE_BIN=
 
 # Phenix
