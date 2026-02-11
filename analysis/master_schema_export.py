@@ -9,26 +9,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-try:
-    from analysis.fda_name_map import (
-        resolve_ligand_display_name,
-        resolve_mapping_csv_path,
-        try_load_fda_index,
-    )
-    from analysis.manifest_utils import extract_pocket, load_run_manifest
-except ModuleNotFoundError:
-    REPO_ROOT = Path(__file__).resolve().parents[1]
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    SRC_ROOT = REPO_ROOT / "src"
-    if str(SRC_ROOT) not in sys.path:
-        sys.path.insert(0, str(SRC_ROOT))
-    from analysis.fda_name_map import (
-        resolve_ligand_display_name,
-        resolve_mapping_csv_path,
-        try_load_fda_index,
-    )
-    from analysis.manifest_utils import extract_pocket, load_run_manifest
+from analysis.fda_name_map import (
+    resolve_ligand_display_name,
+    resolve_mapping_csv_path,
+    try_load_fda_index,
+)
+from analysis.manifest_utils import extract_pocket, load_run_manifest
 
 # Try to import canonical_ligand_base from rescore_reranker
 try:
@@ -91,11 +77,7 @@ def _read_csv_rows(path: Path) -> List[Dict[str, str]]:
 
 def _strip_quotes(value: str) -> str:
     stripped = str(value or "").strip()
-    if (
-        len(stripped) >= 2
-        and stripped[0] == stripped[-1]
-        and stripped[0] in ("'", '"')
-    ):
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ("'", '"'):
         return stripped[1:-1].strip()
     return stripped
 
@@ -216,9 +198,7 @@ def _resolve_test_mode_tokens(repo_root: Path, run_id: str) -> List[str]:
     return ["fda"]
 
 
-def _infer_decoy_prefix_from_tokens(
-    decoy_prefix: str, tokens: List[str]
-) -> str:
+def _infer_decoy_prefix_from_tokens(decoy_prefix: str, tokens: List[str]) -> str:
     if decoy_prefix and decoy_prefix != DECOY_PREFIX_DEFAULT:
         return decoy_prefix
     if "dud" in tokens:
@@ -485,8 +465,8 @@ def _get_pocket_info(
         proteins = manifest.get("proteins", {}) or {}
         entry = proteins.get(pdb_id) or proteins.get(pdb_id.upper())
         if isinstance(entry, dict):
-            details = entry.get("stages", {}).get("pocket_detection", {}).get(
-                "details", {}
+            details = (
+                entry.get("stages", {}).get("pocket_detection", {}).get("details", {})
             )
             pocket = {
                 "method": details.get("method") or details.get("pocket_method"),
@@ -559,9 +539,7 @@ def _load_posebusters_map(
             lig_file = row.get("ligand_file", "")
             if not lig_file:
                 continue
-            base = _canonical_ligand_base_with_prefix(
-                Path(lig_file).stem, decoy_prefix
-            )
+            base = _canonical_ligand_base_with_prefix(Path(lig_file).stem, decoy_prefix)
             if not base:
                 continue
             ligand_groups.setdefault(base, []).append(row)
@@ -1050,9 +1028,7 @@ def main() -> int:
     fdr_summary_rows: List[Dict[str, Any]] = []
     for (pdb_id, variant, ph), indices in combo_indices.items():
         combo_dir = post_root / run_id / pdb_id / variant / ph
-        primary_decoy_path = (
-            combo_dir / f"{decoy_prefix}_consensus_reranked_scorch.csv"
-        )
+        primary_decoy_path = combo_dir / f"{decoy_prefix}_consensus_reranked_scorch.csv"
         legacy_decoy_path = combo_dir / "dud_consensus_reranked_scorch.csv"
         fallback_rows = [master_rows[i] for i in indices]
         (
@@ -1074,9 +1050,7 @@ def main() -> int:
 
         if used_fallback:
             log_path = (
-                primary_decoy_path
-                if primary_decoy_path.exists()
-                else legacy_decoy_path
+                primary_decoy_path if primary_decoy_path.exists() else legacy_decoy_path
             )
             logger.warning(
                 "%s action=fdr_decoy_fallback pdb=%s variant=%s ph=%s path=%s reason=%s",
@@ -1091,9 +1065,7 @@ def main() -> int:
         field_for_rows = field or "consensus_score"
 
         non_decoy_indices = [
-            idx
-            for idx in indices
-            if not _row_is_decoy(master_rows[idx], decoy_prefix)
+            idx for idx in indices if not _row_is_decoy(master_rows[idx], decoy_prefix)
         ]
         for idx in non_decoy_indices:
             master_rows[idx]["fdr_score_field"] = field_for_rows

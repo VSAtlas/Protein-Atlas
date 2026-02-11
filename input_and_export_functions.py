@@ -408,6 +408,104 @@ def load_config(
     return cfg
 
 
+def _selection_pct_error(config_key: str, details: str) -> ValueError:
+    return ValueError(
+        f"{config_key}: {details}. "
+        "Use comma-separated values as either fractions (e.g. 1.0,0.15,0.10) "
+        "or percents (e.g. 100,15,10 or 100%,15%,10%). "
+        "Do not mix unsuffixed fraction and percent scales in one list."
+    )
+
+
+def _parse_selection_pct_list(raw_val: Any, config_key: str) -> list[float]:
+    if isinstance(raw_val, str):
+        text = raw_val.strip()
+        if not text:
+            return []
+        tokens = [tok.strip() for tok in text.split(",")]
+    elif isinstance(raw_val, (list, tuple)):
+        if not raw_val:
+            return []
+        tokens = [str(tok).strip() for tok in raw_val]
+    else:
+        raise _selection_pct_error(
+            config_key,
+            f"expected comma-separated string/list, got {type(raw_val).__name__}",
+        )
+
+    if any(tok == "" for tok in tokens):
+        raise _selection_pct_error(config_key, "contains empty token")
+
+    parsed: list[float] = []
+    unsuffixed_scales: set[str] = set()
+    saw_explicit_percent = False
+    saw_unsuffixed_fraction = False
+
+    for idx, token in enumerate(tokens, start=1):
+        explicit_percent = token.endswith("%")
+        num_text = token[:-1].strip() if explicit_percent else token
+        try:
+            value = float(num_text)
+        except Exception as exc:
+            raise _selection_pct_error(
+                config_key, f"token #{idx} '{token}' is not numeric ({exc})"
+            ) from exc
+
+        if not math.isfinite(value):
+            raise _selection_pct_error(config_key, f"token #{idx} '{token}' is NaN/inf")
+        if value <= 0.0:
+            raise _selection_pct_error(
+                config_key, f"token #{idx} '{token}' must be > 0"
+            )
+
+        if explicit_percent:
+            saw_explicit_percent = True
+            if value > 100.0:
+                raise _selection_pct_error(
+                    config_key, f"token #{idx} '{token}' percent exceeds 100"
+                )
+            parsed.append(value / 100.0)
+            continue
+
+        if value <= 1.0:
+            unsuffixed_scales.add("fraction")
+            saw_unsuffixed_fraction = True
+            parsed.append(value)
+        elif value <= 100.0:
+            unsuffixed_scales.add("percent")
+            parsed.append(value / 100.0)
+        else:
+            raise _selection_pct_error(
+                config_key, f"token #{idx} '{token}' exceeds maximum of 100"
+            )
+
+    if len(unsuffixed_scales) > 1:
+        raise _selection_pct_error(
+            config_key, f"mixed unsuffixed scales are ambiguous (raw={raw_val!r})"
+        )
+    if saw_explicit_percent and saw_unsuffixed_fraction:
+        raise _selection_pct_error(
+            config_key,
+            "cannot mix explicit % tokens with unsuffixed fraction tokens (e.g. 100%,0.1 is ambiguous; use 0.1% or 10%)",
+        )
+    return parsed
+
+
+def _validate_selection_schedule_config(cfg: Dict[str, Any]) -> None:
+    for key in ("DISCOVERY_SELECTION_PCTS", "POLYPHARM_SELECTION_PCTS"):
+        raw = cfg.get(key)
+        if raw in (None, "", [], ()):
+            continue
+        parsed = _parse_selection_pct_list(raw, key)
+        if not parsed:
+            raise _selection_pct_error(key, "no values provided")
+        if not math.isclose(parsed[0], 1.0, rel_tol=0.0, abs_tol=1e-12):
+            raise _selection_pct_error(
+                key,
+                f"first value must resolve to 1.0 (100%) because stage1 always runs on the full ligand pool (got {parsed[0]:.12g})",
+            )
+
+
 def validate_config(cfg: Dict[str, Any]):
     """
     Require OVERALL_DIR and INPUT_DIR to exist.
@@ -454,6 +552,8 @@ def validate_config(cfg: Dict[str, Any]):
             raise FileNotFoundError(
                 f"Could not create directory for {path_key}: {p} ({e})"
             )
+
+    _validate_selection_schedule_config(cfg)
 
 
 def init_config_run_dir(cfg, run_id=None, reset=None, logger=None):

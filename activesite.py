@@ -43,8 +43,12 @@ from pocket_policy import select_pocket  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
-# Load config
-config = load_config()
+def _load_runtime_config() -> dict:
+    try:
+        cfg = load_config() or {}
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
 
 
 def _default_variant(cfg):
@@ -209,6 +213,7 @@ def main(pdb_file):
         pdb_file,
     )
 
+    config = _load_runtime_config()
     paths = make_paths(config, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
 
     variant = _default_variant(config)
@@ -300,9 +305,7 @@ def main(pdb_file):
                             paths.nolig_pdb_path,
                         )
                     except Exception as exc:
-                        logger.warning(
-                            "[pocket-eval] nolig copy failed: %s", exc
-                        )
+                        logger.warning("[pocket-eval] nolig copy failed: %s", exc)
                 if not receptor_pdbqt_path.exists():
                     logger.info(
                         "[pocket-eval] receptor_missing; preparing receptor pdb=%s",
@@ -367,9 +370,7 @@ def main(pdb_file):
                                     second.get("multi_pocket_detected"),
                                 )
                             except Exception as exc:
-                                logger.warning(
-                                    "[pocket-second-pass] failed: %s", exc
-                                )
+                                logger.warning("[pocket-second-pass] failed: %s", exc)
                         else:
                             logger.warning(
                                 "[pocket-eval] missing_override center=%s box=%s",

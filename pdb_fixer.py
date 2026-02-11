@@ -1,7 +1,7 @@
 import os
 import re
 import logging
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import (
     Any,
@@ -22,32 +22,41 @@ from installation import load_config
 
 logger = logging.getLogger(__name__)
 
-# Load config
-config = load_config()
-
 BASE_DIR = Path(__file__).resolve().parent
 
-ALIASES_PATH = (
-    config.get("ALIASES_PATH")
-    or os.environ.get("ALIASES_YAML")
-    or str(BASE_DIR / "aliases.yaml")
-)
+_aliases_cache = None
+_aliases_cache_path: str | None = None
+_rules_cache = None
+_rules_cache_path: str | None = None
 
-# if not found, try canonical chemdb/aliases.yaml automatically
-if not os.path.exists(ALIASES_PATH):
+
+def _resolve_aliases_path() -> str:
+    cfg = {}
+    try:
+        loaded = load_config() or {}
+        if isinstance(loaded, dict):
+            cfg = loaded
+    except Exception:
+        cfg = {}
+
+    configured = cfg.get("ALIASES_PATH") or os.environ.get("ALIASES_YAML")
+    if configured:
+        configured_path = Path(str(configured)).expanduser()
+        if configured_path.exists():
+            return str(configured_path)
+
     for candidate in (
+        BASE_DIR / "aliases.yaml",
         BASE_DIR / "chemdb" / "aliases.yaml",
         BASE_DIR / "activesite" / "aliases.yaml",
         BASE_DIR / "activesite" / "chemdb" / "aliases.yaml",
         BASE_DIR.parent / "chemdb" / "aliases.yaml",
     ):
-        try_path = candidate.resolve() if hasattr(candidate, "resolve") else candidate
-        if Path(try_path).exists():
-            ALIASES_PATH = str(try_path)
-            break
+        if candidate.exists():
+            return str(candidate.resolve())
 
-_aliases_cache = None
-_rules_cache = None
+    # Return the canonical local default even if missing for clear diagnostics.
+    return str((BASE_DIR / "aliases.yaml").resolve())
 
 
 class AliasSets(NamedTuple):
@@ -245,7 +254,7 @@ def _log_alias_tokens(key: str, tokens: set[str]) -> None:
         key,
         len(tokens),
         sample,
-        ALIASES_PATH,
+        _resolve_aliases_path(),
     )
 
 
@@ -377,15 +386,16 @@ def _derive_alias_sets(
 def _load_aliases_yaml():
     import yaml
 
-    global _aliases_cache
-    if _aliases_cache is not None:
+    global _aliases_cache, _aliases_cache_path
+    path = _resolve_aliases_path()
+    if _aliases_cache is not None and _aliases_cache_path == path:
         return _aliases_cache
 
-    path = ALIASES_PATH
     try:
         # try UTF-8 first (fast path)
         with open(path, "r", encoding="utf-8") as fh:
             _aliases_cache = yaml.safe_load(fh) or {}
+            _aliases_cache_path = path
             return _aliases_cache
     except Exception as e_utf8:
         logging.warning("[aliases] UTF-8 load failed for %s: %s", path, e_utf8)
@@ -416,11 +426,13 @@ def _load_aliases_yaml():
 
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         _aliases_cache = yaml.safe_load(text) or {}
+        _aliases_cache_path = path
         logging.info("[aliases] loaded with cp1252 fallback and sanitized punctuation")
         return _aliases_cache
     except Exception as e_cp:
         logging.warning("[aliases] cp1252 fallback failed for %s: %s", path, e_cp)
         _aliases_cache = {}
+        _aliases_cache_path = path
         return _aliases_cache
 
 
@@ -492,14 +504,15 @@ def get_atom_rules():
     Return a SimpleNamespace of normalized sets/maps used by element fixing,
     plus compatibility views so legacy code can still do RULES["element_sets"].
     """
-    global _rules_cache
-    if _rules_cache is not None:
+    global _rules_cache, _rules_cache_path
+    alias_path = _resolve_aliases_path()
+    if _rules_cache is not None and _rules_cache_path == alias_path:
         return _rules_cache
 
     a = _load_aliases_yaml() or {}
     logging.info(
         "[aliases.load] source=%s keys=%d",
-        ALIASES_PATH,
+        alias_path,
         len(a),
     )
     es = a.get("element_sets", {}) or {}
@@ -722,6 +735,7 @@ def get_atom_rules():
         ad4_types=ad4_types,
         legacy_retain_tokens=legacy_tokens,
     )
+    _rules_cache_path = alias_path
 
     metals_probe = [
         "ZN",
@@ -1342,19 +1356,21 @@ def _iter_values(payload: Any) -> Iterable[Any]:
 
 
 def _load_default_alias_cfg() -> Mapping[str, Any]:
-    global _aliases_cache
-    if _aliases_cache is not None:
+    global _aliases_cache, _aliases_cache_path
+    path = _resolve_aliases_path()
+    if _aliases_cache is not None and _aliases_cache_path == path:
         cached = _aliases_cache
         if isinstance(cached, Mapping):
             return cached
     try:
-        with open(ALIASES_PATH, "r", encoding="utf-8") as handle:
+        with open(path, "r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
     except Exception:
         data = {}
     if not isinstance(data, Mapping):
         data = {}
     _aliases_cache = data
+    _aliases_cache_path = path
     return data
 
 

@@ -19,16 +19,16 @@ except Exception:  # pragma: no cover - optional dependency
     yaml = None  # type: ignore
 
 from installation import load_config
-try:
-    from chemdb.path_router import make_paths
-except Exception:
-    try:
-        from path_router import make_paths
-    except Exception:
-        from src.path_router.path_router import make_paths
+from path_router import make_paths  # type: ignore[import-not-found]
 
-# Load config once at import to mirror other helpers.
-config = load_config()
+
+def _load_runtime_config() -> Dict[str, Any]:
+    try:
+        cfg = load_config() or {}
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
 
 # Defaults
 _DEFAULT_FPOCKET_EXE = Path(
@@ -38,26 +38,28 @@ _DEFAULT_FPOCKET_OUTPUT_ROOT = Path(__file__).resolve().parent / "fpocket"
 _PROTEIN_CLASS_RULES: Optional[Dict[str, Any]] = None
 
 
-def _cfg_float(key: str, default: float) -> float:
-    raw = config.get(key)
+def _cfg_float(cfg: Dict[str, Any], key: str, default: float) -> float:
+    raw = cfg.get(key)
+    if raw is None:
+        return default
     try:
-        return float(raw)
+        return float(str(raw))
     except Exception:
         return default
 
 
-def _cfg_str(key: str, default: str = "") -> str:
-    raw = config.get(key)
+def _cfg_str(cfg: Dict[str, Any], key: str, default: str = "") -> str:
+    raw = cfg.get(key)
     if raw is None:
         return default
     return str(raw)
 
 
-def _cfg_str_list(key: str, default: str = "") -> List[str]:
+def _cfg_str_list(cfg: Dict[str, Any], key: str, default: str = "") -> List[str]:
     """
     Split a semi-colon or comma separated string into a cleaned list of lowercased tokens.
     """
-    value = _cfg_str(key, default)
+    value = _cfg_str(cfg, key, default)
     if not value:
         return []
     tokens: List[str] = []
@@ -518,20 +520,21 @@ def _classify_druggability(
     """
     Return (tier_label, triggers).
     """
-    c_druggability_max = _cfg_float("DRUGGABILITY_TIER_C_DRUGGABILITY_MAX", 0.30)
-    c_openness_min = _cfg_float("DRUGGABILITY_TIER_C_OPENNESS_MIN", 0.65)
-    c_polar_frac_min = _cfg_float("DRUGGABILITY_TIER_C_POLAR_FRAC_MIN", 0.60)
+    cfg = _load_runtime_config()
+    c_druggability_max = _cfg_float(cfg, "DRUGGABILITY_TIER_C_DRUGGABILITY_MAX", 0.30)
+    c_openness_min = _cfg_float(cfg, "DRUGGABILITY_TIER_C_OPENNESS_MIN", 0.65)
+    c_polar_frac_min = _cfg_float(cfg, "DRUGGABILITY_TIER_C_POLAR_FRAC_MIN", 0.60)
 
-    a_druggability_min = _cfg_float("DRUGGABILITY_TIER_A_DRUGGABILITY_MIN", 0.50)
-    a_openness_max = _cfg_float("DRUGGABILITY_TIER_A_OPENNESS_MAX", 0.55)
-    a_polar_frac_max = _cfg_float("DRUGGABILITY_TIER_A_POLAR_FRAC_MAX", 0.45)
+    a_druggability_min = _cfg_float(cfg, "DRUGGABILITY_TIER_A_DRUGGABILITY_MIN", 0.50)
+    a_openness_max = _cfg_float(cfg, "DRUGGABILITY_TIER_A_OPENNESS_MAX", 0.55)
+    a_polar_frac_max = _cfg_float(cfg, "DRUGGABILITY_TIER_A_POLAR_FRAC_MAX", 0.45)
 
-    b_druggability_min = _cfg_float("DRUGGABILITY_TIER_B_DRUGGABILITY_MIN", 0.30)
-    b_druggability_max = _cfg_float("DRUGGABILITY_TIER_B_DRUGGABILITY_MAX", 0.50)
-    b_openness_min = _cfg_float("DRUGGABILITY_TIER_B_OPENNESS_MIN", 0.55)
-    b_openness_max = _cfg_float("DRUGGABILITY_TIER_B_OPENNESS_MAX", 0.65)
-    b_polar_frac_min = _cfg_float("DRUGGABILITY_TIER_B_POLAR_FRAC_MIN", 0.45)
-    b_polar_frac_max = _cfg_float("DRUGGABILITY_TIER_B_POLAR_FRAC_MAX", 0.60)
+    b_druggability_min = _cfg_float(cfg, "DRUGGABILITY_TIER_B_DRUGGABILITY_MIN", 0.30)
+    b_druggability_max = _cfg_float(cfg, "DRUGGABILITY_TIER_B_DRUGGABILITY_MAX", 0.50)
+    b_openness_min = _cfg_float(cfg, "DRUGGABILITY_TIER_B_OPENNESS_MIN", 0.55)
+    b_openness_max = _cfg_float(cfg, "DRUGGABILITY_TIER_B_OPENNESS_MAX", 0.65)
+    b_polar_frac_min = _cfg_float(cfg, "DRUGGABILITY_TIER_B_POLAR_FRAC_MIN", 0.45)
+    b_polar_frac_max = _cfg_float(cfg, "DRUGGABILITY_TIER_B_POLAR_FRAC_MAX", 0.60)
 
     triggers_c: List[str] = []
     if druggability < c_druggability_max:
@@ -913,8 +916,13 @@ def run_fpocket_for_explicit_pocket(
 
     src_out_dir = receptor_path.parent / f"{stem}_out"
     if not src_out_dir.exists():
-        combined_text = f"{(result.stdout or '').lower()}\n{(result.stderr or '').lower()}"
-        if "no pockets found" in combined_text or "no pocket to refine" in combined_text:
+        combined_text = (
+            f"{(result.stdout or '').lower()}\n{(result.stderr or '').lower()}"
+        )
+        if (
+            "no pockets found" in combined_text
+            or "no pocket to refine" in combined_text
+        ):
             logger.info(
                 "[druggability.fpocket.skip] pdb=%s reason=no_pockets",
                 receptor_path,
@@ -1048,7 +1056,7 @@ if __name__ == "__main__":
         print(f"Failed to import docking helpers: {exc}")
         raise SystemExit(1)
 
-    cfg = config
+    cfg = _load_runtime_config()
     logger = logging.getLogger("druggability.cli")
     logging.basicConfig(level=logging.INFO)
 

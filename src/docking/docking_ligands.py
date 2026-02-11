@@ -263,9 +263,7 @@ def ensure_deepcoy_decoy_pdbqts(
 
     test_map = _coerce_test_map(cfg.get("TEST_LIBRARY_MAP", {}))
     mapped_value = (test_map or {}).get(pdb_id.upper())
-    base_root = Path(
-        cfg.get("PREPPED_LIGANDS_DIR") or "prepped_ligands"
-    )
+    base_root = Path(cfg.get("PREPPED_LIGANDS_DIR") or "prepped_ligands")
     mapped_root = base_root / mapped_value if mapped_value else None
     run_mode_val = (run_mode or "").lower()
     if mapped_root and mapped_root.exists():
@@ -569,17 +567,154 @@ def norm(p: str | Path) -> str:
     return os.path.abspath(str(p)).replace("\\", "/")
 
 
-def _selection_schedule(docking_mode: str, n_stages: Optional[int]) -> List[float]:
+def _selection_schedule(
+    cfg: Dict[str, Any],
+    docking_mode: str,
+    n_stages: Optional[int],
+    logger: Optional[logging.Logger] = None,
+) -> List[float]:
     """
     Selection percentages per stage.
-    Mirrors the existing Vina staging defaults.
+    Uses config overrides when present:
+      - DISCOVERY_SELECTION_PCTS
+      - POLYPHARM_SELECTION_PCTS
     """
     default_disc = [1.0, 0.1, 0.01, 0.001, 0.001]
     default_poly = [1.0, 0.05, 0.005]
-    sched = {
+    default_sched = {
         "discovery": default_disc,
         "polypharmacology": default_poly,
     }.get(docking_mode, [1.0] * n_stages if n_stages is not None else [1.0])
+
+    def _fmt_selection_err(config_key: str, details: str) -> str:
+        return (
+            f"{config_key}: {details}. "
+            "Use comma-separated values as either fractions (e.g. 1.0,0.15,0.10) "
+            "or percents (e.g. 100,15,10 or 100%,15%,10%). "
+            "Do not mix unsuffixed fraction and percent scales in one list."
+        )
+
+    def _tokenize_schedule(raw_val: Any, config_key: str) -> List[str]:
+        if isinstance(raw_val, str):
+            text = raw_val.strip()
+            if not text:
+                return []
+            toks = [tok.strip() for tok in text.split(",")]
+        elif isinstance(raw_val, (list, tuple)):
+            if not raw_val:
+                return []
+            toks = [str(tok).strip() for tok in raw_val]
+        else:
+            raise ValueError(
+                _fmt_selection_err(
+                    config_key,
+                    f"expected comma-separated string/list, got {type(raw_val).__name__}",
+                )
+            )
+
+        if any(tok == "" for tok in toks):
+            raise ValueError(_fmt_selection_err(config_key, "contains empty token"))
+        return toks
+
+    def _parse_schedule_values(raw_val: Any, config_key: str) -> List[float]:
+        tokens = _tokenize_schedule(raw_val, config_key)
+        if not tokens:
+            return []
+
+        parsed: List[float] = []
+        unsuffixed_scales: set[str] = set()
+        saw_explicit_percent = False
+        saw_unsuffixed_fraction = False
+
+        for idx, token in enumerate(tokens, start=1):
+            explicit_percent = token.endswith("%")
+            num_text = token[:-1].strip() if explicit_percent else token
+            try:
+                value = float(num_text)
+            except Exception as e:
+                raise ValueError(
+                    _fmt_selection_err(
+                        config_key, f"token #{idx} '{token}' is not numeric ({e})"
+                    )
+                ) from e
+
+            if not math.isfinite(value):
+                raise ValueError(
+                    _fmt_selection_err(config_key, f"token #{idx} '{token}' is NaN/inf")
+                )
+            if value <= 0.0:
+                raise ValueError(
+                    _fmt_selection_err(
+                        config_key, f"token #{idx} '{token}' must be > 0"
+                    )
+                )
+
+            if explicit_percent:
+                saw_explicit_percent = True
+                if value > 100.0:
+                    raise ValueError(
+                        _fmt_selection_err(
+                            config_key, f"token #{idx} '{token}' percent exceeds 100"
+                        )
+                    )
+                parsed.append(value / 100.0)
+                continue
+
+            # Unsuffixed values are interpreted by scale:
+            #  - (0,1] => fraction
+            #  - (1,100] => percent
+            if value <= 1.0:
+                unsuffixed_scales.add("fraction")
+                saw_unsuffixed_fraction = True
+                parsed.append(value)
+            elif value <= 100.0:
+                unsuffixed_scales.add("percent")
+                parsed.append(value / 100.0)
+            else:
+                raise ValueError(
+                    _fmt_selection_err(
+                        config_key, f"token #{idx} '{token}' exceeds maximum of 100"
+                    )
+                )
+
+        if len(unsuffixed_scales) > 1:
+            raise ValueError(
+                _fmt_selection_err(
+                    config_key,
+                    f"mixed unsuffixed scales are ambiguous (raw={raw_val!r})",
+                )
+            )
+        if saw_explicit_percent and saw_unsuffixed_fraction:
+            raise ValueError(
+                _fmt_selection_err(
+                    config_key,
+                    "cannot mix explicit % tokens with unsuffixed fraction tokens (e.g. 100%,0.1 is ambiguous; use 0.1% or 10%)",
+                )
+            )
+
+        return parsed
+
+    key = {
+        "discovery": "DISCOVERY_SELECTION_PCTS",
+        "polypharmacology": "POLYPHARM_SELECTION_PCTS",
+    }.get(docking_mode)
+
+    sched = list(default_sched)
+    if key:
+        raw = cfg.get(key)
+        if raw not in (None, "", [], ()):
+            parsed = _parse_schedule_values(raw, key)
+            if not parsed:
+                raise ValueError(_fmt_selection_err(key, "no values provided"))
+            if not math.isclose(parsed[0], 1.0, rel_tol=0.0, abs_tol=1e-12):
+                raise ValueError(
+                    _fmt_selection_err(
+                        key,
+                        f"first value must resolve to 1.0 (100%) because stage1 always runs on the full ligand pool (got {parsed[0]:.12g})",
+                    )
+                )
+            sched = parsed
+
     # Trim/extend to requested number of stages to avoid index errors.
     if n_stages is None:
         return list(sched)
@@ -685,6 +820,7 @@ def _is_under_ph_subdir(p: Path, roots: list[Path]) -> bool:
 
 
 def select_ligands_for_next(
+    cfg: Dict[str, Any],
     docking_mode: str,
     i: int,
     stages: List[Dict],
@@ -697,7 +833,7 @@ def select_ligands_for_next(
         # Still allow force-carry if provided and next stage exists
         return sorted(force_include) if force_include else []
 
-    schedule = _selection_schedule(docking_mode, len(stages))
+    schedule = _selection_schedule(cfg, docking_mode, len(stages), logger=logger)
     pct = schedule[i + 1] if i + 1 < len(schedule) else 0.01
 
     # Use provided base if given (e.g., Stage1 pool size) -- otherwise fall back to valid-count
@@ -708,13 +844,17 @@ def select_ligands_for_next(
     k = max(1, min(k_target, len(scores)))
 
     # take best k from valid scores
-    next_list = [l for l, _ in sorted(scores.items(), key=lambda kv: kv[1])[:k]]
+    next_list = [
+        ligand_id for ligand_id, _ in sorted(scores.items(), key=lambda kv: kv[1])[:k]
+    ]
 
     # Force-carry: add any requested ligands (e.g., extracted controls) to the next stage
     if force_include:
         # maintain stable order: extend with any forced ligands not already selected
         in_set = set(next_list)
-        forced_add = [l for l in sorted(force_include) if l not in in_set]
+        forced_add = [
+            ligand_id for ligand_id in sorted(force_include) if ligand_id not in in_set
+        ]
         next_list.extend(forced_add)
         if forced_add:
             logger.info(
@@ -741,27 +881,26 @@ def compute_stage_membership_from_scores(
 
     Returns {stage_index (1-based): [ligands]}.
     """
-    del cfg  # cfg reserved for future config-driven selection; staging matches current Vina defaults.
     if not scores:
         return {}
 
     # Filter to numeric scores only
     valid_scores = {
-        l: s
-        for l, s in scores.items()
-        if isinstance(s, (int, float)) and math.isfinite(s)
+        ligand_id: score
+        for ligand_id, score in scores.items()
+        if isinstance(score, (int, float)) and math.isfinite(score)
     }
     if not valid_scores:
         return {}
 
     order = [
-        l
-        for l, _ in sorted(
+        ligand_id
+        for ligand_id, _ in sorted(
             valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better
         )
     ]
     total = len(order)
-    schedule = _selection_schedule(docking_mode, n_stages)
+    schedule = _selection_schedule(cfg, docking_mode, n_stages)
 
     # Assign most selective stages first to avoid duplicates, then return in ascending stage order.
     remaining = list(order)
@@ -964,7 +1103,9 @@ def prepare_and_filter_ligands(
     deepcoy_prepped_dir: Optional[Path] = None
     use_deepcoy = is_truthy(cfg, "USE_DEEPCOY", default=True)
     deepcoy_sdf_on = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
-    deepcoy_pdbqt_on = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_PDBQT", "on")).strip().lower()
+    deepcoy_pdbqt_on = (
+        str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_PDBQT", "on")).strip().lower()
+    )
     should_try_deepcoy = (
         use_deepcoy
         and "dud" in effective_tokens
@@ -1164,10 +1305,6 @@ def prepare_and_filter_ligands(
         logger.warning("No .pdbqt ligands were found under the configured roots.")
         return [], {}, {}
 
-    global_root = (
-        Path(cfg["PREPPED_LIGANDS_DIR"]) if cfg.get("PREPPED_LIGANDS_DIR") else None
-    )
-
     valid_pdbqt: Dict[str, Path] = {}
     for p in all_pdbqt_paths:
         try:
@@ -1342,7 +1479,7 @@ def prepare_and_filter_ligands(
         params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
         params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
         params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
-        pains_catalog = FilterCatalog.FilterCatalog(params)
+        _ = FilterCatalog.FilterCatalog(params)
 
         def _has_pains(pdbqt_path: Path) -> bool:
             try:

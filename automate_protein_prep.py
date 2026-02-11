@@ -157,6 +157,7 @@ from pdb_fixer import (  # noqa: F401
     load_canonical_waters,
     scan_helium_counts,
 )
+
 _HE_POSTWRITE_VERBOSE = os.environ.get("HELIUM_POSTWRITE_VERBOSE", "1") != "0"
 
 
@@ -174,19 +175,16 @@ def _format_histogram(counter: Counter[str]) -> str:
     return _format_histogram_impl(counter)
 
 
-
 def _format_token_list(tokens: Iterable[str], *, limit: int = 8) -> str:
     from protein_prep.ion_audit import _format_token_list as _format_token_list_impl
 
     return _format_token_list_impl(tokens, limit=limit)
 
 
-
 def _summarize_ions_file(file_path: Union[str, Path]) -> dict[str, object]:
     from protein_prep.ion_audit import _summarize_ions_file as _summarize_ions_file_impl
 
     return _summarize_ions_file_impl(file_path)
-
 
 
 def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
@@ -202,12 +200,10 @@ def _ion_audit_enabled() -> bool:
     return _ion_audit_enabled_impl()
 
 
-
 def _canon_ion_resname(resname: str) -> str:
     from protein_prep.ion_audit import _canon_ion_resname as _canon_ion_resname_impl
 
     return _canon_ion_resname_impl(resname)
-
 
 
 def _format_breadcrumb_counts(counts: dict[str, int], order: Sequence[str]) -> str:
@@ -218,12 +214,10 @@ def _format_breadcrumb_counts(counts: dict[str, int], order: Sequence[str]) -> s
     return _format_breadcrumb_counts_impl(counts, order)
 
 
-
 def _breadcrumbs_enabled() -> bool:
     from protein_prep.ion_audit import _breadcrumbs_enabled as _breadcrumbs_enabled_impl
 
     return _breadcrumbs_enabled_impl()
-
 
 
 def _emit_ion_breadcrumb(stage: str, file_path: Union[str, Path]) -> None:
@@ -232,12 +226,10 @@ def _emit_ion_breadcrumb(stage: str, file_path: Union[str, Path]) -> None:
     _emit_ion_breadcrumb_impl(stage, file_path)
 
 
-
 def _serialize_counts(counts: dict[str, int]) -> str:
     from protein_prep.ion_audit import _serialize_counts as _serialize_counts_impl
 
     return _serialize_counts_impl(counts)
-
 
 
 def _legacy_ion_global_missing() -> None:
@@ -248,12 +240,10 @@ def _legacy_ion_global_missing() -> None:
     _legacy_ion_global_missing_impl()
 
 
-
 def _gather_ion_counts(path: Path) -> tuple[dict[str, int], dict[str, int], int, int]:
     from protein_prep.ion_audit import _gather_ion_counts as _gather_ion_counts_impl
 
     return _gather_ion_counts_impl(path)
-
 
 
 def audit_ions(
@@ -274,7 +264,6 @@ def audit_ions(
     )
 
 
-
 def diff_ions(
     prev: dict[str, object],
     curr: dict[str, object],
@@ -285,13 +274,11 @@ def diff_ions(
     return _diff_ions_impl(prev=prev, curr=curr, logger=logger)
 
 
-
 class _IonAuditManager:
     def __new__(cls, *args, **kwargs):
         from protein_prep.ion_audit import _IonAuditManager as _IonAuditManagerImpl
 
         return _IonAuditManagerImpl(*args, **kwargs)
-
 
 
 _ION_AUDIT_STACK: list[_IonAuditManager] = []
@@ -303,12 +290,10 @@ def _push_ion_audit_manager(manager: _IonAuditManager) -> None:
     _push_impl(manager)
 
 
-
 def _pop_ion_audit_manager(manager: _IonAuditManager) -> None:
     from protein_prep.ion_audit import _pop_ion_audit_manager as _pop_impl
 
     _pop_impl(manager)
-
 
 
 def _current_ion_audit_manager() -> Optional[_IonAuditManager]:
@@ -317,14 +302,12 @@ def _current_ion_audit_manager() -> Optional[_IonAuditManager]:
     return _current_impl()
 
 
-
 def emit_ion_audit_probe(
     stage: str, file_path: Union[str, Path], *, variant: Optional[str] = None
 ) -> None:
     from protein_prep.ion_audit import emit_ion_audit_probe as _emit_probe_impl
 
     _emit_probe_impl(stage=stage, file_path=file_path, variant=variant)
-
 
 
 _LAST_CLEAN_PROVENANCE = "unknown"
@@ -343,7 +326,6 @@ def _reset_ion_probe(pdb_id: str) -> None:
     from protein_prep.ion_audit import _reset_ion_probe as _reset_probe_impl
 
     _reset_probe_impl(pdb_id)
-
 
 
 def _ion_candidate_tokens(rules_obj=ALIASES) -> set[str]:
@@ -414,7 +396,6 @@ def _log_ions_probe(
     )
 
 
-
 def _format_diff_map(data: dict[str, int]) -> str:
     if not data:
         return "none"
@@ -429,7 +410,6 @@ def get_ion_probe_map(pdb_id: str) -> dict[str, dict[str, int]]:
     from protein_prep.ion_audit import get_ion_probe_map as _get_probe_map_impl
 
     return _get_probe_map_impl(pdb_id)
-
 
 
 def _bucket_counts(counter: Counter) -> dict[str, int]:
@@ -460,19 +440,16 @@ def _collect_monoatomic_records(pdb_path: Union[str, Path]) -> tuple[Counter, Co
     return _collect_impl(pdb_path)
 
 
-
 def _format_ion_hist(counter: Counter) -> str:
     from protein_prep.ion_audit import _format_ion_hist as _format_hist_impl
 
     return _format_hist_impl(counter)
 
 
-
 def _diff_detail_records(before: Counter, after: Counter) -> list[str]:
     from protein_prep.ion_audit import _diff_detail_records as _diff_detail_impl
 
     return _diff_detail_impl(before, after)
-
 
 
 def _format_ion_pairs(pairs: Iterable[tuple[str, str]]) -> str:
@@ -492,7 +469,6 @@ def _parse_atoms_from_pdb_like_lines(
     return _parse_atoms_impl(lines, canonical_metals)
 
 
-
 def _find_metal_donors(
     metal: Mapping[str, object],
     parsed_atoms: Sequence[Mapping[str, object]],
@@ -501,7 +477,6 @@ def _find_metal_donors(
     from protein_prep.metal_site_audit import _find_metal_donors as _find_donors_impl
 
     return _find_donors_impl(metal, parsed_atoms, canonical_waters)
-
 
 
 def run_metal_site_audit(
@@ -529,7 +504,6 @@ def run_metal_site_audit(
     )
 
 
-
 def _maybe_strip_ions(
     pdb_path: Union[str, Path],
     cfg: Optional[dict] = None,
@@ -549,12 +523,10 @@ def _maybe_strip_ions(
     )
 
 
-
 def _is_element_token(sym):
     from protein_prep.strip_nsr import _is_element_token as _is_element_token_impl
 
     return _is_element_token_impl(sym)
-
 
 
 # Treat as "ion-like" if it normalizes to a canonical element token retained by policy
@@ -572,7 +544,7 @@ def _is_retained_ion(resname: str) -> bool:
 try:
     from input_and_export_functions import load_config, validate_config
 
-    _CFG = load_config("config.txt")
+    _CFG = load_config()
     validate_config(_CFG)
 except Exception:
     # Fallback for older setups
@@ -610,7 +582,9 @@ def _holo_restore_from_input_if_needed(
     center: Optional[tuple[float, float, float]] = None,
     box_size: Optional[tuple[float, float, float]] = None,
 ) -> tuple[int, int, bool]:
-    from protein_prep.holo_restore import _holo_restore_from_input_if_needed as _holo_restore_impl
+    from protein_prep.holo_restore import (
+        _holo_restore_from_input_if_needed as _holo_restore_impl,
+    )
 
     return _holo_restore_impl(
         pdb_id=pdb_id,
@@ -673,16 +647,15 @@ def _helium_postwrite_counter(step_name: str, pdb_path: str | Path) -> None:
 
 
 try:
-
     _HAS_RDKIT = True
 except Exception:
     _HAS_RDKIT = False
+
 
 def collapse_sanitized_once(p: Union[str, Path]) -> Path:
     from protein_prep.ligand_extract import collapse_sanitized_once as _collapse_impl
 
     return _collapse_impl(p)
-
 
 
 def compute_control_centroids(
@@ -691,7 +664,6 @@ def compute_control_centroids(
     from protein_prep.waters import compute_control_centroids as _compute_centroids_impl
 
     return _compute_centroids_impl(ligands_dir)
-
 
 
 def filter_waters_near_points(
@@ -710,7 +682,6 @@ def filter_waters_near_points(
         points=points,
         radius_A=radius_A,
     )
-
 
 
 def count_waters_within(
@@ -787,7 +758,6 @@ def _write_pristine_reference(pdb_lig_path: Path) -> None:
     _write_pristine_reference_impl(pdb_lig_path)
 
 
-
 # =============================
 # Canonical per-protein directory layout
 # =============================
@@ -823,14 +793,12 @@ def extract_ligands_from_filtered(
     return _extract_ligands_impl(filtered_pdb, out_dir)
 
 
-
 def element_fix_all_in_dir(
     dir_path: Union[str, Path], rewrite_atoms: bool = False
 ) -> int:
     from protein_prep.ligand_extract import element_fix_all_in_dir as _fix_all_impl
 
     return _fix_all_impl(dir_path, rewrite_atoms=rewrite_atoms)
-
 
 
 def expose_ligand_intermediates_for_debug(
@@ -841,7 +809,6 @@ def expose_ligand_intermediates_for_debug(
     )
 
     _expose_impl(src_dir, link_dir)
-
 
 
 # =============================
@@ -1007,8 +974,8 @@ def build_missing_loops(
 ) -> str:
     """Fill missing loops/residues using MODELLER; return output PDB path."""
     try:
-        from modeller import environ, log
-        from modeller.scripts import complete_pdb
+        from modeller import environ, log  # type: ignore[import-untyped]
+        from modeller.scripts import complete_pdb  # type: ignore[import-untyped]
     except Exception as e:
         logging.warning("MODELLER not available; skipping loop completion: %s", e)
         return str(input_pdb)
@@ -1070,12 +1037,10 @@ def _has_backbone_atoms(lines):
     return _impl(lines)
 
 
-
 def _group_by_chain(lines):
     from protein_prep.chain_prune import _group_by_chain as _impl
 
     return _impl(lines)
-
 
 
 def _prune_chains_conservative(lines, keep_chains):
@@ -1084,12 +1049,10 @@ def _prune_chains_conservative(lines, keep_chains):
     return _impl(lines, keep_chains)
 
 
-
 def _chains_to_keep(lines, pocket_center=None, r=12.0):
     from protein_prep.chain_prune import _chains_to_keep as _impl
 
     return _impl(lines, pocket_center=pocket_center, r=r)
-
 
 
 # --- Hydrogen cleanup (geometry + CONECT) ---
@@ -1147,7 +1110,6 @@ def _cofactor_policy_keep(resname: str) -> bool:
     return _cofactor_keep_impl(resname)
 
 
-
 def strip_nonstandard_residues(
     input_pdb: Union[str, Path],
     output_pdb: Union[str, Path],
@@ -1163,7 +1125,6 @@ def strip_nonstandard_residues(
         output_pdb=output_pdb,
         variant=variant,
     )
-
 
 
 def quick_element_histogram(pdb_path: Union[str, Path]) -> None:
@@ -1258,14 +1219,12 @@ def detect_pocket_center_from_ligands(
     return _detect_pocket_center_impl(filtered_pdb, ligands_dir)
 
 
-
 def score_chain_contacts(
     pdb_path: Union[str, Path], keep_chains: set[str]
 ) -> Dict[str, int]:
     from protein_prep.chain_prune import score_chain_contacts as _score_contacts_impl
 
     return _score_contacts_impl(pdb_path, keep_chains)
-
 
 
 def select_chains_to_keep(
@@ -1276,14 +1235,12 @@ def select_chains_to_keep(
     return _select_chains_impl(filtered_pdb, ligands_dir, cfg=cfg)
 
 
-
 def prune_to_chains(
     input_pdb: Union[str, Path], kept_chains: set[str], output_pdb: Union[str, Path]
 ) -> None:
     from protein_prep.chain_prune import prune_to_chains as _prune_to_chains_impl
 
     _prune_to_chains_impl(input_pdb, kept_chains, output_pdb)
-
 
 
 # ============================

@@ -5,13 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-try:
-    from chemdb.path_router import make_paths
-except Exception:
-    try:
-        from path_router import make_paths
-    except Exception:
-        from src.path_router.path_router import make_paths
+from path_router import make_paths
 
 from druggability_evaluation import (
     _classify_druggability,

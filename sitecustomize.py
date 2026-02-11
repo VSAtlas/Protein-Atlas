@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import importlib.util
 from pathlib import Path
 
 
@@ -42,7 +43,16 @@ _ensure_writable_home()
 
 # Ensure the repository root and src directory are always importable for tests and scripts.
 REPO_ROOT = Path(__file__).resolve().parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-if str(REPO_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT / "src"))
+
+
+def _ensure_local_import_paths() -> None:
+    need_repo_root = importlib.util.find_spec("input_and_export_functions") is None
+    need_src = importlib.util.find_spec("path_router") is None
+
+    if need_repo_root and str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    if need_src and str(REPO_ROOT / "src") not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+
+
+_ensure_local_import_paths()

@@ -2,7 +2,7 @@ import sys
 import os
 from input_and_export_functions import load_config, validate_config
 
-_cfg = load_config("config.txt")
+_cfg = load_config()
 validate_config(_cfg)
 
 

@@ -32,8 +32,6 @@ def _apply_force_carry_and_doping(
         (filtered back out here; controls are injected at Stage3 run time)
       - optional rescue of self-RMSD near-miss ligands
     """
-    use_stage1_base = docking_mode == "polypharmacology" and stage_index == 1
-
     rescue: List[str] = []
     if invalids and stage_index < len(stages_for_run) - 1:
         for lig, (sc, reason) in invalids.items():
@@ -49,12 +47,13 @@ def _apply_force_carry_and_doping(
         ]
 
     selected_raw = select_ligands_for_next(
+        cfg,
         docking_mode,
         stage_index,
         stages_for_run,
         scores,
         logger,
-        base_pool_n=(len(stage1_original) if use_stage1_base else None),
+        base_pool_n=None,
         force_include=(forced_extracted_for_stage3 if next_stage_is_stage3 else None),
     )
 

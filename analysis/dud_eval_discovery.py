@@ -6,21 +6,15 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-try:
-    from path_router.path_router import make_paths  # type: ignore[import-not-found]
-except ModuleNotFoundError:
-    from src.path_router.path_router import make_paths  # type: ignore[import-not-found]
-
-try:
-    from prep_ligands.library_index import LibraryIndex  # type: ignore[import-not-found]
-except ModuleNotFoundError:
-    from src.prep_ligands.library_index import LibraryIndex  # type: ignore[import-not-found]
+from path_router.path_router import make_paths  # type: ignore[import-not-found]
+from prep_ligands.library_index import LibraryIndex  # type: ignore[import-not-found]
 
 import analysis.dud_eval_types as dud_eval_types
 from analysis.dud_eval_log import dbg
 from analysis.dud_eval_types import TargetSpec
 
 _LIB_INDEX_CACHE: Dict[Tuple[str, str], LibraryIndex] = {}
+
 
 def _get_library_index(root: Path, manifest_filename: str) -> LibraryIndex:
     """
@@ -34,6 +28,7 @@ def _get_library_index(root: Path, manifest_filename: str) -> LibraryIndex:
         idx.load([root])
         _LIB_INDEX_CACHE[key] = idx
     return idx
+
 
 def _is_probable_run_id_dirname(name: str) -> bool:
     """
@@ -52,6 +47,7 @@ def _is_probable_run_id_dirname(name: str) -> bool:
     if "T" in name and re.match(r"\d{4}-?\d{2}-?\d{2}", name):
         return True
     return False
+
 
 def _resolve_scan_roots(docked_root: Path, run_id: Optional[str]) -> List[Path]:
     """
@@ -87,6 +83,7 @@ def _resolve_scan_roots(docked_root: Path, run_id: Optional[str]) -> List[Path]:
 
     return [docked_root]
 
+
 def make_target_key(pdb_id: str, variant: Optional[str], ph_tag: Optional[str]) -> str:
     """
     Build a path-safe identifier for a target.
@@ -104,6 +101,7 @@ def make_target_key(pdb_id: str, variant: Optional[str], ph_tag: Optional[str]) 
             ph_norm = ph_norm.replace(sep, "_")
     return f"{pdb_id}__{variant_norm}__{ph_norm}"
 
+
 def _dedup(seq: Iterable[str]) -> List[str]:
     """Preserve order while removing duplicates."""
     seen: Set[str] = set()
@@ -113,6 +111,7 @@ def _dedup(seq: Iterable[str]) -> List[str]:
             seen.add(item)
             out.append(item)
     return out
+
 
 def _normalize_pdb_ids(tokens: Optional[Iterable[str]]) -> List[str]:
     """
@@ -136,12 +135,14 @@ def _normalize_pdb_ids(tokens: Optional[Iterable[str]]) -> List[str]:
         normalized.append(alnum[:4])
     return _dedup(normalized)
 
+
 def _is_under(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
         return True
     except Exception:
         return False
+
 
 def _resolve_reranked_scorch_path(
     spec: TargetSpec,
@@ -186,7 +187,10 @@ def _resolve_reranked_scorch_path(
             / (spec.variant or "")
             / (spec.ph_tag or "")
             / dud_eval_types.RERANKED_SCORCH_BASENAME,
-            base / spec.pdb_id / (spec.variant or "") / dud_eval_types.RERANKED_SCORCH_BASENAME,
+            base
+            / spec.pdb_id
+            / (spec.variant or "")
+            / dud_eval_types.RERANKED_SCORCH_BASENAME,
             base / spec.pdb_id / dud_eval_types.RERANKED_SCORCH_BASENAME,
         ]
         for cand in combos:
@@ -201,7 +205,10 @@ def _resolve_reranked_scorch_path(
         / (spec.variant or "")
         / (spec.ph_tag or "")
         / dud_eval_types.RERANKED_SCORCH_BASENAME,
-        legacy_base / spec.pdb_id / (spec.variant or "") / dud_eval_types.RERANKED_SCORCH_BASENAME,
+        legacy_base
+        / spec.pdb_id
+        / (spec.variant or "")
+        / dud_eval_types.RERANKED_SCORCH_BASENAME,
         legacy_base / spec.pdb_id / dud_eval_types.RERANKED_SCORCH_BASENAME,
     ]
     for cand in legacy_candidates:
@@ -213,6 +220,7 @@ def _resolve_reranked_scorch_path(
         if cand.exists() and cand.is_file():
             return cand
     return None
+
 
 def extract_compnd_molecules(pdb_lines: List[str]) -> List[str]:
     """Pull COMPND.MOLECULE entries from a PDB header."""
@@ -255,6 +263,7 @@ def extract_compnd_molecules(pdb_lines: List[str]) -> List[str]:
     _flush()
     return _dedup(molecules)
 
+
 def extract_uniprot_from_dbref(pdb_lines: List[str]) -> Tuple[List[str], List[str]]:
     """Return (entry_names, accessions) discovered from DBREF UNP rows."""
     entry_names: List[str] = []
@@ -276,6 +285,7 @@ def extract_uniprot_from_dbref(pdb_lines: List[str]) -> Tuple[List[str], List[st
             entry_names.append(entry)
     return _dedup(entry_names), _dedup(accessions)
 
+
 def choose_target_name(
     compnd_mols: List[str],
     uniprot_entries: List[str],
@@ -295,6 +305,7 @@ def choose_target_name(
     # auto
     return compnd_choice or uniprot_entry or uniprot_acc
 
+
 def _read_pdb_header_lines(pdb_path: Path) -> List[str]:
     lines: List[str] = []
     try:
@@ -306,6 +317,7 @@ def _read_pdb_header_lines(pdb_path: Path) -> List[str]:
     except Exception:
         return []
     return lines
+
 
 def _infer_library_name_via_manifest(
     target_id: str,
@@ -399,6 +411,7 @@ def _infer_library_name_via_manifest(
         f"matches={best_count}",
     )
     return best_lib
+
 
 def infer_library_name(
     target_id: str,
@@ -594,6 +607,7 @@ def infer_library_name(
         )
     dbg("WARN", "library", f"pdb={target_id} no library match found in roots")
     return ""
+
 
 def derive_target_name(
     target_id: str, *, prefer: str, pdb_root_override: Optional[Path], cfg: Dict

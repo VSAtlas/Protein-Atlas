@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def test_select_control_engines_defaults_to_vina_only():
-    import src.docking.docking_control_redock as docking
+    import docking.docking_control_redock as docking
 
     cfg = {"CONTROL_CONSENSUS": False}
     engines = docking._select_control_engines(
@@ -20,7 +20,7 @@ def test_select_control_engines_defaults_to_vina_only():
 
 
 def test_select_control_engines_adds_engines_when_enabled():
-    import src.docking.docking_control_redock as docking
+    import docking.docking_control_redock as docking
 
     cfg = {"CONTROL_CONSENSUS": True}
     engines = docking._select_control_engines(
@@ -30,7 +30,7 @@ def test_select_control_engines_adds_engines_when_enabled():
 
 
 def test_select_control_engines_respects_disabled_capabilities():
-    import src.docking.docking_control_redock as docking
+    import docking.docking_control_redock as docking
 
     cfg = {"CONTROL_CONSENSUS": True}
     engines = docking._select_control_engines(

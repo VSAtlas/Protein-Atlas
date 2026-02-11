@@ -4,21 +4,28 @@ import subprocess
 import logging
 import shlex
 from shutil import which
+from typing import Iterable, List, Optional, Tuple
 
 from installation import load_config
 
 logger = logging.getLogger(__name__)
 
-# Load config
-config = load_config()
-P2RANK_DIR = config.get("P2RANK_PATH")
-P2RANK_JAVA_EXE = str(config.get("P2RANK_JAVA_EXE", "java") or "java")
-P2RANK_JAVA_OPTS = str(config.get("P2RANK_JAVA_OPTS", "-Xmx4G") or "-Xmx4G")
+
+def _runtime_p2rank_settings():
+    try:
+        cfg = load_config() or {}
+    except Exception:
+        cfg = {}
+    return {
+        "P2RANK_PATH": cfg.get("P2RANK_PATH"),
+        "P2RANK_JAVA_EXE": str(cfg.get("P2RANK_JAVA_EXE", "java") or "java"),
+        "P2RANK_JAVA_OPTS": str(cfg.get("P2RANK_JAVA_OPTS", "-Xmx4G") or "-Xmx4G"),
+    }
 
 
-def _java_base_cmd():
-    cmd = [P2RANK_JAVA_EXE]
-    opts = P2RANK_JAVA_OPTS.strip()
+def _java_base_cmd(java_exe: str, java_opts: str):
+    cmd = [str(java_exe or "java")]
+    opts = str(java_opts or "").strip()
     if opts:
         cmd.extend(shlex.split(opts))
     return cmd
@@ -41,7 +48,10 @@ def _resolve_p2rank_install(p2rank_path):
         if lower.endswith(".jar"):
             jar_path = raw
             bin_dir = os.path.dirname(jar_path)
-            install_base = os.path.dirname(bin_dir)
+            if os.path.basename(bin_dir).lower() == "bin":
+                install_base = os.path.dirname(bin_dir)
+            else:
+                install_base = bin_dir
             lib_glob = os.path.join(bin_dir, "lib", "*")
             prank_exe = os.path.join(bin_dir, "prank")
             if not os.path.isfile(prank_exe):
@@ -61,35 +71,101 @@ def _resolve_p2rank_install(p2rank_path):
 
         prank_exe = os.path.join(bin_dir, "prank")
         if not os.path.isfile(prank_exe):
-            prank_exe = None
+            prank_exe = os.path.join(raw, "prank")
+            if not os.path.isfile(prank_exe):
+                prank_exe = None
         jar_path = os.path.join(bin_dir, "p2rank.jar")
         if not os.path.isfile(jar_path):
-            jar_path = None
+            jar_path = os.path.join(raw, "p2rank.jar")
+            if not os.path.isfile(jar_path):
+                jar_path = None
         lib_glob = os.path.join(bin_dir, "lib", "*")
         return prank_exe, jar_path, install_base, lib_glob
 
     return None, None, None, None
 
 
+def _build_classpath(entries: Iterable[Optional[str]]) -> str:
+    uniq: List[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not entry:
+            continue
+        text = str(entry).strip()
+        if not text or text in seen:
+            continue
+        if "*" in text:
+            parent = os.path.dirname(text)
+            if not parent or not os.path.isdir(parent):
+                continue
+        else:
+            if not os.path.exists(text):
+                continue
+        uniq.append(text)
+        seen.add(text)
+    return os.pathsep.join(uniq)
+
+
+def _classpath_launch_attempts(
+    java_cmd: List[str],
+    jar_path: str,
+    install_base: Optional[str],
+) -> List[Tuple[str, List[str], Optional[str]]]:
+    jar_dir = os.path.dirname(jar_path)
+    base = install_base or jar_dir
+
+    # Accept common P2Rank layouts across versions/packaging:
+    #   <root>/bin/p2rank.jar + <root>/bin/lib/*
+    #   <root>/p2rank.jar     + <root>/lib/*
+    #   <root>/bin/libs/*
+    cp_entries = [
+        jar_path,
+        os.path.join(jar_dir, "lib", "*"),
+        os.path.join(jar_dir, "libs", "*"),
+        os.path.join(base, "lib", "*"),
+        os.path.join(base, "libs", "*"),
+        os.path.join(base, "bin", "lib", "*"),
+        os.path.join(base, "bin", "libs", "*"),
+    ]
+    cp = _build_classpath(cp_entries)
+    if not cp:
+        return []
+    return [
+        (
+            "configured_classpath",
+            java_cmd + ["-cp", cp, "cz.siret.prank.program.Main", "predict"],
+            install_base,
+        )
+    ]
+
+
 def _launch_attempts_from_config():
-    prank_exe, jar_path, install_base, lib_glob = _resolve_p2rank_install(P2RANK_DIR)
+    settings = _runtime_p2rank_settings()
+    prank_exe, jar_path, install_base, lib_glob = _resolve_p2rank_install(
+        settings.get("P2RANK_PATH")
+    )
     attempts = []
 
     if prank_exe:
         attempts.append(("configured_prank", [prank_exe, "predict"], install_base))
 
     if jar_path:
-        java_cmd = _java_base_cmd()
+        java_cmd = _java_base_cmd(
+            settings.get("P2RANK_JAVA_EXE", "java"),
+            settings.get("P2RANK_JAVA_OPTS", "-Xmx4G"),
+        )
+        attempts.extend(_classpath_launch_attempts(java_cmd, jar_path, install_base))
         if os.path.isdir(os.path.dirname(lib_glob or "")):
-            classpath = os.pathsep.join([jar_path, lib_glob])
-            attempts.append(
-                (
-                    "configured_classpath",
-                    java_cmd
-                    + ["-cp", classpath, "cz.siret.prank.program.Main", "predict"],
-                    install_base,
+            classpath = _build_classpath([jar_path, lib_glob])
+            if classpath:
+                attempts.append(
+                    (
+                        "configured_classpath_legacy",
+                        java_cmd
+                        + ["-cp", classpath, "cz.siret.prank.program.Main", "predict"],
+                        install_base,
+                    )
                 )
-            )
         attempts.append(
             ("configured_jar", java_cmd + ["-jar", jar_path, "predict"], install_base)
         )
@@ -150,7 +226,9 @@ def get_box_from_p2rank_csv(pdb_file):
         pr_base = attempt_base or pr_base
 
         try:
-            completed = subprocess.run(cmd, check=False, shell=False, capture_output=True, text=True)
+            completed = subprocess.run(
+                cmd, check=False, shell=False, capture_output=True, text=True
+            )
         except Exception as e:
             failure_summaries.append(f"{mode}: exec_error={e}")
             continue
@@ -161,17 +239,27 @@ def get_box_from_p2rank_csv(pdb_file):
             break
 
         err_blob = "\n".join(
-            x for x in [(completed.stderr or "").strip(), (completed.stdout or "").strip()] if x
+            x
+            for x in [
+                (completed.stderr or "").strip(),
+                (completed.stdout or "").strip(),
+            ]
+            if x
         )
         if "NoClassDefFoundError: groovy/lang/GroovyObject" in err_blob:
             logging.warning(
-                "P2Rank launcher '%s' missing Groovy runtime on classpath; trying next launcher.",
+                "P2Rank launcher '%s' missing Groovy runtime on classpath; trying next launcher. "
+                "If all launchers fail, verify P2RANK_PATH points to the P2Rank install root (or bin dir) that includes lib/groovy jars.",
                 mode,
             )
         failure_summaries.append(f"{mode}: returncode={completed.returncode}")
 
     if not ran_ok:
-        logging.error("P2Rank failed after %d launcher attempt(s): %s", len(launch_attempts), "; ".join(failure_summaries))
+        logging.error(
+            "P2Rank failed after %d launcher attempt(s): %s",
+            len(launch_attempts),
+            "; ".join(failure_summaries),
+        )
         return None, None
 
     # Prefer the explicit output location; fall back to legacy locations if needed

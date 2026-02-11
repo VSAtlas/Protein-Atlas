@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 
 import analysis.dud_eval_types as dud_eval_types
 from analysis.dud_eval_discovery import (
@@ -30,7 +30,10 @@ from analysis.dud_eval_engine import (
 )
 from analysis.dud_eval_labels import _make_placeholder_row, parse_name_and_label
 from analysis.dud_eval_log import dbg, set_log_level
-from analysis.dud_eval_reporting import _write_pretty_summary, _write_pretty_table_noformat
+from analysis.dud_eval_reporting import (
+    _write_pretty_summary,
+    _write_pretty_table_noformat,
+)
 from analysis.dud_eval_schema import guess_ligfile_col
 from analysis.dud_eval_types import (
     CONSENSUS_CSV_BASENAME,
@@ -61,6 +64,7 @@ CONTROL_REDOCK_RE = re.compile(
 
 _CONTROL_PATTERNS_LOGGED = False
 
+
 def _compute_analysis_root(
     args: argparse.Namespace, cfg: Optional[dict], run_id_override: Optional[str] = None
 ) -> Path:
@@ -83,6 +87,7 @@ def _compute_analysis_root(
     analysis_root.mkdir(parents=True, exist_ok=True)
     return analysis_root
 
+
 def _format_run_label(run_id: Optional[str]) -> str:
     """
     Sanitize run_id for filenames. Falls back to 'none' when run_id is missing.
@@ -94,6 +99,7 @@ def _format_run_label(run_id: Optional[str]) -> str:
         if sep:
             label = label.replace(sep, "_")
     return label.replace(" ", "") or "none"
+
 
 def select_default_run_id(
     targets: List[TargetSpec],
@@ -213,6 +219,7 @@ def select_default_run_id(
 
     return max(candidates, key=lambda k: (run_mtimes.get(k, 0.0), k))
 
+
 def _load_default_cfg() -> Dict:
     cfg_path = Path("config.txt")
     try:
@@ -229,7 +236,7 @@ def _load_default_cfg() -> Dict:
         if not cfg_path.exists():
             dbg("DEBUG", "config", "config.txt not found; using CLI defaults")
             return {}
-        cfg = load_config("config.txt") or {}
+        cfg = load_config() or {}
         if cfg:
             validate_config(cfg)
             dbg("DEBUG", "config", f"config.txt loaded keys={sorted(cfg.keys())}")
@@ -239,6 +246,7 @@ def _load_default_cfg() -> Dict:
     except Exception as exc:
         dbg("WARN", "config", f"failed to load config.txt err={exc}")
         return {}
+
 
 def _resolve_run_label(
     pdb_id: str,
@@ -270,6 +278,7 @@ def _resolve_run_label(
     if active_run_id:
         return str(active_run_id)
     return "(none)"
+
 
 def _candidate_protein_logs(
     pdb_id: str,
@@ -324,6 +333,7 @@ def _candidate_protein_logs(
             break
     return selected, candidates
 
+
 def _manifest_library_for_target(
     manifest: dict,
     pdb_id: str,
@@ -364,6 +374,7 @@ def _manifest_library_for_target(
 
     return ""
 
+
 def _manifest_protein_entries(manifest: dict) -> List[Dict[str, str]]:
     """
     Return the manifest proteins entries in order, without collapsing by pdb_id.
@@ -385,6 +396,7 @@ def _manifest_protein_entries(manifest: dict) -> List[Dict[str, str]]:
         ph = str(entry.get("ph", "") or "").strip()
         entries.append({"pdb_id": pdb_id, "variant": variant, "ph": ph})
     return entries
+
 
 def _manifest_proteins_by_pdb(manifest: dict) -> Dict[str, Dict[str, str]]:
     """
@@ -414,6 +426,7 @@ def _manifest_proteins_by_pdb(manifest: dict) -> Dict[str, Dict[str, str]]:
         ph = str(entry.get("ph", "") or "").strip()
         out[pdb_id] = {"variant": variant, "ph": ph}
     return out
+
 
 def _build_control_records(
     pdb_id: str,
@@ -578,6 +591,7 @@ def _build_control_records(
     }
 
     return long_rows, summary_row, meta
+
 
 def main():
     ap = argparse.ArgumentParser(

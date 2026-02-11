@@ -76,7 +76,7 @@ DEFAULT_SINCE_EPOCH = os.environ.get("BENCH_ANALYSIS_SINCE_EPOCH") or os.environ
 try:
     from input_and_export_functions import load_config, validate_config
 
-    _cfg = load_config("config.txt") or {}
+    _cfg = load_config() or {}
     try:
         validate_config(_cfg)
     except Exception:
@@ -417,7 +417,9 @@ def _prepped_search_dirs_for(pdb_id: str) -> list[Path]:
     """
     base_overall = Path(DEFAULT_DOCKED_ROOT).parent
     processed_root = Path(_cfg.get("OUTPUT_DIR") or (base_overall / "processed_pdbs"))
-    lib_root = Path(_cfg.get("PREPPED_LIGANDS_DIR") or (base_overall / "prepped_ligands"))
+    lib_root = Path(
+        _cfg.get("PREPPED_LIGANDS_DIR") or (base_overall / "prepped_ligands")
+    )
 
     dirs: list[Path] = []
     # per-PDB prepped ligands

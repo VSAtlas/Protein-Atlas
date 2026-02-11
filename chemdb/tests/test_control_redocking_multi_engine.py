@@ -11,11 +11,11 @@ def test_control_redocking_multi_engine_runs_per_enabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import druggability_orchestrator
-    from src.docking import docking_control_redock as docking
-    from src.docking import docking_ledock
-    from src.docking import docking_gnina
-    from src.docking import docking_dock6
-    from src.docking import docking_vina
+    from docking import docking_control_redock as docking
+    from docking import docking_ledock
+    from docking import docking_gnina
+    from docking import docking_dock6
+    from docking import docking_vina
     from prep_docking import prep_for_ledock
     from path_router import make_paths, docked_dir, receptor_file
 
@@ -178,7 +178,7 @@ def test_control_redocking_multi_engine_runs_per_enabled(
 
     monkeypatch.setattr(docking_vina, "emit_vina_config", fake_emit)
 
-    from src.docking import run_vina as _run_vina_mod
+    from docking import run_vina as _run_vina_mod
 
     def fake_run(exe, conf_path, lig_path, out_path):
         out_p = Path(out_path)
