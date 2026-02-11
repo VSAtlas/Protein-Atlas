@@ -177,6 +177,18 @@ No-library docking mode:
       but it will SKIP docking for DUD/FDA libraries. This is useful
       when you only want control validation and planned ligand lists.
 
+Tool verification:
+  --verify-tools
+      Run startup tool verification using fixed "prefer_config" resolution
+      (configured path first, PATH fallback second). This verification is
+      CLI-only and does not auto-run from config defaults.
+      When used, main exits after verification.
+
+Effective config:
+  --print-effective-config
+      Print the fully resolved runtime config as pretty JSON and exit.
+      Resolution uses the same precedence as normal startup.
+
 Artifact retention:
   --retain
       Force artifact retention on for this run.
@@ -266,6 +278,23 @@ Examples:
   python main.py --pdbs "1BN1,2OJ9" --single imatinib
 
 """
+import warnings
+import json
+
+warnings.filterwarnings(
+    "ignore",
+    message=(
+        "to-Python converter for boost::shared_ptr<RDKit::FilterHierarchyMatcher> "
+        "already registered; second conversion method ignored."
+    ),
+    category=RuntimeWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*joblib will operate in serial mode.*",
+    category=UserWarning,
+)
+
 from pdb_fixer import get_atom_rules
 import sys
 import logging
@@ -323,6 +352,7 @@ from cli.run_context import (
     _apply_resume_config_from_snapshot,
     ConfigDict,
 )
+from config.tool_resolver import resolve_required_tools
 from docking.docking_vina import emit_vina_config as _emit_vina_config_impl
 from docking.docking_ligands import _resolve_test_mode
 from docking.library_mode import _coerce_test_map, parse_test_libraries
@@ -388,6 +418,48 @@ def _bench2_enabled(argv: list[str]) -> bool:
 def _dude_enabled(argv: list[str]) -> bool:
     """Check if -dude or --dude is present in arguments."""
     return _cli_has(argv, "-dude") or _cli_has(argv, "--dude")
+
+
+_TOOL_VERIFY_TARGETS: tuple[tuple[str, str, bool], ...] = (
+    ("VINA_EXE", "vina", True),
+    ("OPENBABEL_PATH", "obabel", True),
+    ("MGLTOOLS_PYTHON", "pythonsh", True),
+    ("PREPARE_RECEPTOR_SCRIPT", "prepare_receptor4.py", True),
+    ("PREPARE_LIGAND_SCRIPT", "prepare_ligand4.py", True),
+    ("P2RANK_PATH", "prank", True),
+)
+
+
+def _verify_tools_if_requested(cfg: ConfigDict, argv: list[str]) -> None:
+    """
+    Run tool verification only when explicitly requested by CLI flag.
+    Config defaults remain false and do not auto-enable verification.
+    """
+    cfg.setdefault("TOOL_VERIFY_ON_START", False)
+    cli_verify = _cli_has(argv, "--verify-tools")
+    cfg["TOOL_VERIFY_ON_START"] = bool(cli_verify)
+    if not cli_verify:
+        return
+
+    missing_required = resolve_required_tools(cfg, _TOOL_VERIFY_TARGETS)
+
+    if missing_required:
+        print(f"{len(missing_required)} missing", file=sys.stderr)
+        for key, fallback_cmd in missing_required:
+            print(f"- {key} ({fallback_cmd})", file=sys.stderr)
+        sys.exit(2)
+    print("Tools all successfully verified")
+
+
+def _print_effective_config_and_exit(cfg: ConfigDict) -> None:
+    payload: dict[str, Any] = {}
+    for key in sorted(cfg.keys()):
+        k = str(key)
+        if k.startswith("_"):
+            continue
+        payload[k] = cfg[key]
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    sys.exit(0)
 
 
 def _normalize_artifact_retention_mode(raw: Any) -> str:
@@ -981,6 +1053,15 @@ def main() -> None:
         print(HELP_TEXT)
         sys.exit(0)
 
+    if _cli_has(sys.argv, "--print-effective-config"):
+        cfg = ConfigDict(load_inputs())
+        _print_effective_config_and_exit(cfg)
+
+    if _cli_has(sys.argv, "--verify-tools"):
+        cfg = ConfigDict(load_inputs())
+        _verify_tools_if_requested(cfg, sys.argv)
+        sys.exit(0)
+
     print("MODELLER is working with license.")
     is_resume = _cli_has(sys.argv, "-resume") or _cli_has(sys.argv, "--resume")
     cli_run_id = _cli_val(sys.argv, "--run-id") or _cli_val(sys.argv, "-run-id")
@@ -1053,6 +1134,7 @@ def main() -> None:
         cfg["RUN_ID"] = run_id
 
     validate_config(cfg)
+    _verify_tools_if_requested(cfg, argv_for_parsing)
 
     rules = get_atom_rules()
     alias_sets = getattr(rules, "alias_sets", None)

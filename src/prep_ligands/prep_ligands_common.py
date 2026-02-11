@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 from collections import defaultdict
 
+from config.tool_resolver import resolve_tool
 from rdkit import Chem
 from input_and_export_functions import load_config
 
@@ -1309,8 +1310,10 @@ def quick_pdbqt_validate(path: Path) -> tuple[bool, int, str]:
     return True, atoms, ""
 
 
-def read_config(path="config.txt") -> Dict[str, Any]:
-    return load_config(path)
+def read_config(path: str | None = None) -> Dict[str, Any]:
+    if path:
+        return load_config(path)
+    return load_config()
 
 
 def _resolve_obabel_exe(obabel_cfg: str) -> str:
@@ -1325,28 +1328,40 @@ def _resolve_obabel_exe(obabel_cfg: str) -> str:
 
 
 def _resolve_prepare_ligand4(mgltools_path: str, cfg: Dict[str, str]) -> Path:
-    """Support PREPARE_LIGAND_SCRIPT override; probe Windows-style and Linux-style locations."""
-    override = cfg.get("PREPARE_LIGAND_SCRIPT")
-    if override:
-        pp = Path(override)
-        if pp.exists():
-            return pp
-    mp = Path(mgltools_path)
-    win_probe = (
-        mp
-        / "Lib"
-        / "site-packages"
-        / "AutoDockTools"
-        / "Utilities24"
-        / "prepare_ligand4.py"
-    )
-    lin_probe = (
-        mp / "MGLToolsPckgs" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py"
-    )
-    print("using prepare_ligand4.py at ", lin_probe)
-    if win_probe.exists():
-        return win_probe
-    return lin_probe
+    """Resolve prepare_ligand4 path from config/PATH, then MGLTools root derivation."""
+    resolved = resolve_tool(cfg, "PREPARE_LIGAND_SCRIPT", "prepare_ligand4.py")
+    resolved_path = str(resolved.get("resolved_path", "") or "").strip()
+    if resolved_path:
+        candidate = Path(resolved_path).expanduser()
+        if candidate.exists():
+            return candidate
+
+    mgl_root = str(mgltools_path or "").strip()
+    if mgl_root:
+        mp = Path(mgl_root).expanduser()
+        win_probe = (
+            mp
+            / "Lib"
+            / "site-packages"
+            / "AutoDockTools"
+            / "Utilities24"
+            / "prepare_ligand4.py"
+        )
+        lin_probe = (
+            mp
+            / "MGLToolsPckgs"
+            / "AutoDockTools"
+            / "Utilities24"
+            / "prepare_ligand4.py"
+        )
+        if win_probe.exists():
+            return win_probe
+        if lin_probe.exists():
+            return lin_probe
+
+    if resolved_path:
+        return Path(resolved_path).expanduser()
+    return Path("prepare_ligand4.py")
 
 
 def get_short_path_name(long_name):

@@ -13,13 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-try:
-    from input_and_export_functions import load_config
-except ModuleNotFoundError:
-    REPO_ROOT = Path(__file__).resolve().parents[3]
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    from input_and_export_functions import load_config
+from input_and_export_functions import load_config
 
 COMPONENT = "[rescore-reranker]"
 SCORCH_WEIGHT_DEFAULT = 0.65

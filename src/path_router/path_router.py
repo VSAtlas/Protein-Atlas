@@ -169,56 +169,20 @@ def _default_config_path() -> Path:
     return Path(__file__).resolve().parents[2] / "config.txt"
 
 
-def _read_basic_config(path: Path) -> Dict[str, str]:
-    data: Dict[str, str] = {}
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-    except FileNotFoundError:
-        return data
-    except Exception:
-        return data
-    for ln in text.splitlines():
-        s = ln.strip()
-        if not s or s.startswith("#"):
-            continue
-        if "=" not in s:
-            continue
-        k, v = s.split("=", 1)
-        data[k.strip().upper()] = v.strip()
-    return data
-
-
-def _expand_tokens(values: Dict[str, str]) -> Dict[str, str]:
-    if not values:
-        return {}
-
-    def expand(val: str) -> str:
-        result = val
-        for token in ("OVERALL_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
-            token_val = values.get(token)
-            if not token_val:
-                continue
-            result = result.replace(f"${{{token}}}", token_val)
-            result = result.replace(f"${token}", token_val)
-            result = result.replace(f"{{{token}}}", token_val)
-        return result
-
-    return {k: expand(v) for k, v in values.items()}
-
-
 def _load_router_roots() -> RouterRoots:
     cfg_path = _default_config_path()
+    expanded: Dict[str, str]
     try:
         from input_and_export_functions import load_config
 
         expanded = load_config(config_path=str(cfg_path), base_dir=cfg_path.parent)
     except Exception:
-        cfg = _read_basic_config(cfg_path)
-        for key in ("OVERALL_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
-            env_val = os.environ.get(key)
-            if env_val:
-                cfg[key] = env_val
-        expanded = _expand_tokens(cfg)
+        # Keep router functional even if shared config import fails.
+        expanded = {}
+    for key in ("OVERALL_DIR", "OUTPUT_DIR", "DOCKED_DIR"):
+        env_val = os.environ.get(key)
+        if env_val:
+            expanded[key] = env_val
     run_id = (os.environ.get("ATLAS_RUN_ID") or "").strip()
     cfg_env = os.environ.get("CONFIGS_DIR")
     if cfg_env:
@@ -226,7 +190,9 @@ def _load_router_roots() -> RouterRoots:
 
     over_raw = expanded.get("OVERALL_DIR")
     overall = (
-        Path(over_raw).expanduser() if over_raw else Path(__file__).resolve().parent
+        Path(over_raw).expanduser()
+        if over_raw
+        else Path(__file__).resolve().parents[2]
     )
 
     out_raw = expanded.get("OUTPUT_DIR")

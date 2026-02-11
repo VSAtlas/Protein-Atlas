@@ -90,7 +90,7 @@ from path_router.path_router import make_paths
 try:
     from input_and_export_functions import load_config, validate_config
 
-    _cfg = load_config("config.txt") or {}
+    _cfg = load_config() or {}
     try:
         validate_config(_cfg)
     except Exception:

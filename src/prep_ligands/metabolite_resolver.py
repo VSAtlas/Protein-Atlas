@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Mapping, Sequence
 
-    def load_config(path: str) -> Dict[str, Any]: ...
+    def load_config(config_path: str = "config.txt") -> Dict[str, Any]: ...
     def validate_config(cfg: Dict[str, Any]) -> None: ...
 else:
     from input_and_export_functions import load_config, validate_config
@@ -36,7 +36,7 @@ else:
 
 log = logging.getLogger("metabolite_resolver")
 
-_cfg = load_config("config.txt")
+_cfg = load_config()
 validate_config(_cfg)
 
 # optional chemdb data: prefer external alias/rule tables if available

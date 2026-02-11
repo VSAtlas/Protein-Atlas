@@ -10,6 +10,7 @@ from typing import Any, Dict
 
 _LOG = logging.getLogger(__name__)
 _EMITTED_ALIAS_WARNINGS: set[tuple[str, str]] = set()
+_EMITTED_PORTABILITY_WARNINGS: set[str] = set()
 _VAR_PATTERN = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
 
 # Canonical key -> legacy aliases accepted from config/env.
@@ -91,6 +92,7 @@ _BOOL_KEYS = {
     "POCKET_EVAL_CV_ENABLE",
     "POCKET_EVAL_CV_REQUIRE_SCORES",
     "POCKET_EVAL_ORACLE_ENABLE",
+    "TOOL_VERIFY_ON_START",
 }
 
 _INT_KEYS = {
@@ -222,6 +224,7 @@ def default_tools(base: Path) -> Dict[str, Any]:
         "SCORCH": os.environ.get("SCORCH")
         or os.environ.get("SCORCH_SCRIPT")
         or scorch_script_default,
+        "SCORCH_ENV_PREFIX": os.environ.get("SCORCH_ENV_PREFIX"),
         "SCORCH_ENV": os.environ.get("SCORCH_ENV") or "scorch-env",
     }
 
@@ -231,6 +234,8 @@ def default_runtime() -> Dict[str, Any]:
         "CPU_ONLY": True,
         "CPU": os.cpu_count() or 8,
         "FORCE_REPROCESS": False,
+        # CLI-only gate in main.py; default remains false in config.
+        "TOOL_VERIFY_ON_START": False,
         "DOCKING_MODE": "discovery",
         "QUIET_CONSOLE": False,
         "FILTER_INVALID": False,
@@ -356,6 +361,13 @@ def _warn_alias(alias: str, canonical: str) -> None:
     )
 
 
+def _warn_portability_once(key: str, message: str) -> None:
+    if key in _EMITTED_PORTABILITY_WARNINGS:
+        return
+    _EMITTED_PORTABILITY_WARNINGS.add(key)
+    _LOG.warning(message)
+
+
 def _to_bool(value: Any, default: Any = None) -> Any:
     try:
         return bool(strtobool(str(value)))
@@ -466,6 +478,11 @@ def _derive_mgltools(cfg: Dict[str, Any], explicit: set[str]) -> None:
     if not _is_blank(mgl_root):
         mgl_path = Path(str(mgl_root)).expanduser()
         cfg["MGLTOOLS_PATH"] = str(mgl_path)
+        if "MGLTOOLS_PYTHON" in explicit or "PREPARE_RECEPTOR_SCRIPT" in explicit:
+            _warn_portability_once(
+                "mgltools_derived",
+                "MGLTOOLS_PATH is set; deriving MGLTOOLS_PYTHON and PREPARE_RECEPTOR_SCRIPT from it for portability.",
+            )
         # Canonical behavior: derive ADT paths from MGLTOOLS_PATH for portability.
         cfg["MGLTOOLS_PYTHON"] = str(mgl_path / "bin" / "pythonsh")
         cfg["PREPARE_RECEPTOR_SCRIPT"] = str(

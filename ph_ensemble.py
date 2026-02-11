@@ -12,6 +12,7 @@ import hashlib
 from propka_wire import apply_propka_states
 import automate_protein_prep
 from path_router import ph_ensemble_dir
+from input_and_export_functions import load_config
 
 elog = logging.getLogger("ph_ensemble")
 if not elog.handlers:
@@ -306,15 +307,12 @@ def build_ph_ensemble(
     if "pHlogs" in os.environ:
         enable_file_log = _truthy(os.environ["pHlogs"])
     else:
-        # very light config.txt lookup (same dir as this file)
-        cfg = Path(__file__).resolve().parent / "config.txt"
-        if cfg.exists():
-            for ln in cfg.read_text().splitlines():
-                if "=" in ln:
-                    k, v = ln.split("=", 1)
-                    if k.strip().lower() == "phlogs":
-                        enable_file_log = _truthy(v)
-                        break
+        try:
+            root = Path(__file__).resolve().parent
+            cfg = load_config(config_path=str(root / "config.txt"), base_dir=root)
+            enable_file_log = _truthy(cfg.get("pHlogs", cfg.get("PHLOGS", "")))
+        except Exception:
+            enable_file_log = False
     if enable_file_log:
         fh = logging.FileHandler(
             str(ensemble_dir / "pH_ensemble.log"), mode="w", encoding="utf-8"

@@ -16,11 +16,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-# Ensure repository root is in sys.path for root-level imports
-REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 from input_and_export_functions import load_config
 
 try:
@@ -35,6 +30,7 @@ except Exception:  # pragma: no cover - optional dependency
 COMPONENT = "[scorch-rescore]"
 SCORCH_SCRIPT: Path | None = None
 SCORCH_ENV: str = "scorch-env"
+SCORCH_ENV_PREFIX: Path | None = None
 SCORCH_ROOT: Path | None = None
 SCORCH_TOP_FRACTION_DEFAULT = 0.15
 SCORCH_TOP_FRACTION_KEY = "SCORCH_TOP_FRACTION"
@@ -433,7 +429,7 @@ def _resolve_roots(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path]:
 
 
 def _preflight(cfg: Dict[str, object], logger: logging.Logger) -> bool:
-    global SCORCH_SCRIPT, SCORCH_ENV, SCORCH_ROOT
+    global SCORCH_SCRIPT, SCORCH_ENV, SCORCH_ENV_PREFIX, SCORCH_ROOT
 
     if shutil.which("micromamba") is None:
         logger.error(
@@ -442,6 +438,7 @@ def _preflight(cfg: Dict[str, object], logger: logging.Logger) -> bool:
         return False
 
     script_cfg = cfg.get("SCORCH") or cfg.get("SCORCH_SCRIPT")
+    env_prefix_cfg = cfg.get("SCORCH_ENV_PREFIX")
     env_cfg = cfg.get("SCORCH_ENV")
 
     if script_cfg:
@@ -449,6 +446,10 @@ def _preflight(cfg: Dict[str, object], logger: logging.Logger) -> bool:
 
     if env_cfg:
         SCORCH_ENV = str(env_cfg)
+    if env_prefix_cfg and str(env_prefix_cfg).strip():
+        SCORCH_ENV_PREFIX = Path(str(env_prefix_cfg).strip()).expanduser().resolve()
+    else:
+        SCORCH_ENV_PREFIX = None
 
     if not SCORCH_SCRIPT:
         logger.error(
@@ -467,11 +468,24 @@ def _preflight(cfg: Dict[str, object], logger: logging.Logger) -> bool:
         return False
 
     SCORCH_ROOT = SCORCH_SCRIPT.parent
+    if SCORCH_ENV_PREFIX is not None and not SCORCH_ENV_PREFIX.exists():
+        logger.error(
+            "%s action=preflight status=failed reason=missing_scorch_env_prefix path=%s",
+            COMPONENT,
+            SCORCH_ENV_PREFIX,
+        )
+        return False
+
+    env_mode = "prefix" if SCORCH_ENV_PREFIX is not None else "name"
+    env_value = (
+        str(SCORCH_ENV_PREFIX) if SCORCH_ENV_PREFIX is not None else str(SCORCH_ENV)
+    )
     logger.info(
-        "%s action=preflight status=ok scorch_script=%s scorch_env=%s scorch_root=%s",
+        "%s action=preflight status=ok scorch_script=%s scorch_env_mode=%s scorch_env=%s scorch_root=%s",
         COMPONENT,
         SCORCH_SCRIPT,
-        SCORCH_ENV,
+        env_mode,
+        env_value,
         SCORCH_ROOT,
     )
     return True
@@ -1412,23 +1426,27 @@ def _run_prep_for_scorch(
 
 
 def _scorch_command(receptor: Path, ligands: Path, threads: int) -> List[str]:
-    return [
-        "micromamba",
-        "run",
-        "-n",
-        SCORCH_ENV,
-        "python",
-        str(SCORCH_SCRIPT),
-        "--receptor",
-        str(receptor),
-        "--ligand",
-        str(ligands),
-        "--out",
-        "{out}",
-        "--threads",
-        str(threads),
-        "--verbose",
-    ]
+    cmd = ["micromamba", "run"]
+    if SCORCH_ENV_PREFIX is not None:
+        cmd.extend(["-p", str(SCORCH_ENV_PREFIX)])
+    else:
+        cmd.extend(["-n", SCORCH_ENV])
+    cmd.extend(
+        [
+            "python",
+            str(SCORCH_SCRIPT),
+            "--receptor",
+            str(receptor),
+            "--ligand",
+            str(ligands),
+            "--out",
+            "{out}",
+            "--threads",
+            str(threads),
+            "--verbose",
+        ]
+    )
+    return cmd
 
 
 def _annotate_csv(

@@ -11,6 +11,7 @@ from datetime import datetime
 import shutil
 from collections import Counter
 
+from config.tool_resolver import resolve_tool
 from input_and_export_functions import load_config, validate_config
 from path_router import make_paths
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
@@ -859,7 +860,7 @@ def _bulk_init_config_and_paths(
             "prep_ligands: microstate_dedup=True (stage 4: microstate registry + canonical PDBQT shadow)"
         )
 
-    cfg = load_config("config.txt")
+    cfg = load_config()
     validate_config(cfg)
     ctx["cfg"] = cfg
     pdb_token = (
@@ -1134,22 +1135,16 @@ def _bulk_init_config_and_paths(
         f"pdbqt_dir={output_ligands_dir}"
     )
 
-    mgltools_python = cfg["MGLTOOLS_PYTHON"]
-    mgltools_path = cfg["MGLTOOLS_PATH"]
-    obabel_cfg = cfg["OPENBABEL_PATH"]
-
-    obabel_exe = obabel_cfg
-    obabel_exe_short = get_short_path_name(obabel_exe)
-
-    if not os.environ.get("BABEL_DATADIR"):
-        obabel_dir = Path(obabel_exe).resolve().parent
-        data_dir = obabel_dir / "data"
-        if data_dir.exists():
-            os.environ["BABEL_DATADIR"] = str(data_dir)
+    mgltools_python = str(
+        resolve_tool(cfg, "MGLTOOLS_PYTHON", "pythonsh").get("resolved_path", "") or ""
+    ).strip()
+    mgltools_path = str(cfg.get("MGLTOOLS_PATH", "") or "").strip()
+    obabel_exe = str(
+        resolve_tool(cfg, "OPENBABEL_PATH", "obabel").get("resolved_path", "") or ""
+    ).strip()
 
     for label, p in [
         ("MGLTOOLS_PYTHON", mgltools_python),
-        ("MGLTOOLS_PATH", mgltools_path),
         ("OPENBABEL_PATH", obabel_exe),
         ("EXTRACTED_LIGANDS_DIR", ligand_extracted_dir),
         ("LIGANDS_MOL2_DIR", ligands_mol2_dir),
@@ -1158,6 +1153,13 @@ def _bulk_init_config_and_paths(
         if not str(p).strip():
             raise RuntimeError(f"Config value missing/empty: {label}")
 
+    if not os.environ.get("BABEL_DATADIR"):
+        obabel_dir = Path(obabel_exe).resolve().parent
+        data_dir = obabel_dir / "data"
+        if data_dir.exists():
+            os.environ["BABEL_DATADIR"] = str(data_dir)
+
+    obabel_exe_short = get_short_path_name(obabel_exe)
     mgltools_python_short = get_short_path_name(mgltools_python)
     prepare_script = _resolve_prepare_ligand4(mgltools_path, cfg)
     if not prepare_script.exists():
@@ -1889,20 +1891,14 @@ def prep_ligands_with_mgltools(
         return p if isinstance(p, Path) else Path(p)
 
     def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
-        """Lightweight config reader that prefers env, then config.txt next to this file, else default."""
+        """Resolve config from env first, then shared read_config(), then default."""
         v = os.environ.get(key)
         if v:
             return v
-        try:
-            from input_and_export_functions import load_config
-
-            root = Path(__file__).resolve().parents[2]
-            cfg = load_config(config_path=str(root / "config.txt"), base_dir=root)
-            val = cfg.get(key)
-            if val not in (None, ""):
-                return str(val)
-        except Exception:
-            pass
+        cfg = read_config()
+        val = cfg.get(key)
+        if val not in (None, ""):
+            return str(val)
         return default
 
     def _canon_base(output_root: Path, pdb_id: str) -> Path:

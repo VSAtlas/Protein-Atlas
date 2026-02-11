@@ -10,6 +10,14 @@ import uuid
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from config.tool_resolver import (
+    build_micromamba_runner as _build_micromamba_runner_shared,
+    common_ambertools_prefixes as _common_ambertools_prefixes_shared,
+    looks_like_pkgs_cache as _looks_like_pkgs_cache_shared,
+    prefix_has_tool as _prefix_has_tool_shared,
+    resolve_ambertools_prefix as _resolve_ambertools_prefix_shared,
+    resolve_micromamba as _resolve_micromamba_shared,
+)
 from installation import load_config
 
 
@@ -110,11 +118,11 @@ def _cfg_get(cfg: object | None, key: str, default: object) -> object:
 
 
 def _looks_like_pkgs_cache(prefix: Path) -> bool:
-    return "/micromamba/pkgs" in prefix.as_posix()
+    return _looks_like_pkgs_cache_shared(prefix)
 
 
 def _prefix_has_tool(prefix: Path, tool: str) -> bool:
-    return (prefix / "bin" / tool).is_file()
+    return _prefix_has_tool_shared(prefix, tool)
 
 
 def _resolve_global_cpu_limit(cfg: object | None) -> Optional[int]:
@@ -130,59 +138,11 @@ def _resolve_global_cpu_limit(cfg: object | None) -> Optional[int]:
 
 
 def _resolve_micromamba() -> Optional[Path]:
-    env_mm = os.environ.get("MICROMAMBA_EXE")
-    if env_mm:
-        env_path = Path(env_mm).expanduser()
-        if env_path.is_file():
-            return env_path
-    found = shutil.which("micromamba")
-    if found:
-        return Path(found)
-    home_candidate = Path.home() / "micromamba" / "bin" / "micromamba"
-    if home_candidate.is_file():
-        return home_candidate
-    return None
+    return _resolve_micromamba_shared()
 
 
 def _common_ambertools_prefixes(cfg: object | None) -> list[Path]:
-    candidates: list[Path] = []
-    env_candidates = [
-        os.environ.get("MMGBSA_AMBERTOOLS_PREFIX"),
-        os.environ.get("AMBERTOOLS_PREFIX"),
-        os.environ.get("CONDA_PREFIX"),
-    ]
-    for raw in env_candidates:
-        if raw:
-            candidates.append(Path(raw).expanduser())
-
-    overall = _cfg_get(cfg, "OVERALL_DIR", None)
-    if overall:
-        base = Path(str(overall)).expanduser().resolve().parent
-        candidates.append(base / "tools" / "envs" / "ambertools")
-
-    mamba_root = os.environ.get("MAMBA_ROOT_PREFIX")
-    if mamba_root:
-        candidates.append(Path(mamba_root).expanduser() / "envs" / "AmberTools25")
-
-    home = Path.home()
-    candidates.extend(
-        [
-            home / "tools" / "envs" / "ambertools",
-            home / "micromamba" / "envs" / "AmberTools25",
-            home / "miniconda3" / "envs" / "AmberTools25",
-            home / "anaconda3" / "envs" / "AmberTools25",
-        ]
-    )
-
-    seen: set[str] = set()
-    out: list[Path] = []
-    for path in candidates:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(path)
-    return out
+    return _common_ambertools_prefixes_shared(cfg)
 
 
 def _available_cpus() -> int:
@@ -214,16 +174,7 @@ def _physical_core_count() -> int:
 
 
 def _resolve_ambertools_prefix(cfg: object | None) -> Optional[str]:
-    env_prefix = os.environ.get("AMBERTOOLS_PREFIX")
-    if env_prefix:
-        return env_prefix
-    cfg_prefix = _cfg_get(cfg, "MMGBSA_AMBERTOOLS_PREFIX", None)
-    if cfg_prefix:
-        return str(cfg_prefix)
-    fallback = _cfg_get(cfg, "AMBERTOOLS_PREFIX", None)
-    if fallback:
-        return str(fallback)
-    return None
+    return _resolve_ambertools_prefix_shared(cfg)
 
 
 def _select_cpptraj_runner(
@@ -240,12 +191,12 @@ def _select_cpptraj_runner(
                 "ignoring_AMBERTOOLS_PREFIX",
             )
         elif _prefix_has_tool(prefix, "cpptraj"):
-            micromamba = _resolve_micromamba()
-            if not micromamba:
+            try:
+                runner = _build_micromamba_runner_shared(prefix)
+            except FileNotFoundError:
                 raise FileNotFoundError(
                     "micromamba not found; cannot run cpptraj from prefix"
                 )
-            runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "cpptraj", f"prefix:{prefix}"
         else:
             _log(
@@ -262,12 +213,12 @@ def _select_cpptraj_runner(
     common_prefixes = _common_ambertools_prefixes(cfg)
     for prefix in common_prefixes:
         if _prefix_has_tool(prefix, "cpptraj") and not _looks_like_pkgs_cache(prefix):
-            micromamba = _resolve_micromamba()
-            if not micromamba:
+            try:
+                runner = _build_micromamba_runner_shared(prefix)
+            except FileNotFoundError:
                 raise FileNotFoundError(
                     "micromamba not found; cannot run cpptraj from prefix"
                 )
-            runner = [str(micromamba), "run", "-p", str(prefix)]
             return runner, "cpptraj", f"prefix:{prefix}"
 
     raise FileNotFoundError("could not locate cpptraj; set AMBERTOOLS_PREFIX or PATH")
@@ -290,12 +241,12 @@ def _select_sander_runner(
         else:
             for tool in tool_order:
                 if _prefix_has_tool(prefix, tool):
-                    micromamba = _resolve_micromamba()
-                    if not micromamba:
+                    try:
+                        runner = _build_micromamba_runner_shared(prefix)
+                    except FileNotFoundError:
                         raise FileNotFoundError(
                             "micromamba not found; cannot run sander from prefix"
                         )
-                    runner = [str(micromamba), "run", "-p", str(prefix)]
                     return (
                         runner,
                         str((prefix / "bin" / tool)),
@@ -319,12 +270,12 @@ def _select_sander_runner(
         if _prefix_has_tool(prefix, tool_order[0]) and not _looks_like_pkgs_cache(
             prefix
         ):
-            micromamba = _resolve_micromamba()
-            if not micromamba:
+            try:
+                runner = _build_micromamba_runner_shared(prefix)
+            except FileNotFoundError:
                 raise FileNotFoundError(
                     "micromamba not found; cannot run sander from prefix"
                 )
-            runner = [str(micromamba), "run", "-p", str(prefix)]
             return (
                 runner,
                 str((prefix / "bin" / tool_order[0])),
@@ -334,12 +285,12 @@ def _select_sander_runner(
         if _prefix_has_tool(prefix, tool_order[1]) and not _looks_like_pkgs_cache(
             prefix
         ):
-            micromamba = _resolve_micromamba()
-            if not micromamba:
+            try:
+                runner = _build_micromamba_runner_shared(prefix)
+            except FileNotFoundError:
                 raise FileNotFoundError(
                     "micromamba not found; cannot run sander from prefix"
                 )
-            runner = [str(micromamba), "run", "-p", str(prefix)]
             return (
                 runner,
                 str((prefix / "bin" / tool_order[1])),
@@ -473,7 +424,7 @@ def _run_mpi_smoke(
 
     cmd: List[str] = []
     if amber_prefix and micromamba:
-        cmd.extend([str(micromamba), "run", "-p", str(amber_prefix)])
+        cmd.extend(_build_micromamba_runner_shared(amber_prefix))
     cmd.extend([launcher, "-np", str(max(1, min(2, ranks))), sander_path, "-h"])
 
     cmd_path.write_text(" ".join(cmd), encoding="utf-8")
@@ -1018,7 +969,7 @@ def run_implicit_md(
     env_runner: List[str] = []
     if use_mpi:
         if amber_prefix and micromamba:
-            env_runner = [str(micromamba), "run", "-p", str(amber_prefix)]
+            env_runner = _build_micromamba_runner_shared(amber_prefix)
         else:
             env_runner = list(cmd_prefix)
     else:

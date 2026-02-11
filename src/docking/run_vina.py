@@ -15,7 +15,7 @@ from input_and_export_functions import extract_best_score
 try:
     from input_and_export_functions import load_config, validate_config
 
-    _CFG = load_config("config.txt")
+    _CFG = load_config()
     validate_config(_CFG)
 except Exception:
     _CFG = {}

@@ -448,12 +448,10 @@ def _pick_propka_exe() -> Optional[str]:
       2) env var PROPKA_EXE
       3) PATH: propka31 / propka30 / propka
     """
-    # 1) config.txt
-    cfg_path = Path(__file__).resolve().parent / "config.txt"
+    # 1) normalized config loader
     try:
-        from installation import load_config as _load_cfg
-
-        cfg = _load_cfg() if cfg_path.exists() else {}
+        root = Path(__file__).resolve().parent
+        cfg = _load_cfg_new(config_path=str(root / "config.txt"), base_dir=root)
     except Exception:
         cfg = {}
     if isinstance(cfg, dict):

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional, Set, cast
 
+from config.tool_resolver import resolve_tool
 from rdkit import Chem, rdBase
 
 from prep_ligands.prep_ligands_common import (
@@ -278,16 +279,17 @@ def prep_ligands_from_pdb(
         }
 
     config = read_config()
-    mgltools_python = config.get("MGLTOOLS_PYTHON")
-    mgltools_path = config.get("MGLTOOLS_PATH")
-    obabel_exe_cfg = config.get("OPENBABEL_PATH")
+    mgltools_python = str(
+        resolve_tool(config, "MGLTOOLS_PYTHON", "pythonsh").get("resolved_path", "")
+        or ""
+    ).strip()
+    mgltools_path = str(config.get("MGLTOOLS_PATH", "") or "").strip()
+    obabel_exe = str(
+        resolve_tool(config, "OPENBABEL_PATH", "obabel").get("resolved_path", "") or ""
+    ).strip()
+    if not mgltools_python or not obabel_exe:
+        raise RuntimeError("Missing required tool paths: MGLTOOLS_PYTHON or OPENBABEL_PATH")
 
-    if not mgltools_python or not mgltools_path or not obabel_exe_cfg:
-        raise RuntimeError(
-            "Missing required tool paths: MGLTOOLS_PATH and OPENBABEL_PATH (MGLTOOLS_PYTHON is derived from MGLTOOLS_PATH)"
-        )
-
-    obabel_exe = obabel_exe_cfg
     obabel_exe_short = get_short_path_name(obabel_exe)
 
     mgltools_python_short = get_short_path_name(mgltools_python)

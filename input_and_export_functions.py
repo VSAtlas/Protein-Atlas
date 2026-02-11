@@ -153,6 +153,7 @@ _ALLOWED_ENV_OVERRIDES = {
     # SCORCH rescoring knobs
     "SCORCH",
     "SCORCH_SCRIPT",
+    "SCORCH_ENV_PREFIX",
     "SCORCH_ENV",
     # MMGBSA receptor prep knobs
     "MMGBSA_STRIP_METALS",

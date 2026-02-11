@@ -5,7 +5,7 @@ from input_and_export_functions import load_config, validate_config
 
 
 def decompress_sdf_gz_files():
-    cfg = load_config("config.txt")
+    cfg = load_config()
     validate_config(cfg)
 
     ligand_dir_str = cfg.get("LIGAND_DIR") or cfg.get("ligand_dir")

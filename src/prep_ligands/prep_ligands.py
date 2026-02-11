@@ -3,23 +3,12 @@ import os
 import re
 import shutil
 import sys
-import types
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional
-
-# Ensure repo root is on sys.path so top-level helpers (activesite, etc.) resolve when run as a script.
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-SRC_DIR = ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-if "prep_ligands" not in sys.modules:
-    pkg = types.ModuleType("prep_ligands")
-    pkg.__path__ = [str(SRC_DIR / "prep_ligands")]
-    sys.modules["prep_ligands"] = pkg
+from typing import Any, Dict, Optional
 
 from pdb_fixer import fix_element_columns_in_file  # noqa: E402,F401
+from input_and_export_functions import load_config  # noqa: E402
 
 from prep_ligands.prep_ligands_bulk import (  # noqa: E402,F401
     _audit_protonation_metrics,
@@ -43,21 +32,23 @@ def _as_path(p) -> Path:
     return p if isinstance(p, Path) else Path(p)
 
 
+@lru_cache(maxsize=1)
+def _shared_config() -> Dict[str, Any]:
+    try:
+        return load_config()
+    except Exception:
+        return {}
+
+
 def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
-    """Lightweight config reader that prefers env, then config.txt next to this file, else default."""
+    """Resolve config from env first, then shared load_config(), then default."""
     v = os.environ.get(key)
     if v:
         return v
-    try:
-        from input_and_export_functions import load_config
-
-        root = Path(__file__).resolve().parents[2]
-        cfg = load_config(config_path=str(root / "config.txt"), base_dir=root)
-        val = cfg.get(key)
-        if val not in (None, ""):
-            return str(val)
-    except Exception:
-        pass
+    cfg = _shared_config()
+    val = cfg.get(key)
+    if val not in (None, ""):
+        return str(val)
     return default
 
 

@@ -10,6 +10,14 @@ import uuid
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
+from config.tool_resolver import (
+    build_micromamba_runner as _build_micromamba_runner_shared,
+    common_ambertools_prefixes as _common_ambertools_prefixes_shared,
+    looks_like_pkgs_cache as _looks_like_pkgs_cache_shared,
+    prefix_has_tool as _prefix_has_tool_shared,
+    resolve_ambertools_prefix as _resolve_ambertools_prefix_shared,
+    resolve_micromamba as _resolve_micromamba_shared,
+)
 from installation import load_config
 
 
@@ -226,80 +234,23 @@ def write_aggregated_mmpbsa_results(
 
 
 def _looks_like_pkgs_cache(prefix: Path) -> bool:
-    return "/micromamba/pkgs" in prefix.as_posix()
+    return _looks_like_pkgs_cache_shared(prefix)
 
 
 def _prefix_has_tool(prefix: Path, tool: str) -> bool:
-    return (prefix / "bin" / tool).is_file()
+    return _prefix_has_tool_shared(prefix, tool)
 
 
 def _resolve_micromamba() -> Optional[Path]:
-    env_mm = os.environ.get("MICROMAMBA_EXE")
-    if env_mm:
-        env_path = Path(env_mm).expanduser()
-        if env_path.is_file():
-            return env_path
-    found = shutil.which("micromamba")
-    if found:
-        return Path(found)
-    home_candidate = Path.home() / "micromamba" / "bin" / "micromamba"
-    if home_candidate.is_file():
-        return home_candidate
-    return None
+    return _resolve_micromamba_shared()
 
 
 def _common_ambertools_prefixes(cfg: object | None) -> list[Path]:
-    candidates: list[Path] = []
-    env_candidates = [
-        os.environ.get("MMGBSA_AMBERTOOLS_PREFIX"),
-        os.environ.get("AMBERTOOLS_PREFIX"),
-        os.environ.get("CONDA_PREFIX"),
-    ]
-    for raw in env_candidates:
-        if raw:
-            candidates.append(Path(raw).expanduser())
-
-    overall = _cfg_get(cfg, "OVERALL_DIR", None)
-    if overall:
-        base = Path(str(overall)).expanduser().resolve().parent
-        candidates.append(base / "tools" / "envs" / "ambertools")
-
-    mamba_root = os.environ.get("MAMBA_ROOT_PREFIX")
-    if mamba_root:
-        candidates.append(Path(mamba_root).expanduser() / "envs" / "AmberTools25")
-
-    home = Path.home()
-    candidates.extend(
-        [
-            home / "tools" / "envs" / "ambertools",
-            home / "micromamba" / "envs" / "AmberTools25",
-            home / "miniconda3" / "envs" / "AmberTools25",
-            home / "anaconda3" / "envs" / "AmberTools25",
-        ]
-    )
-
-    seen: set[str] = set()
-    out: list[Path] = []
-    for path in candidates:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(path)
-    return out
+    return _common_ambertools_prefixes_shared(cfg)
 
 
 def _resolve_ambertools_prefix(cfg: object | None) -> Optional[str]:
-    env_prefix = os.environ.get("AMBERTOOLS_PREFIX")
-    if env_prefix:
-        return env_prefix
-    cfg_prefix = _cfg_get(cfg, "MMGBSA_AMBERTOOLS_PREFIX", None)
-    if cfg_prefix:
-        return str(cfg_prefix)
-    fallback = _cfg_get(cfg, "AMBERTOOLS_PREFIX", None)
-    if fallback:
-        return str(fallback)
-    return None
+    return _resolve_ambertools_prefix_shared(cfg)
 
 
 def build_mmpbsa_input(
@@ -346,12 +297,12 @@ def resolve_mmpbsa_runner(cfg: object) -> Dict[str, object]:
                 "ignoring_AMBERTOOLS_PREFIX",
             )
         elif _prefix_has_tool(prefix, "MMPBSA.py"):
-            micromamba = _resolve_micromamba()
-            if not micromamba:
+            try:
+                runner = _build_micromamba_runner_shared(prefix)
+            except FileNotFoundError:
                 raise FileNotFoundError(
                     "micromamba not found; cannot run MMPBSA.py from prefix"
                 )
-            runner = [str(micromamba), "run", "-p", str(prefix)]
             return {
                 "runner": runner,
                 "exe": "MMPBSA.py",
@@ -376,12 +327,12 @@ def resolve_mmpbsa_runner(cfg: object) -> Dict[str, object]:
     common_prefixes = _common_ambertools_prefixes(cfg)
     for prefix in common_prefixes:
         if _prefix_has_tool(prefix, "MMPBSA.py") and not _looks_like_pkgs_cache(prefix):
-            micromamba = _resolve_micromamba()
-            if not micromamba:
+            try:
+                runner = _build_micromamba_runner_shared(prefix)
+            except FileNotFoundError:
                 raise FileNotFoundError(
                     "micromamba not found; cannot run MMPBSA.py from prefix"
                 )
-            runner = [str(micromamba), "run", "-p", str(prefix)]
             return {
                 "runner": runner,
                 "exe": "MMPBSA.py",

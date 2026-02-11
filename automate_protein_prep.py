@@ -741,21 +741,16 @@ def count_waters_within(
 
 
 def _cfg_env_or_default(key: str, default: Optional[str] = None) -> Optional[str]:
-    """Prefer env var, then config.txt (sibling of this file), else default."""
+    """Prefer env var, then normalized load_config(), else default."""
     v = os.environ.get(key)
     if v:
         return v
     try:
         root = Path(__file__).resolve().parent
-        cfg = root / "config.txt"
-        if cfg.is_file():
-            for line in cfg.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, val = line.split("=", 1)
-                if k.strip() == key:
-                    return val.strip()
+        cfg = load_config(config_path=str(root / "config.txt"), base_dir=root)
+        val = cfg.get(key)
+        if val not in (None, ""):
+            return str(val).strip()
     except Exception:
         pass
     return default

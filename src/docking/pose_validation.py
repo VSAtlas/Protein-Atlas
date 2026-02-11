@@ -7,7 +7,7 @@ import numpy as np
 # --- config and tunables ---
 from input_and_export_functions import load_config, validate_config
 
-_cfg = load_config("config.txt")
+_cfg = load_config()
 validate_config(_cfg)
 
 _POSE_CLASH_THRESHOLD_A = float(_cfg.get("POSE_CLASH_THRESHOLD_A", 2.0))
