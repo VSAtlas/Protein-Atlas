@@ -1984,7 +1984,7 @@ def main() -> None:
         )
 
     try:
-        _log_rescore_verification(run_id)
+        _log_rescore_verification(run_id, cfg)
     except Exception:
         logging.warning(
             "[post-check.invoke] action=skip reason=unexpected_exception", exc_info=True

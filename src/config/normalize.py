@@ -34,6 +34,7 @@ _OVERALL_DERIVED: dict[str, str] = {
     "OUTPUT_DIR": "processed_pdbs",
     "PDBQT_DIR": "pdbqts",
     "DOCKED_DIR": "docked",
+    "POST_DOCKED_DIR": "post_docked",
     "P2RANK_OUTPUT_DIR": "p2rank_out",
     "CONFIGS_DIR": "configs",
     "PROTEIN_DIR": "pdbqts",

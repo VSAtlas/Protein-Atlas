@@ -361,6 +361,16 @@ def parse_args() -> argparse.Namespace:
         help="Repository root (default: directory containing rescoring_scorch.py)",
     )
     parser.add_argument(
+        "--docked-root",
+        default=None,
+        help="Docked root (default: cfg DOCKED_DIR or <repo-root>/docked)",
+    )
+    parser.add_argument(
+        "--post-docked-root",
+        default=None,
+        help="Post-docked root (default: cfg POST_DOCKED_DIR or <repo-root>/post_docked)",
+    )
+    parser.add_argument(
         "--threads",
         type=int,
         default=1,
@@ -416,15 +426,34 @@ def configure_logging(verbose: bool) -> logging.Logger:
     return logging.getLogger("rescoring_scorch")
 
 
-def _resolve_roots(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path]:
+def _resolve_roots(
+    args: argparse.Namespace, cfg: Optional[Dict[str, object]] = None
+) -> Tuple[Path, Path, Path, Path]:
     repo_root = (
         Path(args.repo_root).resolve()
         if args.repo_root
         else Path(__file__).resolve().parents[3]
     )
-    docked_root = repo_root / "docked"
-    post_docked_root = repo_root / "post_docked"
-    processed_root = repo_root / "processed_pdbs"
+    cfg_map = cfg or {}
+    docked_root = (
+        Path(args.docked_root).expanduser().resolve()
+        if args.docked_root
+        else Path(str(cfg_map.get("DOCKED_DIR", repo_root / "docked")))
+        .expanduser()
+        .resolve()
+    )
+    post_docked_root = (
+        Path(args.post_docked_root).expanduser().resolve()
+        if args.post_docked_root
+        else Path(str(cfg_map.get("POST_DOCKED_DIR", repo_root / "post_docked")))
+        .expanduser()
+        .resolve()
+    )
+    processed_root = (
+        Path(str(cfg_map.get("OUTPUT_DIR", repo_root / "processed_pdbs")))
+        .expanduser()
+        .resolve()
+    )
     return repo_root, docked_root, post_docked_root, processed_root
 
 
@@ -1366,9 +1395,23 @@ def _prep_missing(
 
 
 def _run_pose_bust(
-    run_id: str, repo_root: Path, overwrite: bool, logger: logging.Logger
+    run_id: str,
+    repo_root: Path,
+    docked_root: Path,
+    post_docked_root: Path,
+    overwrite: bool,
+    logger: logging.Logger,
 ) -> bool:
-    cmd = [sys.executable, str(repo_root / "pose_bust.py"), "--run-id", run_id]
+    cmd = [
+        sys.executable,
+        str(repo_root / "pose_bust.py"),
+        "--run-id",
+        run_id,
+        "--docked-root",
+        str(docked_root),
+        "--post-docked-root",
+        str(post_docked_root),
+    ]
     if overwrite:
         cmd.append("--overwrite")
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -1388,6 +1431,8 @@ def _run_pose_bust(
 def _run_prep_for_scorch(
     run_id: str,
     repo_root: Path,
+    docked_root: Path,
+    post_docked_root: Path,
     overwrite: bool,
     logger: logging.Logger,
     decoy_prefix: Optional[str] = None,
@@ -1400,6 +1445,10 @@ def _run_prep_for_scorch(
         str(repo_root / "src/post_docking/rescoring/prep_for_scorch.py"),
         "--run-id",
         run_id,
+        "--docked-root",
+        str(docked_root),
+        "--post-docked-root",
+        str(post_docked_root),
     ]
     if decoy_prefix:
         cmd.extend(["--decoy-prefix", str(decoy_prefix)])
@@ -2126,7 +2175,7 @@ def main() -> int:
     if not _preflight(cfg, logger):
         return 1
 
-    repo_root, docked_root, post_root, processed_root = _resolve_roots(args)
+    repo_root, docked_root, post_root, processed_root = _resolve_roots(args, cfg)
     run_root = docked_root / args.run_id
     post_run_root = post_root / args.run_id
     if not run_root.exists():
@@ -2200,12 +2249,21 @@ def main() -> int:
 
         if not args.skip_autofix:
             if not ran_pose_bust and _posebusters_missing(post_run_root, combos):
-                _run_pose_bust(args.run_id, repo_root, args.overwrite, logger)
+                _run_pose_bust(
+                    args.run_id,
+                    repo_root,
+                    docked_root,
+                    post_root,
+                    args.overwrite,
+                    logger,
+                )
                 ran_pose_bust = True
             if _prep_missing(run_root, post_run_root, combos):
                 _run_prep_for_scorch(
                     args.run_id,
                     repo_root,
+                    docked_root,
+                    post_root,
                     args.overwrite,
                     logger,
                     decoy_prefix=decoy_prefix,

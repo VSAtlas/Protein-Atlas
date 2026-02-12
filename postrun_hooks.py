@@ -83,6 +83,10 @@ def _maybe_run_scorch_rescore(
         return
 
     repo_root = Path(__file__).resolve().parent
+    docked_root = Path(str(cfg.get("DOCKED_DIR", repo_root / "docked"))).resolve()
+    post_docked_root = Path(
+        str(cfg.get("POST_DOCKED_DIR", repo_root / "post_docked"))
+    ).resolve()
     script_path = repo_root / "src/post_docking/rescoring/rescoring_scorch.py"
     if not script_path.exists():
         logger.warning(
@@ -109,6 +113,10 @@ def _maybe_run_scorch_rescore(
         run_id,
         "--repo-root",
         str(repo_root),
+        "--docked-root",
+        str(docked_root),
+        "--post-docked-root",
+        str(post_docked_root),
         "--threads",
         str(threads),
         "--jobs",
@@ -118,11 +126,13 @@ def _maybe_run_scorch_rescore(
         cmd.append("--verbose")
 
     logger.info(
-        "[scorch-rescore.invoke] run_id=%s jobs=%d threads=%d total_cpu=%d cmd=%s",
+        "[scorch-rescore.invoke] run_id=%s jobs=%d threads=%d total_cpu=%d docked_root=%s post_docked_root=%s cmd=%s",
         run_id,
         jobs,
         threads,
         total_cpu,
+        docked_root,
+        post_docked_root,
         shlex.join(str(c) for c in cmd),
     )
     try:
@@ -177,6 +187,10 @@ def _maybe_run_scorch_rescore_for_pdb(
         return
 
     repo_root = Path(__file__).resolve().parent
+    docked_root = Path(str(cfg.get("DOCKED_DIR", repo_root / "docked"))).resolve()
+    post_docked_root = Path(
+        str(cfg.get("POST_DOCKED_DIR", repo_root / "post_docked"))
+    ).resolve()
     script_path = repo_root / "src/post_docking/rescoring/rescoring_scorch.py"
     if not script_path.exists():
         logger.warning(
@@ -204,6 +218,10 @@ def _maybe_run_scorch_rescore_for_pdb(
         str(run_id),
         "--repo-root",
         str(repo_root),
+        "--docked-root",
+        str(docked_root),
+        "--post-docked-root",
+        str(post_docked_root),
         "--pdb-id",
         str(pdb_id),
         "--threads",
@@ -219,7 +237,7 @@ def _maybe_run_scorch_rescore_for_pdb(
         cmd.append("--verbose")
 
     logger.info(
-        "[scorch-rescore.invoke] scope=per_pdb run_id=%s pdb_id=%s variant=%s ph=%s jobs=%d threads=%d total_cpu=%d cmd=%s",
+        "[scorch-rescore.invoke] scope=per_pdb run_id=%s pdb_id=%s variant=%s ph=%s jobs=%d threads=%d total_cpu=%d docked_root=%s post_docked_root=%s cmd=%s",
         run_id,
         pdb_id,
         variant or "*",
@@ -227,6 +245,8 @@ def _maybe_run_scorch_rescore_for_pdb(
         jobs,
         threads,
         total_cpu,
+        docked_root,
+        post_docked_root,
         shlex.join(str(c) for c in cmd),
     )
     try:
@@ -250,7 +270,9 @@ def _maybe_run_scorch_rescore_for_pdb(
     )
 
 
-def _log_rescore_verification(run_id: str) -> None:
+def _log_rescore_verification(
+    run_id: str, cfg: Optional[Mapping[str, Any]] = None
+) -> None:
     """
     Lightweight best-effort check for consensus and SCORCH outputs.
     """
@@ -260,8 +282,14 @@ def _log_rescore_verification(run_id: str) -> None:
         return
 
     repo_root = Path(__file__).resolve().parent
-    docked_root = repo_root / "docked" / run_id
-    post_root = repo_root / "post_docked" / run_id
+    cfg_map = cfg or {}
+    docked_base = Path(str(cfg_map.get("DOCKED_DIR", repo_root / "docked"))).resolve()
+    post_base = Path(
+        str(cfg_map.get("POST_DOCKED_DIR", repo_root / "post_docked"))
+    ).resolve()
+
+    docked_root = docked_base / run_id
+    post_root = post_base / run_id
 
     consensus_paths = [
         p for p in docked_root.rglob("consensus_docking_scores.csv") if p.is_file()
@@ -456,6 +484,12 @@ def _invoke_artifact_retention(
         "--threads",
         str(threads),
     ]
+    docked_root = cfg.get("DOCKED_DIR")
+    if docked_root:
+        cmd.extend(["--docked-root", str(docked_root)])
+    post_docked_root = cfg.get("POST_DOCKED_DIR")
+    if post_docked_root:
+        cmd.extend(["--post-docked-root", str(post_docked_root)])
     if pdb_id:
         cmd.extend(["--pdb-id", str(pdb_id)])
     if dry_run:

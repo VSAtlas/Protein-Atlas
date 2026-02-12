@@ -121,3 +121,4 @@ config.txt
 
 # large ligand archive
 prepped_ligands.tar.zst
+atlas.tar.xz

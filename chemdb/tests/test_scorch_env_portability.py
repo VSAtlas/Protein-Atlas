@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import postrun_hooks
 import post_docking.rescoring.rescoring_scorch as rescoring_scorch
@@ -104,6 +105,8 @@ def test_per_pdb_hook_uses_cpu_for_jobs_and_threads_one(monkeypatch) -> None:
         "USE_SCORCH": True,
         "CPU": 12,
         "SCORCH_THREADS": 99,
+        "DOCKED_DIR": "/tmp/custom_docked",
+        "POST_DOCKED_DIR": "/tmp/custom_post_docked",
     }
     postrun_hooks._maybe_run_scorch_rescore_for_pdb(cfg, "run_x", "TEST")
 
@@ -111,3 +114,39 @@ def test_per_pdb_hook_uses_cpu_for_jobs_and_threads_one(monkeypatch) -> None:
     cmd = captured[0]
     assert cmd[cmd.index("--jobs") + 1] == "12"
     assert cmd[cmd.index("--threads") + 1] == "1"
+    assert cmd[cmd.index("--docked-root") + 1] == "/tmp/custom_docked"
+    assert cmd[cmd.index("--post-docked-root") + 1] == "/tmp/custom_post_docked"
+
+
+def test_resolve_roots_prefers_cli_over_cfg(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    cfg = {
+        "DOCKED_DIR": str(tmp_path / "cfg_docked"),
+        "POST_DOCKED_DIR": str(tmp_path / "cfg_post_docked"),
+        "OUTPUT_DIR": str(tmp_path / "cfg_processed"),
+    }
+
+    args_cfg = SimpleNamespace(
+        repo_root=str(repo_root),
+        docked_root=None,
+        post_docked_root=None,
+    )
+    resolved_repo, resolved_docked, resolved_post, resolved_processed = (
+        rescoring_scorch._resolve_roots(args_cfg, cfg)
+    )
+    assert resolved_repo == repo_root.resolve()
+    assert resolved_docked == Path(cfg["DOCKED_DIR"]).resolve()
+    assert resolved_post == Path(cfg["POST_DOCKED_DIR"]).resolve()
+    assert resolved_processed == Path(cfg["OUTPUT_DIR"]).resolve()
+
+    args_cli = SimpleNamespace(
+        repo_root=str(repo_root),
+        docked_root=str(tmp_path / "cli_docked"),
+        post_docked_root=str(tmp_path / "cli_post_docked"),
+    )
+    _, cli_docked, cli_post, cli_processed = rescoring_scorch._resolve_roots(
+        args_cli, cfg
+    )
+    assert cli_docked == (tmp_path / "cli_docked").resolve()
+    assert cli_post == (tmp_path / "cli_post_docked").resolve()
+    assert cli_processed == Path(cfg["OUTPUT_DIR"]).resolve()
