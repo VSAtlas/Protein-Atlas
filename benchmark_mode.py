@@ -24,11 +24,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
-import os, capture_pose
-
-
-# Rendering helpers
-from capture_pose import (
+import os
+import docking.capture_pose as capture_pose
+from docking.capture_pose import (
     _render_native_on_original_pdb,
     _render_three_views_with_pymol,
     _safe_open_csv_for_write,
@@ -54,7 +52,7 @@ from input_and_export_functions import load_inputs, validate_config, load_config
 import logging, sys
 cfg = load_config()
 # Library resolution helpers
-from metabolite_resolver import (
+from prep_ligands.metabolite_resolver import (
     ensure_parent_drugs_for_controls,
     load_library_index,
     resolve_corresponding_name_for_rdk,
@@ -73,33 +71,23 @@ from chemdb.chem_alias_db import (
     PER_PDB_HINTS,
 )
 
-# Import core pipeline pieces from main.py (reuses logic verbatim)
-from main import (  # noqa: E402
-    BudgetGuard,
-    CenterSelector,
-    GlobalCenterGuard,
-    build_control_lookup,
-    checkpoint_invalidate_from,
-    checkpoint_mark_done,
-    checkpoint_should_skip,
-    detect_pocket,
-    extract_ligands_to_nolig,
-    final_pose_validation_and_screenshots,
-    get_recenter_params,
-    make_protein_logger,
-    prepare_receptor,
-    record_le,
-    record_score,
-    run_one_stage,
-    _count_heavy_atoms_from_pdbqt,
-    _fingerprint_stage,
-    early_recenter_decision,
-    RetryManager,
-)
+# Import core pipeline pieces (updated to new package paths)
+from docking.fallback_recenter import BudgetGuard, GlobalCenterGuard
+from docking.docking_centering import CenterSelector
+from docking.docking_controls import build_control_lookup, detect_pocket, extract_ligands_to_nolig
+from checkpoints import checkpoint_invalidate_from, checkpoint_mark_done, checkpoint_should_skip
+from docking.docking_utils import final_pose_validation_and_screenshots, _fingerprint_stage, early_recenter_decision
+from main import get_recenter_params
+from logging_topics import make_protein_logger
+from docking.docking_receptor import prepare_receptor
+from record_data import record_le
+from input_and_export_functions import record_score
+from docking.docking_stage_runner import run_one_stage, RetryManager
+from docking.docking_ligands import _count_heavy_atoms_from_pdbqt
 # >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
 # >>> PATHS IMPORT END
-from prep_ligands import prep_ligands_from_pdb
+from prep_ligands.prep_ligands import prep_ligands_from_pdb
 # ----- Deferred render queue (global) -----
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List
@@ -279,8 +267,7 @@ def _patch_main_threadpool(sem):
                 _GLOBAL_LIGAND_SEM = None
 
 
-# ---- Re-entrant deferral for capture_pose PyMOL functions ----
-import capture_pose as _cap
+from docking import capture_pose as _cap
 from concurrent.futures import ThreadPoolExecutor as _RealTPE2
 from contextlib import contextmanager
 
@@ -305,7 +292,7 @@ def _enqueue_render_task(*, pdb_id: str, stage_name: str, paths, variant: Option
     """
     Unified producer: enqueue directly into capture_pose's JSONL by calling its APIs with DEFER_PYMOL=1.
     """
-    import capture_pose as _cap
+from docking import capture_pose as _cap
     stage_dir_target = paths.docked_stage_dir(variant, stage_name)
 
     # Viewport first (used by native + three-views)
@@ -1318,7 +1305,7 @@ def run_benchmark_for_protein(
     scope_dirs = [Path(d).resolve() for d in (fda_scope_dirs or [])]
     if not scope_dirs:
         # Fallback to default fda_library under PREPPED_ROOT if not provided
-        default = Path(cfg.get("OUTPUT_LIGANDS_DIR", str(prepped_dir))).resolve() / "fda_library"
+        default = Path(cfg.get("PREPPED_LIGANDS_DIR", str(prepped_dir))).resolve() / "fda_library"
         scope_dirs = [default]
 
     cand_rows = select_candidates_for_protein(
@@ -2253,7 +2240,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     # 1) Resolve INPUT / OUTPUT / PREPPED
     input_dir = Path(args.input_dir or cfg.get("INPUT_DIR", ""))
     out_root  = Path(args.out_root  or cfg.get("DOCKED_DIR") or cfg.get("OUTPUT_DIR", ""))
-    prepped   = Path(args.prepped   or cfg.get("OUTPUT_LIGANDS_DIR", ""))
+    prepped   = Path(args.prepped   or cfg.get("PREPPED_LIGANDS_DIR", ""))
 
 
     # FDA scope resolution from CLI (default: ['fda_library'])
@@ -2330,7 +2317,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     cfg["INPUT_DIR"] = str(input_dir)
     cfg["DOCKED_DIR"] = str(out_root)
     cfg["OUTPUT_DIR"] = str(Path(cfg.get("OUTPUT_DIR", Path(out_root).parent / "processed_pdbs")))
-    cfg["OUTPUT_LIGANDS_DIR"] = str(prepped)
+    cfg["PREPPED_LIGANDS_DIR"] = str(prepped)
     cfg["DOCKING_MODE"] = "benchmark"
     cfg.setdefault("OVERALL_DIR", str(Path(out_root).parent))
     cfg["BENCH_MAX_SECONDS"] = float(args.max_seconds)
@@ -2425,7 +2412,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         cfg_local = dict(cfg)
         cfg_local["GLOBAL_LIGAND_SEM"] = cfg["GLOBAL_LIGAND_SEM"]
         # Let the global semaphore be the true limiter.
-        cfg_local["MAX_PARALLEL_JOBS"] = max(int(cfg_local.get("MAX_PARALLEL_JOBS") or 0), total_cpus)
+        cfg_local["CPU"] = max(int(cfg_local.get("CPU") or 0), total_cpus)
 
         # Determine which variants to run for this protein
         variant_mode = args.apo_holo_mode or os.environ.get("APO_HOLO_MODE") or cfg.get("APO_HOLO_MODE")
@@ -2514,7 +2501,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         except Exception:
             return default
 
-    from capture_pose import replay_deferred_jobs_mp
+    from docking.capture_pose import replay_deferred_jobs_mp
     workers_cfg = _int_env("PYMOL_RENDER_WORKERS", int(cfg.get("PYMOL_RENDER_WORKERS", 30)))
     mode_cfg    = (os.environ.get("PYMOL_RENDER_MODE") or str(cfg.get("PYMOL_RENDER_MODE", "cli"))).lower()
 

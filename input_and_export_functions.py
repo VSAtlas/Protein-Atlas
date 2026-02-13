@@ -1,18 +1,32 @@
-import os, sys, shutil, json
-from pathlib import Path
-from distutils.util import strtobool
-from typing import Any, Dict, Optional
-import re, csv, math
+import csv
+import importlib
+import math
+import os
+import re
+import shutil
+import sys
+import time
 from collections import defaultdict
-# >>> PATHS IMPORT START
-from path_router import (
-    make_paths,
-    config_dir as router_config_dir,
-    config_file as router_config_file,
-    docked_dir as router_docked_dir,
-    receptor_file as router_receptor_file,
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import pandas as pd  # type: ignore[import-untyped]
+import sitecustomize  # noqa: F401  # ensure HOME is writable for micromamba/pytest sandboxes
+from config import normalize as _cfg_norm  # type: ignore[import-not-found]
+from config.normalize import (  # type: ignore[import-not-found]
+    default_base_dir as _default_base_dir,
+    default_dirs as _default_dirs,
+    default_runtime as _default_runtime,
+    default_tools as _default_tools,
+    normalize_config,
 )
-# >>> PATHS IMPORT END
+from path_router import make_paths  # type: ignore[import-not-found]
+
+# Backward-compatible helper re-exports used across the codebase.
+_to_bool = _cfg_norm._to_bool
+_to_int = _cfg_norm._to_int
+_to_float = _cfg_norm._to_float
+which_or_exists = _cfg_norm.which_or_exists
 
 # -------------------------
 # OS guards (Windows-only)
@@ -20,8 +34,8 @@ from path_router import (
 IS_WINDOWS = sys.platform.startswith("win")
 try:
     if IS_WINDOWS:
-        import win32api  # type: ignore
-        import win32file  # type: ignore
+        win32api = importlib.import_module("win32api")  # type: ignore[assignment]
+        win32file = importlib.import_module("win32file")  # type: ignore[assignment]
     else:
         win32api = None
         win32file = None
@@ -29,128 +43,97 @@ except Exception:
     win32api = None
     win32file = None
 
-# -------------------------
-# Small helpers
-# -------------------------
-def _to_bool(x):
-    try:
-        return bool(strtobool(str(x)))
-    except Exception:
-        return False
-
-def _to_int(x, default=None):
-    try:
-        return int(x)
-    except Exception:
-        return default
-
-def _to_float(x, default=None):
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-def which_or_exists(candidates):
-    """
-    Return the first path that exists (if absolute),
-    or the first found on PATH via shutil.which.
-    """
-    for c in candidates:
-        p = Path(str(c))
-        if p.is_absolute() and p.exists():
-            return str(p)
-        w = shutil.which(p.name)
-        if w:
-            return w
-    return None
-
-# -------------------------
-# Defaults for BRCF layout
-# -------------------------
-def _default_base_dir() -> Path:
-    # env wins; else directory of this file
-    return Path(os.environ.get("PROTEIN_AUTOMATION_DIR", Path(__file__).resolve().parent))
-
-def _default_dirs(base: Path) -> Dict[str, str]:
-    """
-    Opinionated defaults that match BRCF layout:
-      /stor/home/<user>/atlas/code/protein_automation/{subdirs}
-    """
-    return {
-        "OVERALL_DIR":            str(base),
-        "INPUT_DIR":              str(base / "input_pdbs"),
-        "PROTEIN_DIR":            str(base / "pdbqts"),
-        "LIGAND_DIR":             str(base / "input_ligands"),
-        "LIGAND_EXTRACTED_DIR":   str(base / "extracted_ligands"),
-        "LIGANDS_MOL2_DIR":       str(base / "ligands_mol2"),
-        "OUTPUT_LIGANDS_DIR":     str(base / "prepped_ligands"),
-        "OUTPUT_DIR":             str(base / "processed_pdbs"),
-        "PDBQT_DIR":              str(base / "pdbqts"),
-        "DOCKED_DIR":             str(base / "docked"),
-        # p2rank
-        "P2RANK_OUTPUT_DIR":      str(base / "p2rank_out"),
-        # cleanup script (kept in repo)
-        "PHENIX_CLEAN_SCRIPT":    str(base / "phenix_clean.py"),
-    }
-
-def _default_tools() -> Dict[str, str]:
-    """
-    Tool defaults prefer environment & PATH.
-    """
-    return {
-        "VINA_PATH": which_or_exists(["vina"]),
-        "VINA_EXE": which_or_exists(["vina"]),
-        "OPENBABEL_PATH": which_or_exists(["obabel"]),
-        "PYMOL_PATH": which_or_exists(["pymol"]),
-        "REDUCE_EXE": which_or_exists(["reduce"]),
-        # prefer env MGLTOOLS_* if set; otherwise try ADFRsuite pythonsh on PATH
-        "MGLTOOLS_PYTHON": os.environ.get("MGL_PYTHON") or which_or_exists(["pythonsh"]),
-        "PREPARE_LIGAND_SCRIPT": os.environ.get("PREPARE_LIGAND_SCRIPT") or which_or_exists(["prepare_ligand4.py"]),
-        "PREPARE_RECEPTOR_SCRIPT": os.environ.get("PREPARE_RECEPTOR_SCRIPT") or which_or_exists(["prepare_receptor4.py"]),
-        # p2rank: either absolute prank or found on PATH
-        "P2RANK_PATH": shutil.which("prank") or "prank",
-    }
-
-def _default_runtime() -> Dict[str, Any]:
-    return {
-        "CPU_ONLY": True,
-        "CPU": os.cpu_count() or 8,
-        "MAX_PARALLEL_JOBS": max(1, (os.cpu_count() or 8) // 2),
-        "FORCE_REPROCESS": False,
-        "DOCKING_MODE": "discovery",
-        "QUIET_CONSOLE": False,
-        # docking/recenter knobs
-        "EARLY_RECENTER_RATIO": 0.70,
-        "EARLY_RECENTER_MIN_EVAL": 10,
-        "EARLY_RECENTER_FAR_A": 15.0,
-        "EARLY_RECENTER_MEDIAN_A": 10.0,
-        "ALLOW_BOX_EXPAND": True,
-        "MAX_RECENTER_ATTEMPTS": 3,
-        # control-centering knobs
-        "CONTROL_CENTER_POLICY": "best_redock",
-        "CONTROL_CENTER_CLOSE_MAX_A": 8.0,
-        "CTRL_REDOCK_EXHAUSTIVENESS": 64,
-        "CTRL_REDOCK_NMODES": 9,
-
-        # --- benchmark policy knobs ---
-        "BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY": True,
-        "BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING": False,
-    }
-
 
 # -------------------------
 # Config loading & validation
 # -------------------------
 _ALLOWED_ENV_OVERRIDES = {
-    "VINA_EXE","VINA_PATH","OPENBABEL_PATH","MGLTOOLS_PYTHON",
-    "PREPARE_LIGAND_SCRIPT","PREPARE_RECEPTOR_SCRIPT","PYMOL_PATH",
-    "P2RANK_PATH","PHENIX_DIR","PHENIX_LIB_PATH","PHENIX_CLEAN_SCRIPT",
-    "INPUT_DIR","OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","LIGAND_DIR",
-    "LIGAND_EXTRACTED_DIR","LIGANDS_MOL2_DIR","OUTPUT_LIGANDS_DIR",
+    "VINA_EXE",
+    "VINA_PATH",
+    "GNINA_EXE",
+    "OPENBABEL_PATH",
+    "MGLTOOLS_PATH",
+    "MGLTOOLS_DIR",
+    "MGLTOOLS_PYTHON",
+    "PREPARE_LIGAND_SCRIPT",
+    "PREPARE_RECEPTOR_SCRIPT",
+    "PREPARE_LIGAND4",
+    "PYMOL_EXE",
+    "PYMOL_PATH",
+    "P2RANK_PATH",
+    "PHENIX_DIR",
+    "PHENIX_LIB_PATH",
+    "PHENIX_CLEAN_SCRIPT",
+    "INPUT_DIR",
+    "OUTPUT_DIR",
+    "PDBQT_DIR",
+    "DOCKED_DIR",
+    "POST_DOCKED_DIR",
+    "LIGAND_DIR",
+    "EXTRACTED_LIGANDS_DIR",
+    "LIGAND_EXTRACTED_DIR",
+    "LIGANDS_MOL2_DIR",
+    "PREPPED_LIGANDS_DIR",
+    "OUTPUT_LIGANDS_DIR",
+    "PREPPED_LIGANDS_ROOT",
+    "REDUCE_LOCAL_CANDIDATE",
+    "REDUCE_HET_DICT",
+    "DOCK6_EXE",
+    "DMS_EXE",
+    "SPHGEN_EXE",
+    "SPHERE_SELECTOR_EXE",
+    "SHOWBOX_EXE",
+    "GRID_EXE",
+    "DOCK6_VDW_DEFN_FILE",
     "P2RANK_OUTPUT_DIR",
-    "CPU","CPU_ONLY","MAX_PARALLEL_JOBS","DOCKING_MODE","REDUCE_EXE",
-    "USE_MEEKO","OVERALL_DIR","PROTEIN_DIR",
-
+    "CONFIGS_DIR",
+    "CPU",
+    "CPU_ONLY",
+    "DOCKING_MODE",
+    "REDUCE_EXE",
+    "USE_MEEKO",
+    "OVERALL_DIR",
+    "PROTEIN_DIR",
+    "DEEPCOY_DECOYS_PER_ACTIVE",
+    "DEEPCOY_PYTHON",
+    "DEEPCOY_CHUNK_SIZE",
+    "DEEPCOY_BASE_SEED",
+    "DEEPCOY_SEED_PER_CHUNK",
+    "DEEPCOY_USE_ARGMAX_GENERATION",
+    "DEEPCOY_TRY_DIFFERENT_STARTING",
+    "DEEPCOY_NUM_DIFFERENT_STARTING",
+    "DEEPCOY_NUM_SAMPLES",
+    "DEEPCOY_KEEP_CHUNKS",
+    "DEEPCOY_ACTIVE_SOURCES",
+    "DEEPCOY_SOURCE_AUDIT",
+    "DEEPCOY_SOURCE_AUDIT_MAX_LINES",
+    "DEEPCOY_CHEMBL_MAX_PAGES",
+    "POCKET_EVAL",
+    "POCKET_EVAL_MAX_CALIBRATORS",
+    "POCKET_EVAL_SEED",
+    "POCKET_EVAL_FOLDS",
+    "POCKET_EVAL_DATASET_ENABLE",
+    "POCKET_EVAL_DATASET_FORMATS",
+    "POCKET_EVAL_DATASET_WIDE_ENABLE",
+    "POCKET_EVAL_SPLITS_ENABLE",
+    "POCKET_EVAL_SPLIT_GROUP_KEY",
+    "POCKET_EVAL_SPLIT_STRATEGY",
+    "POCKET_EVAL_SPLIT_FOLDS",
+    "POCKET_EVAL_ENSEMBLE_ENABLE",
+    "POCKET_EVAL_CV_ENABLE",
+    "POCKET_EVAL_CV_TOP_M",
+    "POCKET_EVAL_CV_REQUIRE_SCORES",
+    "POCKET_EVAL_ORACLE_ENABLE",
+    "CALIBRATOR_SAMPLING_POLICY",
+    "CALIBRATOR_SAMPLING_SEED",
+    "CALIBRATOR_TEST_FRACTION",
+    "CALIBRATOR_REMAINDER_EVAL_FRACTION",
+    "CALIBRATOR_POSITIVE_CLASS",
+    "CALIBRATOR_NEGATIVE_CLASS",
+    "CALIBRATOR_METRICS_TOP_FRACS",
+    "CALIBRATOR_SET_TABLE_FORMAT",
+    "DEEPCOY_ACTIVE_POTENCY_CUTOFF_NM",
+    "DEEPCOY_ACTIVE_POTENCY_KEEP_UNKNOWN",
     # ---  allow ENV override for the knobs ---
     "BENCH_ENFORCE_HARDCODED_CONTROLS_ONLY",
     "BENCH_ALLOW_WHITELIST_FALLBACK_IF_CONTROLS_MISSING",
@@ -159,9 +142,87 @@ _ALLOWED_ENV_OVERRIDES = {
     "CTRL_REDOCK_EXHAUSTIVENESS",
     "CTRL_REDOCK_NMODES",
     # logging/topic gates (opt-in; safe to ignore if unset)
-    "LOG_TOPICS", "LOG_LEVEL_FILE", "LOG_LEVEL_CONSOLE",
-
+    "LOG_TOPICS",
+    "LOG_LEVEL_FILE",
+    "LOG_LEVEL_CONSOLE",
+    # GNINA follow-up toggle
+    "USE_GNINA",
+    # LeDock follow-up toggle
+    "USE_LEDOCK",
+    # DOCK6 follow-up toggle
+    "USE_DOCK6",
+    # SCORCH rescoring knobs
+    "SCORCH",
+    "SCORCH_SCRIPT",
+    "SCORCH_ENV_PREFIX",
+    "SCORCH_ENV",
+    # MMGBSA receptor prep knobs
+    "MMGBSA_STRIP_METALS",
+    "MMGBSA_WATER_POLICY",
+    "MMGBSA_WATER_KEEP_RADIUS_A",
+    "MMGBSA_WATER_USE_ALIASES",
+    "MMGBSA_METAL_USE_ALIASES",
+    "MMGBSA_TOPOLOGY_PREP_ENABLED",
+    "MMGBSA_TLEAP_RUN",
+    "MMGBSA_TOPOLOGY_DIRNAME",
+    "MMGBSA_AMBERTOOLS_PREFIX",
+    "MMGBSA_CPPTRAJ_ENABLED",
+    "MMGBSA_CPPTRAJ_RUN",
+    "MMGBSA_TRAJOUT_NAME",
+    "MMGBSA_TRAJOUT_FORMAT",
+    "MMGBSA_TRAJIN_SOURCE",
+    "MMGBSA_TRAJIN_PATH",
+    "MMGBSA_TRAJIN_FORMAT",
+    "MMGBSA_TRAJ_STARTFRAME",
+    "MMGBSA_TRAJ_ENDFRAME",
+    "MMGBSA_TRAJ_INTERVAL",
+    "MMGBSA_MMPBSA_ENABLED",
+    "MMGBSA_MMPBSA_RUN",
+    "MMGBSA_MMPBSA_STARTFRAME",
+    "MMGBSA_MMPBSA_ENDFRAME",
+    "MMGBSA_MMPBSA_INTERVAL",
+    "MMGBSA_MMPBSA_VERBOSE",
+    "MMGBSA_GB_IGB",
+    "MMGBSA_GB_SALTCON",
+    "MMGBSA_MMPBSA_INPUT_NAME",
+    "MMGBSA_MMPBSA_LOG_NAME",
+    "MMGBSA_MMPBSA_OUT_DAT",
+    "MMGBSA_MMPBSA_OUT_CSV",
+    "MMGBSA_DEFAULT_TRAJ_NAME",
+    "MMGBSA_ENABLED",
+    "MMGBSA_KEEP_WATERS",
+    "MMGBSA_WATER_KEEP_RADIUS",
+    "MMGBSA_KEEP_METALS",
+    "MMGBSA_METAL_RETAIN_TOKENS",
+    "MMGBSA_WATER_RETAIN_TOKENS",
+    "MMGBSA_RECEPTOR_FORCE",
+    "MMGBSA_FORCE",
+    "MMGBSA_STRICT",
+    "MMGBSA_LIGAND_AT",
+    "MMGBSA_LIGAND_CHARGE_METHOD",
+    "MMGBSA_LIGAND_PRIMARY_CHARGE_METHOD",
+    "MMGBSA_LIGAND_FALLBACK_CHARGE_METHOD",
+    "MMGBSA_LIGAND_NOMINAL_NET_CHARGE",
+    "MMGBSA_LIGAND_BCC_CHARGE_SWEEP",
+    "MMGBSA_LIGAND_BCC_SWEEP_INCLUDE_PLUSMINUS2",
+    "MMGBSA_LIGAND_FORCE",
+    "MMGBSA_RDKit_VALIDATE",
+    "MMGBSA_RDKit_RADICAL_LOWCONF_THRESHOLD",
+    "MMGBSA_LIGAND_NET_CHARGE",
+    "MMGBSA_LIGAND_SQM_LEVEL",
+    "MMGBSA_INPUT_STAGE_DIR",
+    "MMGBSA_MAX_LIGANDS",
+    "MMGBSA_RERANKED_TOP_PCT",
+    "MMGBSA_ACTIVE_SITE_RADIUS_FALLBACK",
+    "MMGBSA_TLEAP_ENABLED",
+    "MMGBSA_TLEAP_FORCE",
+    "MMGBSA_GENERAL_STARTFRAME",
+    "MMGBSA_GENERAL_ENDFRAME",
+    "MMGBSA_GENERAL_INTERVAL",
+    "MMGBSA_GENERAL_VERBOSE",
 }
+
+
 def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}"):
     """Return the brace-balanced substring starting at the first open_char after start_idx."""
     i = text.find(open_char, start_idx)
@@ -176,14 +237,39 @@ def _extract_brace_block(text: str, start_idx: int, open_char="{", close_char="}
         elif c == close_char:
             level -= 1
             if level == 0:
-                return text[i:j+1]
+                return text[i : j + 1]
         j += 1
     return None  # unbalanced
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Strip inline comments starting with #, except when inside quotes."""
+    in_single = False
+    in_double = False
+    escaped = False
+    for idx, ch in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if ch == "#" and not in_single and not in_double:
+            return value[:idx]
+    return value
+
+
 def _parse_kv_config(path: Path) -> Dict[str, str]:
     """
     Lightweight key=value parser; allows comments starting with '#'.
     """
-    out = {}
+    out: Dict[str, str] = {}
     if not path.exists():
         return out
     with path.open() as f:
@@ -193,21 +279,46 @@ def _parse_kv_config(path: Path) -> Dict[str, str]:
                 continue
             if "=" in line:
                 k, v = line.split("=", 1)
-                out[k.strip().upper()] = v.strip()
+                val = _strip_inline_comment(v).strip()
+                out[k.strip().upper()] = val
     return out
+
 
 def _expand_vars_in_value(val: str, cfg_now: Dict[str, Any]) -> str:
     """
-    Expand {OVERALL_DIR} and $OVERALL_DIR occurrences inside config values.
-    We intentionally keep it simple, not a full env expansion.
+    Expand simple config variables inside string values.
+
+    Supported forms:
+      - ${VAR_NAME}   (preferred, "professional" style)
+      - {OVERALL_DIR} (legacy)
+      - $OVERALL_DIR  (legacy)
+
+    For ${VAR_NAME}, we look up VAR_NAME (uppercased) in the current cfg dict.
+    We intentionally keep this modest, not a full shell-style expansion.
     """
     if not isinstance(val, str):
         return val
+
+    # 1) Generic ${VAR_NAME} expansion using keys from cfg_now
+    def _repl(match: re.Match) -> str:
+        key = match.group(1) or ""
+        key_upper = key.upper()
+        if key_upper in cfg_now and cfg_now[key_upper] is not None:
+            return str(cfg_now[key_upper])
+        # If we don't know the key, leave the original text unchanged
+        return match.group(0)
+
+    # Replace all ${VAR_NAME} occurrences
+    val = re.sub(r"\$\{([A-Za-z0-9_]+)\}", _repl, val)
+
+    # 2) Backwards-compatible OVERALL_DIR shorthands
     od = str(cfg_now.get("OVERALL_DIR", ""))
     if od:
         val = val.replace("{OVERALL_DIR}", od)
         val = val.replace("$OVERALL_DIR", od)
+
     return val
+
 
 def _expand_all_vars(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # single pass is sufficient for our use: expand OVERALL_DIR in the other paths
@@ -217,24 +328,54 @@ def _expand_all_vars(cfg: Dict[str, Any]) -> Dict[str, Any]:
             out[k] = _expand_vars_in_value(v, out)
     return out
 
-def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -> Dict[str, Any]:
+
+def _resolve_config_path(config_path: str, base_dir: Path) -> Path:
+    requested = Path(config_path)
+    candidates: list[Path] = []
+    if requested.is_absolute():
+        candidates.append(requested)
+    else:
+        candidates.append(requested)
+        candidates.append(base_dir / requested)
+
+    for cand in candidates:
+        if cand.exists():
+            return cand
+
+    # Backward-compatible fallback for new clones that only have config.example.txt.
+    if requested.name == "config.txt":
+        alt_name = "config.example.txt"
+        alt_candidates = [cand.with_name(alt_name) for cand in candidates]
+        for cand in alt_candidates:
+            if cand.exists():
+                return cand
+
+    # Keep old behavior: return requested path even if missing.
+    return candidates[0]
+
+
+def load_config(
+    config_path: str = "config.txt", base_dir: Path | None = None
+) -> Dict[str, Any]:
     """
     Load configuration with precedence:
       1) defaults (BRCF-aware)
       2) config.txt (key=value, optional)
       3) environment variables (allowed set only)
     Then expand {OVERALL_DIR}/$OVERALL_DIR inside string values.
+    If config.txt is missing, fall back to config.example.txt when present.
     """
-    base = base_dir or _default_base_dir()
+    base = base_dir or _default_base_dir(reference_file=__file__)
+    resolved_config_path = _resolve_config_path(config_path, base)
 
     cfg: Dict[str, Any] = {}
     cfg.update(_default_dirs(base))
-    cfg.update(_default_tools())
+    cfg.update(_default_tools(base))
     cfg.update(_default_runtime())
 
     # overlay config file
-    file_cfg = _parse_kv_config(Path(config_path))
-    
+    file_cfg = _parse_kv_config(resolved_config_path)
+
     # --- preserve multi-line TEST_LIBRARY_MAP block ---
     try:
         raw = file_cfg.get("TEST_LIBRARY_MAP")
@@ -242,7 +383,7 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
             s = raw.strip()
             # If it looks like a dict but was truncated to one line, re-extract the full brace block
             if s.startswith("{") and not s.endswith("}"):
-                txt = Path(config_path).read_text(encoding="utf-8", errors="ignore")
+                txt = resolved_config_path.read_text(encoding="utf-8", errors="ignore")
                 key_idx = txt.find("TEST_LIBRARY_MAP")
                 if key_idx != -1:
                     block = _extract_brace_block(txt, key_idx, "{", "}")
@@ -254,35 +395,117 @@ def load_config(config_path: str = "config.txt", base_dir: Path | None = None) -
         pass
 
     cfg.update(file_cfg)
+    # Preserve raw file-sourced config (before env overrides) for precedence checks.
+    cfg["_FILE_CFG"] = dict(file_cfg)
 
     # overlay env vars (uppercased keys only)
     for k, v in os.environ.items():
         K = k.upper()
-        if K in _ALLOWED_ENV_OVERRIDES:
+        if (K in cfg or K in _ALLOWED_ENV_OVERRIDES) and v:
             cfg[K] = v
 
-    # type coercion (before expansion is fine)
-    for k in ["CPU_ONLY","FORCE_REPROCESS","ALLOW_BOX_EXPAND","QUIET_CONSOLE","USE_MEEKO"]:
-        if k in cfg:
-            cfg[k] = _to_bool(cfg[k])
-
-    for k in ["MAX_PARALLEL_JOBS","CPU","MAX_RECENTER_ATTEMPTS","EARLY_RECENTER_MIN_EVAL","CTRL_REDOCK_EXHAUSTIVENESS","CTRL_REDOCK_NMODES"]:
-        if k in cfg:
-            cfg[k] = _to_int(cfg[k], cfg[k])
-
-
-    for k in ["EARLY_RECENTER_RATIO","EARLY_RECENTER_FAR_A","EARLY_RECENTER_MEDIAN_A","CONTROL_CENTER_CLOSE_MAX_A"]:
-        if k in cfg:
-            cfg[k] = _to_float(cfg[k], cfg[k])
-
-
-    # normalize mode
-    cfg["DOCKING_MODE"] = str(cfg.get("DOCKING_MODE","discovery")).lower()
-
-    # now expand {OVERALL_DIR}/$OVERALL_DIR appearances
-    cfg = _expand_all_vars(cfg)
+    cfg = normalize_config(cfg)
 
     return cfg
+
+
+def _selection_pct_error(config_key: str, details: str) -> ValueError:
+    return ValueError(
+        f"{config_key}: {details}. "
+        "Use comma-separated values as either fractions (e.g. 1.0,0.15,0.10) "
+        "or percents (e.g. 100,15,10 or 100%,15%,10%). "
+        "Do not mix unsuffixed fraction and percent scales in one list."
+    )
+
+
+def _parse_selection_pct_list(raw_val: Any, config_key: str) -> list[float]:
+    if isinstance(raw_val, str):
+        text = raw_val.strip()
+        if not text:
+            return []
+        tokens = [tok.strip() for tok in text.split(",")]
+    elif isinstance(raw_val, (list, tuple)):
+        if not raw_val:
+            return []
+        tokens = [str(tok).strip() for tok in raw_val]
+    else:
+        raise _selection_pct_error(
+            config_key,
+            f"expected comma-separated string/list, got {type(raw_val).__name__}",
+        )
+
+    if any(tok == "" for tok in tokens):
+        raise _selection_pct_error(config_key, "contains empty token")
+
+    parsed: list[float] = []
+    unsuffixed_scales: set[str] = set()
+    saw_explicit_percent = False
+    saw_unsuffixed_fraction = False
+
+    for idx, token in enumerate(tokens, start=1):
+        explicit_percent = token.endswith("%")
+        num_text = token[:-1].strip() if explicit_percent else token
+        try:
+            value = float(num_text)
+        except Exception as exc:
+            raise _selection_pct_error(
+                config_key, f"token #{idx} '{token}' is not numeric ({exc})"
+            ) from exc
+
+        if not math.isfinite(value):
+            raise _selection_pct_error(config_key, f"token #{idx} '{token}' is NaN/inf")
+        if value <= 0.0:
+            raise _selection_pct_error(
+                config_key, f"token #{idx} '{token}' must be > 0"
+            )
+
+        if explicit_percent:
+            saw_explicit_percent = True
+            if value > 100.0:
+                raise _selection_pct_error(
+                    config_key, f"token #{idx} '{token}' percent exceeds 100"
+                )
+            parsed.append(value / 100.0)
+            continue
+
+        if value <= 1.0:
+            unsuffixed_scales.add("fraction")
+            saw_unsuffixed_fraction = True
+            parsed.append(value)
+        elif value <= 100.0:
+            unsuffixed_scales.add("percent")
+            parsed.append(value / 100.0)
+        else:
+            raise _selection_pct_error(
+                config_key, f"token #{idx} '{token}' exceeds maximum of 100"
+            )
+
+    if len(unsuffixed_scales) > 1:
+        raise _selection_pct_error(
+            config_key, f"mixed unsuffixed scales are ambiguous (raw={raw_val!r})"
+        )
+    if saw_explicit_percent and saw_unsuffixed_fraction:
+        raise _selection_pct_error(
+            config_key,
+            "cannot mix explicit % tokens with unsuffixed fraction tokens (e.g. 100%,0.1 is ambiguous; use 0.1% or 10%)",
+        )
+    return parsed
+
+
+def _validate_selection_schedule_config(cfg: Dict[str, Any]) -> None:
+    for key in ("DISCOVERY_SELECTION_PCTS", "POLYPHARM_SELECTION_PCTS"):
+        raw = cfg.get(key)
+        if raw in (None, "", [], ()):
+            continue
+        parsed = _parse_selection_pct_list(raw, key)
+        if not parsed:
+            raise _selection_pct_error(key, "no values provided")
+        if not math.isclose(parsed[0], 1.0, rel_tol=0.0, abs_tol=1e-12):
+            raise _selection_pct_error(
+                key,
+                f"first value must resolve to 1.0 (100%) because stage1 always runs on the full ligand pool (got {parsed[0]:.12g})",
+            )
+
 
 def validate_config(cfg: Dict[str, Any]):
     """
@@ -290,9 +513,16 @@ def validate_config(cfg: Dict[str, Any]):
     Auto-create typical output directories if missing.
     """
     required_keys = [
-        "OUTPUT_DIR","INPUT_DIR","PDBQT_DIR","DOCKED_DIR","OVERALL_DIR",
-        "MGLTOOLS_PYTHON","PREPARE_RECEPTOR_SCRIPT","VINA_EXE","MAX_PARALLEL_JOBS",
-        "PYMOL_PATH",
+        "OUTPUT_DIR",
+        "INPUT_DIR",
+        "PDBQT_DIR",
+        "DOCKED_DIR",
+        "OVERALL_DIR",
+        "MGLTOOLS_PYTHON",
+        "PREPARE_RECEPTOR_SCRIPT",
+        "VINA_EXE",
+        "CPU",
+        "PYMOL_EXE",
     ]
     missing = [k for k in required_keys if not cfg.get(k)]
     if missing:
@@ -306,21 +536,26 @@ def validate_config(cfg: Dict[str, Any]):
 
     # Create-if-missing for outputs/caches
     create_keys = [
-        "OUTPUT_DIR","PDBQT_DIR","DOCKED_DIR","OUTPUT_LIGANDS_DIR",
-        "LIGAND_EXTRACTED_DIR","LIGANDS_MOL2_DIR","P2RANK_OUTPUT_DIR",
+        "OUTPUT_DIR",
+        "PDBQT_DIR",
+        "DOCKED_DIR",
+        "PREPPED_LIGANDS_DIR",
+        "EXTRACTED_LIGANDS_DIR",
+        "LIGANDS_MOL2_DIR",
+        "P2RANK_OUTPUT_DIR",
+        "CONFIGS_DIR",
     ]
     for path_key in create_keys:
         p = Path(cfg[path_key])
         try:
             p.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise FileNotFoundError(f"Could not create directory for {path_key}: {p} ({e})")
+            raise FileNotFoundError(
+                f"Could not create directory for {path_key}: {p} ({e})"
+            )
 
+    _validate_selection_schedule_config(cfg)
 
-
-
-
-import time, logging, tempfile
 
 def init_config_run_dir(cfg, run_id=None, reset=None, logger=None):
     root = Path(cfg.get("CONFIGS_DIR", Path(cfg["OVERALL_DIR"]) / "configs"))
@@ -342,219 +577,6 @@ def init_config_run_dir(cfg, run_id=None, reset=None, logger=None):
     msg = f"[cfg.reset] run_dir={run_dir} removed={removed}"
     (logger.info(msg) if logger else print(msg))
 
-def emit_vina_config(
-    cfg: Dict[str, Any],
-    pdb_id: str,
-    receptor_pdbqt: str,
-    center: tuple[float, float, float],
-    box_size: tuple[float, float, float],
-    ligand_path: str,
-    stage_name: str,
-    stage_info: Dict[str, Any],
-    cpu_per_job: int,
-    logger: logging.Logger | None = None,
-    *,
-    variant: Optional[str] = None,
-    ph_token: Optional[str] = None,
-    legacy: bool = False,
-):
-    make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
-
-    variant_token = (str(variant).strip().upper() or None) if variant is not None else None
-    ph_label = (str(ph_token).strip() or None) if ph_token is not None else None
-    legacy_mode = bool(legacy)
-
-    from pathlib import Path
-
-    lig_base = Path(ligand_path).stem
-    run_id = cfg["RUN_ID"]
-
-    cfg_dir = router_config_dir(
-        run_id,
-        pdb_id,
-        stage_name,
-        variant=variant_token,
-        ph_tag=ph_label,
-        legacy=legacy_mode,
-    )
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-
-    manifest_path = router_config_file(
-        run_id,
-        pdb_id,
-        stage_name,
-        variant=variant_token,
-        ph_tag=ph_label,
-        name="vina.json",
-        legacy=legacy_mode,
-    )
-
-    cfg_path = cfg_dir / f"{lig_base}_{stage_name}.txt"
-
-    stage_root = router_docked_dir(
-        pdb_id,
-        variant=variant_token,
-        ph_tag=ph_label,
-        legacy=legacy_mode,
-    )
-    out_dir = stage_root / stage_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{lig_base}_{stage_name}.pdbqt"
-
-    expected_receptor = router_receptor_file(
-        pdb_id,
-        variant=variant_token,
-        ph_tag=ph_label,
-        legacy=legacy_mode,
-    )
-    receptor_exists = expected_receptor.exists()
-    receptor_for_config = str(expected_receptor)
-
-    variant_display = variant_token or "None"
-    ph_display = ph_label or "None"
-    breadcrumb = (
-        "[cfg.emit] run=%s pdb=%s stage=%s variant=%s ph=%s\n"
-        "           cfg_dir=%s receptor=%s out_root=%s"
-    )
-    breadcrumb_args = (
-        run_id,
-        pdb_id,
-        stage_name,
-        variant_display,
-        ph_display,
-        str(cfg_dir),
-        receptor_for_config,
-        str(stage_root),
-    )
-    if logger:
-        logger.info(breadcrumb, *breadcrumb_args)
-    else:
-        print(breadcrumb % breadcrumb_args)
-
-    if not receptor_exists:
-        msg = (
-            f"[router.error] missing receptor for pdb={pdb_id} variant={variant_display} "
-            f"ph={ph_display} -> {expected_receptor}"
-        )
-        if logger:
-            logger.error(msg)
-        else:
-            print(msg)
-
-    lines = [
-        f"receptor = {receptor_for_config}",
-        f"ligand   = {ligand_path}",
-        f"center_x = {center[0]:.3f}",
-        f"center_y = {center[1]:.3f}",
-        f"center_z = {center[2]:.3f}",
-        f"size_x   = {box_size[0]:.3f}",
-        f"size_y   = {box_size[1]:.3f}",
-        f"size_z   = {box_size[2]:.3f}",
-        f"cpu      = {int(cpu_per_job)}",
-        f"exhaustiveness = {int(stage_info.get('exhaustiveness', 8))}",
-        f"energy_range   = {int(stage_info.get('energy_range', 4))}",
-        f"num_modes      = {int(stage_info.get('num_modes', 4))}",
-        f"verbosity      = {int(stage_info.get('verbosity', 0))}",
-        f"out = {out_path}",
-    ]
-
-    if "seed" in stage_info:
-        lines.append(f"seed = {int(stage_info['seed'])}")
-    if logger:
-        cx, cy, cz = center
-        sx, sy, sz = box_size
-        lig_name = os.path.basename(str(ligand_path))
-        logger.info(
-            "[vina.cfg] lig=%s center=(%.3f,%.3f,%.3f) size=(%.1f,%.1f,%.1f)",
-            lig_name,
-            cx,
-            cy,
-            cz,
-            sx,
-            sy,
-            sz,
-        )
-
-    payload = ("\n".join(lines)).encode("utf-8")
-    overwrite = cfg_path.exists()
-
-    tmp = cfg_path.with_suffix(".part")
-    with open(tmp, "wb") as f:
-        f.write(payload)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, cfg_path)
-
-    manifest_data: Dict[str, Any]
-    entries_map: Dict[str, Dict[str, Any]]
-    if manifest_path.exists():
-        try:
-            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            manifest_data = {}
-    else:
-        manifest_data = {}
-
-    entries = manifest_data.get("entries") if isinstance(manifest_data, dict) else None
-    entries_map = {}
-    if isinstance(entries, list):
-        for item in entries:
-            if isinstance(item, dict):
-                lig = str(item.get("ligand", ""))
-                if lig:
-                    entries_map[lig] = item
-
-    entry = {
-        "ligand": lig_base,
-        "config": str(cfg_path),
-        "out": str(out_path),
-        "receptor": receptor_for_config,
-    }
-    entries_map[lig_base] = entry
-
-    manifest_data = {
-        "run_id": run_id,
-        "pdb_id": pdb_id,
-        "stage": stage_name,
-        "variant": variant_token,
-        "ph": ph_label,
-        "legacy": legacy_mode,
-        "entries": [entries_map[k] for k in sorted(entries_map.keys())],
-    }
-
-    manifest_tmp = manifest_path.with_suffix(".part")
-    with open(manifest_tmp, "w", encoding="utf-8") as fh:
-        json.dump(manifest_data, fh, indent=2, sort_keys=True)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(manifest_tmp, manifest_path)
-
-    emit_msg = (
-        "[cfg.emit] run=%s pdb=%s variant=%s ph=%s stage=%s ligand=%s "
-        "cfg_dir=%s docked_root=%s path=%s overwrite=%s bytes=%d"
-    )
-    emit_args = (
-        run_id,
-        pdb_id,
-        variant_display,
-        ph_display,
-        stage_name,
-        lig_base,
-        str(cfg_dir),
-        str(stage_root),
-        str(cfg_path),
-        str(overwrite).lower(),
-        len(payload),
-    )
-    if logger:
-        logger.info(emit_msg, *emit_args)
-    else:
-        print(emit_msg % emit_args)
-
-    return str(cfg_path), str(out_path)
-
-
-
 
 # -------------------------
 # P2Rank helpers (optional)
@@ -575,17 +597,32 @@ def p2rank_out_dir(cfg: Dict[str, Any]) -> Path:
 def define_docking_stages(mode="discovery"):
     if mode == "discovery":
         return [
-            {"name": "stage1", "num_modes": 1,  "energy_range": 2, "exhaustiveness": 2},
-            {"name": "stage2", "num_modes": 3,  "energy_range": 3, "exhaustiveness": 4},
-            {"name": "stage3", "num_modes": 5,  "energy_range": 4, "exhaustiveness": 6},
-            {"name": "stage4", "num_modes": 9,  "energy_range": 6, "exhaustiveness": 8},
-            {"name": "stage5", "num_modes": 20, "energy_range": 9, "exhaustiveness": 20},
+            {"name": "stage1", "num_modes": 1, "energy_range": 2, "exhaustiveness": 2},
+            {"name": "stage2", "num_modes": 3, "energy_range": 3, "exhaustiveness": 4},
+            {"name": "stage3", "num_modes": 5, "energy_range": 4, "exhaustiveness": 6},
+            {"name": "stage4", "num_modes": 9, "energy_range": 6, "exhaustiveness": 8},
+            {
+                "name": "stage5",
+                "num_modes": 20,
+                "energy_range": 9,
+                "exhaustiveness": 20,
+            },
         ]
     elif mode == "polypharmacology":
         return [
-            {"name": "stage1", "num_modes": 3,  "energy_range": 2, "exhaustiveness": 4},
-            {"name": "stage2", "num_modes": 10, "energy_range": 6, "exhaustiveness": 12},
-            {"name": "stage3", "num_modes": 20, "energy_range": 9, "exhaustiveness": 24},
+            {"name": "stage1", "num_modes": 3, "energy_range": 2, "exhaustiveness": 4},
+            {
+                "name": "stage2",
+                "num_modes": 10,
+                "energy_range": 6,
+                "exhaustiveness": 12,
+            },
+            {
+                "name": "stage3",
+                "num_modes": 20,
+                "energy_range": 9,
+                "exhaustiveness": 24,
+            },
         ]
     else:
         raise ValueError(f"Unknown docking mode: {mode}")
@@ -594,7 +631,9 @@ def define_docking_stages(mode="discovery"):
 # -------------------------
 # Score I/O
 # -------------------------
-def write_score_summary_to_csv(score_history, output_path="docking_score_summary.csv", run_id=None, variant=None):
+def write_score_summary_to_csv(
+    score_history, output_path="docking_score_summary.csv", run_id=None, variant=None
+):
     ligand_stage_pattern = re.compile(r"^(.*?)(_stage\d+)?\.pdbqt$", re.IGNORECASE)
     ligand_scores = defaultdict(dict)
 
@@ -639,6 +678,7 @@ def write_score_summary_to_csv(score_history, output_path="docking_score_summary
 
     print(f"\nScore summary written to: {output_path}")
 
+
 def extract_best_score(docked_pdbqt_path):
     best_score = None
     with open(docked_pdbqt_path, "r") as f:
@@ -651,11 +691,63 @@ def extract_best_score(docked_pdbqt_path):
     return best_score
 
 
+def extract_gnina_scores(docked_pdbqt_path: str) -> Dict[str, Optional[float]]:
+    """
+    Parse GNINA REMARK lines from a docked PDBQT.
+
+    Returns keys:
+      - minimized_affinity_kcal
+      - cnn_score
+      - cnn_affinity_pK
+    Values are float or None if not present/parseable.
+    """
+    metrics: Dict[str, Optional[float]] = {
+        "minimized_affinity_kcal": None,
+        "cnn_score": None,
+        "cnn_affinity_pK": None,
+    }
+    try:
+        with open(docked_pdbqt_path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if not line.startswith("REMARK"):
+                    continue
+                parts = line.strip().split()
+                if len(parts) < 2:
+                    continue
+                token = parts[1].lower()
+                try:
+                    val = float(parts[-1])
+                except Exception:
+                    val = None
+                if token == "minimizedaffinity":
+                    metrics["minimized_affinity_kcal"] = val
+                elif token == "cnnscore":
+                    metrics["cnn_score"] = val
+                elif token == "cnnaffinity":
+                    metrics["cnn_affinity_pK"] = val
+    except Exception:
+        pass
+    return metrics
+
+
 # -------------------------
 # Vina config writer, uses shim(lazy yeah)
 # -------------------------
-def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand_path, stage, stage_info, cpu_per_job, docked_dir=None):
+def generate_config(
+    output_dir,
+    pdb_id,
+    receptor_pdbqt,
+    center,
+    box_size,
+    ligand_path,
+    stage,
+    stage_info,
+    cpu_per_job,
+    docked_dir=None,
+):
     # Legacy shim: derive a minimal cfg for older callers
+    from docking.docking_vina import emit_vina_config  # type: ignore[import-not-found]
+
     cfg = {
         "OVERALL_DIR": output_dir,
         "CONFIGS_DIR": os.path.join(output_dir, "configs"),
@@ -682,9 +774,6 @@ def generate_config(output_dir, pdb_id, receptor_pdbqt, center, box_size, ligand
     )
 
 
-
-
-
 # -------------------------
 # Score bookkeeping
 # -------------------------
@@ -709,6 +798,7 @@ def record_score(score_history, stage_name, ligand, score: Any, valid, reason=No
         "reason": reason,
     }
 
+
 def score_key(item):
     """item = (ligand, rec). Sort by numeric score; invalid or None go to bottom."""
     _, rec = item
@@ -721,32 +811,100 @@ def score_key(item):
         return math.inf
     return s if rec.get("valid", False) else s + 1e-6
 
-def write_scores_csv(cfg, pdb_id, score_history):
+
+def annotate_fda_long_csv_with_t_scores_vs_decoys(
+    cfg: Dict[str, Any],
+    pdb_id: str,
+    ph_label: Optional[str] = None,
+    *,
+    csv_prefix: str = "",
+    decoy_csv_prefix: str = "dud_",
+    logger=None,
+) -> Optional[str]:
+    """
+    Post-processing helper used by docking.py when TEST_MODE_ENABLE includes DUD
+    and we are running the FDA subrun.
+
+    It reads <decoy_prefix>docking_score_long.csv to compute mean/std of best decoy scores,
+    then annotates <csv_prefix>docking_score_long.csv for FDA ligands with a t_vs_decoys column.
+
+    Returns the path to the updated FDA long CSV, or None if skipped.
+    """
+    try:
+        from dud_eval import (  # type: ignore[attr-defined]
+            compute_decoy_stats_from_long_csv,
+            guess_ligfile_col,
+            guess_score_col,
+        )
+    except Exception as e:
+        if logger:
+            logger.warning("[t-score.skip] pdb_id=%s reason=import_error %s", pdb_id, e)
+        return None
+
     paths = make_paths(cfg, base_id=pdb_id, pdb_file=f"{pdb_id}.pdb")
     var = (os.environ.get("APO_HOLO_VARIANT", "") or "").strip().upper() or None
-    variant_root = paths.docked_variant_root(var)
-    os.makedirs(variant_root, exist_ok=True)
-    csv_output_path = os.path.join(variant_root, "docking_score_summary.csv")
+    ph_token = (ph_label or "").strip() or None
+    variant_root = Path(paths.docked_variant_root(var, ph_token))
 
-    run_id_value = str(cfg.get("RUN_ID") or "")
+    dud_csv = variant_root / f"{decoy_csv_prefix}docking_score_long.csv"
+    fda_csv = variant_root / f"{csv_prefix}docking_score_long.csv"
 
-    flat_history = {}
-    for stage_name, stage_map in score_history.items():
-        flat_history[stage_name] = {}
-        for lig, rec in stage_map.items():
-            s = rec.get("score", None)
-            if rec.get("valid", False):
-                flat_history[stage_name][lig] = s if s is not None else ""
-            else:
-                flat_history[stage_name][lig] = (f"{s:.2f} (invalid)" if isinstance(s, (int, float)) else "(invalid)")
+    if not dud_csv.exists() or not fda_csv.exists():
+        if logger:
+            logger.info(
+                "[t-score.skip] pdb_id=%s ph=%s reason=missing_csv dud=%s fda=%s",
+                pdb_id,
+                ph_label or "base",
+                str(dud_csv),
+                str(fda_csv),
+            )
+        return None
 
-    write_score_summary_to_csv(
-        flat_history,
-        output_path=csv_output_path,
-        run_id=run_id_value,
-        variant=var,
-    )
-    return csv_output_path
+    mu, sigma, n_decoys = compute_decoy_stats_from_long_csv(dud_csv)
+    if (
+        not n_decoys
+        or not math.isfinite(mu)
+        or not math.isfinite(sigma)
+        or sigma == 0.0
+    ):
+        if logger:
+            logger.info(
+                "[t-score.skip] pdb_id=%s ph=%s reason=degenerate_stats n=%s mu=%s sigma=%s",
+                pdb_id,
+                ph_label or "base",
+                n_decoys,
+                mu,
+                sigma,
+            )
+        return None
+
+    df = pd.read_csv(fda_csv)
+
+    lig_col = guess_ligfile_col(df, None)
+    score_col = guess_score_col(df, None)
+    df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
+
+    # Best score per ligand
+    best = df.groupby(lig_col, as_index=False).agg(best_score=(score_col, "min"))
+    best["t_vs_decoys"] = (mu - best["best_score"]) / sigma
+    t_map = dict(zip(best[lig_col], best["t_vs_decoys"]))
+
+    df["t_vs_decoys"] = df[lig_col].map(t_map)
+
+    df.to_csv(fda_csv, index=False)
+
+    if logger:
+        logger.info(
+            "[t-score.ok] pdb_id=%s ph=%s n_decoys=%s mean=%.3f std=%.3f out=%s",
+            pdb_id,
+            ph_label or "base",
+            n_decoys,
+            mu,
+            sigma,
+            str(fda_csv),
+        )
+
+    return str(fda_csv)
 
 
 # -------------------------
@@ -757,22 +915,26 @@ def build_paths_for_protein(cfg, base_id, pdb_file, variant=None, ph_token=None)
     p = make_paths(cfg, base_id=base_id, pdb_file=pdb_file)
     return {
         "pdb_id": base_id.upper(),
-        "pdb_path":             str(p.input_pdb_path),
-        "nolig_pdb_path":       str(p.nolig_pdb_path),
-        "ligand_output_dir":    str(p.ligand_output_dir),
-        "ligands_mol2_dir":     str(p.ligands_mol2_dir),
-        "prepped_ligands_dir":  str(p.prepped_ligands_dir),
-        "cleaned_pdb_path":     str(p.receptor_cleaned_pdb(variant)),
-        "receptor_pdbqt_path":  str(p.receptor_pdbqt(variant, ph_token=ph_token)),
+        "pdb_path": str(p.input_pdb_path),
+        "nolig_pdb_path": str(p.nolig_pdb_path),
+        "ligand_output_dir": str(p.ligand_output_dir),
+        "ligands_mol2_dir": str(p.ligands_mol2_dir),
+        "prepped_ligands_dir": str(p.prepped_ligands_dir),
+        "cleaned_pdb_path": str(p.receptor_cleaned_pdb(variant)),
+        "receptor_pdbqt_path": str(p.receptor_pdbqt(variant, ph_token=ph_token)),
     }
+
+
 # >>> BUILD_PATHS SHIM END
 # -------------------------
 # Backward-compat shims
 # -------------------------
 
+
 def load_inputs():
     """Legacy name used by existing scripts. Now just calls load_config()."""
     return load_config()
+
 
 def get_default_config(prompt: bool = False):
     """

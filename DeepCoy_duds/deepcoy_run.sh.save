@@ -1,0 +1,35 @@
+#!/bin/bash
+
+source /home/projects/theron/DeepCoy_duds/
+
+# 1. Get arguments
+ACTIVES_SMI_PATH="$1"
+OUTPUT_DIR="$2"
+
+# 2. Dynamic Server Paths (No more hardcoded /Users/...)
+# This sets the repo path to the directory where this script sits
+DEEPCOY_REPO_PATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+DEEPCOY_ENV_NAME="DeepCoy-env"
+DEEPCOY_MAIN_SCRIPT="DeepCoy.py"
+CONFIG_FILE="deepcoy_config.json"
+
+echo "Starting DeepCoy run for: ${ACTIVES_SMI_PATH}"
+echo "Repo path detected as: ${DEEPCOY_REPO_PATH}"
+
+# 3. Export required variables
+export DEEPCOY_DIR="${DEEPCOY_REPO_PATH}"
+export ATLAS_ROOT="${DEEPCOY_REPO_PATH}"
+
+# 4. Run DeepCoy using 'conda run'
+# Uses the environment name directly, no hardcoded /opt/miniconda path
+conda run -n ${DEEPCOY_ENV_NAME} python "${DEEPCOY_REPO_PATH}/${DEEPCOY_MAIN_SCRIPT}" \
+    --dataset zinc \
+    --config-file "${DEEPCOY_REPO_PATH}/${CONFIG_FILE}"
+
+# 5. Check Output
+if [ $? -eq 0 ]; then
+    echo "DeepCoy execution completed successfully."
+else
+    echo "DeepCoy command failed."
+    exit 1 
+fi

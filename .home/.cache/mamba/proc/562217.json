@@ -1,0 +1,1 @@
+{"command":["exec","python","/home/michael/atlas/code/protein_automation/main.py","-resume","--run-id","test_resume_mode"],"name":"weird_python","prefix":"/home/atlas/micromamba/envs/docking-env"}

@@ -1,0 +1,342 @@
+run_id: test_run
+generated_at: '2026-02-09T17:49:50.604710Z'
+sources:
+  master_rows_csv: data/test_run/master_rows.csv
+  manifest_yaml: manifests/test_run/run_manifest.yaml
+summary:
+  n_target_combos: 2
+  n_rows: 18
+  n_unique_ligands: 7
+targets:
+  TEST|APO|pH7_0:
+    target_name: ''
+    qc:
+      ef1: 0.0
+      roc_auc: 0.0
+      roc_auc_adj: 0.0
+      dud_eval_status_reason: null
+      n_rows: 9
+      n_decoys: 4
+      n_controls: 4
+      fdr: SMALL 1
+      decoy_stats:
+        consensus:
+          mu: 0.3125
+          sigma: 0.336573
+          n: 4
+        blend:
+          mu: null
+          sigma: null
+          n: null
+        scorch:
+          mu: null
+          sigma: null
+          n: null
+      fdr_stats:
+        score_field: null
+        n_decoys: null
+        n_tested: 0
+        n_hits_q05: 0
+        n_hits_q10: 0
+        best_q: 1.0
+        unique_decoy_scores: null
+        reliable: false
+    pocket:
+      method: null
+      center: null
+      box: null
+    top5_ligands:
+    - &id001
+      ligand_base: actives_test_library_10_2
+      ligand_display: desipramine
+      t_selected: 2.04265
+      t_selected_source: stage2
+      pose_valid_any: true
+      pose_invalid_reason_top: ''
+      rank: 1
+      pct_rank: 0.333333
+      is_control: false
+      is_decoy: false
+    - &id002
+      ligand_base: LIG_A301
+      ligand_display: LIG_A301
+      t_selected: 1.29987
+      t_selected_source: stage2_pose_invalid
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
+      rank: 2
+      pct_rank: 0.666667
+      is_control: true
+      is_decoy: false
+    - &id003
+      ligand_base: LIG_A301
+      ligand_display: LIG_A301
+      t_selected: 0.928477
+      t_selected_source: stage2_pose_invalid
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
+      rank: 3
+      pct_rank: 1.0
+      is_control: true
+      is_decoy: false
+    - &id004
+      ligand_base: TEST
+      ligand_display: TEST
+      t_selected: 0.557086
+      t_selected_source: stage2
+      pose_valid_any: true
+      pose_invalid_reason_top: ''
+      rank: 4
+      pct_rank: 1.333333
+      is_control: true
+      is_decoy: false
+    - &id005
+      ligand_base: TEST
+      ligand_display: TEST
+      t_selected: 0.185695
+      t_selected_source: stage2
+      pose_valid_any: true
+      pose_invalid_reason_top: ''
+      rank: 5
+      pct_rank: 1.666667
+      is_control: true
+      is_decoy: false
+    top_ligands_extended:
+    - *id001
+    - *id002
+    - *id003
+    - *id004
+    - *id005
+    notable_ligands:
+    - *id002
+    - *id003
+    - *id004
+    - *id005
+    highlights:
+    - query: imatinib
+      found: false
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
+  TEST|HOLO|pH7_0:
+    target_name: ''
+    qc:
+      ef1: 0.0
+      roc_auc: 0.75
+      roc_auc_adj: 0.75
+      dud_eval_status_reason: ok
+      n_rows: 9
+      n_decoys: 4
+      n_controls: 4
+      fdr: SMALL 1
+      decoy_stats:
+        consensus:
+          mu: 0.34375
+          sigma: 0.389059
+          n: 4
+        blend:
+          mu: null
+          sigma: null
+          n: null
+        scorch:
+          mu: null
+          sigma: null
+          n: null
+      fdr_stats:
+        score_field: null
+        n_decoys: null
+        n_tested: 0
+        n_hits_q05: 0
+        n_hits_q10: 0
+        best_q: 1.0
+        unique_decoy_scores: null
+        reliable: false
+    pocket:
+      method: control
+      center:
+      - 4.833
+      - 1.833
+      - 3.633
+      box:
+      - 24.0
+      - 24.0
+      - 24.0
+    top5_ligands:
+    - &id006
+      ligand_base: actives_test_library_10_2
+      ligand_display: desipramine
+      t_selected: 1.36547
+      t_selected_source: stage2_pose_invalid
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
+      rank: 1
+      pct_rank: 0.333333
+      is_control: false
+      is_decoy: false
+    - &id007
+      ligand_base: LIG_A301
+      ligand_display: LIG_A301
+      t_selected: 1.04419
+      t_selected_source: stage2_pose_invalid
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
+      rank: 2
+      pct_rank: 0.666667
+      is_control: true
+      is_decoy: false
+    - &id008
+      ligand_base: TEST
+      ligand_display: TEST
+      t_selected: 0.722897
+      t_selected_source: stage2
+      pose_valid_any: true
+      pose_invalid_reason_top: ''
+      rank: 3
+      pct_rank: 1.0
+      is_control: true
+      is_decoy: false
+    - &id009
+      ligand_base: LIG_A301
+      ligand_display: LIG_A301
+      t_selected: 0.40161
+      t_selected_source: stage2_pose_invalid
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
+      rank: 4
+      pct_rank: 1.333333
+      is_control: true
+      is_decoy: false
+    - &id010
+      ligand_base: TEST
+      ligand_display: TEST
+      t_selected: 0.0803219
+      t_selected_source: stage2
+      pose_valid_any: true
+      pose_invalid_reason_top: ''
+      rank: 5
+      pct_rank: 1.666667
+      is_control: true
+      is_decoy: false
+    top_ligands_extended:
+    - *id006
+    - *id007
+    - *id008
+    - *id009
+    - *id010
+    notable_ligands:
+    - *id007
+    - *id008
+    - *id009
+    - *id010
+    highlights:
+    - query: imatinib
+      found: false
+      pose_valid_any: false
+      pose_invalid_reason_top: ''
+ligands:
+  LIG_A301:
+    ligand_display: LIG_A301
+    targets_in_top5:
+    - target: TEST|APO|pH7_0
+      t_selected: 1.29987
+      t_selected_source: stage2_pose_invalid
+    - target: TEST|APO|pH7_0
+      t_selected: 0.928477
+      t_selected_source: stage2_pose_invalid
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.04419
+      t_selected_source: stage2_pose_invalid
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.40161
+      t_selected_source: stage2_pose_invalid
+    targets_notable:
+    - target: TEST|APO|pH7_0
+      t_selected: 1.29987
+      t_selected_source: stage2_pose_invalid
+      rank: 2
+      pct_rank: 0.666667
+    - target: TEST|APO|pH7_0
+      t_selected: 0.928477
+      t_selected_source: stage2_pose_invalid
+      rank: 3
+      pct_rank: 1.0
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.04419
+      t_selected_source: stage2_pose_invalid
+      rank: 2
+      pct_rank: 0.666667
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.40161
+      t_selected_source: stage2_pose_invalid
+      rank: 4
+      pct_rank: 1.333333
+  TEST:
+    ligand_display: TEST
+    targets_in_top5:
+    - target: TEST|APO|pH7_0
+      t_selected: 0.557086
+      t_selected_source: stage2
+    - target: TEST|APO|pH7_0
+      t_selected: 0.185695
+      t_selected_source: stage2
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.722897
+      t_selected_source: stage2
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.0803219
+      t_selected_source: stage2
+    targets_notable:
+    - target: TEST|APO|pH7_0
+      t_selected: 0.557086
+      t_selected_source: stage2
+      rank: 4
+      pct_rank: 1.333333
+    - target: TEST|APO|pH7_0
+      t_selected: 0.185695
+      t_selected_source: stage2
+      rank: 5
+      pct_rank: 1.666667
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.722897
+      t_selected_source: stage2
+      rank: 3
+      pct_rank: 1.0
+    - target: TEST|HOLO|pH7_0
+      t_selected: 0.0803219
+      t_selected_source: stage2
+      rank: 5
+      pct_rank: 1.666667
+  actives_test_library_10_2:
+    ligand_display: desipramine
+    targets_in_top5:
+    - target: TEST|APO|pH7_0
+      t_selected: 2.04265
+      t_selected_source: stage2
+    - target: TEST|HOLO|pH7_0
+      t_selected: 1.36547
+      t_selected_source: stage2_pose_invalid
+ligand_highlights:
+- ligand: desipramine
+  ligand_display: desipramine
+  ligand_base: actives_test_library_10_2
+  best_target: TEST
+  best_score: 2.04265
+  best_percentile: 33.33%
+  best_pct_rank: 0.333333
+  top_targets: '1) TEST  z=2.04265  pct=33.33%
+
+    2) TEST  z=1.36547  pct=33.33%'
+  coverage: 2 / 2 targets
+  coverage_k: 2
+  coverage_m: 2
+  breadth: '0'
+  breadth_count: 0
+  tail_summary: "\u2014"
+ligand_highlight_config:
+  top_targets_n: 3
+  breadth_pct_threshold: 0.01
+  coverage_requires_pose_valid: false
+  pct_display_decimals: 1
+  tail_median_decimals: 0
+  highlights_top_pct: 0.01
+  highlights_max_ligands: 25
+multi_target_hits: []

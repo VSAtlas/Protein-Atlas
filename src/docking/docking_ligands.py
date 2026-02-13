@@ -1,0 +1,1838 @@
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import sys
+import contextlib
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import math
+from rdkit import Chem, rdBase
+from rdkit.Chem import FilterCatalog, rdFMCS, rdMolAlign
+from rdkit.Chem.MolStandardize import rdMolStandardize
+
+from docking.library_mode import (
+    _coerce_test_map,
+    _parse_test_libraries_value,
+    compute_allowed_library_roots,
+    is_truthy,
+    parse_test_libraries,
+)
+from docking.pose_validation import compute_redock_rmsd
+from prep_ligands.library_index import LibraryIndex
+from path_router.path_router import Paths
+from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
+
+
+def _rdkit_quiet_logs():
+    try:
+        return rdBase.BlockLogs()
+    except Exception:
+        return contextlib.nullcontext()
+
+
+def ensure_deepcoy_decoy_sdfs(
+    cfg: Dict, pdb_id: str, logger: logging.Logger
+) -> Optional[Path]:
+    if not is_truthy(cfg, "USE_DEEPCOY", default=True):
+        return None
+    enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
+    if enabled not in {"on", "true", "1", "yes"}:
+        return None
+    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
+
+    pdb_up = pdb_id.upper()
+    overall_dir = Path(
+        str(
+            cfg.get("OVERALL_DIR")
+            or os.environ.get("PROTEIN_AUTOMATION_DIR")
+            or Path(__file__).resolve().parents[2]
+        )
+    )
+    deepcoy_dir = Path(
+        cfg.get(
+            "DEEPCOY_DUDS_DIR",
+            os.environ.get("DEEPCOY_DUDS_DIR", str(overall_dir / "DeepCoy_duds")),
+        )
+    )
+    out_root = Path(
+        cfg.get("DEEPCOY_OUT_ROOT", deepcoy_dir / "extracted_ligands/deepcoy")
+    )
+    work_root = (
+        Path(cfg.get("DEEPCOY_WORK_ROOT", deepcoy_dir / "deepcoy_work")) / pdb_up
+    )
+    input_pdb_dir = Path(
+        cfg.get(
+            "DEEPCOY_INPUT_PDB_DIR",
+            cfg.get("INPUT_DIR", str(overall_dir / "input_pdbs")),
+        )
+    )
+    deepcoy_python = cfg.get(
+        "DEEPCOY_PYTHON",
+        os.environ.get("DEEPCOY_PYTHON", sys.executable),
+    )
+    fb_map = cfg.get("_DEEPCOY_FALLBACK_SMILES_BY_PDB", {})
+    fallback_smiles = None
+    if isinstance(fb_map, dict):
+        fallback_smiles = fb_map.get(pdb_up)
+    if not fallback_smiles:
+        fallback_smiles = str(cfg.get("DEEPCOY_FALLBACK_SMILES", "")).strip() or None
+    if not fallback_smiles:
+        processed_root = Path(cfg.get("PROCESSED_PDBS_DIR", "processed_pdbs"))
+        lig_raw_dir = processed_root / pdb_up / "ligands_raw"
+
+        def _smiles_from_file(p: Path) -> Optional[str]:
+            try:
+                ext = p.suffix.lower().lstrip(".")
+                if ext in {"sdf", "sd"}:
+                    suppl = Chem.SDMolSupplier(str(p))
+                    mol = next((m for m in suppl if m), None)
+                elif ext == "mol2":
+                    mol = Chem.MolFromMol2File(str(p))
+                else:
+                    mol = Chem.MolFromPDBFile(str(p))
+                if mol:
+                    return Chem.MolToSmiles(mol, isomericSmiles=True)
+            except Exception:
+                return None
+            return None
+
+        if lig_raw_dir.exists():
+            for ext in ("sdf", "mol2", "pdb"):
+                for cand in sorted(lig_raw_dir.glob(f"*.{ext}")):
+                    smi = _smiles_from_file(cand)
+                    if smi:
+                        fallback_smiles = smi
+                        if isinstance(fb_map, dict):
+                            fb_map[pdb_up] = smi
+                        logger.info(
+                            "[deepcoy.fallback] pdb=%s base=control ref=%s smiles_set=True",
+                            pdb_up,
+                            cand,
+                        )
+                        break
+                if fallback_smiles:
+                    break
+    offline = str(
+        cfg.get("DEEPCOY_OFFLINE", os.environ.get("DEEPCOY_OFFLINE", "off"))
+    ).strip().lower() in {"on", "true", "1", "yes"}
+
+    def _find_existing() -> Optional[Path]:
+        pattern = f"{pdb_up}_*"
+        try:
+            for cand in out_root.glob(pattern):
+                sdf = cand / "deepcoy_decoys.sdf"
+                if sdf.is_file() and sdf.stat().st_size > 0:
+                    return sdf
+        except Exception:
+            return None
+        return None
+
+    existing = _find_existing()
+    if force:
+        # Remove any prior outputs for this PDB to avoid mixing tags (e.g., UNKNOWN vs UniProt)
+        for cand in out_root.glob(f"{pdb_up}_*"):
+            try:
+                shutil.rmtree(cand, ignore_errors=True)
+            except Exception:
+                pass
+        try:
+            shutil.rmtree(work_root, ignore_errors=True)
+        except Exception:
+            pass
+    elif existing:
+        return existing
+
+    # Run the autogen driver with the current Python (requests/rdkit), but still point DeepCoy itself
+    # at the DeepCoy environment via --deepcoy-python.
+    cmd = [
+        sys.executable,
+        str(deepcoy_dir / "generate_dud_library.py"),
+        "--pdb",
+        pdb_up,
+        "--input-pdb-dir",
+        str(input_pdb_dir),
+        "--out-root",
+        str(out_root),
+        "--artifact-dir",
+        str(work_root),
+        "--deepcoy-python",
+        str(deepcoy_python),
+    ]
+    if fallback_smiles:
+        cmd.extend(["--fallback-smiles", fallback_smiles])
+    restrict = int(cfg.get("DEEPCOY_RESTRICT_DATA", 0) or 0)
+    if restrict > 0:
+        cmd.extend(["--restrict-data", str(restrict)])
+    if offline:
+        cmd.append("--offline")
+
+    logger.info(
+        "[deepcoy.autogen] pdb=%s enabled=true out_root=%s work_dir=%s",
+        pdb_up,
+        out_root,
+        work_root,
+    )
+    logger.info("[deepcoy.autogen] cmd=%s", " ".join(cmd))
+
+    work_root.mkdir(parents=True, exist_ok=True)
+    stdout_log = work_root / "autogen.stdout.log"
+    stderr_log = work_root / "autogen.stderr.log"
+
+    def _write_autogen_logs(stdout_text: str, stderr_text: str) -> None:
+        try:
+            stdout_log.write_text(stdout_text or "")
+        except Exception as exc:
+            logger.warning(
+                "[deepcoy.autogen] pdb=%s stdout_log_write_failed=%s", pdb_up, exc
+            )
+        try:
+            stderr_log.write_text(stderr_text or "")
+        except Exception as exc:
+            logger.warning(
+                "[deepcoy.autogen] pdb=%s stderr_log_write_failed=%s", pdb_up, exc
+            )
+
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+    except Exception as exc:
+        _write_autogen_logs("", f"{exc}\n")
+        fallback_existing = _find_existing()
+        if fallback_existing:
+            logger.warning(
+                "[deepcoy.autogen] pdb=%s run_failed_using_cached=%s",
+                pdb_up,
+                fallback_existing,
+            )
+            return fallback_existing
+        raise RuntimeError(
+            f"DeepCoy autogen failed to start: cmd={' '.join(cmd)} "
+            f"stdout_log={stdout_log} stderr_log={stderr_log} error={exc}"
+        ) from exc
+
+    _write_autogen_logs(result.stdout, result.stderr)
+    if result.returncode != 0:
+        fallback_existing = _find_existing()
+        if fallback_existing:
+            logger.warning(
+                "[deepcoy.autogen] pdb=%s run_failed_using_cached=%s",
+                pdb_up,
+                fallback_existing,
+            )
+            return fallback_existing
+        raise RuntimeError(
+            f"DeepCoy autogen failed: cmd={' '.join(cmd)} stdout_log={stdout_log} "
+            f"stderr_log={stderr_log} exit_code={result.returncode}"
+        )
+
+    produced = _find_existing()
+    if not produced:
+        raise RuntimeError(f"DeepCoy decoy SDF not found after run for {pdb_up}")
+    size = produced.stat().st_size
+    logger.info(
+        "[deepcoy.autogen] produced=%s bytes=%d",
+        produced,
+        size,
+    )
+    return produced
+
+
+def ensure_deepcoy_decoy_pdbqts(
+    cfg: Dict, pdb_id: str, logger: logging.Logger, *, run_mode: Optional[str] = None
+) -> Optional[Path]:
+    if not is_truthy(cfg, "USE_DEEPCOY", default=True):
+        return None
+    enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
+    if enabled not in {"on", "true", "1", "yes"}:
+        return None
+    pdbqt_enabled = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_PDBQT", "on")).strip().lower()
+    if pdbqt_enabled not in {"on", "true", "1", "yes"}:
+        return None
+
+    test_map = _coerce_test_map(cfg.get("TEST_LIBRARY_MAP", {}))
+    mapped_value = (test_map or {}).get(pdb_id.upper())
+    base_root = Path(cfg.get("PREPPED_LIGANDS_DIR") or "prepped_ligands")
+    mapped_root = base_root / mapped_value if mapped_value else None
+    run_mode_val = (run_mode or "").lower()
+    if mapped_root and mapped_root.exists():
+        logger.info(
+            "[deepcoy.autogen.skip] pdb=%s reason=mapped_library_exists mapped=%s path=%s run_mode=%s",
+            pdb_id.upper(),
+            mapped_value,
+            mapped_root,
+            run_mode_val or "auto",
+        )
+        return None
+    if mapped_root:
+        logger.info(
+            "[deepcoy.autogen.run] pdb=%s reason=mapped_library_missing mapped=%s path=%s run_mode=%s",
+            pdb_id.upper(),
+            mapped_value,
+            mapped_root,
+            run_mode_val or "auto",
+        )
+    else:
+        logger.info(
+            "[deepcoy.autogen.run] pdb=%s reason=no_test_library_map_match run_mode=%s",
+            pdb_id.upper(),
+            run_mode_val or "auto",
+        )
+
+    sdf_path = ensure_deepcoy_decoy_sdfs(cfg, pdb_id, logger)
+    if not sdf_path or not sdf_path.is_file():
+        return None
+
+    label = sdf_path.parent.name
+    prepped_root = Path(cfg.get("DEEPCOY_PREPPED_SUBDIR", "deepcoy"))
+    prepped_dir = base_root / prepped_root / label
+    prepped_dir.mkdir(parents=True, exist_ok=True)
+
+    force = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
+    actives_enabled = str(cfg.get("DEEPCOY_PREP_ACTIVES", "on")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
+    decoy_existing = [
+        p for p in prepped_dir.glob("decoys_*.pdbqt") if p.stat().st_size > 0
+    ]
+    decoy_existing += [
+        p for p in prepped_dir.glob("deepcoy_decoys_*.pdbqt") if p.stat().st_size > 0
+    ]
+    actives_existing = [
+        p for p in prepped_dir.glob("actives_*.pdbqt") if p.stat().st_size > 0
+    ]
+    if decoy_existing and (actives_existing or not actives_enabled) and not force:
+        return prepped_dir
+
+    lock_path = prepped_dir / ".ligprep.lock"
+    acquired = False
+    try:
+        lock_path.touch(exist_ok=False)
+        acquired = True
+    except FileExistsError:
+        existing = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
+        if existing:
+            return prepped_dir
+        logger.warning(
+            "[deepcoy.ligprep] pdb=%s lock_exists=%s waiting skipped",
+            pdb_id.upper(),
+            lock_path,
+        )
+        return None
+
+    repo_root = Path(__file__).resolve().parents[2]
+    prep_candidates = [
+        repo_root / "src" / "prep_ligands" / "prep_ligands.py",
+        repo_root / "prep_ligands.py",
+    ]
+    prep_script = next((p for p in prep_candidates if p.is_file()), None)
+    if prep_script is None:
+        tried = ", ".join(str(p) for p in prep_candidates)
+        raise FileNotFoundError(f"prep_ligands.py not found; tried: {tried}")
+    mol2_dir = prepped_dir / "mol2"
+    force_flag = str(cfg.get("DEEPCOY_LIGPREP_FORCE", "off")).strip().lower()
+    use_force = force_flag in {"on", "true", "1", "yes"} or force
+
+    def _run_ligprep(sdf_in: Path, status_path: Path, prefix: str) -> None:
+        cmd = [
+            sys.executable,
+            str(prep_script),
+            "--in-sdf",
+            str(sdf_in),
+            "--mol2-dir",
+            str(mol2_dir),
+            "--out-pdbqt-dir",
+            str(prepped_dir),
+            "--status-log",
+            str(status_path),
+            "--rename-prefix",
+            prefix,
+            "--rename-pad",
+            "5",
+            "--rename-force",
+        ]
+        if use_force:
+            cmd.append("--force")
+        logger.info(
+            "[deepcoy.ligprep] pdb=%s sdf=%s out=%s cmd=%s",
+            pdb_id.upper(),
+            sdf_in,
+            prepped_dir,
+            " ".join(cmd),
+        )
+        subprocess.run(cmd, check=True)
+
+    try:
+        if force or not decoy_existing:
+            decoy_status = prepped_dir / "ligprep_status_decoys.tsv"
+            _run_ligprep(sdf_path, decoy_status, "decoys_")
+        if actives_enabled:
+            actives_sdf = sdf_path.parent / "deepcoy_actives.sdf"
+            if actives_sdf.is_file() and actives_sdf.stat().st_size > 0:
+                if force or not actives_existing:
+                    actives_status = prepped_dir / "ligprep_status_actives.tsv"
+                    _run_ligprep(actives_sdf, actives_status, "actives_")
+                logger.info(
+                    "[deepcoy.actives.prep] tag=%s in_sdf=%s out_dir=%s n_pdbqt=%d",
+                    label,
+                    actives_sdf,
+                    prepped_dir,
+                    len(
+                        [
+                            p
+                            for p in prepped_dir.glob("actives_*.pdbqt")
+                            if p.stat().st_size > 0
+                        ]
+                    ),
+                )
+            else:
+                logger.warning(
+                    "[deepcoy.actives.prep.skip] tag=%s reason=missing_sdf path=%s",
+                    label,
+                    actives_sdf,
+                )
+        else:
+            logger.info("[deepcoy.actives.prep.skip] reason=toggle_off")
+    finally:
+        if acquired and lock_path.exists():
+            try:
+                lock_path.unlink()
+            except Exception:
+                pass
+
+    created = [p for p in prepped_dir.glob("*.pdbqt") if p.stat().st_size > 0]
+    if not created:
+        raise RuntimeError(f"DeepCoy ligprep produced no PDBQT files in {prepped_dir}")
+
+    logger.info(
+        "[deepcoy.ligprep] pdb=%s pdbqt_count=%d out_dir=%s",
+        pdb_id.upper(),
+        len(created),
+        prepped_dir,
+    )
+    return prepped_dir
+
+
+def _maybe_set_deepcoy_as_dud_library(
+    cfg: Dict,
+    pdb_id: str,
+    effective_tokens: list[str],
+    prepped_dir: Optional[Path],
+    logger: logging.Logger,
+) -> None:
+    mode_label = "+".join(effective_tokens)
+    if "dud" not in effective_tokens:
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=mode_not_dud",
+            pdb_id.upper(),
+            mode_label,
+        )
+        return
+    if not is_truthy(cfg, "USE_DEEPCOY", default=True):
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=use_deepcoy_off",
+            pdb_id.upper(),
+            mode_label,
+        )
+        return
+    if str(cfg.get("DEEPCOY_USE_AS_DUD_LIBRARY", "on")).strip().lower() not in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }:
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=feature_disabled",
+            pdb_id.upper(),
+            mode_label,
+        )
+        return
+    if prepped_dir is None:
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_prepped_dir",
+            pdb_id.upper(),
+            mode_label,
+        )
+        return
+    if not prepped_dir.exists():
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=missing_dir dir=%s",
+            pdb_id.upper(),
+            mode_label,
+            prepped_dir,
+        )
+        return
+    if not any(p.stat().st_size > 0 for p in prepped_dir.glob("*.pdbqt")):
+        logger.debug(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=no_pdbqt dir=%s",
+            pdb_id.upper(),
+            mode_label,
+            prepped_dir,
+        )
+        return
+
+    tag = prepped_dir.name
+    key = pdb_id.upper()
+    mapped_subdir = f"{cfg.get('DEEPCOY_PREPPED_SUBDIR', 'deepcoy').strip('/')}/{tag}"
+
+    test_map = cfg.setdefault("TEST_LIBRARY_MAP", {})
+    canonical = cfg.setdefault("_TEST_LIBRARY_CANONICAL", {})
+    if not isinstance(test_map, dict):
+        logger.warning(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=reset reason=map_not_dict",
+            key,
+            mode_label,
+        )
+        test_map = {}
+        cfg["TEST_LIBRARY_MAP"] = test_map
+    if not isinstance(canonical, dict):
+        logger.warning(
+            "[deepcoy.dud-map] pdb=%s mode=%s action=reset reason=canonical_not_dict",
+            key,
+            mode_label,
+        )
+        canonical = {}
+        cfg["_TEST_LIBRARY_CANONICAL"] = canonical
+
+    force_map = str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+        "on",
+        "true",
+        "1",
+        "yes",
+    }
+    existing = test_map.get(key)
+    if existing:
+        if existing == mapped_subdir:
+            logger.debug(
+                "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
+                key,
+                mode_label,
+                existing,
+            )
+            return
+        base_root = prepped_dir.parent.parent if prepped_dir.parent else prepped_dir
+        existing_dir = base_root / existing
+        existing_ok = existing_dir.exists() and any(
+            p.stat().st_size > 0 for p in existing_dir.glob("*.pdbqt")
+        )
+        if not existing_ok or force_map:
+            logger.info(
+                "[deepcoy.dud-map] pdb=%s mode=%s action=update existing=%s new=%s reason=%s",
+                key,
+                mode_label,
+                existing,
+                mapped_subdir,
+                "force" if force_map else "missing_or_empty",
+            )
+        else:
+            logger.debug(
+                "[deepcoy.dud-map] pdb=%s mode=%s action=skip reason=already_mapped existing=%s",
+                key,
+                mode_label,
+                existing,
+            )
+            return
+
+    test_map[key] = mapped_subdir
+    canonical[key] = mapped_subdir
+    logger.info(
+        "[deepcoy.dud-map] pdb=%s mode=%s mapped_subdir=%s",
+        key,
+        mode_label,
+        mapped_subdir,
+    )
+
+
+def norm(p: str | Path) -> str:
+    """Normalize path to a clean, forward-slash string for logs & keys."""
+    return os.path.abspath(str(p)).replace("\\", "/")
+
+
+def _selection_schedule(
+    cfg: Dict[str, Any],
+    docking_mode: str,
+    n_stages: Optional[int],
+    logger: Optional[logging.Logger] = None,
+) -> List[float]:
+    """
+    Selection percentages per stage.
+    Uses config overrides when present:
+      - DISCOVERY_SELECTION_PCTS
+      - POLYPHARM_SELECTION_PCTS
+    """
+    default_disc = [1.0, 0.1, 0.01, 0.001, 0.001]
+    default_poly = [1.0, 0.05, 0.005]
+    default_sched = {
+        "discovery": default_disc,
+        "polypharmacology": default_poly,
+    }.get(docking_mode, [1.0] * n_stages if n_stages is not None else [1.0])
+
+    def _fmt_selection_err(config_key: str, details: str) -> str:
+        return (
+            f"{config_key}: {details}. "
+            "Use comma-separated values as either fractions (e.g. 1.0,0.15,0.10) "
+            "or percents (e.g. 100,15,10 or 100%,15%,10%). "
+            "Do not mix unsuffixed fraction and percent scales in one list."
+        )
+
+    def _tokenize_schedule(raw_val: Any, config_key: str) -> List[str]:
+        if isinstance(raw_val, str):
+            text = raw_val.strip()
+            if not text:
+                return []
+            toks = [tok.strip() for tok in text.split(",")]
+        elif isinstance(raw_val, (list, tuple)):
+            if not raw_val:
+                return []
+            toks = [str(tok).strip() for tok in raw_val]
+        else:
+            raise ValueError(
+                _fmt_selection_err(
+                    config_key,
+                    f"expected comma-separated string/list, got {type(raw_val).__name__}",
+                )
+            )
+
+        if any(tok == "" for tok in toks):
+            raise ValueError(_fmt_selection_err(config_key, "contains empty token"))
+        return toks
+
+    def _parse_schedule_values(raw_val: Any, config_key: str) -> List[float]:
+        tokens = _tokenize_schedule(raw_val, config_key)
+        if not tokens:
+            return []
+
+        parsed: List[float] = []
+        unsuffixed_scales: set[str] = set()
+        saw_explicit_percent = False
+        saw_unsuffixed_fraction = False
+
+        for idx, token in enumerate(tokens, start=1):
+            explicit_percent = token.endswith("%")
+            num_text = token[:-1].strip() if explicit_percent else token
+            try:
+                value = float(num_text)
+            except Exception as e:
+                raise ValueError(
+                    _fmt_selection_err(
+                        config_key, f"token #{idx} '{token}' is not numeric ({e})"
+                    )
+                ) from e
+
+            if not math.isfinite(value):
+                raise ValueError(
+                    _fmt_selection_err(config_key, f"token #{idx} '{token}' is NaN/inf")
+                )
+            if value <= 0.0:
+                raise ValueError(
+                    _fmt_selection_err(
+                        config_key, f"token #{idx} '{token}' must be > 0"
+                    )
+                )
+
+            if explicit_percent:
+                saw_explicit_percent = True
+                if value > 100.0:
+                    raise ValueError(
+                        _fmt_selection_err(
+                            config_key, f"token #{idx} '{token}' percent exceeds 100"
+                        )
+                    )
+                parsed.append(value / 100.0)
+                continue
+
+            # Unsuffixed values are interpreted by scale:
+            #  - (0,1] => fraction
+            #  - (1,100] => percent
+            if value <= 1.0:
+                unsuffixed_scales.add("fraction")
+                saw_unsuffixed_fraction = True
+                parsed.append(value)
+            elif value <= 100.0:
+                unsuffixed_scales.add("percent")
+                parsed.append(value / 100.0)
+            else:
+                raise ValueError(
+                    _fmt_selection_err(
+                        config_key, f"token #{idx} '{token}' exceeds maximum of 100"
+                    )
+                )
+
+        if len(unsuffixed_scales) > 1:
+            raise ValueError(
+                _fmt_selection_err(
+                    config_key,
+                    f"mixed unsuffixed scales are ambiguous (raw={raw_val!r})",
+                )
+            )
+        if saw_explicit_percent and saw_unsuffixed_fraction:
+            raise ValueError(
+                _fmt_selection_err(
+                    config_key,
+                    "cannot mix explicit % tokens with unsuffixed fraction tokens (e.g. 100%,0.1 is ambiguous; use 0.1% or 10%)",
+                )
+            )
+
+        return parsed
+
+    key = {
+        "discovery": "DISCOVERY_SELECTION_PCTS",
+        "polypharmacology": "POLYPHARM_SELECTION_PCTS",
+    }.get(docking_mode)
+
+    sched = list(default_sched)
+    if key:
+        raw = cfg.get(key)
+        if raw not in (None, "", [], ()):
+            parsed = _parse_schedule_values(raw, key)
+            if not parsed:
+                raise ValueError(_fmt_selection_err(key, "no values provided"))
+            if not math.isclose(parsed[0], 1.0, rel_tol=0.0, abs_tol=1e-12):
+                raise ValueError(
+                    _fmt_selection_err(
+                        key,
+                        f"first value must resolve to 1.0 (100%) because stage1 always runs on the full ligand pool (got {parsed[0]:.12g})",
+                    )
+                )
+            sched = parsed
+
+    # Trim/extend to requested number of stages to avoid index errors.
+    if n_stages is None:
+        return list(sched)
+    if len(sched) < n_stages:
+        sched = sched + [sched[-1]] * (n_stages - len(sched))
+    elif len(sched) > n_stages:
+        sched = sched[:n_stages]
+    return sched
+
+
+def _iter_pdbqt_dirfirst(root: Path, allowed_subdirs: Optional[set[str]] = None):
+    """
+    Yield .pdbqt files with a directory-first strategy:
+      - files directly under `root`
+      - then files under first-level subdirs (filter via `allowed_subdirs` if provided)
+    Falls back to recursive glob if any listing fails to keep things robust.
+    """
+    try:
+        if not root or not root.exists():
+            return
+        for p in root.glob("*.pdbqt"):
+            yield p
+        for d in root.iterdir():
+            if not d.is_dir():
+                continue
+            if allowed_subdirs is not None and d.name not in allowed_subdirs:
+                continue
+            for p in d.glob("*.pdbqt"):
+                yield p
+    except Exception:
+        for p in root.rglob("*.pdbqt"):
+            yield p
+
+
+def _parse_ph_dir_value(dir_name: str) -> Optional[float]:
+    """
+    Try to coerce a directory token into a plausible pH value.
+
+    Accepts:
+      - plain numerics: "7", "7.4", "6.0"
+      - prefixed numerics: "ph7", "ph7.4", "ph_6.0", "ph-6.0", "pH7.4"
+    Returns float if 0.0 <= value <= 14.0 else None.
+    """
+    token = str(dir_name).strip()
+    if not token:
+        return None
+
+    lowered = token.lower()
+    num_pattern = re.compile(r"[+-]?\d+(?:\.\d+)?$")
+
+    def _coerce(candidate: str) -> Optional[float]:
+        try:
+            val = float(candidate)
+        except Exception:
+            return None
+        return val if 0.0 <= val <= 14.0 else None
+
+    if lowered.startswith("ph"):
+        remainder = lowered[2:].lstrip("_- ")
+        if remainder and remainder[0] in "+-.0123456789":
+            for candidate in (remainder, remainder.replace("_", ".")):
+                if num_pattern.fullmatch(candidate):
+                    parsed = _coerce(candidate)
+                    if parsed is not None:
+                        return parsed
+            match = re.search(r"([+-]?\d+(?:\.\d+)?)", remainder)
+            if match:
+                parsed = _coerce(match.group(1))
+                if parsed is not None:
+                    return parsed
+
+    cleaned = lowered.strip("_- ")
+    cleaned_alt = cleaned.replace("_", ".")
+    for candidate in (cleaned, cleaned_alt):
+        if candidate and num_pattern.fullmatch(candidate):
+            parsed = _coerce(candidate)
+            if parsed is not None:
+                return parsed
+
+    return None
+
+
+def _is_ph_dir_name(dir_name: str) -> bool:
+    """True if the name looks like a pH bucket (0-14)."""
+    return _parse_ph_dir_value(dir_name) is not None
+
+
+def _is_under_ph_subdir(p: Path, roots: list[Path]) -> bool:
+    """
+    Returns True if `p` resides under <root>/<pH_dir>/... where <pH_dir> is
+    the first component beneath any allowed root and looks like a pH bucket.
+    """
+    for root in roots:
+        try:
+            rel = p.resolve().relative_to(Path(root).resolve())
+        except Exception:
+            continue
+        if not rel.parts:
+            continue
+        if _is_ph_dir_name(rel.parts[0]):
+            return True
+    return False
+
+
+def select_ligands_for_next(
+    cfg: Dict[str, Any],
+    docking_mode: str,
+    i: int,
+    stages: List[Dict],
+    scores: Dict[str, float],
+    logger: logging.Logger,
+    base_pool_n: Optional[int] = None,  #  if provided, select % of this
+    force_include: Optional[set] = None,  #  always add these
+) -> List[str]:
+    if not scores:
+        # Still allow force-carry if provided and next stage exists
+        return sorted(force_include) if force_include else []
+
+    schedule = _selection_schedule(cfg, docking_mode, len(stages), logger=logger)
+    pct = schedule[i + 1] if i + 1 < len(schedule) else 0.01
+
+    # Use provided base if given (e.g., Stage1 pool size) -- otherwise fall back to valid-count
+    pool_n = base_pool_n if (base_pool_n is not None) else len(scores)
+
+    # Select K by the base pool, but cap at the number of valid scores available
+    k_target = max(1, int(pool_n * pct))
+    k = max(1, min(k_target, len(scores)))
+
+    # take best k from valid scores
+    next_list = [
+        ligand_id for ligand_id, _ in sorted(scores.items(), key=lambda kv: kv[1])[:k]
+    ]
+
+    # Force-carry: add any requested ligands (e.g., extracted controls) to the next stage
+    if force_include:
+        # maintain stable order: extend with any forced ligands not already selected
+        in_set = set(next_list)
+        forced_add = [
+            ligand_id for ligand_id in sorted(force_include) if ligand_id not in in_set
+        ]
+        next_list.extend(forced_add)
+        if forced_add:
+            logger.info(
+                f"[Force-carry] Added {len(forced_add)} extracted ligands to next stage."
+            )
+
+    logger.info(
+        f"Selected {k} by score (+{len(force_include or [])} forced) "
+        f"= {len(next_list)} total ({pct * 100:.5f}% of base={pool_n})."
+    )
+    return next_list
+
+
+def compute_stage_membership_from_scores(
+    cfg: Dict[str, Any],
+    docking_mode: str,
+    scores: Dict[str, float],
+    *,
+    higher_is_better: bool,
+    n_stages: Optional[int] = None,
+) -> Dict[int, List[str]]:
+    """
+    Compute stage membership using the same percentile logic as Vina staging.
+
+    Returns {stage_index (1-based): [ligands]}.
+    """
+    if not scores:
+        return {}
+
+    # Filter to numeric scores only
+    valid_scores = {
+        ligand_id: score
+        for ligand_id, score in scores.items()
+        if isinstance(score, (int, float)) and math.isfinite(score)
+    }
+    if not valid_scores:
+        return {}
+
+    order = [
+        ligand_id
+        for ligand_id, _ in sorted(
+            valid_scores.items(), key=lambda kv: kv[1], reverse=higher_is_better
+        )
+    ]
+    total = len(order)
+    schedule = _selection_schedule(cfg, docking_mode, n_stages)
+
+    # Assign most selective stages first to avoid duplicates, then return in ascending stage order.
+    remaining = list(order)
+    stage_membership: Dict[int, List[str]] = {}
+    for stage_idx in range(len(schedule), 0, -1):
+        pct = schedule[stage_idx - 1]
+        target = int(math.ceil(total * pct))
+        target = max(1, target)
+        if stage_idx == 1:
+            assign_count = len(remaining)
+        else:
+            assign_count = min(target, len(remaining))
+        stage_membership[stage_idx] = remaining[:assign_count]
+        remaining = remaining[assign_count:]
+
+    return {k: stage_membership[k] for k in sorted(stage_membership)}
+
+
+def _count_heavy_atoms_from_pdbqt(pdbqt_path: Path) -> int:
+    heavy = 0
+    with open(pdbqt_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                continue
+            element = line[76:78].strip() if len(line) >= 78 else ""
+            if element:
+                if element.upper() != "H":
+                    heavy += 1
+            else:
+                atom_name = line[12:16].strip()
+                if not atom_name.upper().startswith("H"):
+                    heavy += 1
+    return heavy
+
+
+def _load_mol_any(pdbqt_path: Path, obabel_exe: str | None) -> Chem.Mol | None:
+    base = pdbqt_path.with_suffix("")
+    # prefer SDF, then MOL2, then PDB
+    sdf = base.with_suffix(".sdf")
+    mol2 = base.with_suffix(".mol2")
+    pdb = base.with_suffix(".pdb")
+    if sdf.exists():
+        supp = Chem.SDMolSupplier(str(sdf), removeHs=False, sanitize=True)
+        for m in supp:
+            if m:
+                return m
+    for fp, reader in [(mol2, Chem.MolFromMol2File), (pdb, Chem.MolFromPDBFile)]:
+        if fp.exists():
+            m = reader(str(fp), sanitize=True, removeHs=False)
+            if m:
+                return m
+    # fallback: PDBQT -> SDF via obabel (Linux-friendly)
+    if obabel_exe:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td, "tmp.sdf")
+            try:
+                subprocess.check_call(
+                    [
+                        obabel_exe,
+                        "-ipdbqt",
+                        str(pdbqt_path),
+                        "-osdf",
+                        "-O",
+                        str(out),
+                        "--retype",
+                        "--addh",
+                    ]
+                )
+                supp = Chem.SDMolSupplier(str(out), removeHs=False, sanitize=True)
+                for m in supp:
+                    if m:
+                        return m
+            except Exception:
+                return None
+    return None
+
+
+def _standardize(m: Chem.Mol) -> Chem.Mol:
+    parent = rdMolStandardize.ChargeParent(m)  # neutralize/parent
+    rdMolStandardize.Normalize(parent)  # FG normalization
+    Chem.SanitizeMol(parent)
+    return parent
+
+
+# Build catalog with PAINS A/B/C
+params = FilterCatalog.FilterCatalogParams()
+params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
+params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
+params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
+pains_catalog = FilterCatalog.FilterCatalog(params)
+
+
+def _resolve_test_mode(cfg) -> str:
+    """
+    Compatibility helper: return legacy mode strings for reserved-only configs,
+    or a "+"-joined token string when custom library tokens are used.
+    """
+    raw = (
+        os.environ.get("TEST_MODE_ENABLE")
+        if "TEST_MODE_ENABLE" in os.environ
+        else cfg.get("TEST_MODE_ENABLE", "off")
+    )
+    if isinstance(raw, bool):
+        if not raw:
+            return "off"
+    s = str(raw).strip()
+    if not s or s.lower() in {"", "0", "false", "no", "off", "none", "null"}:
+        return "off"
+
+    tokens = parse_test_libraries(cfg)
+    reserved = {"dud", "fda", "hmdb"}
+    if tokens and all(tok in reserved for tok in tokens):
+        token_set = set(tokens)
+        if token_set == {"dud"}:
+            return "dud"
+        if token_set == {"fda"}:
+            return "fda"
+        if token_set == {"hmdb"}:
+            return "hmdb"
+        if token_set == {"dud", "fda"}:
+            return "fda+dud"
+        if token_set == {"hmdb", "dud"}:
+            return "hmdb+dud"
+        if token_set == {"hmdb", "fda"}:
+            return "hmdb+fda"
+        if token_set == {"dud", "fda", "hmdb"}:
+            return "fda+dud+hmdb"
+    return "+".join(tokens) if tokens else "off"
+
+
+def _dedup_index_roots(seq: list[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in seq:
+        if not candidate:
+            continue
+        path_obj = Path(candidate)
+        try:
+            key = str(path_obj.resolve())
+        except Exception:
+            key = str(path_obj)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path_obj)
+    return deduped
+
+
+def _lib_roots_for_pdb(
+    cfg: Dict,
+    pdb_id: str,
+    paths: Paths,
+    logger: logging.Logger,
+    *,
+    test_mode_override: Optional[str] = None,
+) -> tuple[list[Path], list[Path]]:
+    del paths
+    tokens_override = (
+        _parse_test_libraries_value(test_mode_override)
+        if test_mode_override is not None
+        else None
+    )
+    allowed_noncontrol_roots = compute_allowed_library_roots(
+        cfg,
+        pdb_id,
+        logger,
+        tokens_override=tokens_override,
+    )
+    return [], allowed_noncontrol_roots
+
+
+def prepare_and_filter_ligands(
+    cfg: Dict,
+    paths: Paths,
+    logger: logging.Logger,
+    *,
+    run_mode: Optional[str] = None,
+) -> Tuple[List[str], Dict[str, int], Dict[str, bool]]:
+    """
+    Gathers candidate ligands, keeps existing validation/PAINS logic, and
+    filters the *non-control* pool to allowed library roots derived from
+    TEST_MODE_ENABLE tokens.
+
+    run_mode:
+      - None: use parsed TEST_MODE_ENABLE tokens
+      - "<token>": treat run_mode as a single token subrun (reserved or custom)
+
+    Controls are *never* filtered out here.
+    LIBRARY_EXTRA_DIRS remain included (unchanged).
+    """
+    overall_tokens = parse_test_libraries(cfg)
+    effective_tokens = overall_tokens
+    if run_mode is not None:
+        token = str(run_mode).strip()
+        if token:
+            lowered = token.lower()
+            if lowered in {"default", "off", "none", "null"}:
+                lowered = "fda"
+            effective_tokens = [lowered]
+
+    deepcoy_prepped_dir: Optional[Path] = None
+    use_deepcoy = is_truthy(cfg, "USE_DEEPCOY", default=True)
+    deepcoy_sdf_on = str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_SDF", "off")).strip().lower()
+    deepcoy_pdbqt_on = (
+        str(cfg.get("DEEPCOY_ENABLE_AUTOGEN_PDBQT", "on")).strip().lower()
+    )
+    should_try_deepcoy = (
+        use_deepcoy
+        and "dud" in effective_tokens
+        and deepcoy_sdf_on in {"on", "true", "1", "yes"}
+        and deepcoy_pdbqt_on in {"on", "true", "1", "yes"}
+    )
+    if should_try_deepcoy:
+        try:
+            deepcoy_prepped_dir = ensure_deepcoy_decoy_pdbqts(
+                cfg, paths.pdb_id, logger, run_mode=run_mode
+            )
+        except Exception as exc:
+            logger.warning("[deepcoy.autogen] pdb=%s error=%s", paths.pdb_id, exc)
+            if str(cfg.get("DEEPCOY_FORCE", "off")).strip().lower() in {
+                "on",
+                "true",
+                "1",
+                "yes",
+            }:
+                raise
+
+    _maybe_set_deepcoy_as_dud_library(
+        cfg, paths.pdb_id, effective_tokens, deepcoy_prepped_dir, logger
+    )
+
+    # Keep existing prep step for extracted controls (harmless if nothing to do)
+    prep_ligands_from_pdb(
+        ligand_output_dir=paths.ligand_output_dir,
+        ligands_mol2_dir=paths.ligands_mol2_dir,
+        prepped_ligands_dir=paths.prepped_ligands_dir,
+    )
+
+    allowed_noncontrol_roots = compute_allowed_library_roots(
+        cfg,
+        paths.pdb_id.upper(),
+        logger,
+        tokens_override=effective_tokens,
+    )
+    per_index_roots: list[Path] = []
+    if paths.prepped_ligands_dir:
+        per_index_roots.append(paths.prepped_ligands_dir)
+
+    index_library_roots: list[Path] = _dedup_index_roots(allowed_noncontrol_roots)
+    per_index_roots = _dedup_index_roots(per_index_roots)
+    index_roots = _dedup_index_roots(per_index_roots + index_library_roots)
+
+    manifest_filename = str(cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json"))
+    lib_index = cfg.get("_LIB_INDEX")
+    if not isinstance(lib_index, LibraryIndex):
+        lib_index = LibraryIndex(manifest_filename=manifest_filename, logger=logger)
+        cfg["_LIB_INDEX"] = lib_index
+    if index_roots:
+        lib_index.load(index_roots)
+    cfg["_LIB_INDEX_PER_ROOTS"] = [str(p) for p in per_index_roots]
+    cfg["_LIB_INDEX_LIBRARY_ROOTS"] = [str(p) for p in index_library_roots]
+
+    def _under(p: Path, root: Path) -> bool:
+        try:
+            p.resolve().relative_to(root.resolve())
+            return True
+        except Exception:
+            return False
+
+    def _enumerate_noncontrol_candidates_via_index(
+        cfg: Dict,
+        allowed_roots: list[Path],
+        logger: logging.Logger,
+    ) -> list[Path]:
+        from prep_ligands.prep_ligands_microstates import enumerate_ligands_for_docking
+
+        resolved_roots = _dedup_index_roots([Path(r) for r in allowed_roots if r])
+        resolved_existing = [r for r in resolved_roots if r.exists()]
+        logger.info(
+            "[lib-roots] non-control roots = %s",
+            [str(p) for p in resolved_existing],
+        )
+
+        candidates: list[Path] = []
+        microstate_roots = [
+            r for r in resolved_existing if (r / "microstates.json").exists()
+        ]
+        if microstate_roots:
+            try:
+                all_ms: list[Path] = []
+                for root in microstate_roots:
+                    ms_paths = enumerate_ligands_for_docking(
+                        requested_ph_values=None,
+                        cfg=cfg,
+                        pdb_id=paths.pdb_id.upper(),
+                        root_dir=root,
+                        microstate_dedup=True,
+                        force=False,
+                    )
+                    all_ms.extend(ms_paths)
+                ms_filtered = [
+                    p
+                    for p in all_ms
+                    if any(_under(p, root) for root in resolved_existing)
+                ]
+                candidates.extend(ms_filtered)
+                logger.info(
+                    "[lib-index.microstate] roots=%d ligands=%d",
+                    len(microstate_roots),
+                    len(ms_filtered),
+                )
+            except Exception as exc:
+                logger.warning("[lib-index.microstate] error=%s", exc)
+
+        manifest_candidates: list[Path] = []
+        if isinstance(cfg.get("_LIB_INDEX"), LibraryIndex):
+            index_obj: LibraryIndex = cfg["_LIB_INDEX"]
+            for root in resolved_existing:
+                manifest = getattr(index_obj, "_cache", {}).get(Path(root))
+                if not manifest:
+                    continue
+                for rel in manifest.entries.values():
+                    manifest_candidates.append(Path(root) / rel)
+        if manifest_candidates:
+            candidates.extend(manifest_candidates)
+            logger.info(
+                "[lib-index.manifest] roots=%d ligands=%d",
+                len(resolved_existing),
+                len(manifest_candidates),
+            )
+
+        if not candidates:
+            logger.warning(
+                "[lib-index] no usable index detected; falling back to filesystem scan under %d roots (this is slow)",
+                len(resolved_existing),
+            )
+            seen: set[str] = set()
+            for root in resolved_existing:
+                for p in _iter_pdbqt_dirfirst(root):
+                    pn = norm(p)
+                    if pn not in seen:
+                        seen.add(pn)
+                        candidates.append(p)
+
+        deduped: list[Path] = []
+        seen_keys: set[str] = set()
+        for p in candidates:
+            key = norm(p)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(Path(p))
+        return deduped
+
+    scan_roots: list[Path] = []
+    prepped_lig_root = paths.prepped_ligands_dir
+    if prepped_lig_root and prepped_lig_root.exists():
+        scan_roots.append(prepped_lig_root)
+
+    scan_roots.extend(allowed_noncontrol_roots)
+    scan_roots = _dedup_index_roots(scan_roots)
+
+    single_selector = cfg.get("_EFFECTIVE_SINGLE_LIGAND")
+    crawl_allowed = not bool(single_selector)
+    logger.info(
+        "[ligands.scan.guard] roots=%d crawl_allowed=%s selector=%s",
+        len(scan_roots),
+        crawl_allowed,
+        single_selector,
+    )
+
+    seen: set[str] = set()
+    controls: list[Path] = []
+    per_protein_allow = {"controls", "reference"}
+    if prepped_lig_root and prepped_lig_root.exists():
+        logger.info(
+            "[ligands.scan.root] root=%s allowed_subdirs=%s crawl=%s",
+            prepped_lig_root,
+            per_protein_allow,
+            crawl_allowed,
+        )
+        for p in _iter_pdbqt_dirfirst(
+            prepped_lig_root, allowed_subdirs=per_protein_allow
+        ):
+            pn = norm(p)
+            if pn not in seen:
+                seen.add(pn)
+                controls.append(p)
+
+    noncontrol_candidates = _enumerate_noncontrol_candidates_via_index(
+        cfg, allowed_noncontrol_roots, logger
+    )
+
+    all_pdbqt_paths: list[Path] = []
+    all_pdbqt_paths.extend(controls)
+    all_pdbqt_paths.extend(noncontrol_candidates)
+
+    logger.info(
+        "[ligands.scan] roots=%d found=%d", len(scan_roots), len(all_pdbqt_paths)
+    )
+    cfg["ALL_LIGAND_PATHS"] = [str(p) for p in all_pdbqt_paths]
+
+    if not all_pdbqt_paths:
+        logger.warning("No .pdbqt ligands were found under the configured roots.")
+        return [], {}, {}
+
+    valid_pdbqt: Dict[str, Path] = {}
+    for p in all_pdbqt_paths:
+        try:
+            if p.exists() and p.stat().st_size > 100:
+                valid_pdbqt[norm(p)] = p
+            else:
+                logger.debug(f"Excluded malformed ligand (missing or too small): {p}")
+        except Exception:
+            logger.debug(f"Excluded malformed ligand (exception): {p}")
+
+    cfg["ALL_LIGAND_PATHS_VALID"] = [str(p) for p in valid_pdbqt.values()]
+    logger.info("[ligands.valid] count=%d", len(valid_pdbqt))
+
+    controls_valid: list[Path] = []
+    noncontrols: list[Path] = []
+    for p in valid_pdbqt.values():
+        if prepped_lig_root and _under(p, prepped_lig_root):
+            controls_valid.append(p)
+        else:
+            noncontrols.append(p)
+
+    filtered_noncontrols: list[Path] = []
+    for p in noncontrols:
+        keep = False
+        for root in allowed_noncontrol_roots:
+            if root.exists() and _under(p, root):
+                keep = True
+                break
+        if keep:
+            filtered_noncontrols.append(p)
+
+    # When pH ligand mode is disabled, drop pH-annotated microstate ligands
+    # from the non-control pool. We detect these by 'pH' in the filename stem.
+    ph_mode_raw = str(cfg.get("PH_LIGAND_MODE", "off")).strip().lower()
+    ph_ligand_mode_on = ph_mode_raw not in ("", "off", "none", "false", "0")
+    if not ph_ligand_mode_on:
+        micro_removed: list[Path] = []
+        ph_dir_removed: list[Path] = []
+        stem_removed: list[Path] = []
+        filtered: list[Path] = []
+        for p in filtered_noncontrols:
+            is_microstates = any(part.lower() == "microstates" for part in p.parts)
+            is_ph_subdir = _is_under_ph_subdir(p, allowed_noncontrol_roots)
+            has_ph_stem = "pH" in p.stem
+
+            if is_microstates:
+                micro_removed.append(p)
+                continue
+            if is_ph_subdir:
+                ph_dir_removed.append(p)
+                continue
+            if has_ph_stem:
+                stem_removed.append(p)
+                continue
+            filtered.append(p)
+
+        filtered_noncontrols = filtered
+        logger.info(
+            "[ligands.ph-filter] mode=off microstates_removed=%d ph_subdir_removed=%d stem_removed=%d",
+            len(micro_removed),
+            len(ph_dir_removed),
+            len(stem_removed),
+        )
+        if micro_removed:
+            logger.info(
+                "[ligands.ph-filter.examples] category=microstates sample=%s",
+                [str(p) for p in micro_removed[:3]],
+            )
+        if ph_dir_removed:
+            logger.info(
+                "[ligands.ph-filter.examples] category=ph_subdir sample=%s",
+                [str(p) for p in ph_dir_removed[:3]],
+            )
+
+    # --- Optional: build library manifests from scan results ---
+    if cfg.get("LIBRARY_MANIFEST_BUILD_ON_SCAN"):
+        try:
+            manifest_filename = str(
+                cfg.get("LIBRARY_MANIFEST_FILENAME", "_manifest.json")
+            )
+            by_root: Dict[Path, list[Path]] = {}
+
+            for root in allowed_noncontrol_roots:
+                root = Path(root)
+                if not root.exists():
+                    continue
+                for lig in filtered_noncontrols:
+                    lig_path = Path(lig)
+                    if not lig_path.exists():
+                        continue
+                    if not _under(lig_path, root):
+                        continue
+                    by_root.setdefault(root, []).append(lig_path)
+
+            for root, ligs in by_root.items():
+                manifest_path = root / manifest_filename
+                if manifest_path.exists():
+                    logger.info(
+                        "[lib-manifest.scan.skip] root=%s reason=exists path=%s",
+                        str(root),
+                        str(manifest_path),
+                    )
+                    continue
+
+                if not ligs:
+                    continue
+
+                logger.info(
+                    "[lib-manifest.scan.build] root=%s ligands=%d manifest=%s",
+                    str(root),
+                    len(ligs),
+                    str(manifest_path),
+                )
+
+                entries: list[str] = []
+                for lig in ligs:
+                    try:
+                        rel = Path(lig).resolve().relative_to(root.resolve())
+                        entries.append(rel.as_posix())
+                    except Exception:
+                        entries.append(os.path.relpath(str(lig), str(root)))
+
+                tmp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+
+                try:
+                    lib_index = LibraryIndex(
+                        manifest_filename=manifest_filename,
+                        logger=logger,
+                    )
+                    if hasattr(lib_index, "write_manifest_for_root"):
+                        lib_index.write_manifest_for_root(root, entries, tmp_path)
+                    else:
+                        import json
+
+                        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                        data = {"root": str(root), "entries": entries}
+                        tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+                    tmp_path.replace(manifest_path)
+                except Exception:
+                    logger.exception(
+                        "[lib-manifest.scan.error] root=%s manifest=%s",
+                        str(root),
+                        str(manifest_path),
+                    )
+        except Exception:
+            logger.exception(
+                "[lib-manifest.scan.error] unexpected failure during build_on_scan"
+            )
+    # ------------------------------------------------------------
+
+    # Merge back: controls (unaltered) + filtered non-controls
+    if cfg.get("_EFFECTIVE_SINGLE_LIGAND") and cfg.get("_SINGLE_RESOLVED_PATH"):
+        resolved_path = Path(cfg["_SINGLE_RESOLVED_PATH"])
+        final_paths = controls_valid + [resolved_path]
+        filtered_noncontrols = [resolved_path]
+        logger.info(
+            "[single.fuel] resolved=%s controls=%d (blocking non-control pool)",
+            cfg["_SINGLE_RESOLVED_PATH"],
+            len(controls_valid),
+        )
+    else:
+        final_paths = controls_valid + filtered_noncontrols
+
+    # --- PAINS flags (keep as before; default to {}) ---
+    pains_flags: Dict[str, bool] = {}
+    try:
+        from rdkit.Chem import FilterCatalog
+
+        # Build catalog once at module-level if you prefer; safe inline here too
+        params = FilterCatalog.FilterCatalogParams()
+        params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
+        params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
+        params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
+        _ = FilterCatalog.FilterCatalog(params)
+
+        def _has_pains(pdbqt_path: Path) -> bool:
+            try:
+                # Try to locate a mol2 (or similar) neighbor if your original logic requires it.
+                # Fallback: False (non-blocking).
+                return False
+            except Exception:
+                return False
+
+        for p in final_paths:
+            pains_flags[p.stem] = _has_pains(p)
+    except Exception:
+        pains_flags = {}
+
+    # Heavy atom counts (reuse your existing helper)
+    heavy_atom_counts: Dict[str, int] = {}
+    for p in final_paths:
+        try:
+            heavy_atom_counts[p.stem] = _count_heavy_atoms_from_pdbqt(p)
+        except Exception:
+            heavy_atom_counts[p.stem] = 0
+
+    # Final return (stringify paths)
+    ligands = [str(p) for p in final_paths]
+    non_control_count = max(0, len(final_paths) - len(controls))
+    logger.info(
+        f"Selected ligands -> controls={len(controls)} + non-controls={non_control_count} = total={len(ligands)}"
+    )
+    # GUARD: enforce .pdbqt-only pool
+    bad = [p for p in ligands if not str(p).lower().endswith(".pdbqt")]
+    if bad:
+        raise ValueError(f"Ligand is not a .pdbqt file: {bad[0]}")
+    return ligands, heavy_atom_counts, pains_flags
+
+
+def _read_any_lig(path: str):
+    """
+    Load ligand from SDF/MOL2/PDB with consistent settings.
+    Returns an RDKit Mol or None.
+    """
+    mol = None
+    loader = "unknown"
+    sanitize = True
+    sanitize_failed = False
+    load_err = None
+    ext = os.path.splitext(path)[1].lower()
+    _rlog = logging.getLogger("rmsd")
+
+    try:
+        with _rdkit_quiet_logs():
+            if ext in (".sdf", ".sd"):
+                loader = "SDMolSupplier"
+                sanitize = True
+                suppl = Chem.SDMolSupplier(path, removeHs=False, sanitize=True)
+                mol = next((m for m in suppl if m is not None), None)
+            elif ext in (".mol2",):
+                loader = "MolFromMol2File"
+                sanitize = True
+                mol = Chem.MolFromMol2File(path, sanitize=True, removeHs=False)
+            elif ext in (".pdbqt",):
+                loader = "MolFromPDBFile(pdbqt)"
+                sanitize = False
+                mol = Chem.MolFromPDBFile(
+                    path, sanitize=False, removeHs=False, proximityBonding=True
+                )
+                if mol is not None:
+                    try:
+                        Chem.SanitizeMol(mol)
+                    except Exception as e:
+                        sanitize_failed = True
+                        if _rlog:
+                            _rlog.warning(
+                                f"[read_any] sanitize failed for path='{path}' err={e!r}"
+                            )
+            elif ext in (".pdb",):
+                loader = "MolFromPDBFile"
+                sanitize = True
+                # If you use proximityBonding or flavor flags elsewhere, keep them consistent here.
+                try:
+                    mol = Chem.MolFromPDBFile(
+                        path, sanitize=True, removeHs=False, proximityBonding=True
+                    )
+                except Exception as e:
+                    load_err = e
+                    mol = None
+                if mol is None:
+                    try:
+                        with open(path, "rt", errors="ignore") as fh:
+                            head = fh.read(1024)
+                    except Exception:
+                        head = ""
+                    looks_like_pdbqt = (
+                        ("REMARK VINA" in head)
+                        or ("TORSDOF" in head)
+                        or ("ROOT" in head)
+                    )
+                    if looks_like_pdbqt:
+                        if _rlog:
+                            _rlog.warning(
+                                f"[read_any] PDBQT fallback for path='{path}' (sanitize=True failed; retry sanitize=False)"
+                            )
+                        loader = "MolFromPDBFile(pdbqt-fallback)"
+                        sanitize = False
+                        try:
+                            mol = Chem.MolFromPDBFile(
+                                path,
+                                sanitize=False,
+                                removeHs=False,
+                                proximityBonding=True,
+                            )
+                        except Exception as e:
+                            load_err = e
+                            mol = None
+                        if mol is not None:
+                            try:
+                                Chem.SanitizeMol(mol)
+                            except Exception as e:
+                                sanitize_failed = True
+                                if _rlog:
+                                    _rlog.warning(
+                                        f"[read_any] sanitize failed for path='{path}' err={e!r}"
+                                    )
+            else:
+                loader = "auto"
+                sanitize = True
+                mol = Chem.MolFromMolFile(
+                    path, sanitize=True, removeHs=False
+                )  # last-ditch; or return None
+    except Exception as e:
+        load_err = e if load_err is None else load_err
+        mol = None
+    if (mol is None) and (load_err is None):
+        load_err = "load_returned_None"
+
+    # ──  single debug line about what we actually loaded ───────────────────
+    try:
+        _rlog = logging.getLogger("rmsd")
+        if _rlog and mol is not None:
+            from rdkit.Chem import rdMolDescriptors
+
+            # formula = e.g., "C20H25N3O"
+            formula = rdMolDescriptors.CalcMolFormula(mol)
+            # InChIKey may be unavailable if RDKit was built without InChI; guard it.
+            try:
+                from rdkit.Chem import inchi
+
+                inchikey = inchi.MolToInchiKey(mol)
+            except Exception:
+                inchikey = "NA"
+            extra = " sanitize_failed=True" if sanitize_failed else ""
+            _rlog.info(
+                f"[read_any] loader={loader} sanitize={sanitize} path='{path}'{extra} "
+                f"atoms={mol.GetNumAtoms()} heavy={mol.GetNumHeavyAtoms()} formula={formula} inchikey={inchikey}"
+            )
+        elif _rlog:
+            if (mol is None) and (load_err is not None):
+                _rlog.info(
+                    f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None err={load_err!r}"
+                )
+            else:
+                _rlog.info(
+                    f"[read_any] loader={loader} sanitize={sanitize} path='{path}' mol=None"
+                )
+    except Exception:
+        pass
+    # ───────────────────────────────────────────────────────────────────────────
+
+    return mol
+
+
+def _is_readable_ref(pth: Path) -> bool:
+    try:
+        m = _read_any_lig(str(pth))
+        return (m is not None) and (m.GetNumHeavyAtoms() > 0)
+    except Exception:
+        return False
+
+
+def compute_rmsd(ref_path: str, docked_path: str) -> float:
+    """Heavy-atom RMSD using best mapping; supports PDB/SDF/MOL2 refs and adds a minimal MCS fallback."""
+    _rlog = logging.getLogger("rmsd")
+
+    def _clamp(val: float) -> float:
+        try:
+            if 0 < val < 0.01:
+                return 0.01
+        except Exception:
+            pass
+        return val
+
+    coord_rmsd = None
+    tmp_to_cleanup: list[Path] = []
+    try:
+        coord_ref = ref_path
+        # Convert non-PDB references to PDB for coordinate-based RMSD if possible.
+        if not str(ref_path).lower().endswith(".pdb"):
+            try:
+                mol = _read_any_lig(ref_path)
+                if mol is not None:
+                    tmp_ref = Path(tempfile.mkstemp(suffix=".pdb")[1])
+                    Chem.MolToPDBFile(mol, str(tmp_ref))
+                    coord_ref = str(tmp_ref)
+                    tmp_to_cleanup.append(tmp_ref)
+            except Exception:
+                coord_ref = ref_path
+
+        coord_rmsd = compute_redock_rmsd(coord_ref, docked_path)
+        if coord_rmsd is not None and math.isfinite(coord_rmsd):
+            if _rlog:
+                _rlog.info(
+                    f"[rmsd.coord] ref='{coord_ref}' dock='{docked_path}' rmsd={coord_rmsd:.3f}A (kabsch)"
+                )
+            return _clamp(coord_rmsd)
+    except Exception as e:
+        if _rlog:
+            _rlog.warning(
+                f"[rmsd.coord] failed ref='{ref_path}' dock='{docked_path}' err={e!r}; falling back to RDKit/MCS"
+            )
+    finally:
+        for tmp in tmp_to_cleanup:
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+
+    ref = _read_any_lig(ref_path)
+    dock = _read_any_lig(docked_path)
+    if not ref or not dock:
+        return float("inf")
+
+    # 1) Fast path: RDKit best alignment
+    try:
+        rmsd = float(rdMolAlign.GetBestRMS(ref, dock))
+        if _rlog:
+            _rlog.info(
+                f"[rmsd.best] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A"
+            )
+        return _clamp(rmsd)
+    except Exception as e:
+        if _rlog:
+            _rlog.warning(
+                f"[rmsd.best] failed ref='{ref_path}' dock='{docked_path}' err={e!r}; falling back to MCS"
+            )
+
+    # 2) Tiny, robust fallback via MCS
+    try:
+        # Ensure ring info for potentially unsanitized PDBQT-derived mols
+        Chem.FastFindRings(ref)
+        Chem.FastFindRings(dock)
+
+        mcs = rdFMCS.FindMCS(
+            [ref, dock],
+            ringMatchesRingOnly=True,
+            completeRingsOnly=True,
+            matchValences=True,
+        )
+        patt = Chem.MolFromSmarts(mcs.smartsString)
+        if patt is None:
+            if _rlog:
+                _rlog.warning(
+                    f"[rmsd.mcs] no SMARTS pattern for ref='{ref_path}' dock='{docked_path}'"
+                )
+            return float("inf")
+        ref_match = ref.GetSubstructMatch(patt)
+        dock_match = dock.GetSubstructMatch(patt)
+        if not ref_match or not dock_match or (len(ref_match) != len(dock_match)):
+            if _rlog:
+                _rlog.warning(
+                    f"[rmsd.mcs] match-fail ref='{ref_path}' dock='{docked_path}'"
+                )
+            return float("inf")
+        amap = list(zip(dock_match, ref_match))  # (probe->ref)
+        rmsd = float(rdMolAlign.AlignMol(dock, ref, atomMap=amap))
+        if _rlog:
+            _rlog.info(
+                f"[rmsd.mcs] ref='{ref_path}' dock='{docked_path}' rmsd={rmsd:.3f}A atoms={len(amap)}"
+            )
+        return _clamp(rmsd)
+    except Exception as e:
+        if _rlog:
+            _rlog.warning(
+                f"[rmsd.mcs] failed ref='{ref_path}' dock='{docked_path}' err={e!r}"
+            )
+        return float("inf")
+
+
+def validate_ligand(
+    ligand_name: str,
+    docked_path: str,
+    crystal_path: str = None,
+    rmsd_thresh: float = 2.0,
+    self_rmsd: float = None,
+    logger=None,
+) -> bool:
+    """
+    Validate ligand docking.
+      * If crystal structure available ? use redocking RMSD (hard gate).
+      * Otherwise (non-controls) ? self-RMSD is *log-only* (never reject).
+    """
+    if crystal_path and Path(crystal_path).exists():
+        # Prefer coordinate-based Kabsch RMSD for control redock when a crystal ligand is available.
+        # This uses pose_validation.compute_redock_rmsd, which operates directly on coordinates,
+        # and falls back to the RDKit/MCS-based compute_rmsd if needed.
+        redock_rmsd = None
+        try:
+            redock_rmsd = compute_redock_rmsd(crystal_path, docked_path)
+        except Exception as e:
+            if logger:
+                logger.warning(
+                    f"[validate] {ligand_name}: compute_redock_rmsd failed for "
+                    f"crystal='{crystal_path}' docked='{docked_path}'; "
+                    f"falling back to RDKit/MCS RMSD; err={e!r}"
+                )
+
+        # If the coordinate-based RMSD could not be computed (None), fall back to the
+        # original RDKit/MCS RMSD implementation to preserve behavior.
+        if redock_rmsd is None:
+            redock_rmsd = compute_rmsd(crystal_path, docked_path)
+        if logger:
+            sr = f"{self_rmsd:.2f}" if isinstance(self_rmsd, (int, float)) else "n/a"
+            logger.info(
+                f"[validate] {ligand_name}: redock_RMSD={redock_rmsd:.2f} A, self_RMSD={sr}"
+            )
+        if redock_rmsd <= rmsd_thresh:
+            return True
+        else:
+            if logger:
+                logger.warning(
+                    f"[validate] {ligand_name}: redocking failed (RMSD {redock_rmsd:.2f} A > {rmsd_thresh:.2f})"
+                )
+            return False
+
+    # Non-controls: log self-RMSD but do not gate on it
+    try:
+        sr_val = float(self_rmsd) if self_rmsd is not None else None
+    except Exception:
+        sr_val = None
+    if logger:
+        sr_txt = f"{sr_val:.2f}" if isinstance(sr_val, (int, float)) else "n/a"
+        logger.info(f"[validate] {ligand_name}: self_RMSD={sr_txt} A (LOG-ONLY)")
+    return True
+
+
+__all__ = [
+    "select_ligands_for_next",
+    "prepare_and_filter_ligands",
+    "compute_rmsd",
+    "validate_ligand",
+    "_coerce_test_map",
+    "_resolve_test_mode",
+    "_lib_roots_for_pdb",
+    "_dedup_index_roots",
+    "_count_heavy_atoms_from_pdbqt",
+    "_read_any_lig",
+    "_is_readable_ref",
+]

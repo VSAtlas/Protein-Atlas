@@ -1,0 +1,21 @@
+# Minimal portable configuration (preferred)
+# Keep config.txt focused on repo roots and tool prefixes.
+# Individual executable paths are derived by normalize_config() and PATH resolution.
+
+OVERALL_DIR=.
+
+# Optional tool roots/prefixes
+MGLTOOLS_PATH=
+ADFRSUITE_BIN=
+PHENIX_DIR=
+PHENIX_LIB_PATH=
+P2RANK_PATH=prank
+MMGBSA_AMBERTOOLS_PREFIX=
+AMBERTOOLS_PREFIX=
+
+# CLI-only gate; verification runs only with: python main.py --verify-tools
+TOOL_VERIFY_ON_START=false
+
+# Optional env-prefix keys used by external modules
+SCORCH_ENV_PREFIX=
+SCORCH_ENV=scorch-env

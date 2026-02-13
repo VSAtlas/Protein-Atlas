@@ -1,2 +1,0 @@
-rank	severity	rule_id	pdb	ligand	message	count	recency	file	sample	hint
-1	hard	ligprep.rdkit_valence	2025		RDKit sanitize/valence/kekulize error(s)	7		/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251009_200323.log	[20:04:45] Explicit valence for atom # 10 O, 3, is greater than permitted	Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.

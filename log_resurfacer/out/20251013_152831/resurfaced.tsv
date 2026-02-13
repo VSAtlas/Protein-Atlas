@@ -1,2 +1,0 @@
-rank	severity	rule_id	pdb	ligand	message	count	recency	file	sample	hint	step	paths
-1	hard	ligprep.rdkit_valence			RDKit sanitize/valence/kekulize error(s)	8		/stor/home/mpg2352/atlas/code/protein_automation/logs/bench_20251013_152831.log	[15:29:06] Explicit valence for atom # 18 C, 5, is greater than permitted	Quarantine; consider pre-sanitize with RDKit, fix aromaticity, add hydrogens earlier.	ligprep.sanitize	

@@ -1,0 +1,216 @@
+# Canonical protein classes and their decoding rules for family difficulty prior.
+# All string matching is done case-insensitively.
+
+classes:
+  KINASE:
+    tier_prior: A
+    text_keywords:
+      - kinase
+      - protein kinase
+      - tyrosine kinase
+      - serine/threonine kinase
+      - cdk
+      - map kinase
+    ec_prefixes:
+      - "2.7.10"
+      - "2.7.11"
+      - "2.7.12"
+
+  PROTEASE:
+    tier_prior: B
+    text_keywords:
+      - protease
+      - peptidase
+      - serine protease
+      - trypsin
+      - thrombin
+      - factor vii
+      - factor x
+    ec_prefixes:
+      - "3.4.21"
+      - "3.4.23"
+      - "3.4.24"
+
+  NUCLEAR_RECEPTOR:
+    tier_prior: A
+    text_keywords:
+      - nuclear receptor
+      - thyroid hormone receptor
+      - androgen receptor
+      - estrogen receptor
+      - glucocorticoid receptor
+    ec_prefixes: []
+
+  GPCR:
+    tier_prior: B
+    text_keywords:
+      - g protein-coupled receptor
+      - g-protein coupled receptor
+      - gpcr
+      - adrenergic receptor
+      - chemokine receptor
+    ec_prefixes: []
+
+  METALLOENZYME:
+    tier_prior: C
+    text_keywords:
+      - metalloenzyme
+      - zinc enzyme
+      - zinc metalloprotease
+      - carbonic anhydrase
+      - comt
+      - catechol o-methyltransferase
+      - farnesyl pyrophosphate synthase
+      - fpps
+    ec_prefixes:
+      - "1.14.13"
+      - "1.14.14"
+
+  hsp90_chaperone:
+    tier_prior: C
+    text_keywords:
+      - "heat shock protein 90"
+      - "hsp90"
+      - "hsp 90"
+    ec_prefixes:
+      - "3.6.3"   # if applicable
+
+  acetylcholinesterase_gorge:
+    tier_prior: C
+    text_keywords:
+      - "acetylcholinesterase"
+      - "ache"
+      - "cholinesterase"
+      - "acetycholinesterase"  # common typo
+    ec_prefixes:
+      - "3.1.1"   # cholinesterases
+
+  flavo_mao:
+    tier_prior: C
+    text_keywords:
+      - "monoamine oxidase"
+      - "mao b"
+      - "mao-b"
+      - "flavin-containing amine oxidase"
+    ec_prefixes: []
+
+  nucleoside_kinase_polar:
+    tier_prior: C
+    text_keywords:
+      - "thymidine kinase"
+      - "nucleoside kinase"
+      - "kith"
+    ec_prefixes:
+      - "2.7.1"   # nucleoside kinases
+
+  PPI_INTERFACE:
+    tier_prior: C
+    text_keywords:
+      - "protein-protein interaction"
+      - "protein protein interaction"
+      - "bcl-2"
+      - "bcl2"
+      - "mdm2"
+      - "iap"
+      - "xiap"
+    ec_prefixes: []
+
+  TRANSCRIPTION_FACTOR:
+    tier_prior: C
+    text_keywords:
+      - "transcription factor"
+      - "transcriptional regulator"
+      - "transcriptional activator"
+      - "myc"
+      - "nf-kb"
+      - "p53"
+    ec_prefixes: []
+
+  INTEGRIN:
+    tier_prior: C
+    text_keywords:
+      - "integrin"
+      - "avb3"
+      - "alpha v beta 3"
+      - "lfa-1"
+      - "lymphocyte function-associated antigen 1"
+    ec_prefixes: []
+
+  PTP:
+    tier_prior: C
+    text_keywords:
+      - "protein tyrosine phosphatase"
+      - "tyrosine phosphatase"
+      - "ptp1b"
+      - "shp2"
+    ec_prefixes:
+      - "3.1.3.16"
+      - "3.1.3.48"
+
+  LIPASE_PHOSPHOLIPASE:
+    tier_prior: C
+    text_keywords:
+      - "phospholipase"
+      - "phospholipase a2"
+      - "pla2"
+      - "lipase"
+      - "lipoprotein lipase"
+    ec_prefixes:
+      - "3.1.1"
+
+  ABC_TRANSPORTER:
+    tier_prior: C
+    text_keywords:
+      - "abc transporter"
+      - "p-glycoprotein"
+      - "p glycoprotein"
+      - "abcb1"
+      - "abcg2"
+      - "multidrug resistance protein"
+    ec_prefixes: []
+
+  CYSTEINE_PROTEASE:
+    tier_prior: B
+    text_keywords:
+      - "caspase"
+      - "cathepsin"
+      - "cysteine protease"
+    ec_prefixes:
+      - "3.4.22"
+
+  BROMODOMAIN:
+    tier_prior: B
+    text_keywords:
+      - "bromodomain"
+      - "brd2"
+      - "brd3"
+      - "brd4"
+      - "baz2a"
+    ec_prefixes: []
+
+  PHOSPHODIESTERASE:
+    tier_prior: B
+    text_keywords:
+      - "phosphodiesterase"
+      - "pde5"
+      - "pde4"
+      - "pde3"
+    ec_prefixes:
+      - "3.1.4"
+
+  BETA_LACTAMASE:
+    tier_prior: C
+    text_keywords:
+      - "beta-lactamase"
+      - "beta lactamase"
+      - "metallo-beta-lactamase"
+      - "metallo beta-lactamase"
+      - "ndm-1"
+      - "imp-1"
+    ec_prefixes:
+      - "3.5.2"
+
+  OTHER:
+    tier_prior: B
+    text_keywords: []
+    ec_prefixes: []

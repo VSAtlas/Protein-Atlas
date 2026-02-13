@@ -1,0 +1,299 @@
+ligand	status	reason	pdbqt_rel	stage	failure_code	failure_detail	fixes_count	rules_version	writer_final	rescue_used	torsion_root_rule	polarH	ad4_types_ok	charges_ok	torsdof
+rdk_0000001	ok		decoys_final_00002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		decoys_final_00002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	OK		decoys_final_00002.pdbqt				0								
+rdk_0000006	ok		decoys_final_00007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		decoys_final_00007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	OK		decoys_final_00007.pdbqt				0								
+rdk_0000007	ok		decoys_final_00008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		decoys_final_00008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000007	OK		decoys_final_00008.pdbqt				0								
+rdk_0000003	ok		decoys_final_00004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		decoys_final_00004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	4
+rdk_0000003	OK		decoys_final_00004.pdbqt				0								
+rdk_0000008	ok		decoys_final_00009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		decoys_final_00009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	7
+rdk_0000008	OK		decoys_final_00009.pdbqt				0								
+rdk_0000005	ok		decoys_final_00006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		decoys_final_00006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000005	OK		decoys_final_00006.pdbqt				0								
+rdk_0000010	ok		decoys_final_00011.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		decoys_final_00011.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	5
+rdk_0000010	OK		decoys_final_00011.pdbqt				0								
+rdk_0000002	ok		decoys_final_00003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		decoys_final_00003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	False	True	True	8
+rdk_0000002	OK		decoys_final_00003.pdbqt				0								
+rdk_0000004	ok		decoys_final_00005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		decoys_final_00005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	False	True	True	3
+rdk_0000004	OK		decoys_final_00005.pdbqt				0								
+rdk_0000009	ok		decoys_final_00010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		decoys_final_00010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	False	True	True	6
+rdk_0000009	OK		decoys_final_00010.pdbqt				0								
+rdk_0000001	ok		actives_final_00002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		actives_final_00002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000003	ok		actives_final_00004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	OK		actives_final_00002.pdbqt				0								
+rdk_0000003	ok		actives_final_00004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	4
+rdk_0000003	OK		actives_final_00004.pdbqt				0								
+rdk_0000006	ok		actives_final_00007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		actives_final_00007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	OK		actives_final_00007.pdbqt				0								
+rdk_0000002	ok		actives_final_00003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		actives_final_00006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		actives_final_00003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		actives_final_00006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000005	OK		actives_final_00006.pdbqt				0								
+rdk_0000002	OK		actives_final_00003.pdbqt				0								
+rdk_0000007	ok		actives_final_00008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		actives_final_00008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000007	OK		actives_final_00008.pdbqt				0								
+rdk_0000008	ok		actives_final_00009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		actives_final_00009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	OK		actives_final_00009.pdbqt				0								
+rdk_0000004	ok		actives_final_00005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		actives_final_00005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	3
+rdk_0000004	OK		actives_final_00005.pdbqt				0								
+rdk_0000010	ok		actives_final_00011.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		actives_final_00011.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	5
+rdk_0000010	OK		actives_final_00011.pdbqt				0								
+rdk_0000009	ok		actives_final_00010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		actives_final_00010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	5
+rdk_0000009	OK		actives_final_00010.pdbqt				0								
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		rdk_0000006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		rdk_0000005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		rdk_0000008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		rdk_0000007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		rdk_0000004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		rdk_0000001.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		rdk_0000003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	11
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		rdk_0000002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	10
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		rdk_0000010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		rdk_0000009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000001	ok		actives_final_00002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		actives_final_00002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000006	ok		actives_final_00007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		actives_final_00007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		actives_final_00008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		actives_final_00008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000003	ok		actives_final_00004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		actives_final_00004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	4
+rdk_0000005	ok		actives_final_00006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		actives_final_00006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000008	ok		actives_final_00009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		actives_final_00009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	7
+rdk_0000002	quarantined	invalid_pdbqt_postwrite	actives_final_00003.pdbqt	validate_pdbqt	invalid_pdbqt_postwrite	empty_or_missing	0	rules:v1							
+rdk_0000004	ok		actives_final_00005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		actives_final_00005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	False	True	True	3
+rdk_0000010	ok		actives_final_00011.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		actives_final_00011.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	5
+rdk_0000001	ok		actives_final_00002.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000001	ok		actives_final_00002.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000002	ok		actives_final_00003.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000002	ok		actives_final_00003.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000009	quarantined	invalid_pdbqt_postwrite	actives_final_00010.pdbqt	validate_pdbqt	invalid_pdbqt_postwrite	empty_or_missing	0	rules:v1							
+rdk_0000005	ok		actives_final_00006.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000005	ok		actives_final_00006.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000003	ok		actives_final_00004.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000003	ok		actives_final_00004.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	4
+rdk_0000006	ok		actives_final_00007.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000006	ok		actives_final_00007.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000007	ok		actives_final_00008.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000007	ok		actives_final_00008.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	8
+rdk_0000009	ok		actives_final_00010.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000009	ok		actives_final_00010.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	5
+rdk_0000010	ok		actives_final_00011.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000010	ok		actives_final_00011.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	5
+rdk_0000004	ok		actives_final_00005.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000004	ok		actives_final_00005.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	3
+rdk_0000008	ok		actives_final_00009.pdbqt	write_pdbqt			0	rules:v1							
+rdk_0000008	ok		actives_final_00009.pdbqt	write_pdbqt			0	rules:v1	mgltools	False	adt_default	True	True	True	6
+rdk_0000003	OK		actives_final_00004.pdbqt				0								
+rdk_0000007	OK		actives_final_00008.pdbqt				0								
+rdk_0000005	OK		actives_final_00006.pdbqt				0								
+rdk_0000009	OK		actives_final_00010.pdbqt				0								
+rdk_0000007	OK		actives_final_00008.pdbqt				0								
+rdk_0000002	OK		actives_final_00003.pdbqt				0								
+rdk_0000004	OK		actives_final_00005.pdbqt				0								
+rdk_0000001	OK		actives_final_00002.pdbqt				0								
+rdk_0000005	OK		actives_final_00006.pdbqt				0								
+rdk_0000003	OK		actives_final_00004.pdbqt				0								
+rdk_0000008	OK		actives_final_00009.pdbqt				0								
+rdk_0000010	OK		actives_final_00011.pdbqt				0								
+rdk_0000008	OK		actives_final_00009.pdbqt				0								
+rdk_0000001	OK		actives_final_00002.pdbqt				0								
+rdk_0000002	FAIL	postcheck_fail	actives_final_00003.pdbqt				0								
+rdk_0000006	OK		actives_final_00007.pdbqt				0								
+rdk_0000010	OK		actives_final_00011.pdbqt				0								
+rdk_0000009	FAIL	postcheck_fail	actives_final_00010.pdbqt				0								
+rdk_0000004	OK		actives_final_00005.pdbqt				0								
+rdk_0000006	OK		actives_final_00007.pdbqt				0								

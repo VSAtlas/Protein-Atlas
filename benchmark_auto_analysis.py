@@ -38,41 +38,45 @@ import base64
 import html as _html
 from dataclasses import dataclass
 from pathlib import Path
-import re, csv, json, math, logging, itertools, statistics
-from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional, Iterable, Set, Sequence, Mapping, List, Sequence
+import logging
+from typing import Dict, Tuple, Optional, List, Sequence
 import numpy as np
 from chemdb.chem_alias_db import alias_list_for_het as _alias_list_for_het
 
 
-
 # -----------------------------
 # Portable defaults: prefer env, then relative to this file
-from pathlib import Path
+
 _SCRIPT_ROOT = Path(__file__).resolve().parent
 
 # >>> PATHS IMPORT START
 from path_router import make_paths, expand_variants
 # >>> PATHS IMPORT END
 
-DEFAULT_DOCKED_ROOT  = os.environ.get("DOCKED_DIR") \
-    or os.environ.get("OUTPUT_DIR") \
+DEFAULT_DOCKED_ROOT = (
+    os.environ.get("DOCKED_DIR")
+    or os.environ.get("OUTPUT_DIR")
     or str(_SCRIPT_ROOT / "docked")
+)
 
-DEFAULT_MAPPING_CSV  = os.environ.get("MAPPING_CSV") \
-    or str(_SCRIPT_ROOT / "fda_mapping_from_pdbqt.csv")
+DEFAULT_MAPPING_CSV = os.environ.get("MAPPING_CSV") or str(
+    _SCRIPT_ROOT / "fda_mapping_from_pdbqt.csv"
+)
 DEFAULT_ONLY_PDB = None  # e.g., "5MO4"
-DEFAULT_SCORE_TOL = 2   # kcal/mol
+DEFAULT_SCORE_TOL = 2  # kcal/mol
 DEFAULT_CENTER_TOL = 1.0  # Å
-DEFAULT_RMSD_TOL = 3.0    # Å
-DEFAULT_OUTDIR = None     # None -> <DOCKED>\_analysis
+DEFAULT_RMSD_TOL = 3.0  # Å
+DEFAULT_OUTDIR = None  # None -> <DOCKED>\_analysis
 DEFAULT_INCLUDE_IDENTITY = True  # toggle 4th criterion
 # Prefer explicit analysis cutoff if provided; else use the run's stamped epoch
-DEFAULT_SINCE_EPOCH = os.environ.get("BENCH_ANALYSIS_SINCE_EPOCH") or os.environ.get("BENCH_RUN_START_EPOCH")
+DEFAULT_SINCE_EPOCH = os.environ.get("BENCH_ANALYSIS_SINCE_EPOCH") or os.environ.get(
+    "BENCH_RUN_START_EPOCH"
+)
 
 try:
     from input_and_export_functions import load_config, validate_config
-    _cfg = load_config("config.txt") or {}
+
+    _cfg = load_config() or {}
     try:
         validate_config(_cfg)
     except Exception:
@@ -82,13 +86,15 @@ except Exception:
 
 DEFAULT_DOCKED_ROOT = _cfg.get("DOCKED_DIR") or DEFAULT_DOCKED_ROOT
 DEFAULT_MAPPING_CSV = _cfg.get("FDA_MAPPING_CSV") or DEFAULT_MAPPING_CSV
-DEFAULT_ONLY_PDB     = _cfg.get("ANALYSIS_ONLY_PDB") or DEFAULT_ONLY_PDB
-DEFAULT_SCORE_TOL    = float(_cfg.get("SCORE_TOL_KCAL", DEFAULT_SCORE_TOL))
-DEFAULT_CENTER_TOL   = float(_cfg.get("CENTER_TOL_A",   DEFAULT_CENTER_TOL))
-DEFAULT_RMSD_TOL     = float(_cfg.get("RMSD_TOL_A",     DEFAULT_RMSD_TOL))
-DEFAULT_OUTDIR       = _cfg.get("BENCH_ANALYSIS_OUTDIR") or DEFAULT_OUTDIR
+DEFAULT_ONLY_PDB = _cfg.get("ANALYSIS_ONLY_PDB") or DEFAULT_ONLY_PDB
+DEFAULT_SCORE_TOL = float(_cfg.get("SCORE_TOL_KCAL", DEFAULT_SCORE_TOL))
+DEFAULT_CENTER_TOL = float(_cfg.get("CENTER_TOL_A", DEFAULT_CENTER_TOL))
+DEFAULT_RMSD_TOL = float(_cfg.get("RMSD_TOL_A", DEFAULT_RMSD_TOL))
+DEFAULT_OUTDIR = _cfg.get("BENCH_ANALYSIS_OUTDIR") or DEFAULT_OUTDIR
 
-VARIANT_MODE = (os.environ.get("APO_HOLO_MODE") or str(_cfg.get("APO_HOLO_MODE") or "holo")).strip()
+VARIANT_MODE = (
+    os.environ.get("APO_HOLO_MODE") or str(_cfg.get("APO_HOLO_MODE") or "holo")
+).strip()
 CURRENT_VARIANT_LABEL = VARIANT_MODE
 
 
@@ -101,66 +107,73 @@ def _set_current_variant_label(variant: Optional[str]) -> None:
 def _current_variant_label() -> str:
     return str(CURRENT_VARIANT_LABEL or "")
 
+
 # -----------------------------
 # Filename patterns
 # -----------------------------
 SCORE_PAT = re.compile(r"REMARK\s+VINA\s+RESULT[:\s]+(-?\d+\.\d+)")
-CONTROL_PAT = re.compile(r"^(?P<het>[A-Za-z0-9]{3})_\w\d+_bench_pocket\d+_single\.best\.(?:pdb|pdbqt)$", re.I)
+CONTROL_PAT = re.compile(
+    r"^(?P<het>[A-Za-z0-9]{3})_\w\d+_bench_pocket\d+_single\.best\.(?:pdb|pdbqt)$", re.I
+)
 RDK_PAT = re.compile(r"^(rdk_\d{6,8})_bench_pocket\d+_single\.(?:pdbqt|pdb)$", re.I)
 
 
 # Expected RDK names by PDB (case-insensitive match will be applied on use)
 EXPECTED_RDK_BY_PDB: Dict[str, List[str]] = {
-  "1T46": ["imatinib", "gleevec"],
-  "1M17": ["erlotinib"],
-  "2E2B": ["bafetinib"],
-  "2HYY": ["imatinib", "gleevec"],
-  "2GQG": ["dasatinib"],
-  "3CS9": ["nilotinib", "tasigna"],
-  "3ERT": ["4-hydroxytamoxifen", "tamoxifen"],
-  "3OG7": ["vemurafenib"],
-  "3QX3": ["etoposide"],
-  "4RT7": ["quizartinib"],
-  "4XUF": ["quizartinib"],
-  "6O0L": ["venetoclax"],
-  "6JQR": ["gilteritinib"],
-  "6WTN": ["ruxolitinib"],
-  "4XV2": ["dabrafenib"],
-  "3OXZ": ["ponatinib"],
-  "5I96": ["enasidenib"],
-  "4U5J": ["ruxolitinib"],
-  "3LXK": ["tofacitinib", "xeljanz"],
-  "3ZOS": ["ponatinib", "Ponatinib"],
-  "3WZD": ["lenvatinib"],
-  "2WGJ": ["crizotinib"],
-  "2XP2": ["crizotinib"],
-  "3DZY": ["Rosiglitazone"],
-  "3WZE": ["sorafenib"],
-  "3ZBF": ["Crizotinib"],
-  "4AG8": ["axitinib"],
-  "4ASD": ["sorafenib"],
-  "5L7I": ["vismodegib", "erivedge"],
-  "6O0K": ["venetoclax"],
-  "5MO4": ["asciminib", "nilotinib"],
-  "6U4J": ["olutasidenib", "FT-2102"],
+    "1T46": ["imatinib", "gleevec"],
+    "1M17": ["erlotinib"],
+    "2E2B": ["bafetinib"],
+    "2HYY": ["imatinib", "gleevec"],
+    "2GQG": ["dasatinib"],
+    "3CS9": ["nilotinib", "tasigna"],
+    "3ERT": ["4-hydroxytamoxifen", "tamoxifen"],
+    "3OG7": ["vemurafenib"],
+    "3QX3": ["etoposide"],
+    "4RT7": ["quizartinib"],
+    "4XUF": ["quizartinib"],
+    "6O0L": ["venetoclax"],
+    "6JQR": ["gilteritinib"],
+    "6WTN": ["ruxolitinib"],
+    "4XV2": ["dabrafenib"],
+    "3OXZ": ["ponatinib"],
+    "5I96": ["enasidenib"],
+    "4U5J": ["ruxolitinib"],
+    "3LXK": ["tofacitinib", "xeljanz"],
+    "3ZOS": ["ponatinib", "Ponatinib"],
+    "3WZD": ["lenvatinib"],
+    "2WGJ": ["crizotinib"],
+    "2XP2": ["crizotinib"],
+    "3DZY": ["Rosiglitazone"],
+    "3WZE": ["sorafenib"],
+    "3ZBF": ["Crizotinib"],
+    "4AG8": ["axitinib"],
+    "4ASD": ["sorafenib"],
+    "5L7I": ["vismodegib", "erivedge"],
+    "6O0K": ["venetoclax"],
+    "5MO4": ["asciminib", "nilotinib"],
+    "6U4J": ["olutasidenib", "FT-2102"],
 }
 
 
-
 def _is_expected_name(pdb_id: str, rdk_name: str) -> bool:
-    exp = [_norm_text(x) for x in EXPECTED_RDK_BY_PDB.get((pdb_id or '').upper(), [])]
-    nm = _norm_text(rdk_name or '')
+    exp = [_norm_text(x) for x in EXPECTED_RDK_BY_PDB.get((pdb_id or "").upper(), [])]
+    nm = _norm_text(rdk_name or "")
     if not exp or not nm:
         return True  # fail-open
     return any(en and (en in nm or nm in en) for en in exp)
 
+
 # name normalization for robust identity checks
 from typing import Optional as _Optional
+
+
 def _norm_text(s: _Optional[str]) -> str:
-    return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
 
 # Debug flag (env or CLI --debug)
 DEBUG = bool(int(os.environ.get("BENCH_DEBUG", "0")))
+
 
 def _pdbqt_element_histogram(path: Path) -> Dict[str, int]:
     hist: Dict[str, int] = {}
@@ -173,25 +186,28 @@ def _pdbqt_element_histogram(path: Path) -> Dict[str, int]:
                 if not el:
                     # fallback: atom name heuristic
                     an = ln[12:16].strip().upper()
-                    el = (an[0] if an else "")
+                    el = an[0] if an else ""
                 if el:
                     hist[el] = hist.get(el, 0) + 1
     except Exception:
         pass
     return hist
 
-def _hist_equal(a: Dict[str,int], b: Dict[str,int]) -> bool:
+
+def _hist_equal(a: Dict[str, int], b: Dict[str, int]) -> bool:
     # ignore H in strict heavy atom match; compare H optionally
-    ah = {k:v for k,v in a.items() if k != "H"}
-    bh = {k:v for k,v in b.items() if k != "H"}
+    ah = {k: v for k, v in a.items() if k != "H"}
+    bh = {k: v for k, v in b.items() if k != "H"}
     return ah == bh
+
+
 def alignment_metrics(ctrl: np.ndarray, rdk: np.ndarray, nn_cap: int = 128):
     """
     Returns (rmsd, raw_centroid, aligned_centroid, n_ctrl, n_rdk).
     Aligns RDK -> CTRL using nearest-neighbor pairing + Kabsch.
     """
     n_ctrl = int(ctrl.shape[0])
-    n_rdk  = int(rdk.shape[0])
+    n_rdk = int(rdk.shape[0])
 
     rmsd = None
 
@@ -285,7 +301,9 @@ class MappingIndex:
         if not csv_path or not Path(csv_path).is_file():
             return
         try:
-            with open(csv_path, "r", encoding="utf-8", errors="ignore", newline="") as f:
+            with open(
+                csv_path, "r", encoding="utf-8", errors="ignore", newline=""
+            ) as f:
                 reader = csv.DictReader(f)
                 for r in reader:
                     self.rows.append(
@@ -300,8 +318,12 @@ class MappingIndex:
                             pubchem_synonyms=str(r.get("pubchem_synonyms", "")),
                             rxnorm_generic_name=str(r.get("rxnorm_generic_name", "")),
                             rxnorm_brand_names=str(r.get("rxnorm_brand_names", "")),
-                            drugcentral_generic_name=str(r.get("drugcentral_generic_name", "")),
-                            drugcentral_brand_names=str(r.get("drugcentral_brand_names", "")),
+                            drugcentral_generic_name=str(
+                                r.get("drugcentral_generic_name", "")
+                            ),
+                            drugcentral_brand_names=str(
+                                r.get("drugcentral_brand_names", "")
+                            ),
                             remark_name=str(r.get("remark_name", "")),
                             sdf_title=str(r.get("sdf_title", "")),
                             inchikey=str(r.get("inchikey", "")),
@@ -328,6 +350,7 @@ class MappingIndex:
 # -----------------------------
 # PDB/PDBQT parsing helpers
 # -----------------------------
+
 
 def parse_vina_score(path: Path) -> Optional[float]:
     try:
@@ -378,12 +401,14 @@ def parse_coords(path: Path) -> np.ndarray:
 
 # --- Prepped ligand path resolver (module-scope) ------------------------------
 
+
 def _collapse_core_stem(stem: str) -> str:
     # strip stage suffixes like "_bench_pocket1_single" and optional ".best"
     s = re.sub(r"_bench_pocket\d+_single(?:\.best)?$", "", stem, flags=re.I)
     # strip trailing ".sanitized" tokens if present
     s = re.sub(r"(?:\.sanitized)+$", "", s, flags=re.I)
     return s
+
 
 def _prepped_search_dirs_for(pdb_id: str) -> list[Path]:
     """
@@ -392,7 +417,9 @@ def _prepped_search_dirs_for(pdb_id: str) -> list[Path]:
     """
     base_overall = Path(DEFAULT_DOCKED_ROOT).parent
     processed_root = Path(_cfg.get("OUTPUT_DIR") or (base_overall / "processed_pdbs"))
-    lib_root = Path(_cfg.get("OUTPUT_LIGANDS_DIR") or (base_overall / "prepped_ligands"))
+    lib_root = Path(
+        _cfg.get("PREPPED_LIGANDS_DIR") or (base_overall / "prepped_ligands")
+    )
 
     dirs: list[Path] = []
     # per-PDB prepped ligands
@@ -414,6 +441,7 @@ def _prepped_search_dirs_for(pdb_id: str) -> list[Path]:
             seen.add(key)
             out.append(d)
     return out
+
 
 def guess_prepped_from_pose(pose_path: Path, pdb_id: str) -> Optional[Path]:
     """
@@ -438,7 +466,10 @@ def guess_prepped_from_pose(pose_path: Path, pdb_id: str) -> Optional[Path]:
             return hits[0]
     return None
 
-def extract_raw_text_block(path: Path, max_chars: int = 20000, only_header: bool = False) -> str:
+
+def extract_raw_text_block(
+    path: Path, max_chars: int = 20000, only_header: bool = False
+) -> str:
     """
     Return a 'raw text' snippet from a PDB/PDBQT pose.
 
@@ -454,7 +485,7 @@ def extract_raw_text_block(path: Path, max_chars: int = 20000, only_header: bool
     """
     try:
         ext = (path.suffix or "").lower()
-        is_pdbqt = (ext == ".pdbqt")
+        is_pdbqt = ext == ".pdbqt"
 
         if not only_header:
             # Full text path: include everything
@@ -464,7 +495,7 @@ def extract_raw_text_block(path: Path, max_chars: int = 20000, only_header: bool
             if len(raw) > max_chars:
                 raw = raw[:max_chars].rstrip() + " …"
             return raw
-        
+
         # Header-only path (kept for possible re-use)
         keep_prefixes = ("MODEL", "REMARK", "TORSDOF", "ENDMDL")
         out_lines = []
@@ -485,7 +516,6 @@ def extract_raw_text_block(path: Path, max_chars: int = 20000, only_header: bool
         return ""
 
 
-
 def centroid(pts: np.ndarray) -> Optional[np.ndarray]:
     if pts is None or pts.size == 0:
         return None
@@ -495,6 +525,7 @@ def centroid(pts: np.ndarray) -> Optional[np.ndarray]:
 # -----------------------------
 # Approximate RMSD (robust, order-agnostic)
 # -----------------------------
+
 
 def _kabsch(P: np.ndarray, Q: np.ndarray) -> Tuple[np.ndarray, float]:
     Pc = P - P.mean(axis=0)
@@ -510,11 +541,17 @@ def _kabsch(P: np.ndarray, Q: np.ndarray) -> Tuple[np.ndarray, float]:
     return R, rmsd
 
 
-def approximate_rmsd(coords_a: np.ndarray, coords_b: np.ndarray, nn_cap: int = 128) -> Optional[float]:
+def approximate_rmsd(
+    coords_a: np.ndarray, coords_b: np.ndarray, nn_cap: int = 128
+) -> Optional[float]:
     if coords_a.shape[0] < 3 or coords_b.shape[0] < 3:
         return None
     # Use smaller set as reference; cap to nn_cap for speed
-    A, B = (coords_a, coords_b) if coords_a.shape[0] <= coords_b.shape[0] else (coords_b, coords_a)
+    A, B = (
+        (coords_a, coords_b)
+        if coords_a.shape[0] <= coords_b.shape[0]
+        else (coords_b, coords_a)
+    )
     if A.shape[0] > nn_cap:
         idx = np.linspace(0, A.shape[0] - 1, nn_cap, dtype=int)
         A = A[idx]
@@ -548,6 +585,7 @@ def approximate_rmsd(coords_a: np.ndarray, coords_b: np.ndarray, nn_cap: int = 1
 # Identity helpers
 # -----------------------------
 
+
 def _rdk_id_from_stem(stem: str) -> Optional[str]:
     m = re.search(r"(rdk_\d{6,8})", stem.lower())
     return m.group(1) if m else None
@@ -570,7 +608,6 @@ def expected_names_for_het(het: str) -> List[str]:
     return _alias_list_for_het(het or "")
 
 
-
 # -----------------------------
 # Data classes
 # -----------------------------
@@ -586,7 +623,10 @@ class Pose:
 # Screenshot helpers (PyMOL renders)
 # -----------------------------
 
-def find_pymol_screenshots(pdb_id: str, pocket_dir: Path) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
+
+def find_pymol_screenshots(
+    pdb_id: str, pocket_dir: Path
+) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
     """
     Looks for three PNGs in the given pocket directory:
       <PDB>_cleaned__CONTROL+RDKclosest_side.png
@@ -606,7 +646,11 @@ def find_pymol_screenshots(pdb_id: str, pocket_dir: Path) -> Tuple[Optional[Path
         cands = sorted(pocket_dir.glob(f"*{pdb_id}*CONTROL+RDKclosest*{v}*.png"))
         out.append(cands[0] if cands else None)
     return out[0], out[1], out[2]
-def find_pair_only_screenshots(pdb_id: str, pocket_dir: Path, rdk_id: Optional[str]) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
+
+
+def find_pair_only_screenshots(
+    pdb_id: str, pocket_dir: Path, rdk_id: Optional[str]
+) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
     """
     Looks for three PNGs named like:
       <PDB>_cleaned__CONTROL+<RDKID>_PAIR_side.png
@@ -614,7 +658,7 @@ def find_pair_only_screenshots(pdb_id: str, pocket_dir: Path, rdk_id: Optional[s
       <PDB>_cleaned__CONTROL+<RDKID>_PAIR_top.png
     Falls back to a loose glob if names vary.
     """
-    rid = (rdk_id or "RDKclosest")
+    rid = rdk_id or "RDKclosest"
     base = f"{pdb_id}_cleaned__CONTROL+{rid}_PAIR"
     views = ["side", "front", "top"]
     out: List[Optional[Path]] = []
@@ -624,7 +668,11 @@ def find_pair_only_screenshots(pdb_id: str, pocket_dir: Path, rdk_id: Optional[s
             out.append(p)
             continue
         # Fallback: allow slight naming differences, but keep rid in the filename if possible
-        cands = [q for q in pocket_dir.glob(f"*{pdb_id}*CONTROL+*PAIR*{v}*.png") if rid.lower() in q.name.lower()]
+        cands = [
+            q
+            for q in pocket_dir.glob(f"*{pdb_id}*CONTROL+*PAIR*{v}*.png")
+            if rid.lower() in q.name.lower()
+        ]
         if not cands:
             cands = list(pocket_dir.glob(f"*{pdb_id}*CONTROL+*PAIR*{v}*.png"))
         out.append(sorted(cands)[0] if cands else None)
@@ -686,19 +734,23 @@ class PairEval:
 # Crawling & pairing
 # -----------------------------
 
+
 def find_pocket_dirs(pdb_dir: Path) -> List[Path]:
     out: List[Path] = []
     if not pdb_dir.is_dir():
         return out
     for child in pdb_dir.iterdir():
-        if child.is_dir() and child.name.startswith("bench_pocket") and child.name.endswith("_single"):
+        if (
+            child.is_dir()
+            and child.name.startswith("bench_pocket")
+            and child.name.endswith("_single")
+        ):
             out.append(child)
     return sorted(out)
 
+
 def load_controls_and_rdks(
-    pocket_dir: Path,
-    mapping: MappingIndex,
-    since_epoch: Optional[float] = None
+    pocket_dir: Path, mapping: MappingIndex, since_epoch: Optional[float] = None
 ) -> Tuple[List[Tuple[str, Pose]], List[Pose]]:
     controls: List[Tuple[str, Pose]] = []
     rdks: List[Pose] = []
@@ -727,7 +779,7 @@ def load_controls_and_rdks(
     return controls, rdks
 
 
-#should stay unused
+# should stay unused
 def _closest_by_centroid(ctrl: Pose, rdks: Sequence[Pose]) -> Optional[Pose]:
     if ctrl.centroid is None:
         return None
@@ -743,7 +795,6 @@ def _closest_by_centroid(ctrl: Pose, rdks: Sequence[Pose]) -> Optional[Pose]:
     return best
 
 
-
 def _match_by_identity(ctrl_het: str, rdks: Sequence[Pose]) -> List[Pose]:
     expected_norm = [_norm_text(s) for s in expected_names_for_het(ctrl_het)]
     if not expected_norm:
@@ -751,7 +802,9 @@ def _match_by_identity(ctrl_het: str, rdks: Sequence[Pose]) -> List[Pose]:
     hits: List[Pose] = []
     for r in rdks:
         nm_norm = _norm_text(r.rdk_name)
-        if nm_norm and any(en and (en in nm_norm or nm_norm in en) for en in expected_norm):
+        if nm_norm and any(
+            en and (en in nm_norm or nm_norm in en) for en in expected_norm
+        ):
             hits.append(r)
     return hits
 
@@ -778,7 +831,6 @@ def evaluate_pairs(
         # Minimal: read a TSV that has 'ligprep_errors' and 'proteinprep_errors' keyed by basename
         return "", ""  # no-op if not available
 
-
     for control_id, ctrl in controls:
         m = re.match(r"^(?P<het>[A-Za-z0-9]{3})_(?P<chain>\w)(?P<res>\d+)$", control_id)
         het = (m.group("het") if m else control_id.split("_")[0]).upper()
@@ -790,7 +842,10 @@ def evaluate_pairs(
         if candidates:
             identity_flag = 1
             if ctrl.score is not None:
-                picked = min(candidates, key=lambda r: abs((r.score or 9e9) - (ctrl.score or 0.0)))
+                picked = min(
+                    candidates,
+                    key=lambda r: abs((r.score or 9e9) - (ctrl.score or 0.0)),
+                )
             else:
                 picked = min(candidates, key=lambda r: (r.score or 9e9))
         else:
@@ -798,7 +853,9 @@ def evaluate_pairs(
             if not rdks:
                 continue  # nothing to pair with
             if ctrl.score is not None:
-                picked = min(rdks, key=lambda r: abs((r.score or 9e9) - (ctrl.score or 0.0)))
+                picked = min(
+                    rdks, key=lambda r: abs((r.score or 9e9) - (ctrl.score or 0.0))
+                )
                 pick_reason = "score-nearest"
             else:
                 picked = min(rdks, key=lambda r: (r.score or 9e9))
@@ -835,8 +892,10 @@ def evaluate_pairs(
         flag_center = 0
 
         if DEBUG and rmsd_val is not None and flag_rmsd:
-            print(f"[debug] {pdb_id}/{pocket_name}/{control_id}: RMSD ok ({rmsd_val:.2f} Å) "
-                  f"Using aligned for scoring. pick={picked.path.name} via {pick_reason}")
+            print(
+                f"[debug] {pdb_id}/{pocket_name}/{control_id}: RMSD ok ({rmsd_val:.2f} Å) "
+                f"Using aligned for scoring. pick={picked.path.name} via {pick_reason}"
+            )
 
         rdk_id = _rdk_id_from_stem(picked.path.stem) or ""
         # Expected RDK names (by PDB)
@@ -858,37 +917,54 @@ def evaluate_pairs(
 
         # interpretability / labels (resolve control name first)
         ctrl_guess_list = expected_names_for_het(het)
-        control_display_name = (ctrl_guess_list[0] if ctrl_guess_list else "")
+        control_display_name = ctrl_guess_list[0] if ctrl_guess_list else ""
 
         # Raw text straight from pose files INCLUDING ATOM/HETATM (capped for size)
         rdk_raw_text = extract_raw_text_block(picked.path, only_header=False)
         control_raw_text = extract_raw_text_block(ctrl.path, only_header=False)
 
-
         # Success criterion (ignore centroid): identity & RMSD & score
         matched_success = int(bool(flag_identity and flag_rmsd and flag_score))
 
-        pair_side, pair_front, pair_top = find_pair_only_screenshots(pdb_id, pocket_dir, rdk_id or "RDKclosest")
+        pair_side, pair_front, pair_top = find_pair_only_screenshots(
+            pdb_id, pocket_dir, rdk_id or "RDKclosest"
+        )
 
         # Confidence rule use only score & RMSD (+ identity for "confident")
-        _two = (flag_rmsd + flag_score)
+        _two = flag_rmsd + flag_score
         confident = int(bool(flag_identity and flag_rmsd and flag_score))
-        confidence_label = "confident" if confident else ("plausible" if _two >= 2 else "weak")
+        confidence_label = (
+            "confident" if confident else ("plausible" if _two >= 2 else "weak")
+        )
 
-
-        good_control = int((ctrl.score is not None) and (int(ctrl.coords.shape[0]) >= 10) and bool(control_display_name))
+        good_control = int(
+            (ctrl.score is not None)
+            and (int(ctrl.coords.shape[0]) >= 10)
+            and bool(control_display_name)
+        )
         flags_sum = _two + (identity_flag if include_identity else 0)
         if DEBUG and (ctrl.score is not None) and (picked.score is not None):
             logging.debug(
                 "[Δkcal-check] %s/%s ctrl=%.3f rdk=%.3f Δ=%.3f tol=%.3f -> score✔=%d",
-                pdb_id, control_id, ctrl.score, picked.score, delta_kcal, score_tol, flag_score
+                pdb_id,
+                control_id,
+                ctrl.score,
+                picked.score,
+                delta_kcal,
+                score_tol,
+                flag_score,
             )
 
-        total_points = flag_score + flag_center + flag_rmsd + (identity_flag if include_identity else 0)
+        total_points = (
+            flag_score
+            + flag_center
+            + flag_rmsd
+            + (identity_flag if include_identity else 0)
+        )
         lig_e, prot_e = _lookup_errors(picked.path)
         # resolve the actual prepped input ligands (best-effort)
         _control_prepped = guess_prepped_from_pose(ctrl.path, pdb_id)
-        _rdk_prepped     = guess_prepped_from_pose(picked.path, pdb_id)
+        _rdk_prepped = guess_prepped_from_pose(picked.path, pdb_id)
 
         rows.append(
             PairEval(
@@ -913,7 +989,6 @@ def evaluate_pairs(
                 total_points=total_points,
                 n_atoms_ctrl=int(ctrl.coords.shape[0]),
                 n_atoms_rdk=int(picked.coords.shape[0]),
-
                 pick_reason=pick_reason,
                 png_side=png_side,
                 png_front=png_front,
@@ -931,9 +1006,9 @@ def evaluate_pairs(
                 rdk_raw_text=rdk_raw_text,
                 control_raw_text=control_raw_text,
                 identity_strict=identity_strict,
-                ligprep_errors=lig_e, proteinprep_errors=prot_e,
+                ligprep_errors=lig_e,
+                proteinprep_errors=prot_e,
                 is_expected=int(is_expected_bool),
-
             )
         )
     return rows
@@ -942,6 +1017,7 @@ def evaluate_pairs(
 # -----------------------------
 # CSV writing
 # -----------------------------
+
 
 def _fmt(x: Optional[float]) -> str:
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
@@ -963,50 +1039,106 @@ def _pass_category(total_points: int, include_identity: bool) -> str:
     return ""  # exactly 1 -> no category requested
 
 
-def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity: bool) -> Path:
+def write_details_csv(
+    out_dir: Path, rows: Sequence[PairEval], include_identity: bool
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "benchmark_analysis_details.csv"
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow([
-            "variant", "pdb_id", "pocket", "control_id", "control_het",
-            "control_file", "control_prepped", "rdk_file", "rdk_prepped", "rdk_id",
-            "control_drug_guess", "rdk_suspected_fda_name",
-            "control_score_kcal", "rdk_score_kcal", "delta_kcal",
-            "rmsd_ctrl_to_rdk_A", "rmsd_rdk_to_ctrl_A",
-            "score_within_tol", "rmsd_within_tol", "identity_match",
-            "n_atoms_ctrl", "n_atoms_rdk", "pick_reason",
-            "png_side", "png_front", "png_top",
-            "pair_png_side", "pair_png_front", "pair_png_top",
-            "flags_sum", "confident_match", "confidence_label", "good_control",
-            "total_points", "pass_category",
-            "ligprep_errors", "proteinprep_errors", "identity_strict",
-            "expected_rdks", "matched_success", "rdk_raw_text", "control_raw_text",
-        ])
+        w.writerow(
+            [
+                "variant",
+                "pdb_id",
+                "pocket",
+                "control_id",
+                "control_het",
+                "control_file",
+                "control_prepped",
+                "rdk_file",
+                "rdk_prepped",
+                "rdk_id",
+                "control_drug_guess",
+                "rdk_suspected_fda_name",
+                "control_score_kcal",
+                "rdk_score_kcal",
+                "delta_kcal",
+                "rmsd_ctrl_to_rdk_A",
+                "rmsd_rdk_to_ctrl_A",
+                "score_within_tol",
+                "rmsd_within_tol",
+                "identity_match",
+                "n_atoms_ctrl",
+                "n_atoms_rdk",
+                "pick_reason",
+                "png_side",
+                "png_front",
+                "png_top",
+                "pair_png_side",
+                "pair_png_front",
+                "pair_png_top",
+                "flags_sum",
+                "confident_match",
+                "confidence_label",
+                "good_control",
+                "total_points",
+                "pass_category",
+                "ligprep_errors",
+                "proteinprep_errors",
+                "identity_strict",
+                "expected_rdks",
+                "matched_success",
+                "rdk_raw_text",
+                "control_raw_text",
+            ]
+        )
         for r in rows:
-            w.writerow([
-                _current_variant_label(),
-                r.pdb_id, r.pocket, r.control_id, r.control_het,
-                str(r.control_file), (str(r.control_prepped) if r.control_prepped else ""),
-                str(r.rdk_file), (str(r.rdk_prepped) if r.rdk_prepped else ""),
-                r.rdk_id,
-                (r.control_display_name or ""), (r.rdk_name or ""),
-                _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal),
-                _fmt(r.rmsd), _fmt(r.rmsd),
-                r.flag_score,  r.flag_rmsd, r.flag_identity,
-                r.n_atoms_ctrl, r.n_atoms_rdk, r.pick_reason,
-                (str(r.png_side) if r.png_side else ""),
-                (str(r.png_front) if r.png_front else ""),
-                (str(r.png_top) if r.png_top else ""),
-                (str(r.png_pair_side) if r.png_pair_side else ""),
-                (str(r.png_pair_front) if r.png_pair_front else ""),
-                (str(r.png_pair_top) if r.png_pair_top else ""),
-                r.flags_sum, r.confident_match, r.confidence_label, r.good_control,
-                r.total_points, _pass_category(r.total_points, include_identity),
-                (r.ligprep_errors or ""), (r.proteinprep_errors or ""), r.identity_strict,
-                r.expected_rdks, r.matched_success, r.rdk_raw_text, r.control_raw_text,
-
-            ])
+            w.writerow(
+                [
+                    _current_variant_label(),
+                    r.pdb_id,
+                    r.pocket,
+                    r.control_id,
+                    r.control_het,
+                    str(r.control_file),
+                    (str(r.control_prepped) if r.control_prepped else ""),
+                    str(r.rdk_file),
+                    (str(r.rdk_prepped) if r.rdk_prepped else ""),
+                    r.rdk_id,
+                    (r.control_display_name or ""),
+                    (r.rdk_name or ""),
+                    _fmt(r.control_score),
+                    _fmt(r.rdk_score),
+                    _fmt(r.delta_kcal),
+                    _fmt(r.rmsd),
+                    _fmt(r.rmsd),
+                    r.flag_score,
+                    r.flag_rmsd,
+                    r.flag_identity,
+                    r.n_atoms_ctrl,
+                    r.n_atoms_rdk,
+                    r.pick_reason,
+                    (str(r.png_side) if r.png_side else ""),
+                    (str(r.png_front) if r.png_front else ""),
+                    (str(r.png_top) if r.png_top else ""),
+                    (str(r.png_pair_side) if r.png_pair_side else ""),
+                    (str(r.png_pair_front) if r.png_pair_front else ""),
+                    (str(r.png_pair_top) if r.png_pair_top else ""),
+                    r.flags_sum,
+                    r.confident_match,
+                    r.confidence_label,
+                    r.good_control,
+                    r.total_points,
+                    _pass_category(r.total_points, include_identity),
+                    (r.ligprep_errors or ""),
+                    (r.proteinprep_errors or ""),
+                    r.identity_strict,
+                    r.expected_rdks,
+                    r.matched_success,
+                    r.rdk_raw_text,
+                    r.control_raw_text,
+                ]
+            )
     return path
 
 
@@ -1014,7 +1146,10 @@ def write_details_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
 # Summary writers (drop-in)
 # =========================
 
-def write_summary_csv(out_dir: Path, rows: Sequence[PairEval], include_identity: bool) -> Path:
+
+def write_summary_csv(
+    out_dir: Path, rows: Sequence[PairEval], include_identity: bool
+) -> Path:
     """
     Per-PDB rollup with flags and counts, including 'good_control' and 'confident_match'.
     Writes: <out_dir>/benchmark_analysis_summary.csv
@@ -1024,20 +1159,22 @@ def write_summary_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
     path = out_dir / "benchmark_analysis_summary.csv"
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow([
-            "pdb_id",
-            "best_total_points",
-            "num_controls",
-            "num_pockets",
-            "any_score_within_tol",
-            "any_rmsd_within_tol",
-            "any_identity_match",
-            "num_good_controls",
-            "num_confident_matches",
-            "passed_4_or_max",
-            "near_pass_2to(max-1)",
-            "fail_0",
-        ])
+        w.writerow(
+            [
+                "pdb_id",
+                "best_total_points",
+                "num_controls",
+                "num_pockets",
+                "any_score_within_tol",
+                "any_rmsd_within_tol",
+                "any_identity_match",
+                "num_good_controls",
+                "num_confident_matches",
+                "passed_4_or_max",
+                "near_pass_2to(max-1)",
+                "fail_0",
+            ]
+        )
         by_pdb: Dict[str, List[PairEval]] = {}
         for r in rows:
             by_pdb.setdefault(r.pdb_id, []).append(r)
@@ -1057,18 +1194,30 @@ def write_summary_csv(out_dir: Path, rows: Sequence[PairEval], include_identity:
             near = int(1 < best_total < max_points)
             fail0 = int(best_total == 0)
 
-            w.writerow([
-                pdb_id, best_total, num_controls, num_pockets,
-                any_score, any_center, any_rmsd, any_ident,
-                num_good_ctrl, num_confident,
-                passed, near, fail0,
-            ])
+            w.writerow(
+                [
+                    pdb_id,
+                    best_total,
+                    num_controls,
+                    num_pockets,
+                    any_score,
+                    any_center,
+                    any_rmsd,
+                    any_ident,
+                    num_good_ctrl,
+                    num_confident,
+                    passed,
+                    near,
+                    fail0,
+                ]
+            )
     return path
 
 
 # -----------------------------
 # Visual reports (images embedded)
 # -----------------------------
+
 
 def _html_escape(s: Optional[str]) -> str:
     return _html.escape("" if s is None else str(s))
@@ -1087,6 +1236,7 @@ def _img_to_data_uri_or_link(p: Optional[Path], max_width_px: int = 280) -> str:
         except Exception:
             return _html_escape(str(p))
 
+
 def _mtime_ok(p: Optional[Path], since_epoch: Optional[float]) -> bool:
     if not p or not Path(p).is_file():
         return False
@@ -1096,6 +1246,7 @@ def _mtime_ok(p: Optional[Path], since_epoch: Optional[float]) -> bool:
         return float(Path(p).stat().st_mtime) >= float(since_epoch)
     except Exception:
         return False
+
 
 def write_details_html(
     out_dir: Path,
@@ -1117,7 +1268,8 @@ def write_details_html(
         return f"<span class='badge {cls}'>{_html_escape(label)}</span>"
 
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("""
+        fh.write(
+            """
 <!doctype html>
 <html>
 <head>
@@ -1166,13 +1318,15 @@ def write_details_html(
   <th class="imgcell">pair_side</th><th class="imgcell">pair_front</th><th class="imgcell">pair_top</th>
 </tr></thead>
 <tbody>
-""")
+"""
+        )
 
         # Do NOT filter rows: render everything provided in `rows`.
         for r in rows:
             # Gate images by mtime ≥ since_epoch (rows are never filtered)
             def _maybe(p: Optional[Path]) -> Optional[Path]:
                 return p if _mtime_ok(p, since_epoch) else None
+
             side = _maybe(r.png_side)
             front = _maybe(r.png_front)
             top = _maybe(r.png_top)
@@ -1190,13 +1344,21 @@ def write_details_html(
             fh.write(f"<td>{_html_escape(str(r.control_prepped or ''))}</td>")
             fh.write(f"<td>{_html_escape(r.control_display_name or '')}</td>")
 
-            _nm = r.rdk_name or ''
+            _nm = r.rdk_name or ""
+
             def _norm(s: str) -> str:
-                return re.sub(r'[^a-z0-9]+', '', (s or '').lower())
-            _exp = [_norm(x) for x in EXPECTED_RDK_BY_PDB.get((r.pdb_id or '').upper(), [])]
+                return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+            _exp = [
+                _norm(x) for x in EXPECTED_RDK_BY_PDB.get((r.pdb_id or "").upper(), [])
+            ]
             _nm_norm = _norm(_nm)
-            _match = (not _exp) or (not _nm_norm) or any(en and (en in _nm_norm or _nm_norm in en) for en in _exp)
-            note = '' if _match else " <span class='muted'>(not-in-expected)</span>"
+            _match = (
+                (not _exp)
+                or (not _nm_norm)
+                or any(en and (en in _nm_norm or _nm_norm in en) for en in _exp)
+            )
+            note = "" if _match else " <span class='muted'>(not-in-expected)</span>"
             fh.write(f"<td>{_html_escape(_nm)}{note}</td>")
 
             fh.write(f"<td class='num'>{_html_escape(_fmt(r.control_score))}</td>")
@@ -1206,8 +1368,12 @@ def write_details_html(
             fh.write(f"<td>{_html_escape(r.expected_rdks)}</td>")
             fh.write(f"<td>{'True' if r.matched_success else 'False'}</td>")
 
-            fh.write(f"<td class='rawcol'><pre class='raw'>{_html_escape(r.rdk_raw_text)}</pre></td>")
-            fh.write(f"<td class='rawcol'><pre class='raw'>{_html_escape(r.control_raw_text)}</pre></td>")
+            fh.write(
+                f"<td class='rawcol'><pre class='raw'>{_html_escape(r.rdk_raw_text)}</pre></td>"
+            )
+            fh.write(
+                f"<td class='rawcol'><pre class='raw'>{_html_escape(r.control_raw_text)}</pre></td>"
+            )
 
             fh.write(f"<td>{_html_escape(r.pick_reason)}</td>")
             fh.write(f"<td>{_badge(r.confidence_label)}</td>")
@@ -1224,31 +1390,56 @@ def write_details_html(
             fh.write(f"<td class='imgcell'>{_img_to_data_uri_or_link(ptop)}</td>")
             fh.write("</tr>")
 
-        fh.write("""
+        fh.write(
+            """
 </tbody>
 </table>
 </body>
 </html>
-""")
+"""
+        )
     return path
 
 
-def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity: bool) -> Optional[Path]:
+def write_details_xlsx(
+    out_dir: Path, rows: Sequence[PairEval], include_identity: bool
+) -> Optional[Path]:
     """Try to write an .xlsx with embedded images. Uses xlsxwriter if available, else openpyxl. Returns path or None."""
     # First try xlsxwriter (no Pillow dependency required)
     try:
         import xlsxwriter  # type: ignore
+
         xlsx_path = out_dir / "benchmark_analysis_details.xlsx"
         wb = xlsxwriter.Workbook(str(xlsx_path))
         ws = wb.add_worksheet("details")
         # Column headers
         headers = [
-            "pdb_id","pocket","control_id","control_het","rdk_id","rdk_suspected_fda","control_drug_guess",
-            "ctrl_score","rdk_score","delta_kcal","rmsd_A","pick_reason",
-            "confidence","good_control","score✔","center✔","rmsd✔","ident✔",
-            "image_side","image_front","image_top","pair_side","pair_front","pair_top",
+            "pdb_id",
+            "pocket",
+            "control_id",
+            "control_het",
+            "rdk_id",
+            "rdk_suspected_fda",
+            "control_drug_guess",
+            "ctrl_score",
+            "rdk_score",
+            "delta_kcal",
+            "rmsd_A",
+            "pick_reason",
+            "confidence",
+            "good_control",
+            "score✔",
+            "center✔",
+            "rmsd✔",
+            "ident✔",
+            "image_side",
+            "image_front",
+            "image_top",
+            "pair_side",
+            "pair_front",
+            "pair_top",
         ]
-        for c,h in enumerate(headers):
+        for c, h in enumerate(headers):
             ws.write(0, c, h)
         # Set widths
         ws.set_column(0, 1, 10)
@@ -1260,23 +1451,48 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
         # Data rows
         row = 1
         for r in rows:
-            ws.write_row(row, 0, [
-                r.pdb_id, r.pocket, r.control_id, r.control_het, r.rdk_id, r.rdk_name or "", r.control_display_name or "",
-                _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal), _fmt(r.rmsd), r.pick_reason,
-                r.confidence_label, r.good_control, r.flag_score, r.flag_center, r.flag_rmsd, r.flag_identity
-            ])
+            ws.write_row(
+                row,
+                0,
+                [
+                    r.pdb_id,
+                    r.pocket,
+                    r.control_id,
+                    r.control_het,
+                    r.rdk_id,
+                    r.rdk_name or "",
+                    r.control_display_name or "",
+                    _fmt(r.control_score),
+                    _fmt(r.rdk_score),
+                    _fmt(r.delta_kcal),
+                    _fmt(r.rmsd),
+                    r.pick_reason,
+                    r.confidence_label,
+                    r.good_control,
+                    r.flag_score,
+                    r.flag_center,
+                    r.flag_rmsd,
+                    r.flag_identity,
+                ],
+            )
             # Insert overlay images (scaled down)
             for offset, p in enumerate([r.png_side, r.png_front, r.png_top]):
                 if p and Path(p).is_file():
                     try:
-                        ws.insert_image(row, 19 + offset, str(p), {"x_scale":0.35, "y_scale":0.35})
+                        ws.insert_image(
+                            row, 19 + offset, str(p), {"x_scale": 0.35, "y_scale": 0.35}
+                        )
                     except Exception:
                         pass
             # Insert pair-only images (scaled down)
-            for offset, p in enumerate([r.png_pair_side, r.png_pair_front, r.png_pair_top]):
+            for offset, p in enumerate(
+                [r.png_pair_side, r.png_pair_front, r.png_pair_top]
+            ):
                 if p and Path(p).is_file():
                     try:
-                        ws.insert_image(row, 22 + offset, str(p), {"x_scale":0.35, "y_scale":0.35})
+                        ws.insert_image(
+                            row, 22 + offset, str(p), {"x_scale": 0.35, "y_scale": 0.35}
+                        )
                     except Exception:
                         pass
             row += 1
@@ -1290,24 +1506,67 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
         from openpyxl import Workbook  # type: ignore
         from openpyxl.drawing.image import Image as XLImage  # type: ignore
         from openpyxl.utils import get_column_letter  # type: ignore
+
         xlsx_path = out_dir / "benchmark_analysis_details.xlsx"
         wb = Workbook()
         ws = wb.active
         ws.title = "details"
         headers = [
-            "pdb_id","pocket","control_id","control_het","rdk_id","rdk_suspected_fda","control_drug_guess",
-            "ctrl_score","rdk_score","delta_kcal","rmsd_A","pick_reason",
-            "confidence","good_control","score✔","center✔","rmsd✔","ident✔",
-            "image_side","image_front","image_top","pair_side","pair_front","pair_top",
+            "pdb_id",
+            "pocket",
+            "control_id",
+            "control_het",
+            "rdk_id",
+            "rdk_suspected_fda",
+            "control_drug_guess",
+            "ctrl_score",
+            "rdk_score",
+            "delta_kcal",
+            "rmsd_A",
+            "pick_reason",
+            "confidence",
+            "good_control",
+            "score✔",
+            "center✔",
+            "rmsd✔",
+            "ident✔",
+            "image_side",
+            "image_front",
+            "image_top",
+            "pair_side",
+            "pair_front",
+            "pair_top",
         ]
         ws.append(headers)
         for r in rows:
-            ws.append([
-                r.pdb_id, r.pocket, r.control_id, r.control_het, r.rdk_id, r.rdk_name or "", r.control_display_name or "",
-                _fmt(r.control_score), _fmt(r.rdk_score), _fmt(r.delta_kcal), _fmt(r.rmsd), r.pick_reason,
-                r.confidence_label, r.good_control, r.flag_score, r.flag_center, r.flag_rmsd, r.flag_identity,
-                "", "", "", "", "", ""  # placeholders for 6 images
-            ])
+            ws.append(
+                [
+                    r.pdb_id,
+                    r.pocket,
+                    r.control_id,
+                    r.control_het,
+                    r.rdk_id,
+                    r.rdk_name or "",
+                    r.control_display_name or "",
+                    _fmt(r.control_score),
+                    _fmt(r.rdk_score),
+                    _fmt(r.delta_kcal),
+                    _fmt(r.rmsd),
+                    r.pick_reason,
+                    r.confidence_label,
+                    r.good_control,
+                    r.flag_score,
+                    r.flag_center,
+                    r.flag_rmsd,
+                    r.flag_identity,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",  # placeholders for 6 images
+                ]
+            )
             row_idx = ws.max_row
             # overlay
             for i, p in enumerate([r.png_side, r.png_front, r.png_top], start=20):
@@ -1318,7 +1577,9 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
                 except Exception:
                     continue
             # pair-only
-            for i, p in enumerate([r.png_pair_side, r.png_pair_front, r.png_pair_top], start=23):
+            for i, p in enumerate(
+                [r.png_pair_side, r.png_pair_front, r.png_pair_top], start=23
+            ):
                 try:
                     if p and Path(p).is_file():
                         img = XLImage(str(p))
@@ -1331,27 +1592,31 @@ def write_details_xlsx(out_dir: Path, rows: Sequence[PairEval], include_identity
         return None
 
 
-
 def write_details_visual_report(
     out_dir: Path,
     rows: Sequence[PairEval],
     include_identity: bool,
     *,
     html_success_only: Optional[bool] = None,
-    since_epoch: Optional[float] = None
+    since_epoch: Optional[float] = None,
 ) -> Path:
     """Create a visual report attempting XLSX (with images) first, else HTML with inline images."""
     xlsx = write_details_xlsx(out_dir, rows, include_identity)
     if xlsx is not None:
         return xlsx
-    return write_details_html(out_dir, rows, include_identity,
-                              html_success_only=html_success_only, since_epoch=since_epoch)
-
+    return write_details_html(
+        out_dir,
+        rows,
+        include_identity,
+        html_success_only=html_success_only,
+        since_epoch=since_epoch,
+    )
 
 
 # -----------------------------
 # Main
 # -----------------------------
+
 
 def find_pdb_dirs(docked_root: Path, only_pdb: Optional[str]) -> List[Path]:
     pdb_dirs: List[Path] = []
@@ -1363,6 +1628,7 @@ def find_pdb_dirs(docked_root: Path, only_pdb: Optional[str]) -> List[Path]:
         pdb_dirs.append(child)
     pdb_dirs.sort()
     return pdb_dirs
+
 
 def run_analysis(
     docked_root: Path,
@@ -1381,10 +1647,14 @@ def run_analysis(
         print(f"[analysis] DOCKED root not found: {docked_root}")
         return None, None
 
-    mapping = MappingIndex(mapping_csv if mapping_csv and Path(mapping_csv).is_file() else None)
+    mapping = MappingIndex(
+        mapping_csv if mapping_csv and Path(mapping_csv).is_file() else None
+    )
 
     cfg = _cfg or {}
-    variant_mode = cfg.get("APO_HOLO_MODE") or os.environ.get("APO_HOLO_MODE") or VARIANT_MODE
+    variant_mode = (
+        cfg.get("APO_HOLO_MODE") or os.environ.get("APO_HOLO_MODE") or VARIANT_MODE
+    )
 
     any_rows = False
     last_details_path: Optional[Path] = None
@@ -1408,16 +1678,16 @@ def run_analysis(
             ph_token: Optional[str] = None
 
             # >>> ANALYSIS PATHS PATCH START
-            variant  = (variant or None)
-            ph_token = (ph_token or None)
+            variant = variant or None
+            ph_token = ph_token or None
 
-            docked_root_variant   = paths.docked_variant_root(variant)
-            stage_dir_s1  = paths.docked_stage_dir(variant, "stage1")
-            stage_dir_s2  = paths.docked_stage_dir(variant, "stage2")  # only if used
+            docked_root_variant = paths.docked_variant_root(variant)
+            stage_dir_s1 = paths.docked_stage_dir(variant, "stage1")
+            stage_dir_s2 = paths.docked_stage_dir(variant, "stage2")  # only if used
 
-            score_csv     = docked_root_variant / "docking_score_summary.csv"
+            score_csv = docked_root_variant / "docking_score_summary.csv"
 
-            analysis_dir  = docked_root_variant / "analysis"
+            analysis_dir = docked_root_variant / "analysis"
             analysis_dir.mkdir(parents=True, exist_ok=True)
             # >>> ANALYSIS PATHS PATCH END
 
@@ -1430,17 +1700,27 @@ def run_analysis(
                 sentinel = pocket_dir / ".rdk_skipped"
                 if sentinel.exists():
                     try:
-                        has_rdk = any(RDK_PAT.match(ch.name) for ch in pocket_dir.iterdir() if ch.is_file())
+                        has_rdk = any(
+                            RDK_PAT.match(ch.name)
+                            for ch in pocket_dir.iterdir()
+                            if ch.is_file()
+                        )
                     except Exception:
                         has_rdk = False
                     if not has_rdk:
                         if DEBUG:
-                            print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} due to .rdk_skipped sentinel")
+                            print(
+                                f"[debug] Skipping {pdb_id}/{pocket_dir.name} due to .rdk_skipped sentinel"
+                            )
                         continue
-                controls, rdks = load_controls_and_rdks(pocket_dir, mapping, since_epoch=since_epoch)
+                controls, rdks = load_controls_and_rdks(
+                    pocket_dir, mapping, since_epoch=since_epoch
+                )
                 if not controls or not rdks:
                     if DEBUG:
-                        print(f"[debug] Skipping {pdb_id}/{pocket_dir.name} (controls={len(controls)} rdks={len(rdks)})")
+                        print(
+                            f"[debug] Skipping {pdb_id}/{pocket_dir.name} (controls={len(controls)} rdks={len(rdks)})"
+                        )
                     continue
                 rows = evaluate_pairs(
                     pdb_id,
@@ -1457,7 +1737,9 @@ def run_analysis(
 
             if not all_rows:
                 if DEBUG:
-                    print(f"[debug] No matches for {pdb_id} variant={variant or 'legacy'}")
+                    print(
+                        f"[debug] No matches for {pdb_id} variant={variant or 'legacy'}"
+                    )
                 continue
 
             any_rows = True
@@ -1476,57 +1758,116 @@ def run_analysis(
             max_points = 4 if include_identity else 3
             by_pdb_best: Dict[str, int] = {}
             for r in all_rows:
-                by_pdb_best[r.pdb_id] = max(by_pdb_best.get(r.pdb_id, 0), r.total_points)
+                by_pdb_best[r.pdb_id] = max(
+                    by_pdb_best.get(r.pdb_id, 0), r.total_points
+                )
 
             passed_pdbs = sorted([p for p, v in by_pdb_best.items() if v == max_points])
-            near_pdbs   = sorted([p for p, v in by_pdb_best.items() if 1 < v < max_points])
-            fail0_pdbs  = sorted([p for p, v in by_pdb_best.items() if v == 0])
+            near_pdbs = sorted(
+                [p for p, v in by_pdb_best.items() if 1 < v < max_points]
+            )
+            fail0_pdbs = sorted([p for p, v in by_pdb_best.items() if v == 0])
 
             global_best = max(by_pdb_best.values()) if by_pdb_best else 0
-            best_pdbs   = sorted([p for p, v in by_pdb_best.items() if v == global_best])
+            best_pdbs = sorted([p for p, v in by_pdb_best.items() if v == global_best])
 
-            print(f"[analysis] Wrote details CSV ({pdb_id}, {variant or 'legacy'}): {details_path}")
-            print(f"[analysis] Wrote summary CSV ({pdb_id}, {variant or 'legacy'}): {summary_path}")
-            print(f"[analysis] Wrote visual details ({pdb_id}, {variant or 'legacy'}): {visual_path}")
-            print(f"[analysis] Passed (=={max_points}): {len(passed_pdbs)} -> {', '.join(passed_pdbs) if passed_pdbs else '-'}")
-            print(f"[analysis] Near (2..{max_points-1}): {len(near_pdbs)} -> {', '.join(near_pdbs) if near_pdbs else '-'}")
-            print(f"[analysis] Fail (==0): {len(fail0_pdbs)} -> {', '.join(fail0_pdbs) if fail0_pdbs else '-'}")
-            print(f"[analysis] PDBs with BEST score = {global_best}: {', '.join(best_pdbs) if best_pdbs else '-'}")
+            print(
+                f"[analysis] Wrote details CSV ({pdb_id}, {variant or 'legacy'}): {details_path}"
+            )
+            print(
+                f"[analysis] Wrote summary CSV ({pdb_id}, {variant or 'legacy'}): {summary_path}"
+            )
+            print(
+                f"[analysis] Wrote visual details ({pdb_id}, {variant or 'legacy'}): {visual_path}"
+            )
+            print(
+                f"[analysis] Passed (=={max_points}): {len(passed_pdbs)} -> {', '.join(passed_pdbs) if passed_pdbs else '-'}"
+            )
+            print(
+                f"[analysis] Near (2..{max_points - 1}): {len(near_pdbs)} -> {', '.join(near_pdbs) if near_pdbs else '-'}"
+            )
+            print(
+                f"[analysis] Fail (==0): {len(fail0_pdbs)} -> {', '.join(fail0_pdbs) if fail0_pdbs else '-'}"
+            )
+            print(
+                f"[analysis] PDBs with BEST score = {global_best}: {', '.join(best_pdbs) if best_pdbs else '-'}"
+            )
 
             last_details_path = details_path
             last_summary_path = summary_path
 
     if not any_rows:
-        print("[analysis] No matches found. Are the bench_pocketX_single folders populated?")
+        print(
+            "[analysis] No matches found. Are the bench_pocketX_single folders populated?"
+        )
 
     return last_details_path, last_summary_path
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Auto-interpret benchmark results across proteins/pockets.")
+    p = argparse.ArgumentParser(
+        description="Auto-interpret benchmark results across proteins/pockets."
+    )
     p.add_argument("--docked-root", default=DEFAULT_DOCKED_ROOT)
     p.add_argument("--mapping", default=DEFAULT_MAPPING_CSV)
     p.add_argument("--only-pdb", default=DEFAULT_ONLY_PDB)
-    p.add_argument("--score-tol", type=float, default=DEFAULT_SCORE_TOL,
-                   help="Score tolerance (kcal/mol) used for 'score✔'.")
+    p.add_argument(
+        "--score-tol",
+        type=float,
+        default=DEFAULT_SCORE_TOL,
+        help="Score tolerance (kcal/mol) used for 'score✔'.",
+    )
     p.add_argument("--center-tol", type=float, default=DEFAULT_CENTER_TOL)
     p.add_argument("--rmsd-tol", type=float, default=DEFAULT_RMSD_TOL)
-    p.add_argument("--no-identity", action="store_true", help="Exclude identity-match from scoring (max 3 points)")
+    p.add_argument(
+        "--no-identity",
+        action="store_true",
+        help="Exclude identity-match from scoring (max 3 points)",
+    )
     p.add_argument("--out", default=DEFAULT_OUTDIR)
-    p.add_argument("--debug", action="store_true", help="Verbose per-pair diagnostics (or set BENCH_DEBUG=1)")
-    p.add_argument("--analysis-score-tol", type=float, dest="score_tol",
-                   help="Alias for --score-tol (kcal/mol).")
-    p.add_argument("--html-expected-only", dest="html_expected_only", action="store_true", default=True,
-                   help="Show only expected FDA RDKs in the HTML report (env ANALYSIS_HTML_EXPECTED_ONLY=1).")
-    p.add_argument("--no-html-expected-only", dest="html_expected_only", action="store_false",
-                   help="Disable expected-only filtering in HTML (env ANALYSIS_HTML_EXPECTED_ONLY=0).")
-    p.add_argument("--since-epoch", type=float,
-                   default=(float(DEFAULT_SINCE_EPOCH) if DEFAULT_SINCE_EPOCH else None),
-                   help="Only ingest files with mtime >= this UNIX epoch (env BENCH_ANALYSIS_SINCE_EPOCH or BENCH_RUN_START_EPOCH).")
-    p.add_argument("--html-success-only", dest="html_success_only", action="store_true", default=True,
-                   help="HTML shows only success rows (score✔ & RMSD✔ & identity✔). Env ANALYSIS_HTML_SUCCESS_ONLY=1.")
-    p.add_argument("--no-html-success-only", dest="html_success_only", action="store_false",
-                   help="Disable success-only filtering for HTML (env ANALYSIS_HTML_SUCCESS_ONLY=0).")
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Verbose per-pair diagnostics (or set BENCH_DEBUG=1)",
+    )
+    p.add_argument(
+        "--analysis-score-tol",
+        type=float,
+        dest="score_tol",
+        help="Alias for --score-tol (kcal/mol).",
+    )
+    p.add_argument(
+        "--html-expected-only",
+        dest="html_expected_only",
+        action="store_true",
+        default=True,
+        help="Show only expected FDA RDKs in the HTML report (env ANALYSIS_HTML_EXPECTED_ONLY=1).",
+    )
+    p.add_argument(
+        "--no-html-expected-only",
+        dest="html_expected_only",
+        action="store_false",
+        help="Disable expected-only filtering in HTML (env ANALYSIS_HTML_EXPECTED_ONLY=0).",
+    )
+    p.add_argument(
+        "--since-epoch",
+        type=float,
+        default=(float(DEFAULT_SINCE_EPOCH) if DEFAULT_SINCE_EPOCH else None),
+        help="Only ingest files with mtime >= this UNIX epoch (env BENCH_ANALYSIS_SINCE_EPOCH or BENCH_RUN_START_EPOCH).",
+    )
+    p.add_argument(
+        "--html-success-only",
+        dest="html_success_only",
+        action="store_true",
+        default=True,
+        help="HTML shows only success rows (score✔ & RMSD✔ & identity✔). Env ANALYSIS_HTML_SUCCESS_ONLY=1.",
+    )
+    p.add_argument(
+        "--no-html-success-only",
+        dest="html_success_only",
+        action="store_false",
+        help="Disable success-only filtering for HTML (env ANALYSIS_HTML_SUCCESS_ONLY=0).",
+    )
 
     return p
 
@@ -1540,7 +1881,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     # honor CLI --debug
     global DEBUG
     DEBUG = DEBUG or bool(args.debug)
-    _default_expected_only = str(_cfg.get("ANALYSIS_HTML_EXPECTED_ONLY", "true")).lower() in ("1", "true", "yes")
+    _default_expected_only = str(
+        _cfg.get("ANALYSIS_HTML_EXPECTED_ONLY", "true")
+    ).lower() in ("1", "true", "yes")
 
     run_analysis(
         docked_root=docked_root,

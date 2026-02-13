@@ -1,0 +1,20 @@
+{
+  "A": {
+    "chain": "A",
+    "uniprot": "P0A884",
+    "unp_start": 1,
+    "unp_end": 264,
+    "pdb_start": 1,
+    "pdb_end": 264,
+    "source": "dbref"
+  },
+  "B": {
+    "chain": "B",
+    "uniprot": "P0A884",
+    "unp_start": 1,
+    "unp_end": 264,
+    "pdb_start": 1,
+    "pdb_end": 264,
+    "source": "dbref"
+  }
+}

@@ -1,0 +1,13 @@
+{
+    "active_smiles_file": "extracted_ligands/deepcoy/1A2B_P61586/1A2B_P61586_actives.smi",
+    "batch_size": 1,
+    "dataset": "zinc",
+    "generation": true,
+    "mode": "generate",
+    "model_name": "Default",
+    "num_samples": 50,
+    "output_file": "extracted_ligands/deepcoy/1A2B_P61586/deepcoy_decoys.smi",
+    "restore": "models/DeepCoy_DUDE_model_e09.pickle",
+    "train_file": "data/molecules_train_zinc.json",
+    "valid_file": "data/molecules_valid_zinc.json"
+}
