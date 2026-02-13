@@ -182,6 +182,8 @@ Tool verification:
       Run startup tool verification using fixed "prefer_config" resolution
       (configured path first, PATH fallback second). This verification is
       CLI-only and does not auto-run from config defaults.
+      Core required tools must resolve; optional checks (for example,
+      SCORCH script/env) are reported but do not fail verification.
       When used, main exits after verification.
 
 Effective config:
@@ -352,7 +354,7 @@ from cli.run_context import (
     _apply_resume_config_from_snapshot,
     ConfigDict,
 )
-from config.tool_resolver import resolve_required_tools
+from config.tool_resolver import resolve_required_tools, resolve_tool
 from docking.docking_vina import emit_vina_config as _emit_vina_config_impl
 from docking.docking_ligands import _resolve_test_mode
 from docking.library_mode import _coerce_test_map, parse_test_libraries
@@ -427,7 +429,43 @@ _TOOL_VERIFY_TARGETS: tuple[tuple[str, str, bool], ...] = (
     ("PREPARE_RECEPTOR_SCRIPT", "prepare_receptor4.py", True),
     ("PREPARE_LIGAND_SCRIPT", "prepare_ligand4.py", True),
     ("P2RANK_PATH", "prank", True),
+    ("SCORCH", "scorch.py", False),
 )
+
+
+def _verify_scorch_env(cfg: ConfigDict) -> tuple[bool, str]:
+    micromamba = shutil.which("micromamba")
+    if not micromamba:
+        return False, "missing_micromamba"
+
+    env_prefix_raw = str(cfg.get("SCORCH_ENV_PREFIX", "") or "").strip()
+    env_name = str(cfg.get("SCORCH_ENV", "scorch-env") or "scorch-env").strip()
+    if not env_name:
+        env_name = "scorch-env"
+
+    if env_prefix_raw:
+        env_prefix = str(Path(env_prefix_raw).expanduser().resolve())
+        mode = f"prefix={env_prefix}"
+        cmd = [micromamba, "run", "-p", env_prefix, "python", "-V"]
+    else:
+        mode = f"name={env_name}"
+        cmd = [micromamba, "run", "-n", env_name, "python", "-V"]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception as exc:
+        return False, f"env_probe_exception mode={mode} error={exc}"
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        summary = detail[0] if detail else ""
+        if summary:
+            return (
+                False,
+                f"env_probe_failed mode={mode} rc={proc.returncode} detail={summary}",
+            )
+        return False, f"env_probe_failed mode={mode} rc={proc.returncode}"
+    return True, f"ok mode={mode}"
 
 
 def _verify_tools_if_requested(cfg: ConfigDict, argv: list[str]) -> None:
@@ -442,6 +480,21 @@ def _verify_tools_if_requested(cfg: ConfigDict, argv: list[str]) -> None:
         return
 
     missing_required = resolve_required_tools(cfg, _TOOL_VERIFY_TARGETS)
+    missing_optional: list[tuple[str, str]] = []
+    scorch_tool_available = False
+    for key, fallback_cmd, required in _TOOL_VERIFY_TARGETS:
+        if required:
+            continue
+        result = resolve_tool(cfg, key, fallback_cmd)
+        resolved_path = str(result.get("resolved_path", "")).strip()
+        if key == "SCORCH":
+            scorch_tool_available = bool(resolved_path)
+        if not resolved_path:
+            missing_optional.append((key, fallback_cmd))
+    if scorch_tool_available:
+        scorch_env_ok, scorch_env_reason = _verify_scorch_env(cfg)
+        if not scorch_env_ok:
+            missing_optional.append(("SCORCH_ENV", scorch_env_reason))
 
     if missing_required:
         print(f"{len(missing_required)} missing", file=sys.stderr)
@@ -449,6 +502,10 @@ def _verify_tools_if_requested(cfg: ConfigDict, argv: list[str]) -> None:
             print(f"- {key} ({fallback_cmd})", file=sys.stderr)
         sys.exit(2)
     print("Tools all successfully verified")
+    if missing_optional:
+        print(f"{len(missing_optional)} optional missing")
+        for key, fallback_cmd in missing_optional:
+            print(f"- {key} ({fallback_cmd})")
 
 
 def _print_effective_config_and_exit(cfg: ConfigDict) -> None:

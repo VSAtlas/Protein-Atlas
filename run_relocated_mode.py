@@ -120,9 +120,40 @@ def _copy_tree_contents(source_root: Path, dest_root: Path) -> None:
             target.symlink_to(os.readlink(item))
             continue
         if item.is_dir():
-            shutil.copytree(item, target, dirs_exist_ok=True)
+            shutil.copytree(item, target, dirs_exist_ok=True, symlinks=True)
             continue
         shutil.copy2(item, target)
+
+
+def _rewrite_symlink_target(target: str, old_base: Path, new_base: Path) -> str:
+    target_path = Path(target)
+    if not target_path.is_absolute():
+        return target
+    try:
+        suffix = target_path.relative_to(old_base)
+    except ValueError:
+        return target
+    return str(new_base / suffix)
+
+
+def _rewrite_tree_symlinks(dest_root: Path, old_base: Path, new_base: Path) -> int:
+    rewritten = 0
+    for current_root, dirnames, filenames in os.walk(dest_root, followlinks=False):
+        root_path = Path(current_root)
+        for name in [*dirnames, *filenames]:
+            link_path = root_path / name
+            if not link_path.is_symlink():
+                continue
+            current_target = os.readlink(link_path)
+            rewritten_target = _rewrite_symlink_target(
+                current_target, old_base, new_base
+            )
+            if rewritten_target == current_target:
+                continue
+            link_path.unlink()
+            link_path.symlink_to(rewritten_target)
+            rewritten += 1
+    return rewritten
 
 
 def _extract_prepped_archive(
@@ -169,7 +200,23 @@ def _extract_prepped_archive(
                 f"Archive extracted but no files were found under: {source_root}"
             )
 
-        _copy_tree_contents(source_root, prepped_root)
+        old_base = archive_path.parent.resolve()
+        new_base = prepped_root.parent.resolve()
+        try:
+            _copy_tree_contents(source_root, prepped_root)
+            rewritten_links = _rewrite_tree_symlinks(prepped_root, old_base, new_base)
+        except (shutil.Error, OSError) as exc:
+            raise RuntimeError(
+                "Archive extraction copy failed while materializing prepared ligands "
+                f"from {source_root} to {prepped_root}. "
+                "This can happen when archived symlinks are dangling or have "
+                "machine-specific absolute targets."
+            ) from exc
+        if rewritten_links:
+            _log(
+                "rewrote_symlink_targets "
+                f"count={rewritten_links} old_base={old_base} new_base={new_base}"
+            )
         _log(f"extract_done archive={archive_path} destination={prepped_root}")
         return True
 

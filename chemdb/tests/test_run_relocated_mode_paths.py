@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +19,61 @@ def _write_prepped_payload(prepped_root: Path) -> None:
     lib_dir = prepped_root / "demo_lib"
     lib_dir.mkdir(parents=True, exist_ok=True)
     (lib_dir / "demo_1.pdbqt").write_text("MODEL 1\nENDMDL\n", encoding="utf-8")
+
+
+def _require_tar_tools() -> None:
+    missing = [tool for tool in ("tar", "unzstd") if shutil.which(tool) is None]
+    if missing:
+        pytest.skip(f"requires tools on PATH: {', '.join(missing)}")
+
+
+def _create_tar_zst(source_root: Path, archive_path: Path) -> None:
+    commands = [
+        [
+            "tar",
+            "--zstd",
+            "-cf",
+            str(archive_path),
+            "-C",
+            str(source_root),
+            "prepped_ligands",
+        ],
+        [
+            "tar",
+            "--use-compress-program=zstd",
+            "-cf",
+            str(archive_path),
+            "-C",
+            str(source_root),
+            "prepped_ligands",
+        ],
+    ]
+    failures: list[str] = []
+    for cmd in commands:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            return
+        failures.append((proc.stderr or proc.stdout or "").strip())
+    pytest.skip(
+        "unable to create .tar.zst with local tar/zstd tooling: "
+        + " | ".join(msg for msg in failures if msg)
+    )
+
+
+def _make_archive_with_intermediates_link(
+    tmp_path: Path, link_target: str
+) -> tuple[Path, Path]:
+    source_root = tmp_path / "source_bundle"
+    lib_dir = source_root / "prepped_ligands" / "3KFA"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    (lib_dir / "demo_1.pdbqt").write_text("MODEL 1\nENDMDL\n", encoding="utf-8")
+    os.symlink(link_target, lib_dir / "intermediates_src")
+
+    archive_root = tmp_path / "archive_bundle"
+    archive_root.mkdir(parents=True, exist_ok=True)
+    archive_path = archive_root / "prepped_ligands.tar.zst"
+    _create_tar_zst(source_root, archive_path)
+    return archive_root, archive_path
 
 
 def test_extracted_root_optional_uses_config_resolution(
@@ -382,3 +439,69 @@ def test_permission_error_during_mkdir_is_friendly(monkeypatch, tmp_path: Path) 
 
     with pytest.raises(RuntimeError, match="Unable to create directory"):
         run_relocated_mode.main()
+
+
+def test_extract_prepped_archive_real_tar_dangling_symlink_does_not_fail(
+    tmp_path: Path,
+) -> None:
+    _require_tar_tools()
+    dangling = "/nonexistent/intermediates/3KFA"
+    _, archive_path = _make_archive_with_intermediates_link(tmp_path, dangling)
+
+    prepped_root = tmp_path / "relocated_bundle" / "prepped_ligands"
+    extracted = run_relocated_mode._extract_prepped_archive(
+        archive_path, prepped_root, force_extract=False
+    )
+    assert extracted is True
+    link_path = prepped_root / "3KFA" / "intermediates_src"
+    assert link_path.is_symlink()
+
+
+def test_extract_prepped_archive_real_tar_rewrites_absolute_symlink_target(
+    tmp_path: Path,
+) -> None:
+    _require_tar_tools()
+    old_root = tmp_path / "archive_bundle"
+    old_target = old_root / "intermediates" / "3KFA"
+    _, archive_path = _make_archive_with_intermediates_link(tmp_path, str(old_target))
+
+    prepped_root = tmp_path / "relocated_bundle" / "prepped_ligands"
+    run_relocated_mode._extract_prepped_archive(
+        archive_path, prepped_root, force_extract=False
+    )
+    link_path = prepped_root / "3KFA" / "intermediates_src"
+    expected = prepped_root.parent / "intermediates" / "3KFA"
+    assert link_path.is_symlink()
+    assert os.readlink(link_path) == str(expected)
+
+
+def test_extract_prepped_archive_real_tar_keeps_relative_symlink_target(
+    tmp_path: Path,
+) -> None:
+    _require_tar_tools()
+    relative_target = "../shared/intermediates"
+    _, archive_path = _make_archive_with_intermediates_link(tmp_path, relative_target)
+
+    prepped_root = tmp_path / "relocated_bundle" / "prepped_ligands"
+    run_relocated_mode._extract_prepped_archive(
+        archive_path, prepped_root, force_extract=False
+    )
+    link_path = prepped_root / "3KFA" / "intermediates_src"
+    assert link_path.is_symlink()
+    assert os.readlink(link_path) == relative_target
+
+
+def test_extract_prepped_archive_real_tar_keeps_external_absolute_symlink_target(
+    tmp_path: Path,
+) -> None:
+    _require_tar_tools()
+    external_target = "/opt/shared/intermediates/3KFA"
+    _, archive_path = _make_archive_with_intermediates_link(tmp_path, external_target)
+
+    prepped_root = tmp_path / "relocated_bundle" / "prepped_ligands"
+    run_relocated_mode._extract_prepped_archive(
+        archive_path, prepped_root, force_extract=False
+    )
+    link_path = prepped_root / "3KFA" / "intermediates_src"
+    assert link_path.is_symlink()
+    assert os.readlink(link_path) == external_target

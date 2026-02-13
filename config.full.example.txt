@@ -1,6 +1,7 @@
 # Full configuration template (includes optional knobs)
 # Use config.example.txt for minimal portable setup.
 # Optional engines/tools (MMGBSA, GNINA, DOCK6, LeDock) are configurable but not required for --verify-tools.
+# SCORCH script + env are checked by --verify-tools as optional/non-blocking.
 
 OVERALL_DIR=.
 TOOL_VERIFY_ON_START=false

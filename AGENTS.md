@@ -6,9 +6,10 @@
 * **SCOPE:** Edit ONLY `code/protein_automation/` and `docs/`. Protected: `tests/`, `ci/`, `input_pdbs/`, `docked/`.
 * **ENVIRONMENT:** `direnv` is active. You can run `python` directly. (Ignore lockfile errors; assume success).
     * *Only ask for elevated permissions if you run into repeated failures.*
-
+* **When operating under /stor/home/mpg2352/atlas2/code/protein_automation or  /stor/home/mpg2352/atlas/code/protein_automation
+    Do not create new  directories under /tmp, instead make temporary directories under /stor/home/mpg2352 only
 ## 2. REPO ARCHITECTURE
-* **Root:** `/home/michael/atlas/code/protein_automation`
+* **Root:** `/stor/home/mpg2352/atlas2/code/protein_automation` or  /stor/home/mpg2352/atlas/code/protein_automation
 * **Source:** `src/` (Packages: `docking`, `path_router`, `cli`, `prep_ligands`, `post_docking`).
 * **Outputs:** `docked/<RUN_ID>/...` (Engine-scoped).
 * **Pathing:** NEVER hardcode. Import `src.path_router.path_router`. Respect `APO`/`HOLO` and `pH`.
@@ -38,7 +39,12 @@
 * **Inspect:** `csvstat <file>` (Stats/Columns) or `csvlook <file> | head` (Table View).
 * **Filter:** `csvgrep -c "col_name" -r "pattern" <file>` to extract specific rows.
 
-## 6. CHEATSHEET (Common Commands)
+## 6. NOTES
+When you come across an error  and have to make an important change to fix a  bug, note  it  in the docs directory under a new  md file.
+Name the .md file the name of the file edited, *note past notes may not use the name of  the file	
+If you check the docs  directory and think that one of the docs  might have relevance to what youre working on then read it and update it as needed.
+
+## 7. CHEATSHEET (Common Commands)
 * **Smoke Test:** `python main.py --test -fast --test-fda`
 * **Rescoring:** `python -m post_docking.rescoring.rescoring_scorch --run-id <ID> --overwrite`
 * **Tests:** `pytest chemdb/tests/test_path_router.py -q`

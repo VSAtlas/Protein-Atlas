@@ -62,4 +62,4 @@ Expected output:
   - `<N> missing`
   - one line per missing tool key
 
-Optional toolchains (`MMGBSA`, `GNINA`, `DOCK6`, `LeDock`) are configurable but do not fail the core `--verify-tools` check.
+Optional toolchains (`MMGBSA`, `GNINA`, `DOCK6`, `LeDock`) are configurable but do not fail the core `--verify-tools` check. `SCORCH` is also checked as optional/non-blocking: missing SCORCH script and/or unusable SCORCH env are reported but do not fail verification.
