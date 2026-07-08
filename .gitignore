@@ -1,0 +1,116 @@
+# === large generated / HPC outputs ===
+ligands_mol2/
+prepped_ligands/
+docked/
+docked/dud_eval/
+docked/dud_eval.dir_backup_*/
+logs/
+logs_summary/
+failed/
+input_ligands/
+extracted_ligands/
+processed_pdbs/
+hide/
+input_pdbs/
+p2rank_out/
+pdbqts/
+configs/
+temp/
+outputs/
+reference/
+
+# caches / scratch
+pubchem_name_cache.json
+malformed_ligands*.txt
+
+# common heavy chemistry artifacts
+*.pdbqt
+*.mol2
+*.pdb
+*.sdf
+
+# Canonical test fixtures may intentionally contain chemistry file extensions.
+!chemdb/tests/fixtures/
+!chemdb/tests/fixtures/**
+
+# python/log artifacts
+__pycache__/
+*.pyc
+*.log
+*.pid
+*.egg-info/
+
+# run manifests and generated analysis outputs
+/manifests/
+/analysis/out/
+/analysis/difficulty/
+analysis/benchmarks/
+analysis/dud_eval/
+analysis/_tmp/
+analysis/gene_list/pdb_query_egfr_check.csv
+analysis/gene_list/pdb_query_genes_10.csv
+analysis/gene_list/pdb_query_genes_30.csv
+analysis/gene_list/pdb_query_genes_smoke.csv
+analysis/gene_list/pdb_query_out_30x20.csv
+analysis/gene_list/pdb_query_smoke_out.csv
+analysis/gene_list/possible_target_ids_from_query.txt
+analysis/gene_list/possible_targets_installed_success.txt
+analysis/gene_list/possible_targets_missing_after_massinstall.txt
+post_docked/
+/size_artifacts/
+.aider*
+*.stdout.json
+chemdb/bench/runs/*.time
+# Bench run outputs are generated runtime artifacts unless promoted as fixtures.
+chemdb/bench/runs/*_workload.json
+chemdb/bench/runs/*.stdout.json
+chemdb/bench/runs/*/events.jsonl
+chemdb/bench/runs/*/meta.json
+chemdb/bench/runs/*/summary.csv
+chemdb/bench/runs/*/summary.json
+chemdb/bench/runs/*/workload.json
+
+# local/large dirs
+_skeletons/
+# Runtime datasets (includes data/external/, caches, etc.) - not versioned.
+# Keep DVC pointer files versionable while ignoring dataset contents.
+data/*
+!data/*.dvc
+llama.cpp/
+
+# local env/cache
+.direnv/
+.envs/
+.cache/
+.cache_test/
+.home/
+.envrc
+.idea/
+
+# local build/vendor dirs
+node_modules/
+report_assets
+report_assets/
+tools/Vina-GPU-2.1/
+
+# pathway resolver artifacts
+pathways/
+drugcentral/structures.smiles.tsv
+
+# ML workflow artifacts
+src/ml/data/bigbind/
+src/ml/data/*.tar
+src/ml/data/*.tar.gz
+src/ml/outputs/
+src/ml/cache/
+src/ml/data/manual_bigbind_smoke/
+
+# large local archives / runtime config
+prepped_ligands.tar.zst
+*.tar.zst
+atlas.tar.xz
+config.txt
+config.txt.backup*
+config.*.backup*
+.tmp_massinstall_possible_targets
+.probe_regression

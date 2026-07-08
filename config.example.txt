@@ -1,0 +1,59 @@
+# Minimal portable configuration (preferred)
+# Keep config.txt focused on repo roots and tool prefixes.
+# Individual executable paths are derived by normalize_config() and PATH resolution.
+
+OVERALL_DIR=.
+
+# Runtime outputs are intentionally grouped under outputs/.
+# OUTPUT_DIR is a processed-PDB base; fresh runs append <RUN_ID> at runtime.
+OUTPUT_DIR=outputs/processed_pdbs
+DOCKED_DIR=outputs/docked
+POST_DOCKED_DIR=outputs/post_docked
+CONFIGS_DIR=outputs/configs
+MANIFESTS_DIR=outputs/manifests
+DATA_DIR=outputs/data
+LOGS_DIR=outputs/logs
+
+# Optional tool roots/prefixes
+MGLTOOLS_PATH=
+ADFRSUITE_BIN=
+PHENIX_DIR=
+PHENIX_LIB_PATH=
+P2RANK_PATH=prank
+MMGBSA_AMBERTOOLS_PREFIX=
+AMBERTOOLS_PREFIX=
+
+# MM/GBSA is a standalone/report-driven post-processing step by default.
+# Set MMGBSA_AUTO_RUN=true only to restore legacy post-run execution.
+MMGBSA_AUTO_RUN=false
+# screening keeps the fast one-frame behavior; production expands MD/QC defaults.
+MMGBSA_PROTOCOL=screening
+# Production requires curated ligand chemistry, not PDBQT reconstruction.
+MMGBSA_INPUT_CHEMISTRY_AUTHORITATIVE=false
+MMGBSA_INPUT_CHEMISTRY_SOURCE=unreviewed_sdf
+
+# CLI-only gate; verification runs only with: atlas --verify-tools
+TOOL_VERIFY_ON_START=false
+
+# Optional env-prefix keys used by external modules
+SCORCH_DEVICE=cpu
+SCORCH_GPU_IDS=
+SCORCH_ENV_PREFIX=
+SCORCH_ENV=scorch-env
+
+# Optional PDB query / massinstall defaults
+# Query-selection defaults come from tools/pdb_query.py; set PDB_QUERY_GENES_FILE for no-flag runs.
+# PDB_QUERY_GENES_FILE=analysis/gene_list/pilot_pdbs_30.csv
+
+# Optional library selection
+# Main library default: LIBRARY_SUBDIR_DEFAULT=fda_library
+# Fully populated FDA/RDK ligand-name map used by reports and FDA benchmarks.
+FDA_MAPPING_CSV=chemdb/data/fda_mapping_from_pdbqt.csv
+# Downloaded source SDFs for `atlas ligands install ...` are cached here.
+LIGAND_SOURCE_CACHE_DIR=outputs/data/ligand_sources
+# One-off DUD/decoy override: atlas --pdb 1BN1 --dud-library aa2ar
+# Target-specific DUD-E libraries belong in TEST_LIBRARY_MAP in config.txt.
+# Bundled smoke fixtures live outside runtime output roots.
+# This TEST mapping is for smoke execution only, not a DUD-E benchmark claim.
+TEST_FIXTURE_PREPPED_LIGANDS_DIR=chemdb/tests/fixtures/prepped_ligands
+TEST_LIBRARY_MAP={"TEST": "fda_test_library_10"}

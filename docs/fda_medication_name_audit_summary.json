@@ -1,0 +1,20 @@
+{
+  "blocking_row_count": 0,
+  "classified_non_medication_csv": "docs/fda_non_medication_substances.csv",
+  "classified_non_medication_rows": 8,
+  "classified_non_medication_unique_names": 8,
+  "detail_csv": "docs/fda_medication_name_audit.csv",
+  "include_cross_field_conflicts": false,
+  "include_weak_signals": false,
+  "mapping_csv": "chemdb/data/fda_mapping_from_pdbqt.csv",
+  "reason_counts": {},
+  "review_row_count": 0,
+  "row_severity_counts": {
+    "classified_non_medication": 8,
+    "ok": 4722
+  },
+  "total_rows": 4730,
+  "unique_display_names_reviewed": 0,
+  "unique_reason_counts": {},
+  "unique_review_csv": "docs/fda_medication_name_review_unique.csv"
+}

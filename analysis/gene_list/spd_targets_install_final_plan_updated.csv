@@ -1,0 +1,102 @@
+gene,pdb_id,mode,method,install_status,nontrivial_comp_ids,installed_file_exists
+ACHE,1B41,apo_fallback,X-RAY DIFFRACTION,apo_downloaded,,no
+ADORA1,5UEN,holo_strict,X-RAY DIFFRACTION,holo_downloaded,DU1;OLA,yes
+ADORA3,8YH0,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,A1BII,yes
+ADRA1A,8THK,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,CGZ,yes
+ADRA2A,9CBL,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,ALE,yes
+ADRA2B,6K41,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,CZX,yes
+ADRB1,7BTS,holo_strict,X-RAY DIFFRACTION,holo_downloaded,ALE;EPE;CLR;1WV,yes
+ADRB2,6PS2,holo_strict,X-RAY DIFFRACTION,holo_downloaded,A1IZU,yes
+ADRB3,9IJD,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,CAU,yes
+AGTR1,6DO1,holo_strict,X-RAY DIFFRACTION,holo_downloaded,OLC,yes
+AGTR2,5UNF,holo_strict,X-RAY DIFFRACTION,holo_downloaded,8ES,yes
+AR,1XOW,holo_strict,X-RAY DIFFRACTION,holo_downloaded,R18,yes
+AVPR1A,9XB1,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,CLR,yes
+AVPR2,4JQI,holo_strict,X-RAY DIFFRACTION,holo_downloaded,PRO,yes
+BDKRB1,7EIB,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+BDKRB2,7F2O,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+CACNA1B,7MIX,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,Y01;CLR;3PE;PT5,yes
+CACNA1C,2F3Y,apo_fallback,X-RAY DIFFRACTION,apo_downloaded,,no
+CCKAR,7F8U,holo_strict,X-RAY DIFFRACTION,holo_downloaded,1OE,yes
+CCKBR,1L4T,apo_fallback,SOLUTION NMR,apo_downloaded,,no
+CHRM1,6ZFZ,holo_strict,X-RAY DIFFRACTION,holo_downloaded,QJT;OLA;OLC;EPE,yes
+CHRM2,5YC8,holo_strict,X-RAY DIFFRACTION,holo_downloaded,3C0;HG,yes
+CHRM3,8E9W,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,WEC,yes
+CHRM4,9N09,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,5XI,yes
+CHRM5,6OL9,holo_strict,X-RAY DIFFRACTION,holo_downloaded,OLA;0HK;P33;OLC,yes
+CHRNA4,2LLY,apo_fallback,SOLUTION NMR,apo_downloaded,,no
+CNR1,5TGZ,holo_strict,X-RAY DIFFRACTION,holo_downloaded,ZDG;FMN;OLC;OLA,yes
+CRHR1,2L27,apo_fallback,SOLUTION NMR,apo_downloaded,,no
+CRHR2,6PB1,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,CLR;PLM,yes
+DRD1,7JOZ,holo_strict,X-RAY DIFFRACTION,holo_downloaded,CLR;A1EKL;PLM,yes
+DRD2,6CM4,holo_strict,X-RAY DIFFRACTION,holo_downloaded,8NU;OLA,yes
+DRD3,7CMU,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,G6L,yes
+DRD4,5WIU,holo_strict,X-RAY DIFFRACTION,holo_downloaded,AQD;OLA,yes
+DRD5,8IRV,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,R5F;CLR;PLM,yes
+EDNRA,8HCQ,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+EDNRB,5GLI,holo_strict,X-RAY DIFFRACTION,holo_downloaded,OLC;OLA,yes
+EGFR,1MOX,holo_strict,X-RAY DIFFRACTION,holo_downloaded,PT;CD,yes
+ERBB2,3PP0,holo_strict,X-RAY DIFFRACTION,holo_downloaded,03Q,yes
+ESR1,7NDO,holo_strict,X-RAY DIFFRACTION,holo_downloaded,RAL,yes
+ESR2,1U3Q,holo_strict,X-RAY DIFFRACTION,holo_downloaded,272,yes
+F2,1T4U,holo_strict,X-RAY DIFFRACTION,holo_downloaded,81A,yes
+GABBR1,4MQE,apo_fallback,X-RAY DIFFRACTION,apo_downloaded,,no
+GABRA1,6HUJ,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,PIO;RI5;ABU,yes
+GCGR,4ERS,apo_fallback,X-RAY DIFFRACTION,apo_downloaded,,no
+GHSR,7F83,holo_strict,X-RAY DIFFRACTION,holo_downloaded,OLC;1KQ,yes
+GIPR,2QKH,holo_strict,X-RAY DIFFRACTION,holo_downloaded,TAR,yes
+GRIN1,5H8F,holo_strict,X-RAY DIFFRACTION,holo_downloaded,GLU,yes
+HCAR2,7ZL9,holo_strict,X-RAY DIFFRACTION,holo_downloaded,OLA;OLC;UNX,yes
+HRH1,9LRB,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,HSM,yes
+HRH2,8YN3,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,HSM;CLR,yes
+HRH3,7F61,holo_strict,X-RAY DIFFRACTION,holo_downloaded,1IB;CLR,yes
+HTR1A,7E2X,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,J40;CLR;PLM,yes
+HTR2A,6A93,holo_strict,X-RAY DIFFRACTION,holo_downloaded,8NU;CLR;1PE;PLM,yes
+HTR2B,4IB4,holo_strict,X-RAY DIFFRACTION,holo_downloaded,ERM;PLM;CLR;OLC;OLB;OLA,yes
+HTR2C,6BQG,holo_strict,X-RAY DIFFRACTION,holo_downloaded,ERM;OLC,yes
+HTR3A,8AXD,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+HTR5A,7UM4,holo_strict,X-RAY DIFFRACTION,holo_downloaded,1PE;NN6,yes
+HTR6,7YS6,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,SRO,yes
+HTR7,7XTC,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,8K3;CLR,yes
+KCNH2,1UJL,apo_fallback,SOLUTION NMR,apo_downloaded,,no
+KDR,1YWN,holo_strict,X-RAY DIFFRACTION,holo_downloaded,LIF,yes
+MC3R,8KIG,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+MC4R,6W25,holo_strict,X-RAY DIFFRACTION,holo_downloaded,OLA,yes
+NPY1R,5ZBQ,holo_strict,X-RAY DIFFRACTION,holo_downloaded,9AO,yes
+NPY2R,7DDZ,holo_strict,X-RAY DIFFRACTION,holo_downloaded,H46;FMN,yes
+NR1H2,3KFC,holo_strict,X-RAY DIFFRACTION,holo_downloaded,61X,yes
+NR1H3,3IPQ,holo_strict,X-RAY DIFFRACTION,holo_downloaded,965,yes
+NR1H4,1OSH,holo_strict,X-RAY DIFFRACTION,holo_downloaded,FEX,yes
+NR1I2,1SKX,holo_strict,X-RAY DIFFRACTION,holo_downloaded,RFP,yes
+NR1I3,1XVP,holo_strict,X-RAY DIFFRACTION,holo_downloaded,F15;CID,yes
+NR3C1,3BQD,holo_strict,X-RAY DIFFRACTION,holo_downloaded,DAY,yes
+NTSR1,7UL2,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,Q6Q,yes
+OPRD1,8F7S,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,CLR;PLM,yes
+OPRK1,6B73,holo_strict,X-RAY DIFFRACTION,holo_downloaded,CVV;CLR;OLA,yes
+OPRM1,9WST,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+PDE3A,7KWE,holo_strict,X-RAY DIFFRACTION,holo_downloaded,X5M,yes
+PDE4A,2QYK,holo_strict,X-RAY DIFFRACTION,holo_downloaded,NPV,yes
+PDE4D,1Q9M,holo_strict,X-RAY DIFFRACTION,holo_downloaded,ROL,yes
+PGR,3G8O,holo_strict,X-RAY DIFFRACTION,holo_downloaded,30X,yes
+PPARA,2P54,holo_strict,X-RAY DIFFRACTION,holo_downloaded,735,yes
+PPARG,1KNU,holo_strict,X-RAY DIFFRACTION,holo_downloaded,YPA,yes
+PTGS2,5F19,holo_strict,X-RAY DIFFRACTION,holo_downloaded,COH;AKR;BOG,yes
+RARA,3A9E,holo_strict,X-RAY DIFFRACTION,holo_downloaded,754;REA,yes
+RARB,4DM6,holo_strict,X-RAY DIFFRACTION,holo_downloaded,TTB,yes
+RARG,5M24,holo_strict,X-RAY DIFFRACTION,holo_downloaded,9CR;LMU,yes
+SCN5A,4DJC,apo_fallback,X-RAY DIFFRACTION,apo_downloaded,,no
+SLC18A2,8JSW,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,SRO,yes
+SLC6A2,8HFE,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+SLC6A3,9EO4,holo_strict,ELECTRON MICROSCOPY,holo_downloaded,42L;A1AAF;Y01;D10;LNK;HP6;D12;MYS;OCT,yes
+SLC6A4,5I6X,holo_strict,X-RAY DIFFRACTION,holo_downloaded,CLR;LMT;8PR,yes
+TACR1,6J20,holo_strict,X-RAY DIFFRACTION,holo_downloaded,GBQ,yes
+TACR2,7XWO,apo_fallback,ELECTRON MICROSCOPY,apo_downloaded,,no
+TBXA2R,6IIU,holo_strict,X-RAY DIFFRACTION,holo_downloaded,A8X;CLR;OLC,yes
+ABCB11,,missing,,not_selected,,no
+ADORA2A,,missing,,not_selected,,no
+ADRA2C,,missing,,not_selected,,no
+MAOA,,missing,,not_selected,,no
+MLNR,,missing,,not_selected,,no
+PDE6A,,missing,,not_selected,,no
+PTGS1,,missing,,not_selected,,no
+SLC29A1,,missing,,not_selected,,no

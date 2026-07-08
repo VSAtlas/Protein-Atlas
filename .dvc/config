@@ -1,0 +1,5 @@
+[core]
+    analytics = false
+    remote = atlas_local
+['remote "atlas_local"']
+    url = /stor/work/VDS_Beckham/atlas/dvc_remote

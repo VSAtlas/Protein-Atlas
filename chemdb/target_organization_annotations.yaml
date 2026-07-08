@@ -1,0 +1,185 @@
+adme:
+  order:
+    - Transporter
+    - Phase I metabolism
+    - Phase II metabolism
+    - Modifier/regulator
+    - Non-ADME / Unassigned
+  rules:
+    - category: Transporter
+      gene_symbols:
+        - ABCB1
+        - ABCB11
+        - ABCC2
+        - ABCG2
+        - OATP1B1
+        - SLCO1B1
+        - SLC22A1
+      target_name_keywords:
+        - abc transporter
+        - transporter
+        - p-glycoprotein
+        - multidrug resistance protein
+        - bile salt export pump
+        - solute carrier
+        - organic anion transporter
+        - organic cation transporter
+    - category: Phase I metabolism
+      gene_symbols:
+        - CYP3A4
+        - CYP2D6
+        - CYP2C9
+        - CYP2C19
+        - CYP1A2
+        - CYP3A5
+        - FMO3
+        - MAOA
+        - MAOB
+      target_name_keywords:
+        - cytochrome p450
+        - monoamine oxidase
+        - flavin-containing monooxygenase
+        - aldehyde oxidase
+        - carboxylesterase
+    - category: Phase II metabolism
+      gene_symbols:
+        - UGT1A1
+        - UGT2B7
+        - GSTP1
+        - NAT2
+        - TPMT
+        - SULT1A1
+      target_name_keywords:
+        - glucuronosyltransferase
+        - glutathione s-transferase
+        - sulfotransferase
+        - n-acetyltransferase
+        - thiopurine s-methyltransferase
+    - category: Modifier/regulator
+      uniprot_ids:
+        - O75469
+        - Q14994
+        - P37231
+        - P35869
+      gene_symbols:
+        - NR1I2
+        - NR1I3
+        - PPARG
+        - AHR
+      target_name_keywords:
+        - pregnane x receptor
+        - constitutive androstane receptor
+        - peroxisome proliferator-activated receptor
+        - aryl hydrocarbon receptor
+
+safety:
+  order:
+    - Hepatotoxicity
+    - Cardiotoxicity / QT
+    - CNS
+    - Endocrine
+    - Hematologic
+    - GI
+    - Dermatologic
+    - Unassigned
+  rules:
+    - category: Hepatotoxicity
+      uniprot_ids:
+        - P04035
+      target_name_keywords:
+        - hmg-coa reductase
+        - hmg coenzyme a reductase
+        - farnesoid x receptor
+        - bile salt export pump
+    - category: Cardiotoxicity / QT
+      uniprot_ids:
+        - Q12809
+        - P07550
+      gene_symbols:
+        - KCNH2
+        - ADRB2
+      target_name_keywords:
+        - herg
+        - potassium channel
+        - adrenergic receptor beta
+        - beta-adrenergic receptor
+    - category: CNS
+      uniprot_ids:
+        - P14416
+        - P28223
+        - P41595
+      target_name_keywords:
+        - serotonin receptor
+        - 5-hydroxytryptamine receptor
+        - dopamine receptor
+        - monoamine oxidase
+        - acetylcholinesterase
+    - category: Endocrine
+      uniprot_ids:
+        - P03372
+        - P06401
+        - P10275
+        - P37231
+      gene_symbols:
+        - ESR1
+        - PGR
+        - AR
+        - PPARG
+      target_name_keywords:
+        - estrogen receptor
+        - progesterone receptor
+        - androgen receptor
+        - glucocorticoid receptor
+        - thyroid hormone receptor
+        - peroxisome proliferator-activated receptor
+    - category: Hematologic
+      uniprot_ids:
+        - O60674
+        - Q06187
+        - P00519
+        - P09874
+      gene_symbols:
+        - JAK2
+        - BTK
+        - ABL1
+        - PARP1
+      target_name_keywords:
+        - bruton tyrosine kinase
+        - jak2
+        - abl1
+        - poly [adp-ribose] polymerase 1
+    - category: GI
+      uniprot_ids:
+        - P35354
+      gene_symbols:
+        - PTGS2
+      target_name_keywords:
+        - prostaglandin g/h synthase
+        - cyclooxygenase
+    - category: Dermatologic
+      uniprot_ids:
+        - P00533
+        - P11362
+        - P35968
+      gene_symbols:
+        - EGFR
+        - FGFR1
+        - KDR
+      target_name_keywords:
+        - epidermal growth factor receptor
+        - fibroblast growth factor receptor
+        - vascular endothelial growth factor receptor
+
+expression:
+  rules:
+    - level: high
+      score: 0.85
+      uniprot_ids:
+        - P37231
+      gene_symbols:
+        - PPARG
+      target_name_keywords:
+        - peroxisome proliferator-activated receptor gamma
+        - peroxisome proliferator-activated receptor gamma 2
+      source: Human Protein Atlas / GTEx
+      summary: PPARG is tissue enhanced in adipose tissue and breast and detected in many tissues.

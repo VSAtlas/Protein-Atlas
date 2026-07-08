@@ -1,0 +1,12 @@
+# Additional non-drug non-polymer components to treat as trivial
+IPA
+DMSO
+DMF
+THF
+ACN
+ETH
+MEOH
+NMP
+TCEP
+PEG400
+PIP

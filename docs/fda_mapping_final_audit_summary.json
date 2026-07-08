@@ -1,0 +1,20 @@
+{
+  "benchmark_audit_flagged_rows": 0,
+  "blocking_reason_counts": {},
+  "blocking_rows": 0,
+  "mapping_csv": "chemdb/data/fda_mapping_from_pdbqt.csv",
+  "review_reason_counts": {
+    "brand_display_with_clean_pubchem_title": 1774,
+    "raw_quality_cas_only": 138,
+    "raw_quality_empty": 435,
+    "raw_quality_equals_pubchem_iupac": 1099,
+    "raw_quality_formula_like": 125,
+    "raw_quality_identifier_like": 172,
+    "raw_quality_inchikey_like": 2,
+    "raw_quality_iupac_like": 1398,
+    "raw_quality_ndc_like": 101,
+    "raw_quality_unii_like": 36
+  },
+  "review_rows": 3944,
+  "total_rows": 4730
+}

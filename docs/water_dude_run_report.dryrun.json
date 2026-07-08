@@ -1,0 +1,142 @@
+{
+  "benchmark": "water_dude_mini",
+  "policies": [
+    "remove_all",
+    "site_only",
+    "keep_all"
+  ],
+  "runs": [
+    {
+      "docking_command": [
+        "/stor/home/mpg2352/micromamba/envs/docking-env/bin/python",
+        "main.py",
+        "--waterbench",
+        "-fast",
+        "--run-id",
+        "water_dude_dry_20260506_remove_all",
+        "--pdbs",
+        "3EML,1UYG,1XL2"
+      ],
+      "docking_returncode": 0,
+      "dud_eval_command": [
+        "/stor/home/mpg2352/micromamba/envs/docking-env/bin/python",
+        "-m",
+        "analysis.cli.dud_eval",
+        "--run-id",
+        "water_dude_dry_20260506_remove_all",
+        "--docked-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/outputs/docked",
+        "--post-docked-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/outputs/post_docked",
+        "--out-dir",
+        "outputs/data/water_dude_eval_dryrun",
+        "--prepped-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands",
+        "--report-library"
+      ],
+      "dud_eval_returncode": 0,
+      "policy": "remove_all",
+      "run_id": "water_dude_dry_20260506_remove_all"
+    },
+    {
+      "docking_command": [
+        "/stor/home/mpg2352/micromamba/envs/docking-env/bin/python",
+        "main.py",
+        "--waterbench",
+        "-fast",
+        "--run-id",
+        "water_dude_dry_20260506_site_only",
+        "--pdbs",
+        "3EML,1UYG,1XL2"
+      ],
+      "docking_returncode": 0,
+      "dud_eval_command": [
+        "/stor/home/mpg2352/micromamba/envs/docking-env/bin/python",
+        "-m",
+        "analysis.cli.dud_eval",
+        "--run-id",
+        "water_dude_dry_20260506_site_only",
+        "--docked-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/outputs/docked",
+        "--post-docked-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/outputs/post_docked",
+        "--out-dir",
+        "outputs/data/water_dude_eval_dryrun",
+        "--prepped-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands",
+        "--report-library"
+      ],
+      "dud_eval_returncode": 0,
+      "policy": "site_only",
+      "run_id": "water_dude_dry_20260506_site_only"
+    },
+    {
+      "docking_command": [
+        "/stor/home/mpg2352/micromamba/envs/docking-env/bin/python",
+        "main.py",
+        "--waterbench",
+        "-fast",
+        "--run-id",
+        "water_dude_dry_20260506_keep_all",
+        "--pdbs",
+        "3EML,1UYG,1XL2"
+      ],
+      "docking_returncode": 0,
+      "dud_eval_command": [
+        "/stor/home/mpg2352/micromamba/envs/docking-env/bin/python",
+        "-m",
+        "analysis.cli.dud_eval",
+        "--run-id",
+        "water_dude_dry_20260506_keep_all",
+        "--docked-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/outputs/docked",
+        "--post-docked-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/outputs/post_docked",
+        "--out-dir",
+        "outputs/data/water_dude_eval_dryrun",
+        "--prepped-root",
+        "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands",
+        "--report-library"
+      ],
+      "dud_eval_returncode": 0,
+      "policy": "keep_all",
+      "run_id": "water_dude_dry_20260506_keep_all"
+    }
+  ],
+  "summary": [],
+  "targets": [
+    {
+      "conservation_refs": [
+        "3PWH",
+        "4EIY",
+        "5IU4"
+      ],
+      "dude_target": "aa2ar",
+      "library": "water_aa2ar",
+      "pdb_id": "3EML",
+      "water_rationale": "A2A receptor has a conserved ligand-site water network."
+    },
+    {
+      "conservation_refs": [
+        "1UY6",
+        "1YER",
+        "1YC4"
+      ],
+      "dude_target": "hs90a",
+      "library": "water_hs90a",
+      "pdb_id": "1UYG",
+      "water_rationale": "HSP90 N-terminal ligands frequently retain or displace ordered pocket waters."
+    },
+    {
+      "conservation_refs": [
+        "1HXW",
+        "1HSG",
+        "2Q3K"
+      ],
+      "dude_target": "hivpr",
+      "library": "water_hivpr",
+      "pdb_id": "1XL2",
+      "water_rationale": "HIV protease has a conserved flap/ligand bridging-water motif."
+    }
+  ]
+}

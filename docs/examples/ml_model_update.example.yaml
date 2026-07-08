@@ -1,0 +1,13 @@
+task: binding
+label: spd_binding_label
+feature_set: spd_binding_nonleaky
+split: scaffold_holdout
+pu_strategy: standard_binary
+model: explainable_boosting_machine
+calibration: sigmoid
+metrics:
+  - auroc
+  - average_precision
+  - precision_at_20
+  - enrichment_at_20
+seed: 42

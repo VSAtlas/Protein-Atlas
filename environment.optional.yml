@@ -1,0 +1,25 @@
+name: docking-env
+channels:
+  - conda-forge
+  - nvidia
+  - salilab
+dependencies:
+  # Optional engines and research extras. Install on top of environment.core.yml.
+  - cudnn
+  - tensorflow>=2.9
+  - xgboost
+  - modeller=10.7
+  - pyside6
+  - pyqt
+  - openjdk
+  - r-base
+  - r-dplyr
+  - r-ggplot2
+  - r-optparse
+  - r-pheatmap
+  - r-readr
+  - r-tidyr
+  - gh
+  - pip:
+      - clustergrammer==1.13.6
+      - posebusters==0.6.3

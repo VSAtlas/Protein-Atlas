@@ -1,0 +1,69 @@
+{
+  "benchmark": "water_dude_mini",
+  "commands": [
+    "ATLAS_WATER_BENCH_POLICY=remove_all ATLAS_WATER_CONSERVATION_REFS='{\"1UYG\": [\"1UY6\", \"1YER\", \"1YC4\"], \"1XL2\": [\"1HXW\", \"1HSG\", \"2Q3K\"], \"3EML\": [\"3PWH\", \"4EIY\", \"5IU4\"]}' python main.py --waterbench -fast --run-id water_dude_remove_all --pdbs 3EML,1UYG,1XL2",
+    "atlas analysis dud-eval water_dude_remove_all --docked-root docked --post-docked-root post_docked --out-dir analysis/dud_eval",
+    "ATLAS_WATER_BENCH_POLICY=site_only ATLAS_WATER_CONSERVATION_REFS='{\"1UYG\": [\"1UY6\", \"1YER\", \"1YC4\"], \"1XL2\": [\"1HXW\", \"1HSG\", \"2Q3K\"], \"3EML\": [\"3PWH\", \"4EIY\", \"5IU4\"]}' python main.py --waterbench -fast --run-id water_dude_site_only --pdbs 3EML,1UYG,1XL2",
+    "atlas analysis dud-eval water_dude_site_only --docked-root docked --post-docked-root post_docked --out-dir analysis/dud_eval",
+    "ATLAS_WATER_BENCH_POLICY=keep_all ATLAS_WATER_CONSERVATION_REFS='{\"1UYG\": [\"1UY6\", \"1YER\", \"1YC4\"], \"1XL2\": [\"1HXW\", \"1HSG\", \"2Q3K\"], \"3EML\": [\"3PWH\", \"4EIY\", \"5IU4\"]}' python main.py --waterbench -fast --run-id water_dude_keep_all --pdbs 3EML,1UYG,1XL2",
+    "atlas analysis dud-eval water_dude_keep_all --docked-root docked --post-docked-root post_docked --out-dir analysis/dud_eval"
+  ],
+  "conservation_refs_env": "{\"1UYG\": [\"1UY6\", \"1YER\", \"1YC4\"], \"1XL2\": [\"1HXW\", \"1HSG\", \"2Q3K\"], \"3EML\": [\"3PWH\", \"4EIY\", \"5IU4\"]}",
+  "evaluation": {
+    "compare": "Run atlas analysis dud-eval for each run_id, then compare selected/site_only against remove_all and keep_all.",
+    "metrics": [
+      "ROC_AUC",
+      "PR_AUC",
+      "logAUC",
+      "BEDROC_alpha_20",
+      "EF@1%",
+      "EF@5%"
+    ]
+  },
+  "library_map": {
+    "1UYG": "water_hs90a",
+    "1XL2": "water_hivpr",
+    "3EML": "water_aa2ar"
+  },
+  "max_ligands_per_target": 999,
+  "targets": [
+    {
+      "conservation_refs": [
+        "3PWH",
+        "4EIY",
+        "5IU4"
+      ],
+      "dude_target": "aa2ar",
+      "library": "water_aa2ar",
+      "pdb_id": "3EML",
+      "water_rationale": "A2A receptor has a conserved ligand-site water network."
+    },
+    {
+      "conservation_refs": [
+        "1UY6",
+        "1YER",
+        "1YC4"
+      ],
+      "dude_target": "hs90a",
+      "library": "water_hs90a",
+      "pdb_id": "1UYG",
+      "water_rationale": "HSP90 N-terminal ligands frequently retain or displace ordered pocket waters."
+    },
+    {
+      "conservation_refs": [
+        "1HXW",
+        "1HSG",
+        "2Q3K"
+      ],
+      "dude_target": "hivpr",
+      "library": "water_hivpr",
+      "pdb_id": "1XL2",
+      "water_rationale": "HIV protease has a conserved flap/ligand bridging-water motif."
+    }
+  ],
+  "water_policies": [
+    "remove_all",
+    "site_only",
+    "keep_all"
+  ]
+}

@@ -1,0 +1,1414 @@
+import os
+import re
+import subprocess
+import shutil
+import sys
+import math
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Set, Tuple
+import logging
+import warnings
+from Bio import BiopythonWarning
+
+from protein_prep.metal.retention import rescue_retained_hets
+from protein_prep.pdb_records import line_xyz
+from protein_prep.pdb_fixer_runtime import (
+    fix_pdb_elements,
+    load_canonical_cofactors,
+    load_canonical_metals,
+    load_canonical_waters,
+)
+
+# this filters out the occupancy messages, not  really relevant to us. occupancy from my understanding
+# is not used by reduce, vina or anything else here
+warnings.filterwarnings("ignore", category=BiopythonWarning, module="Bio.PDB.PDBIO")
+
+try:
+    # Prefer the newer loader/validator if present
+    from config.runtime_config import load_config as _load_cfg_new, validate_config as _validate_cfg
+
+    _CFG = _load_cfg_new("config.txt")
+    try:
+        _validate_cfg(_CFG)
+    except Exception:
+        pass
+except Exception:
+    _CFG = {}
+
+
+_CANONICAL_CACHE: dict[str, Set[str]] | None = None
+_HET_FLAG_CACHE: dict[str, Optional[str]] = {}
+_HET_SUPPORT_NOTE_CACHE: dict[str, str] = {}
+
+
+def _active_env_bin() -> Path:
+    return Path(sys.executable).resolve().parent
+
+
+def _prepend_active_env_bin() -> None:
+    env_bin = _active_env_bin()
+    if not env_bin.is_dir():
+        return
+    path_parts = os.environ.get("PATH", "").split(os.pathsep)
+    env_bin_str = str(env_bin)
+    if env_bin_str not in path_parts:
+        os.environ["PATH"] = os.pathsep.join([env_bin_str, *path_parts])
+
+
+_prepend_active_env_bin()
+
+
+@dataclass
+class _ProbeResult:
+    metals: int = 0
+    cofactors: int = 0
+    waters: int = 0
+
+
+def _cfg(key: str, default: str = "", legacy_key: str | None = None) -> str:
+    v = os.environ.get(key)
+    if v is not None and v != "":
+        return str(v)
+    if key in _CFG and str(_CFG.get(key)) != "":
+        return str(_CFG.get(key))
+    if legacy_key and legacy_key in _CFG and str(_CFG.get(legacy_key)) != "":
+        return str(_CFG.get(legacy_key))
+    return default
+
+
+def _pick_reduce_exe() -> str:
+    # 1) explicit config/env
+    explicit = (
+        os.environ.get("REDUCE_EXE")
+        or os.environ.get("REDUCE_BIN")
+        or _cfg("REDUCE_EXE", "", "reduce_exe")
+    )
+    if explicit and Path(explicit).exists():
+        return explicit
+    # 2) repo-local build
+    here = Path(__file__).resolve().parent
+    # Also try the repository root's tools/ directory (../../tools/reduce/...)
+    repo_root = here.parents[1]
+    cand_root = repo_root / "tools" / "reduce" / "reduce_src" / "reduce"
+    if cand_root.exists() and os.access(str(cand_root), os.X_OK):
+        return str(cand_root)
+    cand = here / "tools" / "reduce" / "reduce_src" / "reduce"
+    if cand.exists() and os.access(str(cand), os.X_OK):
+        return str(cand)
+    # 3) active Python env, then PATH
+    env_reduce = _active_env_bin() / "reduce"
+    if env_reduce.exists() and os.access(str(env_reduce), os.X_OK):
+        return str(env_reduce)
+    which = shutil.which("reduce") or shutil.which("reduce.exe")
+    return which or "reduce"
+
+
+def _het_dict_path() -> str | None:
+    hd = os.environ.get("REDUCE_HET_DICT") or _cfg(
+        "REDUCE_HET_DICT", "", "reduce_het_dict"
+    )
+    if hd and Path(hd).is_file():
+        return hd
+    # repo default if bundled
+    here = Path(__file__).resolve().parent
+    repo_root = here.parents[1]
+    default_root = repo_root / "tools" / "reduce" / "reduce_wwPDB_het_dict.txt"
+    if default_root.is_file():
+        return str(default_root)
+    default = here / "tools" / "reduce" / "reduce_wwPDB_het_dict.txt"
+    return str(default) if default.is_file() else None
+
+
+REDUCE_EXE = _pick_reduce_exe()
+logging.info("propka_wire: Using Reduce at %s", REDUCE_EXE)
+
+
+def _count_atoms_pdb(path: Path) -> int:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            return sum(1 for ln in fh if ln.startswith(("ATOM  ", "HETATM")))
+    except Exception:
+        return 0
+
+
+def _sha1_of_file(p: Path) -> str:
+    h = hashlib.sha1()
+    try:
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _peek_lines(p: Path, n: int = 12) -> list[str]:
+    try:
+        return p.read_text(errors="ignore").splitlines()[:n]
+    except Exception:
+        return []
+
+
+# --------------------
+# Small exec helpers
+# --------------------
+def _which(name: str) -> Optional[str]:
+    env_candidate = _active_env_bin() / name
+    if env_candidate.exists() and os.access(str(env_candidate), os.X_OK):
+        return str(env_candidate)
+    p = shutil.which(name)
+    return p if p else None
+
+
+def _has_exe(name: str) -> Optional[str]:
+    return _which(name)
+
+
+def _ensure_exec(env_var: str, fallback_names: list[str]) -> Optional[str]:
+    cand = os.environ.get(env_var, "")
+    if cand and Path(cand).exists():
+        return cand
+    for nm in fallback_names:
+        p = _which(nm)
+        if p:
+            return p
+    return None
+
+
+def _canonical_sets(
+    cfg: Mapping[str, Any] | None = None,
+) -> tuple[Set[str], Set[str], Set[str]]:
+    global _CANONICAL_CACHE
+    if cfg is not None and not isinstance(cfg, Mapping):
+        cfg = None
+
+    if cfg is not None:
+        metals = set(load_canonical_metals(cfg))
+        cofactors = set(load_canonical_cofactors(cfg))
+        waters = set(load_canonical_waters(cfg))
+        return metals, cofactors, waters
+
+    if _CANONICAL_CACHE is None:
+        metals = set(load_canonical_metals(None))
+        cofactors = set(load_canonical_cofactors(None))
+        waters = set(load_canonical_waters(None))
+        _CANONICAL_CACHE = {
+            "metals": metals,
+            "cofactors": cofactors,
+            "waters": waters,
+        }
+    return (
+        set(_CANONICAL_CACHE.get("metals", set())),
+        set(_CANONICAL_CACHE.get("cofactors", set())),
+        set(_CANONICAL_CACHE.get("waters", set())),
+    )
+
+
+def _resolve_keep_het_policy(cfg: Mapping[str, Any] | None = None) -> str:
+    valid = {"AUTO", "ALWAYS", "NEVER"}
+    env_raw = (os.environ.get("P2PQR_KEEP_HET") or "").strip().upper()
+    if env_raw in valid:
+        return env_raw
+    if env_raw:
+        logger.warning("[pdb2pqr.policy] invalid_env_value=%s fallback=AUTO", env_raw)
+
+    if cfg and isinstance(cfg, Mapping):
+        cfg_raw = str(cfg.get("P2PQR_KEEP_HET", "")).strip().upper()
+        if cfg_raw in valid:
+            return cfg_raw
+        if cfg_raw:
+            logger.warning(
+                "[pdb2pqr.policy] invalid_cfg_value=%s fallback=AUTO", cfg_raw
+            )
+    return "AUTO"
+
+
+def _classify_pdb2pqr_het_support(
+    output: str,
+) -> tuple[Optional[str], str]:
+    candidates = ["--keep-hetatoms", "--keep-hetatm", "--keep-hetero", "--keep-het"]
+    detected = next((cand for cand in candidates if cand in output), None)
+    if detected is not None:
+        return detected, f"generic_flag:{detected}"
+    if "--ligand" in output or "--reuse-ligand-mol2-files" in output:
+        return None, "single_ligand_mol2_only"
+    return None, "generic_flag_absent"
+
+
+def _read_pdb2pqr_help(exe: str) -> str | None:
+    try:
+        help_run = subprocess.run(
+            [exe, "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    return (help_run.stdout or "") + "\n" + (help_run.stderr or "")
+
+
+def _detect_keep_hetero_flag(exe: str) -> Optional[str]:
+    if not exe:
+        return None
+    if exe in _HET_FLAG_CACHE:
+        return _HET_FLAG_CACHE[exe]
+
+    output = _read_pdb2pqr_help(exe)
+    if output is None:
+        detected: Optional[str] = None
+        support_note = "help_unavailable"
+    else:
+        detected, support_note = _classify_pdb2pqr_het_support(output)
+
+    _HET_FLAG_CACHE[exe] = detected
+    _HET_SUPPORT_NOTE_CACHE[exe] = support_note
+    if detected is None:
+        logger.debug(
+            "[pdb2pqr.policy] generic_keep_het_flag_unavailable support=%s exe=%s",
+            support_note,
+            exe,
+        )
+    return detected
+
+
+def _probe_pdb_classes(
+    pdb_path: Path,
+    metals: Set[str],
+    cofactors: Set[str],
+    waters: Set[str],
+) -> _ProbeResult:
+    result = _ProbeResult()
+    try:
+        lines = pdb_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return result
+
+    for line in lines:
+        if not line.startswith(("ATOM  ", "HETATM")):
+            continue
+
+        resname = line[17:20].strip().upper()
+        element = line[76:78].strip().upper()
+
+        if resname in waters:
+            result.waters += 1
+            continue
+
+        candidate_metal = (resname in metals) or (
+            element in metals if element else False
+        )
+        counted_metal = bool(element) and ((element in metals) or (resname in metals))
+
+        if candidate_metal:
+            if counted_metal:
+                result.metals += 1
+            continue
+
+        if resname in cofactors:
+            result.cofactors += 1
+
+    return result
+
+
+def _needs_elemfix(pre: _ProbeResult, post: _ProbeResult) -> bool:
+    return (pre.metals > 0 and post.metals == 0) or (
+        pre.cofactors > 0 and post.cofactors == 0
+    )
+
+
+def _elements_column_blank(pdb_path: Path) -> bool:
+    try:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as handle:
+            found = False
+            for line in handle:
+                if not line.startswith(("ATOM  ", "HETATM")):
+                    continue
+                found = True
+                if line[76:78].strip():
+                    return False
+            return found
+    except Exception:
+        return False
+
+
+# --------------------
+# PDB2PQR / PROPKA
+# --------------------
+def _strip_pqr_to_pdb(pqr_path: Path, pdb_out: Path) -> None:
+    """Convert PQR to PDB by dropping charge/radius columns, keeping coords & Hs."""
+    lines = []
+    for line in Path(pqr_path).read_text().splitlines():
+        if line.startswith(("ATOM  ", "HETATM")):
+            # Keep columns 1..54 (xyz), plus element in cols 77..78 if present
+            core = line[:54]
+            element = line[76:78] if len(line) >= 78 else ""
+            # Re-pad to a minimal valid PDB ATOM/HETATM line
+            new = f"{core:54s}{'':6s}{'':6s}{element:>2s}\n"
+            lines.append(new)
+        else:
+            lines.append(line + ("\n" if not line.endswith("\n") else ""))
+    pdb_out.write_text("".join(lines))
+
+
+def _copy_if_exists(src: Path, dst: Path) -> Optional[Path]:
+    if src and src.exists():
+        shutil.copy2(src, dst)
+        return dst
+    return None
+
+
+def _pick_propka_exe() -> Optional[str]:
+    """
+    Choose PROPKA CLI with precedence:
+      1) config.txt (key: PROPKA_EXE, via installation.load_config)
+      2) env var PROPKA_EXE
+      3) PATH: propka31 / propka30 / propka
+    """
+    # 1) normalized config loader
+    try:
+        root = Path(__file__).resolve().parents[2]
+        cfg = _load_cfg_new(config_path=str(root / "config.txt"), base_dir=root)
+    except Exception:
+        cfg = {}
+    if isinstance(cfg, dict):
+        cand = str(cfg.get("PROPKA_EXE", "")).strip()
+        if cand and Path(cand).exists():
+            return cand
+
+    # 2) env
+    env_cand = os.environ.get("PROPKA_EXE", "").strip()
+    if env_cand and Path(env_cand).exists():
+        return env_cand
+
+    # 3) PATH fallbacks
+    return (
+        _has_exe("propka31")
+        or _has_exe("propka30")
+        or _has_exe("propka3")
+        or _has_exe("propka")
+    )
+
+
+def pdb2pqr_protonate(
+    pdb_in: str,
+    target_ph: float,
+    out_dir: str | Path,
+    ff: str = "amber",
+    keep_waters: bool = True,
+    *,
+    variant: Optional[str] = None,
+    cfg: Mapping[str, Any] | None = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Run PDB2PQR (with PROPKA) and guard against hetero loss."""
+    pdb2pqr = _ensure_exec("PDB2PQR_EXE", ["pdb2pqr"])
+    if not pdb2pqr:
+        logger.warning("pdb2pqr not found on PATH; skipping pre-protonation.")
+        return None, None
+
+    pdb_in_path = Path(pdb_in).resolve()
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = pdb_in_path.stem
+    tag = str(target_ph).replace(".", "_")
+    pqr_out = out_dir / f"{base}.p{tag}.pqr"
+    pdb_out = out_dir / f"{base}.p{tag}.pdb"
+    pk_log = out_dir / f"{base}.propka_pka.txt"
+
+    cfg_obj: Mapping[str, Any] | None = (
+        cfg
+        if isinstance(cfg, Mapping)
+        else (_CFG if isinstance(_CFG, Mapping) else None)
+    )
+    metals, cofactors, waters = _canonical_sets(cfg_obj)
+    pre_probe = _probe_pdb_classes(Path(pdb_in), metals, cofactors, waters)
+    logger.info(
+        "(3a) p2pqr BEFORE: metals=%d cofactors=%d waters=%d file=%s",
+        pre_probe.metals,
+        pre_probe.cofactors,
+        pre_probe.waters,
+        str(pdb_in),
+    )
+
+    policy = _resolve_keep_het_policy(cfg_obj)
+    variant_norm = (variant or "").strip().upper()
+    keep_hetero: bool
+    if policy == "ALWAYS":
+        keep_hetero = True
+    elif policy == "NEVER":
+        keep_hetero = False
+    else:
+        if variant_norm == "HOLO":
+            keep_hetero = True
+        elif pre_probe.metals > 0 or pre_probe.cofactors > 0:
+            keep_hetero = True
+        else:
+            keep_hetero = False
+
+    het_flag = _detect_keep_hetero_flag(pdb2pqr) if keep_hetero else None
+    logger.info(
+        "[pdb2pqr.policy] keep_hetatoms_requested=%s generic_cli_supported=%s policy=%s variant=%s metals_pre=%d cofactors_pre=%d",
+        "true" if keep_hetero else "false",
+        "true" if het_flag else "false",
+        policy,
+        variant_norm or "NONE",
+        pre_probe.metals,
+        pre_probe.cofactors,
+    )
+
+    summary_keep = "true" if keep_hetero else "false"
+    logger.info(
+        "[pdb2pqr] keep_hetatoms=%s in=%s out=%s",
+        summary_keep,
+        str(pdb_in),
+        str(pdb_out),
+    )
+
+    # PDB2PQR 3.x expects uppercase FF names; default to AMBER if unknown
+    ALLOWED_FF = {"AMBER", "CHARMM", "PARSE", "TYL06", "PEOEPB", "SWANSON"}
+    ff_norm = (ff or "AMBER").upper()
+    if ff_norm not in ALLOWED_FF:
+        ff_norm = "AMBER"
+    cmd = [
+        pdb2pqr,
+        f"--ff={ff_norm}",
+        f"--with-ph={target_ph:.2f}",
+        "--keep-chain",
+        "--titration-state-method=propka",
+        # note: default is to keep waters; only add --drop-water if requested
+    ]
+    if not keep_waters:
+        cmd.append("--drop-water")
+
+    if keep_hetero:
+        if het_flag:
+            cmd.append(het_flag)
+        else:
+            support_note = _HET_SUPPORT_NOTE_CACHE.get(
+                pdb2pqr,
+                "generic_flag_absent",
+            )
+            logger.info(
+                "[pdb2pqr.policy] generic_het_retention=unsupported support=%s atlas_retention=audited_rescue",
+                support_note,
+            )
+    cmd.extend([str(pdb_in_path), str(pqr_out)])
+
+    try:
+        subprocess.run(
+            cmd, check=True, text=True, capture_output=True, cwd=str(out_dir)
+        )
+        _strip_pqr_to_pdb(pqr_out, pdb_out)
+        # Copy PROPKA table if it was emitted near the PQR (cwd was set to out_dir)
+        pka_candidate = next((p for p in Path(out_dir).glob("*.propka*")), None)
+        if pka_candidate is not None:
+            _copy_if_exists(pka_candidate, pk_log)
+        logger.info(
+            "[pdb2pqr] ph=%.2f out=%s pkas=%s",
+            float(target_ph),
+            str(pdb_out),
+            str(pk_log.exists()),
+        )
+
+        post_raw = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
+        logger.info(
+            "(3b) p2pqr AFTER (raw): metals=%d cofactors=%d waters=%d file=%s",
+            post_raw.metals,
+            post_raw.cofactors,
+            post_raw.waters,
+            str(pdb_out),
+        )
+
+        post_elemfix = post_raw
+        elemfix_ran = False
+        if _elements_column_blank(pdb_out):
+            try:
+                fix_pdb_elements(str(pdb_out))
+                elemfix_ran = True
+            except Exception as exc:
+                logger.warning(
+                    "[pdb2pqr.elemfix] failed error=%s file=%s", exc, str(pdb_out)
+                )
+        elif _needs_elemfix(pre_probe, post_raw):
+            try:
+                fix_pdb_elements(str(pdb_out))
+                elemfix_ran = True
+            except Exception as exc:
+                logger.warning(
+                    "[pdb2pqr.elemfix] failed error=%s file=%s", exc, str(pdb_out)
+                )
+
+        if elemfix_ran:
+            post_elemfix = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
+            logger.info(
+                "(3c) p2pqr AFTER (elemfix): metals=%d cofactors=%d waters=%d file=%s",
+                post_elemfix.metals,
+                post_elemfix.cofactors,
+                post_elemfix.waters,
+                str(pdb_out),
+            )
+        else:
+            post_elemfix = post_raw
+
+        if _needs_elemfix(pre_probe, post_elemfix):
+            inserted = rescue_retained_hets(
+                source_pdb=pdb_in,
+                target_pdb=pdb_out,
+                stage="pdb2pqr",
+                cfg=cfg_obj,
+                logger=logger,
+            )
+            post_rescue = _probe_pdb_classes(pdb_out, metals, cofactors, waters)
+            logger.info(
+                "[p2pqr.rescue] attempted=true reinserted=%d metals=%d cofactors=%d file=%s",
+                inserted,
+                post_rescue.metals,
+                post_rescue.cofactors,
+                str(pdb_out),
+            )
+
+        return str(pdb_out), (str(pk_log) if pk_log.exists() else None)
+
+    except subprocess.CalledProcessError as e:
+        # Write full stdout/stderr so we can see why pdb2pqr failed
+        fail_txt = out_dir / f"{base}.pdb2pqr.failed.txt"
+        try:
+            with open(fail_txt, "w", encoding="utf-8") as fh:
+                if e.stdout:
+                    fh.write(e.stdout)
+                    fh.write("\n")
+                fh.write("--- STDERR ---\n")
+                if e.stderr:
+                    fh.write(e.stderr)
+        except Exception:
+            pass
+        logger.error(
+            "pdb2pqr failed at pH %.2f rc=%s; see %s",
+            target_ph,
+            str(e.returncode),
+            str(fail_txt),
+        )
+        return None, None
+    except Exception as e:
+        logger.error("pdb2pqr failed at pH %.2f: %s", target_ph, e)
+        return None, None
+
+
+# --------------------
+# Local titration by PROPKA states
+# --------------------
+def _collect_residues_within(
+    pdb_in: str, center_xyz: Tuple[float, float, float], radius_A: float
+) -> Set[Tuple[str, int, str]]:
+    """Collect (chain, resi, resname) for residues with any atom within radius_A."""
+    cx, cy, cz = center_xyz
+    out: Set[Tuple[str, int, str]] = set()
+    for line in Path(pdb_in).read_text().splitlines():
+        if not line.startswith(("ATOM  ", "HETATM")):
+            continue
+        xyz = line_xyz(line)
+        if xyz is None:
+            continue
+        try:
+            resn = line[17:20].strip().upper()
+            chain = line[21].strip() or "?"
+            resi = int(line[22:26])
+        except Exception:
+            continue
+        x, y, z = xyz
+        if (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2 <= radius_A**2:
+            out.add((chain, resi, resn))
+    return out
+
+
+# --- BEGIN: PROPKA-only prestate generator (no hydrogens here) ---
+
+_log = logging.getLogger("propka_wire")
+if not _log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[propka_wire] %(message)s"))
+    _log.addHandler(_h)
+_log.setLevel(logging.INFO)
+logger = _log  # lazy little  shim
+# Residue rename rules
+ACIDS = {"ASP", "GLU", "CYS", "TYR"}
+BASES = {"HIS", "LYS", "ARG"}
+RENAMES = {
+    ("ASP", True): "ASH",
+    ("ASP", False): "ASP",
+    ("GLU", True): "GLH",
+    ("GLU", False): "GLU",
+    ("CYS", False): "CYM",  # deprotonated sulfur; protonated stays CYS
+    ("LYS", False): "LYN",  # deprotonated lysine; protonated stays LYS
+    # HIS needs tautomer; default neutral = HIE; protonated = HIP; forced alternative neutral = HID (rarely)
+}
+
+# Accept blank/lowercase chain and optional insertion code next to resseq.
+_PKA_RE = re.compile(
+    r"^\s*(\d+)\s+([A-Za-z]{3})\s+(\S?)\s+(\d+)([A-Za-z]?)\s+([-\d\.]+)"
+)
+# A more permissive matcher for newer PROPKA tables (3.5.x can vary spacing/columns)
+_PKA_RE2 = re.compile(
+    r"^\s*\d+\s+([A-Za-z]{3})\s+(\S?)\s+(\d+)[A-Za-z]?\s+([-+]?\d+(?:\.\d+)?)\s*$"
+)
+
+
+def _run_propka(pdb_in: Path, ph: float, out_dir: Path) -> Optional[Path]:
+    """
+    Run propka with an explicit pH and return a per-pH .pka:
+      <basename>.pH{ph_tag}.pka  (e.g., 6LYZ_cleaned.pH7_00.pka)
+
+    Note: PROPKA 3.5.x sometimes omits an explicit “pH=X” banner in the .pka header.
+    We therefore no longer reject based on header content; we accept any non-empty .pka.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ph_tag = f"{ph:.2f}".replace(".", "_")
+    pka_file = out_dir / f"{pdb_in.stem}.pH{ph_tag}.pka"
+    dbg_file = out_dir / (pdb_in.stem + f".pH{ph_tag}.propka.debug.txt")
+
+    exe = _pick_propka_exe()
+    if not exe:
+        _log.warning("[propka.exec] no propka exe found; skipping")
+        return None
+
+    cmd = [exe, str(pdb_in), "--pH", f"{ph:.2f}"]
+
+    tried = []
+    try:
+        # Run in out_dir so propka emits its default-named outputs there
+        cp = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True)
+        tried.append((cmd, cp.returncode))
+
+        # PROPKA typically writes <basename>.pka — capture that, then copy to our per-pH name
+        default_pka = out_dir / f"{pdb_in.stem}.pka"
+        if default_pka.exists() and default_pka.stat().st_size > 0:
+            shutil.copy2(default_pka, pka_file)
+
+        # Write a detailed debug trace (first 200 lines for format triage)
+        with open(dbg_file, "w", encoding="utf-8") as fh:
+            fh.write(f"[propka.exec] cwd={out_dir}\n")
+            for tcmd, rc in tried:
+                fh.write(f"[propka.try] rc={rc} cmd={' '.join(tcmd)}\n")
+            cand = pka_file if pka_file.exists() else (out_dir / f"{pdb_in.stem}.pka")
+            if cand.exists():
+                fh.write(
+                    f"[propka.out] exists=1 size={cand.stat().st_size} sha1={_sha1_of_file(cand)}\n"
+                )
+                try:
+                    lines = cand.read_text(errors="ignore").splitlines()
+                    for ln in lines[:200]:
+                        fh.write(f"[propka.pka.peek] {ln}\n")
+                except Exception as e:
+                    fh.write(f"[propka.peek.error] {e}\n")
+            else:
+                fh.write("[propka.out] exists=0\n")
+
+    except FileNotFoundError:
+        _log.warning("[propka.exec] exe missing; tried=%s", exe)
+    except Exception as e:
+        _log.error("[propka.exec] ph=%.2f failed: %s", ph, e)
+
+    if pka_file.exists() and pka_file.stat().st_size > 0:
+        _log.info(
+            "[propka.exec] ph=%.2f wrote_pka=1 sha1=%s size=%d cwd=%s",
+            ph,
+            _sha1_of_file(pka_file),
+            pka_file.stat().st_size,
+            str(out_dir),
+        )
+        # Consistency: filename pH tag vs runtime pH
+        ph_from_name = parse_ph_from_name(pka_file.name)
+        if ph_from_name is not None and abs(ph_from_name - float(ph)) > 1e-2:
+            _log.warning(
+                "[propka.exec] pH tag mismatch: name=%.2f runtime=%.2f file=%s",
+                ph_from_name,
+                float(ph),
+                pka_file.name,
+            )
+        # Quick fingerprint (rows via tolerant parser)
+        try:
+            rows = len(_parse_pka_table(pka_file))
+            _log.info(
+                "[propka.fingerprint] ph=%.2f file=%s size=%d sha1=%s rows=%d",
+                float(ph),
+                pka_file.name,
+                pka_file.stat().st_size,
+                _sha1_of_file(pka_file),
+                rows,
+            )
+        except Exception:
+            pass
+        return pka_file
+
+    _log.warning("[propka.exec] ph=%.2f wrote_pka=0 cwd=%s", ph, str(out_dir))
+    return None
+
+
+def parse_ph_from_name(name: str) -> Optional[float]:
+    """
+    Extract pH from filenames like ..._pH8_5.pka, ..._pH7.00.pka, ..._pH9.pka (case-insensitive).
+    Returns float pH if found, else None.
+    """
+    s = (name or "").strip()
+    m = re.search(r"(?i)(?:^|[._-])pH\s*([0-9]+)(?:[_\. ]([0-9]+))?", s)
+    if not m:
+        return None
+    major = m.group(1)
+    minor = m.group(2) or ""
+    try:
+        if minor != "":
+            return float(f"{major}.{minor}")
+        return float(major)
+    except Exception:
+        return None
+
+
+def _parse_pka_table(pka_path: Path) -> Dict[Tuple[str, int, str], float]:
+    """
+    Robust PROPKA parser for v3.1–3.5.1 tables.
+
+    Returns a dict keyed by (RESN, RESID, CHAIN) -> pKa.
+    Also stores chain-agnostic fallback keys (CHAIN="").
+    """
+    table: Dict[Tuple[str, int, str], float] = {}
+    if not pka_path or not pka_path.exists():
+        _log.info("[propka.pka.stats] parsed_rows=0 unique_keys=0 (no file)")
+        return table
+
+    raw = pka_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+
+    # --- Try legacy strictly-formatted pattern first (for older propka dumps) ---
+    legacy_rows = 0
+    for line in raw:
+        m = _PKA_RE.match(line)
+        if not m:
+            continue
+        _idx, resn, chain, resi, icode, pka = m.groups()
+        try:
+            resn_u = resn.upper()
+            if not re.fullmatch(r"[A-Z]{3}", resn_u):
+                continue  # skip termini like C-, N+
+            chain_u = (chain or "").upper() or "_"
+            resi_i = int(resi)  # insertion code is ignored
+            val = float(pka)  # tolerate sentinel 99.99 etc.
+        except Exception:
+            continue
+        table[(resn_u, resi_i, chain_u)] = val
+        table[(resn_u, resi_i, "")] = val
+        legacy_rows += 1
+
+    if legacy_rows > 0:
+        _log.info(
+            "[propka.pka.stats] parsed_rows=%d unique_keys=%d (legacy pattern)",
+            legacy_rows,
+            len(table),
+        )
+        items = list(table.items())[:10]
+        sample = "; ".join([f"{k[2]}:{k[1]}:{k[0]}={v:.2f}" for k, v in items])
+        _log.info("[propka.pka.sample] %s", sample)
+        return table
+
+    # --- SUMMARY block parser (tolerant across 3.x variants) ---
+    in_summary = False
+    parsed_rows = 0
+    for line in raw:
+        U = line.upper()
+        if not in_summary:
+            if "SUMMARY OF THIS PREDICTION" in U:
+                in_summary = True
+            continue
+
+        # Stop at the first major separator/footer after we've parsed rows
+        if re.search(r"-{5,}", line) and parsed_rows > 0:
+            break
+        if (
+            "FREE ENERGY" in U or "PROTEIN CHARGE" in U or "REFERENCES" in U
+        ) and parsed_rows > 0:
+            break
+
+        s = line.strip()
+        if not s or set(s) <= {"-"}:
+            continue
+        if s.upper().startswith(("GROUP", "RESIDUE")):
+            continue
+
+        toks = s.split()
+        if len(toks) < 3:
+            continue
+
+        # Token 0 must be a 3-letter residue name (skip terminal groups like C-, N+)
+        resn_tok = toks[0].upper()
+        if not re.fullmatch(r"[A-Z]{3}", resn_tok):
+            continue
+
+        # Token 1 is residue index, possibly with insertion code (e.g., 35A)
+        m_resi = re.match(r"(\d+)", toks[1])
+        if not m_resi:
+            continue
+        resi_i = int(m_resi.group(1))
+
+        # Token 2 is either a chain ID (single letter) or the first numeric pKa
+        chain_u = "_"
+        pka_val: Optional[float] = None
+        idx_from = 2
+        if len(toks[2]) == 1 and toks[2].isalpha():
+            chain_u = toks[2].upper()
+            idx_from = 3
+
+        # Find first numeric token from idx_from onward as the pKa
+        for tk in toks[idx_from:]:
+            if re.match(r"^[-+]?\d+(?:\.\d+)?$", tk):
+                try:
+                    pka_val = float(tk)
+                except Exception:
+                    pka_val = None
+                break
+
+        if pka_val is None:
+            continue
+
+        key1 = (resn_tok, resi_i, chain_u)
+        key2 = (resn_tok, resi_i, "")
+        table[key1] = pka_val
+        table[key2] = pka_val
+        parsed_rows += 1
+
+    _log.info(
+        "[propka.pka.stats] parsed_rows=%d unique_keys=%d", parsed_rows, len(table)
+    )
+    if parsed_rows:
+        items = list(table.items())[:10]
+        sample = "; ".join([f"{k[2]}:{k[1]}:{k[0]}={v:.2f}" for k, v in items])
+        _log.info("[propka.pka.sample] %s", sample)
+    else:
+        _log.warning("[propka.pka.sample] no rows parsed; verify .pka format")
+
+    return table
+
+
+def _within_sphere(
+    x: float, y: float, z: float, cx: float, cy: float, cz: float, r2: float
+) -> bool:
+    dx, dy, dz = x - cx, y - cy, z - cz
+    return (dx * dx + dy * dy + dz * dz) <= r2
+
+
+def _choose_his_name(delta: float) -> str:
+    """
+    HIS policy with gentle hysteresis:
+      delta = pKa - pH
+      if delta >= +0.5 -> HIP (+1)
+      else -> neutral HIE (dock-friendly default)
+    """
+    return "HIP" if delta >= 0.5 else "HIE"
+
+
+def _protonated_is_true_for(resname: str, pka_minus_ph: float) -> Optional[bool]:
+    """
+    Gentle hysteresis to avoid flip-flopping:
+      ACIDS (ASP,GLU):   neutral (ASH/GLH) if (pKa - pH) >= +0.5 -> protonated=True
+                         else deprotonated (ASP/GLU) -> protonated=False
+      CYS:               deprotonate to CYM only when (pH - pKa) >= 1.0
+      TYR:               keep TYR; only consider deprot when (pH - pKa) >= 1.0 (we keep name 'TYR')
+      BASES (LYS):       deprotonate to LYN only when (pH - pKa) >= 1.0
+      ARG:               practically always protonated for docking; leave as-is (True)
+    """
+    r = resname.upper()
+    d = pka_minus_ph  # = pKa - pH
+
+    if r in {"ASP", "GLU"}:
+        # protonated (neutralized name) when delta >= +0.5
+        return True if d >= 0.5 else False
+
+    if r == "CYS":
+        # deprotonate only when pH - pKa >= 1.0  =>  delta <= -1.0
+        return (
+            False if d <= -1.0 else True
+        )  # True==protonated (stay CYS), False==deprot (-> CYM)
+
+    if r == "TYR":
+        # keep protonated unless strong evidence to deprotonate
+        return True if d > -1.0 else False
+
+    if r == "LYS":
+        # deprotonate (-> LYN) only when pH - pKa >= 1.0
+        return False if d <= -1.0 else True
+
+    if r == "ARG":
+        return True  # keep protonated for docking
+
+    return None  # HIS handled separately
+
+
+def _rename_line(line: str, new3: str) -> str:
+    # PDB residue name columns 18-20 (1-indexed), i.e., [17:20] 0-indexed
+    return line[:17] + f"{new3:>3}" + line[20:]
+
+
+def _extract_xyz(line: str) -> Tuple[float, float, float]:
+    xyz = line_xyz(line)
+    if xyz is None:
+        raise ValueError(f"could not parse PDB coordinates from record: {line[:54]!r}")
+    return xyz
+
+
+def apply_propka_states(
+    cleaned_receptor_pdb: str,
+    center: Tuple[float, float, float],
+    radius: float,
+    ph: float,
+    out_dir: str,
+    tag: str,
+) -> Tuple[str, str, int]:
+    """
+    Produce PROPKA-informed, pocket-localized renames only (or whole-protein in GLOBAL mode).
+    Inputs:
+      cleaned_receptor_pdb: path to base receptor (no hydrogens required)
+      center: (cx,cy,cz), sphere center in Å
+      radius: sphere radius in Å; if radius >= 1e6 or math.isinf(radius) => GLOBAL mode
+      ph: target environmental pH
+      out_dir: directory for outputs
+      tag: filename tag (e.g., '6LYZ_pH7_0')
+    Outputs:
+      (prestate_pdb_path, pka_path, n_renamed)
+    Side effects:
+      - Writes <tag>.pka (if propka ran)
+      - Writes <tag>.prestate.pdb (never empty; guard copies input when needed)
+    """
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    pdb_in = Path(cleaned_receptor_pdb)
+    prestate_pdb = out_dir_path / f"{tag}.prestate.pdb"
+    pka_out = out_dir_path / f"{tag}.pka"
+
+    # GLOBAL titration sentinel (preserves call sites; pass a huge radius to enable)
+    global_mode = (radius >= 1e6) or math.isinf(radius)
+    cx, cy, cz = center
+    r2 = float("inf") if global_mode else (radius * radius)
+
+    def in_scope(x: float, y: float, z: float) -> bool:
+        # Whole protein in GLOBAL mode; otherwise pocket sphere
+        if global_mode:
+            return True
+        dx, dy, dz = x - cx, y - cy, z - cz
+        return (dx * dx + dy * dy + dz * dz) <= r2
+
+    # 1) Run PROPKA and persist a copy of the pKa table as <tag>.pka
+    pka_file = _run_propka(pdb_in, ph, out_dir_path)
+    if pka_file and pka_file.exists():
+        try:
+            shutil.copy2(pka_file, pka_out)
+        except Exception:
+            if pka_file.resolve() != pka_out.resolve():
+                shutil.copyfile(pka_file, pka_out)
+    else:
+        # No pKa table; proceed with rename heuristics = none (n_renamed may be 0)
+        pka_out.touch(exist_ok=True)
+
+    pka_table = _parse_pka_table(pka_out) if pka_out.exists() else {}
+    # --- Diagnostics: fingerprint and quick peek of the PROPKA table for this pH ---
+    if pka_out.exists() and pka_out.stat().st_size > 0:
+        pka_sha1 = _sha1_of_file(pka_out)
+        _log.info(
+            "[propka.fingerprint] ph=%.2f file=%s size=%d sha1=%s rows=%d",
+            ph,
+            pka_out.name,
+            pka_out.stat().st_size,
+            pka_sha1,
+            len(pka_table),
+        )
+        for ln in _peek_lines(pka_out, 8):
+            _log.info("[propka.table.peek] %s", ln)
+    else:
+        _log.info(
+            "[propka.fingerprint] ph=%.2f file=%s size=0 sha1= rows=%d (no table)",
+            ph,
+            pka_out.name,
+            len(pka_table),
+        )
+
+    # --- Diagnostics: enumerate residues in-scope and rename choices (cap to avoid spam) ---
+    _diag_shown = 0
+    _diag_cap = 40  # don’t flood logs; raise if you want more
+    try:
+        with open(cleaned_receptor_pdb, "r", errors="ignore") as _fh:
+            seen_keys = set()
+            for _ln in _fh:
+                if not _ln.startswith(("ATOM  ", "HETATM")):
+                    continue
+                xyz = line_xyz(_ln)
+                if xyz is None:
+                    continue
+                x, y, z = xyz
+                if not in_scope(x, y, z):
+                    continue
+                resn = _ln[17:20].strip().upper()
+                chain = _ln[21].strip() or " "
+                resi = int(_ln[22:26])
+                k = (resn, resi, chain)
+                if k in seen_keys:
+                    continue
+                seen_keys.add(k)
+
+                pka = (
+                    pka_table.get((resn, resi, chain))
+                    or pka_table.get((resn, resi, ""))
+                    or pka_table.get((resn, resi, "?"))
+                    or None
+                )
+
+                if resn == "HIS":
+                    new3 = (
+                        _choose_his_name((pka - ph) if pka is not None else -999.0)
+                        if pka is not None
+                        else None
+                    )
+                elif resn in ACIDS or resn in BASES:
+                    if pka is not None:
+                        prot = _protonated_is_true_for(resn, pka - ph)
+                        new3 = (
+                            RENAMES.get((resn, True))
+                            if prot is True
+                            else RENAMES.get((resn, False))
+                            if prot is False
+                            else None
+                        )
+                    else:
+                        new3 = None
+                else:
+                    new3 = None
+
+                if _diag_shown < _diag_cap:
+                    if pka is None:
+                        _log.info(
+                            "[propka.choice] ph=%.2f %s%d:%s pKa=? delta=? -> %s",
+                            ph,
+                            chain,
+                            resi,
+                            resn,
+                            str(new3 or resn),
+                        )
+                    else:
+                        _log.info(
+                            "[propka.choice] ph=%.2f %s%d:%s pKa=%.2f delta=%.2f -> %s",
+                            ph,
+                            chain,
+                            resi,
+                            resn,
+                            pka,
+                            (pka - ph),
+                            str(new3 or resn),
+                        )
+                    _diag_shown += 1
+    except Exception:
+        pass
+
+    # 2) Renaming pass (in-scope only)
+    n_renamed = 0
+    wrote_atoms = 0
+    with open(pdb_in, "r", errors="ignore") as fh_in, open(prestate_pdb, "w") as fh_out:
+        for line in fh_in:
+            rec = line[:6]
+            if rec == "ATOM  " or rec == "HETATM":
+                xyz = line_xyz(line)
+                if xyz is None:
+                    fh_out.write(line)
+                    continue
+                x, y, z = xyz
+
+                if in_scope(x, y, z):
+                    resn = line[17:20].strip().upper()
+                    chain = line[21].strip() or " "
+                    resi = int(line[22:26])
+                    new3 = None
+
+                    if resn in ACIDS or resn in BASES or resn == "HIS":
+                        pka = (
+                            pka_table.get((resn, resi, chain))
+                            or pka_table.get((resn, resi, ""))
+                            or pka_table.get((resn, resi, "?"))
+                            or None
+                        )
+                        if resn == "HIS":
+                            if pka is not None:
+                                new3 = _choose_his_name(pka - ph)
+                        else:
+                            if pka is not None:
+                                prot = _protonated_is_true_for(resn, pka - ph)
+                                if prot is True:
+                                    new3 = RENAMES.get((resn, True), resn)
+                                elif prot is False:
+                                    new3 = RENAMES.get((resn, False), resn)
+
+                    if new3 and new3 != resn:
+                        line = _rename_line(line, new3)
+                        n_renamed += 1
+
+                fh_out.write(line)
+                wrote_atoms += 1
+            else:
+                fh_out.write(line)
+
+    # 3) Guard: never leave an empty prestate
+    if wrote_atoms == 0:
+        shutil.copy2(pdb_in, prestate_pdb)
+        _log.warning(
+            "[prestate.guard] wrote_atoms=0 \u2192 copied input\u2192output: %s",
+            prestate_pdb,
+        )
+
+    # 4) Compact rename summary (same logic; scope via in_scope)
+    try:
+
+        def _res_map(path: Path) -> dict[tuple[str, int], str]:
+            m: dict[tuple[str, int], str] = {}
+            with open(path, "r", errors="ignore") as f:
+                for ln in f:
+                    if ln.startswith(("ATOM  ", "HETATM")):
+                        xyz = line_xyz(ln)
+                        if xyz is None:
+                            continue
+                        x, y, z = xyz
+                        if in_scope(x, y, z):
+                            chain = ln[21].strip() or " "
+                            resi = int(ln[22:26])
+                            resn = ln[17:20].strip().upper()
+                            m.setdefault((chain, resi), resn)
+            return m
+
+        before = _res_map(pdb_in)
+        after = _res_map(prestate_pdb)
+        ren_list: list[tuple[str, int, str, str]] = []
+        for res_key in sorted(set(before) | set(after)):
+            b = before.get(res_key)
+            a = after.get(res_key)
+            if b and a and a != b:
+                ren_list.append((res_key[0], res_key[1], b, a))
+        if ren_list:
+            _log.info(
+                "[propka.renames] ph=%.2f within_r=%s n=%d %s",
+                ph,
+                ("ALL" if global_mode else f"{radius:.1f}"),
+                len(ren_list),
+                " ".join([f"{c}{i}:{b}->{a}" for (c, i, b, a) in ren_list]),
+            )
+    except Exception:
+        pass
+
+    try:
+        matched = sum(1 for (k, v) in pka_table.items() if k[2] != "")
+        _log.info(
+            "[propka.match] pKa_keys=%d (with_chain) + %d (chainless)",
+            matched,
+            sum(1 for (k, v) in pka_table.items() if k[2] == ""),
+        )
+    except Exception:
+        pass
+
+    # 5) State summary + fingerprint (explicit scope marker)
+    _log.info(
+        "[propka.states] scope=%s center=(%.3f,%.3f,%.3f) r=%s ph=%.2f n_renamed=%d",
+        ("GLOBAL" if global_mode else "SPHERE"),
+        cx,
+        cy,
+        cz,
+        ("ALL" if global_mode else f"{radius:.2f}"),
+        ph,
+        n_renamed,
+    )
+    try:
+        pre_sha1 = _sha1_of_file(prestate_pdb)
+        n_atoms = _count_atoms_pdb(prestate_pdb)
+        _log.info(
+            "[prestate.sha1] ph=%.2f file=%s atoms=%d sha1=%s size=%d",
+            ph,
+            prestate_pdb.name,
+            n_atoms,
+            pre_sha1,
+            prestate_pdb.stat().st_size,
+        )
+    except Exception:
+        pass
+
+    # 6) Fixed-order residue-name bins; in GLOBAL mode these are whole-protein counts
+    try:
+        counts = {
+            "ASP": 0,
+            "ASH": 0,
+            "GLU": 0,
+            "GLH": 0,
+            "HIS": 0,
+            "HID": 0,
+            "HIE": 0,
+            "HIP": 0,
+            "LYS": 0,
+            "LYN": 0,
+            "CYS": 0,
+            "CYM": 0,
+            "TYR": 0,
+        }
+        with open(prestate_pdb, "r", errors="ignore") as fh:
+            seen = set()
+            for ln in fh:
+                if not ln.startswith(("ATOM  ", "HETATM")):
+                    continue
+                xyz = line_xyz(ln)
+                if xyz is None:
+                    continue
+                x, y, z = xyz
+                if not in_scope(x, y, z):
+                    continue
+                chain = ln[21].strip() or " "
+                resi = int(ln[22:26])
+                resn = ln[17:20].strip().upper()
+                key = (chain, resi)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if resn in counts:
+                    counts[resn] += 1
+
+        _log.info(
+            "[propka.states.bin] ph=%.2f ASP=%d ASH=%d GLU=%d GLH=%d HIS=%d HID=%d HIE=%d HIP=%d CYS=%d CYM=%d LYS=%d LYN=%d TYR=%d",
+            ph,
+            counts["ASP"],
+            counts["ASH"],
+            counts["GLU"],
+            counts["GLH"],
+            counts["HIS"],
+            counts["HID"],
+            counts["HIE"],
+            counts["HIP"],
+            counts["CYS"],
+            counts["CYM"],
+            counts["LYS"],
+            counts["LYN"],
+            counts["TYR"],
+        )
+    except Exception:
+        pass
+
+    return (str(prestate_pdb), str(pka_out), n_renamed)
+
+
+# --------------------
+# Reduce
+# --------------------
+def reduce_add_hydrogens(pdb_in: str, pdb_out: str, mode: str | None = None) -> None:
+    """
+    Add/optimize hydrogens with Reduce, with strict empty-output detection and fallbacks.
+    mode=None         -> auto: if input has H, do flip-only; else full build
+    mode="flip_only"  -> always use -FLIP -Quiet
+    mode="full_build" -> always use -BUILD -Quiet
+    """
+    import subprocess
+    import shutil
+    import os as os
+
+    # ---- Guard: input must exist before we try Reduce/OpenBabel ----
+    pdb_in_path = Path(pdb_in)
+    if not pdb_in_path.exists():
+        logger.error("[reduce] input_missing in=%s; aborting hydrogenation", pdb_in)
+        raise FileNotFoundError(pdb_in)
+
+    def _count_atoms(path: str) -> int:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                return sum(1 for ln in fh if ln.startswith(("ATOM  ", "HETATM")))
+        except Exception:
+            return 0
+
+    def _has_h(path: str) -> bool:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                for ln in fh:
+                    if ln.startswith(("ATOM  ", "HETATM")) and ln[
+                        12:16
+                    ].strip().startswith("H"):
+                        return True
+        except Exception:
+            pass
+        return False
+
+    # Decide flags
+    if mode == "flip_only":
+        flags = ["-FLIP", "-Quiet"]
+        assume_h = True
+    elif mode == "full_build":
+        flags = ["-BUILD", "-Quiet"]
+        assume_h = False
+    else:
+        assume_h = _has_h(pdb_in)
+        flags = ["-FLIP", "-Quiet"] if assume_h else ["-BUILD", "-Quiet"]
+
+    out_dir = Path(pdb_out).resolve().parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    het_dict = _het_dict_path()
+    if het_dict:
+        env["REDUCE_HET_DICT"] = het_dict
+
+    exe = REDUCE_EXE or (
+        shutil.which("reduce") or shutil.which("reduce.exe") or "reduce"
+    )
+
+    def _run(stage: str, use_flags: list[str]) -> tuple[int, int, str]:
+        """return (rc, wrote_atoms, stderr)"""
+        cmd = [exe] + use_flags + [pdb_in]
+        stderr_path = out_dir / f"{stage}.stderr.txt"
+        with open(pdb_out, "w", encoding="utf-8") as out:
+            cp = subprocess.run(
+                cmd, stdout=out, stderr=subprocess.PIPE, text=True, env=env
+            )
+        try:
+            stderr_path.write_text(cp.stderr or "", encoding="utf-8")
+        except Exception:
+            pass
+        wrote = _count_atoms(pdb_out)
+        logger.info(
+            "[reduce] stage=%s rc=%s flags=%s wrote_atoms=%d",
+            stage,
+            cp.returncode,
+            " ".join(use_flags),
+            wrote,
+        )
+        return cp.returncode, wrote, cp.stderr or ""
+
+    # 1) Primary attempt
+    rc, wrote, _ = _run("Reduce#1", flags)
+    if wrote == 0:
+        # 2) Alternate flag attempt (flip <-> build)
+        alt = ["-BUILD", "-Quiet"] if "-FLIP" in flags else ["-FLIP", "-Quiet"]
+        rc2, wrote2, _ = _run("Reduce#retry", alt)
+        if wrote2 == 0:
+            # 3) OpenBabel fallback
+            ob = shutil.which("obabel") or shutil.which("obabel.exe")
+            if ob:
+                cmd = [ob, "-i", "pdb", pdb_in, "-o", "pdb", "-O", pdb_out, "-h"]
+                cp3 = subprocess.run(cmd, text=True, capture_output=True)
+                wrote3 = _count_atoms(pdb_out)
+                logger.warning(
+                    "[fallback] openbabel in=%s out=%s rc=%s wrote_atoms=%d",
+                    pdb_in,
+                    pdb_out,
+                    cp3.returncode,
+                    wrote3,
+                )
+                (out_dir / "OpenBabel.stderr.txt").write_text(
+                    cp3.stderr or "", encoding="utf-8"
+                )
+                if wrote3 == 0:
+                    shutil.copy2(pdb_in, pdb_out)
+                    logger.error(
+                        "[reduce] all attempts failed; copied input→output (wrote_atoms=0)"
+                    )
+            else:
+                shutil.copy2(pdb_in, pdb_out)
+                logger.error(
+                    "[reduce] no OpenBabel found; copied input→output (wrote_atoms=0)"
+                )
+    # Success/acceptance (even if rc==1) is purely “has atoms”
+    return

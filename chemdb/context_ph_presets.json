@@ -1,0 +1,135 @@
+{
+  "compartment_pH": {
+    "extracellular": [7.35, 7.45],
+    "blood": [7.35, 7.45],
+    "serum": [7.35, 7.45],
+    "interstitial_fluid": [7.30, 7.45],
+    "synovial_fluid": [7.35, 7.45],
+    "cerebrospinal_fluid": [7.31, 7.33],
+    "plasma_membrane": [7.00, 7.40],
+    "cell_surface": [7.20, 7.40],
+    "secreted": [7.30, 7.50],
+    "extracellular_matrix": [7.20, 7.40],
+
+    "cytosol": [7.00, 7.20],
+    "cytoplasm": [7.00, 7.20],
+    "nucleus": [7.20, 7.40],
+    "nucleoplasm": [7.20, 7.40],
+    "nucleolus": [7.20, 7.40],
+
+    "mitochondrial_matrix": [7.70, 8.00],
+    "mitochondrial_intermembrane_space": [6.80, 7.20],
+    "peroxisome": [7.40, 8.20],
+    "er_lumen": [7.10, 7.20],
+    "endoplasmic_reticulum": [7.10, 7.20],
+    "golgi": [6.30, 6.70],
+    "endosome": [5.50, 6.50],
+    "early_endosome": [6.30, 6.80],
+    "late_endosome": [5.50, 6.00],
+    "lysosome": [4.50, 5.50],
+    "secretory_granule": [5.00, 6.00],
+    "synaptic_vesicle_lumen": [5.20, 5.90],
+
+    "periplasm": [6.50, 7.50],
+    "bacterial_cytosol": [7.20, 7.60],
+
+    "chloroplast_stroma": [7.90, 8.20],
+    "thylakoid_lumen": [5.00, 6.00],
+    "plant_vacuole": [5.00, 6.50],
+    "apoplast": [5.00, 6.50],
+
+    "skin_surface": [4.70, 5.80],
+    "stomach_lumen": [1.50, 3.50],
+    "small_intestine_lumen": [6.00, 7.40],
+    "colon_lumen": [6.00, 7.00],
+    "bile": [7.50, 8.20],
+    "urine": [4.50, 8.00],
+    "saliva": [6.20, 7.60],
+
+    "tumor_microenvironment": [6.20, 7.00],
+    "hypoxic_tumor": [6.40, 6.90]
+  },
+
+  "aliases": {
+    "membrane": "plasma_membrane",
+    "mitochondria": "mitochondrial_matrix",
+    "mitochondrion": "mitochondrial_matrix",
+    "ims": "mitochondrial_intermembrane_space",
+    "er": "endoplasmic_reticulum",
+    "golgi_apparatus": "golgi",
+    "lysosomal_lumen": "lysosome",
+    "acidic_vesicle": "lysosome",
+    "secretory_vesicle": "secretory_granule",
+    "synaptic_vesicle": "synaptic_vesicle_lumen",
+    "perineuronal_net": "extracellular",
+    "cell_surface": "cell_surface",
+    "extracellular_region": "extracellular",
+    "extracellular_space": "extracellular",
+    "ecm": "extracellular_matrix",
+    "interstitial": "interstitial_fluid",
+    "csf": "cerebrospinal_fluid",
+    "blood_plasma": "blood",
+    "serum": "serum",
+    "bacterial_cytoplasm": "bacterial_cytosol",
+    "plant_vacuole_lumen": "plant_vacuole",
+    "thylakoid": "thylakoid_lumen",
+    "tme": "tumor_microenvironment"
+  },
+
+  "weights": {
+    "override": 1.0,
+    "assay": 0.9,
+    "uniprot_go": 0.75,
+    "enzyme_optimum": 0.7,
+    "pdb_header": 0.6,
+    "project_compartment": 0.8,
+    "default": 0.5
+  },
+
+  "default_pH": 7.0,
+
+  "location_tokens": {
+    "phrases": [
+      "cell surface",
+      "plasma membrane",
+      "extracellular matrix",
+      "early endosome",
+      "late endosome",
+      "synaptic vesicle",
+      "tumor microenvironment"
+    ],
+    "singles": [
+      "extracellular",
+      "secreted",
+      "membrane",
+      "lysosome",
+      "endosome",
+      "golgi",
+      "er", 
+      "peroxisome",
+      "mitochondrial",
+      "intermembrane",
+      "chloroplast",
+      "thylakoid",
+      "periplasm",
+      "nucleus",
+      "nucleoplasm",
+      "nucleolus",
+      "cytosol",
+      "cytoplasm",
+      "vacuole",
+      "apoplast",
+      "blood",
+      "serum",
+      "interstitial",
+      "synovial",
+      "cerebrospinal",
+      "bile",
+      "saliva",
+      "urine",
+      "synaptic",
+      "hypoxic"
+    ]
+  }
+}
+

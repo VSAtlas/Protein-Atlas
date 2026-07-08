@@ -1,0 +1,18 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        files: ^(\.pre-commit-config\.yaml|README\.md|main\.py|pytest\.ini|src/|analysis/reporting/|docs/(development|testing|manuscript_artifact_checklist|cli_reference|config_reference|demo_report|logging_taxonomy|pr_integration_plan)\.md)$
+      - id: end-of-file-fixer
+        files: ^(\.pre-commit-config\.yaml|README\.md|main\.py|pytest\.ini|src/|analysis/reporting/|docs/(development|testing|manuscript_artifact_checklist|cli_reference|config_reference|demo_report|logging_taxonomy|pr_integration_plan)\.md)$
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.7
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(main\.py|src/|analysis/reporting/|tools/|chemdb/tests/)

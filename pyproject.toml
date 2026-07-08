@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protein-automation"
+version = "0.1.0-alpha"
+description = "Atlas docking and post-docking pipeline"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+
+[project.scripts]
+atlas = "cli.atlas_main_cli:main"
+atlas-main = "cli.atlas_main_cli:main"
+atlas-cap-driver = "cli.cap_driver_cli:main"
+atlas-phenix-clean = "cli.phenix_clean_cli:main"
+atlas-generate-skeletons = "cli.skeletons_cli:main"
+atlas-mmgbsa = "post_docking.mmgbsa.cli:main"
+atlas-protein-prep-benchmark = "protein_prep.prep_benchmark:main"
+
+[tool.setuptools]
+include-package-data = false
+# Keep the root import surface narrow: `atlas` is the public CLI, while
+# `main.py` remains as the developer-compatible script entrypoint.
+py-modules = [
+  "main",
+  "sitecustomize",
+]
+packages = [
+  "docking",
+  "path_router",
+  "cli",
+  "cli.qol",
+  "prep_ligands",
+  "prep_docking",
+  "post_docking",
+  "post_docking.rescoring",
+  "post_docking.mmgbsa",
+  "protein_prep",
+  "config",
+  "analysis",
+  "atlas",
+  "chemdb",
+  "ml",
+  "ml.data",
+  "tools",
+]
+
+[tool.setuptools.package-dir]
+docking = "src/docking"
+path_router = "src/path_router"
+cli = "src/cli"
+prep_ligands = "src/prep_ligands"
+prep_docking = "src/prep_docking"
+post_docking = "src/post_docking"
+protein_prep = "src/protein_prep"
+config = "src/config"
+analysis = "analysis"
+atlas = "atlas"
+chemdb = "chemdb"
+ml = "src/ml"
+tools = "tools"
+
+[tool.ruff]
+exclude = [
+  ".git",
+  ".envs",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  "__pycache__",
+  "analysis/_tmp",
+  "chemdb/tests",
+  "data/external/banana",
+  "docked",
+  "input_pdbs",
+  "logs",
+  "post_docked",
+  "prepped_ligands",
+  "processed_pdbs",
+  "tools/autodock4zn",
+  "tools/benchmark_auto_analysis.py",
+  "tools/benchmark_mode.py",
+  "tools/data_analysis.py",
+  "tools/identify_ligand.py",
+  "tools/molprobity_coot.py",
+  "tools/pose_bust.py",
+  "src/docking/capture_pose.py",
+  "src/protein_prep/propka_wire.py",
+  "src/prep_ligands/dedup_sdfs.py",
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+exclude = "(^.envs/|^analysis/_tmp/|^chemdb/tests/|^data/external/|^docked/|^input_pdbs/|^logs/|^post_docked/|^prepped_ligands/|^processed_pdbs/|^tools/autodock4zn/|^tools/benchmark_auto_analysis\\.py$|^tools/benchmark_mode\\.py$|^tools/data_analysis\\.py$|^tools/identify_ligand\\.py$|^tools/molprobity_coot\\.py$|^tools/pose_bust\\.py$|^src/docking/capture_pose\\.py$|^src/protein_prep/propka_wire\\.py$|^src/prep_ligands/dedup_sdfs\\.py$)"
+
+[tool.vulture]
+ignore_names = [
+  "known_species_aliases",
+  "search_rcsb_by_gene",
+  "search_rcsb_by_uniprot",
+  "get_ranked_entries_for_text",
+  "get_pdbs_for_gene",
+]

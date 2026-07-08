@@ -1,0 +1,76 @@
+schema_version: 1
+rules:
+  - root_cause: missing_tool_or_config
+    patterns:
+      - not found
+      - no such file
+      - unresolved
+      - missing required
+      - command not found
+      - could not find
+  - root_cause: license_or_restricted_tool
+    patterns:
+      - license
+      - licensed
+      - proprietary
+      - modeller
+      - adfr
+      - mgltools
+  - root_cause: receptor_prep
+    patterns:
+      - prepare_receptor
+      - receptor_prep
+      - protein prep
+      - protein cleaning failed
+      - receptor_pdbqt_missing
+      - clean_pdb
+      - propka_wire
+      - pdb2pqr failed
+      - apo-holo] failed
+      - failure log
+      - validated.pdb2pqr.failed
+  - root_cause: ligand_prep
+    patterns:
+      - ligprep
+      - prepare_ligand
+      - meeko
+      - pdbqt
+      - sdf
+      - mol2
+  - root_cause: docking_engine
+    patterns:
+      - vina
+      - gnina
+      - ledock
+      - dock6
+      - docking failed
+      - non-zero exit
+  - root_cause: pose_validation
+    patterns:
+      - pose_invalid
+      - pose validation
+      - rmsd
+      - pose_file_missing
+  - root_cause: scheduler_or_timeout
+    patterns:
+      - slurm
+      - squeue
+      - sacct
+      - timeout
+      - time limit
+      - killed
+      - oom
+  - root_cause: disk_path_io
+    patterns:
+      - permission denied
+      - disk
+      - quota
+      - read-only
+      - i/o
+      - ioerror
+  - root_cause: report_generation
+    patterns:
+      - run-report
+      - heatmap
+      - report.fail
+      - no usable vina heatmap rows

@@ -1,0 +1,41 @@
+name: docking-env
+channels:
+  - conda-forge
+  - speleo3
+  - salilab
+dependencies:
+  - python=3.10
+  - pip
+  - setuptools
+  - wheel
+  - pyyaml
+  - requests
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - biopython
+  - rdkit
+  - openmm
+  - pdbfixer
+  - openbabel
+  - pymol-open-source
+  - vina
+  - meeko
+  - gemmi
+  - propka
+  - pdb2pqr
+  - reduce
+  - probe
+  - tqdm
+  - csvkit
+  - ruff
+  - mypy
+  - pytest
+  - ripgrep
+  - nodejs
+  - pip:
+      - dimorphite-dl==2.0.2
+      - clustergrammer==1.13.6
+      - tach==0.34.1
+      - xenon==0.9.3

@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas.local/schemas/status_dashboard.schema.json",
+  "title": "Atlas Status Dashboard",
+  "type": "object",
+  "required": [
+    "run_id",
+    "found_any",
+    "lifecycle",
+    "progress",
+    "stages",
+    "distributed",
+    "slurm",
+    "eta",
+    "paths",
+    "existing_paths",
+    "next",
+    "explanations"
+  ],
+  "properties": {
+    "run_id": {"type": "string"},
+    "html_path": {"type": "string"},
+    "found_any": {"type": "boolean"},
+    "manifest": {"type": "string"},
+    "lifecycle": {
+      "type": "object",
+      "required": ["status", "timing"],
+      "properties": {
+        "status": {"type": "string"},
+        "timing": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "progress": {
+      "type": "object",
+      "required": ["scheduled", "completed", "failed", "running", "done", "percent_done"],
+      "properties": {
+        "scheduled": {"type": "integer"},
+        "completed": {"type": "integer"},
+        "failed": {"type": "integer"},
+        "running": {"type": "integer"},
+        "done": {"type": "integer"},
+        "percent_done": {"type": "number"},
+        "failed_examples": {"type": "array", "items": {"type": "string"}},
+        "running_examples": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["total", "completed", "failed", "running", "pending", "percent_done"],
+        "properties": {
+          "total": {"type": "integer"},
+          "completed": {"type": "integer"},
+          "failed": {"type": "integer"},
+          "running": {"type": "integer"},
+          "pending": {"type": "integer"},
+          "percent_done": {"type": "number"},
+          "median_wall_time_sec": {"type": ["number", "null"]},
+          "failed_examples": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      }
+    },
+    "distributed": {"type": "object", "additionalProperties": true},
+    "slurm": {
+      "type": "object",
+      "properties": {
+        "available": {"type": "boolean"},
+        "job_ids": {"type": "array", "items": {"type": "string"}},
+        "source": {"type": "string"},
+        "jobs": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "state_counts": {"type": "object", "additionalProperties": {"type": "integer"}}
+      },
+      "additionalProperties": true
+    },
+    "eta": {
+      "type": "object",
+      "required": ["remaining_units", "eta_sec", "confidence", "basis"],
+      "properties": {
+        "elapsed_sec": {"type": ["number", "null"]},
+        "remaining_units": {"type": "integer"},
+        "eta_sec": {"type": ["number", "null"]},
+        "confidence": {"type": "string"},
+        "basis": {"type": "string"},
+        "history_samples": {"type": "integer"}
+      },
+      "additionalProperties": true
+    },
+    "eta_history": {"type": "object", "additionalProperties": true},
+    "errors": {"type": "object", "additionalProperties": true},
+    "scorch_failures": {
+      "type": "object",
+      "properties": {
+        "failed": {"type": "integer"},
+        "errors": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "returncodes": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "examples": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      },
+      "additionalProperties": true
+    },
+    "paths": {"type": "object", "additionalProperties": {"type": "string"}},
+    "existing_paths": {"type": "object", "additionalProperties": {"type": "string"}},
+    "next": {"type": "array", "items": {"type": "string"}},
+    "explanations": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

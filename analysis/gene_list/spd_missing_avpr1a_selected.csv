@@ -1,0 +1,5 @@
+category,gene,pdb_id,rank_score,resolution,method,forced_included,valid_entry,nontrivial_comp_ids
+SPD,AVPR1A,9UWL,53.200,2.600,ELECTRON MICROSCOPY,false,true,A1EQN;CLR
+SPD,AVPR1A,9UWJ,50.000,3.000,ELECTRON MICROSCOPY,false,true,A1EB7;CLR
+SPD,AVPR1A,9UWI,49.600,2.800,ELECTRON MICROSCOPY,false,true,CLR
+SPD,AVPR1A,9XB1,49.600,2.800,ELECTRON MICROSCOPY,false,true,CLR

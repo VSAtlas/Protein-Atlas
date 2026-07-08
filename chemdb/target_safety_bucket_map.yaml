@@ -1,0 +1,262 @@
+order:
+  - Hepatotoxicity
+  - Cardiotoxicity / QT
+  - CNS
+  - Endocrine
+  - Hematologic
+  - GI
+  - Dermatologic
+  - Unassigned
+
+buckets:
+  Hepatotoxicity:
+    strong_event_keywords:
+      - hepatotoxicity
+      - drug-induced liver injury
+      - liver injury
+      - hepatic failure
+      - hepatic function abnormal
+      - hepatitis toxic
+      - cholestatic
+      - hyperbilirubinaemia
+      - jaundice
+      - transaminases increased
+      - transaminase increased
+      - alanine aminotransferase increased
+      - aspartate aminotransferase increased
+      - bilirubin increased
+      - hepatic steatosis
+    weak_event_keywords:
+      - hepatic
+      - liver
+      - hepatobiliary
+      - hepatocellular
+      - cholest
+      - bilirubin
+      - transaminase
+      - alt
+      - ast
+      - steatosis
+    exclude_event_keywords:
+      - progesterone receptor
+      - estrogen receptor
+      - androgen receptor
+      - thyroid receptor
+      - steroid hormone
+    strong_tissue_keywords:
+      - liver
+      - hepatic
+      - hepatobiliary
+    weak_tissue_keywords:
+      - hepat
+    study_keywords:
+      - liver
+      - hepatic
+  Cardiotoxicity / QT:
+    strong_event_keywords:
+      - qt prolongation
+      - torsade
+      - ventricular arrhythmia
+      - arrhythmia
+      - tachycardia
+      - bradycardia
+      - heart failure
+      - myocardial infarction
+      - cardiomyopathy
+      - myocarditis
+      - atrial fibrillation
+      - ventricular tachycardia
+      - pulmonary arterial hypertension
+    weak_event_keywords:
+      - qt
+      - cardiac
+      - heart
+      - myocardial
+      - embol
+      - thrombosis
+      - edema
+      - oedema
+      - vascular
+    strong_tissue_keywords:
+      - cardiovascular
+      - cardiac
+      - heart
+    weak_tissue_keywords:
+      - cv
+      - vascul
+    study_keywords:
+      - cardiovascular
+  CNS:
+    strong_event_keywords:
+      - seizure
+      - serotonin syndrome
+      - hallucination
+      - psychosis
+      - cognitive disorder
+      - confusional state
+      - somnolence
+      - tremor
+      - dizziness
+      - headache
+      - depression
+      - anxiety
+      - abnormal behavior
+      - abnormal behaviour
+    weak_event_keywords:
+      - cns
+      - serotonin
+      - dopamine
+      - cognitive
+      - confusion
+      - sedation
+      - neural
+      - neuron
+    strong_tissue_keywords:
+      - central nervous system
+      - brain
+      - neural
+    weak_tissue_keywords:
+      - cns
+      - neuron
+    study_keywords:
+      - neurological
+      - neuro
+  Endocrine:
+    strong_event_keywords:
+      - progesterone receptor
+      - estrogen receptor
+      - androgen receptor
+      - glucocorticoid receptor
+      - mineralocorticoid receptor
+      - steroid hormone
+      - endocrine
+      - reproductive
+      - fertility
+      - adrenal
+      - thyroid
+      - ovary
+      - uterine
+      - breast tenderness
+      - menorrhagia
+      - metrorrhagia
+      - vaginal haemorrhage
+      - vaginal bleeding
+      - contraceptive
+      - medical abortion
+    weak_event_keywords:
+      - estrogen
+      - progesterone
+      - androgen
+      - steroid
+      - glucose intolerance
+      - hyperglyca
+      - hypoglyca
+      - menstrual
+      - reproductive
+    strong_tissue_keywords:
+      - endocrine
+      - reproductive
+      - gland
+    weak_tissue_keywords:
+      - adrenal
+      - thyroid
+    study_keywords:
+      - endocrine
+      - reproductive
+  Hematologic:
+    strong_event_keywords:
+      - thrombocytopenia
+      - neutropenia
+      - anemia
+      - anaemia
+      - leukopenia
+      - myelosuppression
+      - bone marrow suppression
+      - platelet count decreased
+      - pancytopenia
+      - coagulopathy
+      - deep vein thrombosis
+    weak_event_keywords:
+      - platelet
+      - coagulation
+      - blood
+      - marrow
+      - hemat
+      - haem
+    strong_tissue_keywords:
+      - blood
+      - bone marrow
+      - marrow
+    weak_tissue_keywords:
+      - hemat
+      - haem
+    study_keywords:
+      - hematology
+      - haematology
+  GI:
+    strong_event_keywords:
+      - colitis
+      - diarrhea
+      - diarrhoea
+      - nausea
+      - vomiting
+      - emesis
+      - gastrointestinal haemorrhage
+      - gastrointestinal hemorrhage
+      - gi bleed
+      - gastric ulcer
+      - duodenal ulcer
+      - pancreatitis
+      - intestinal obstruction
+      - bowel perforation
+    weak_event_keywords:
+      - gastro
+      - intestinal
+      - bowel
+      - gastric
+      - stomach
+      - colonic
+      - ulcer
+      - pancreat
+    exclude_event_keywords:
+      - liver
+      - hepatic
+      - hepat
+    strong_tissue_keywords:
+      - gut
+      - gastric
+      - intestinal
+      - colon
+      - bowel
+      - stomach
+    weak_tissue_keywords:
+      - gi
+    study_keywords:
+      - gastrointestinal
+  Dermatologic:
+    strong_event_keywords:
+      - rash
+      - dermatitis
+      - acneiform
+      - skin toxicity
+      - pruritus
+      - psoriasis
+      - eczema
+      - alopecia
+      - nail disorder
+      - cutaneous
+      - photosensitivity
+    weak_event_keywords:
+      - skin
+      - derm
+      - acne
+      - epiderm
+      - nail
+    strong_tissue_keywords:
+      - skin
+      - epiderm
+      - derm
+    weak_tissue_keywords:
+      - cutaneous
+    study_keywords:
+      - dermatology

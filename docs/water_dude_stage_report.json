@@ -1,0 +1,35 @@
+[
+  {
+    "actives": 25,
+    "decoys": 974,
+    "destination": "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands/water_aa2ar",
+    "dude_target": "aa2ar",
+    "library": "water_aa2ar",
+    "pdb_id": "3EML",
+    "source": "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands/aa2ar",
+    "status": "staged",
+    "total": 999
+  },
+  {
+    "actives": 25,
+    "decoys": 974,
+    "destination": "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands/water_hs90a",
+    "dude_target": "hs90a",
+    "library": "water_hs90a",
+    "pdb_id": "1UYG",
+    "source": "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands/hs90a",
+    "status": "staged",
+    "total": 999
+  },
+  {
+    "actives": 25,
+    "decoys": 974,
+    "destination": "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands/water_hivpr",
+    "dude_target": "hivpr",
+    "library": "water_hivpr",
+    "pdb_id": "1XL2",
+    "source": "/stor/work/VDS_Beckham/atlas/code/protein_automation/prepped_ligands/hivpr",
+    "status": "staged",
+    "total": 999
+  }
+]

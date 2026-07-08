@@ -1,0 +1,78 @@
+exclude = [
+  "**/*__pycache__",
+  "**/*egg-info",
+  "**/tests",
+  ".cache",
+  ".cache_test",
+  ".direnv",
+  ".git",
+  ".home",
+  "_skeletons",
+  "analysis",
+  "analysis/_tmp",
+  "analysis/benchmarks",
+  "analysis/dud_eval",
+  "analysis/out",
+  "atlas",
+  "chemdb",
+  "configs",
+  "data",
+  "docked",
+  "input_ligands",
+  "input_pdbs",
+  "logs",
+  "logs_summary",
+  "outputs",
+  "p2rank_out",
+  "post_docked",
+  "prepped_ligands",
+  "processed_pdbs",
+  "reference",
+  "src/ml/cache",
+  "src/ml/data",
+  "src/ml/outputs",
+  "temp",
+  "tools",
+]
+source_roots = [
+  "src",
+]
+root_module = "ignore"
+ignore_type_checking_imports = true
+respect_gitignore = "if_git_repo"
+
+[[modules]]
+path = "cli"
+depends_on = ["config", "docking", "post_docking", "path_router", "prep_ligands", "protein_prep"]
+
+[[modules]]
+path = "config"
+depends_on = []
+
+[[modules]]
+path = "docking"
+depends_on = ["config", "path_router", "post_docking", "prep_docking", "cli", "protein_prep", "prep_ligands"]
+
+[[modules]]
+path = "ml"
+depends_on = []
+
+[[modules]]
+path = "path_router"
+depends_on = ["config"]
+
+[[modules]]
+path = "post_docking"
+depends_on = ["protein_prep", "config", "docking", "path_router"]
+
+[[modules]]
+path = "prep_docking"
+depends_on = ["docking", "path_router"]
+
+[[modules]]
+path = "prep_ligands"
+depends_on = ["protein_prep", "path_router", "docking", "config"]
+
+[[modules]]
+path = "protein_prep"
+depends_on = ["docking", "path_router", "post_docking", "config"]

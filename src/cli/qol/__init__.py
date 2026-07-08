@@ -1,0 +1,35 @@
+"""Atlas QoL CLI package split from legacy qol_cli.py."""
+from cli.qol.constants import (
+    DEMO_RUN_ID,
+    DEMO_ROWS,
+    SLURM_BENCH2_CANARY_ARRAY,
+    SLURM_BENCH2_CANARY_CPUS_PER_TASK,
+    SLURM_BENCH2_CANARY_JOB_NAME,
+    SLURM_BENCH2_CANARY_MAIN_ARGS,
+    SLURM_BENCH2_CANARY_SCRIPT,
+    SLURM_BENCH2_CANARY_TIME,
+    SLURM_SUBMIT_DEFAULT_ARRAY,
+    SLURM_SUBMIT_DEFAULT_CPUS_PER_TASK,
+    SLURM_SUBMIT_DEFAULT_JOB_NAME,
+    SLURM_SUBMIT_DEFAULT_SCRIPT,
+)
+from cli.qol.dispatch import dispatch
+from cli.qol.utils import _display_path, load_effective_config
+
+__all__ = [
+    "DEMO_RUN_ID",
+    "DEMO_ROWS",
+    "SLURM_BENCH2_CANARY_ARRAY",
+    "SLURM_BENCH2_CANARY_CPUS_PER_TASK",
+    "SLURM_BENCH2_CANARY_JOB_NAME",
+    "SLURM_BENCH2_CANARY_MAIN_ARGS",
+    "SLURM_BENCH2_CANARY_SCRIPT",
+    "SLURM_BENCH2_CANARY_TIME",
+    "SLURM_SUBMIT_DEFAULT_ARRAY",
+    "SLURM_SUBMIT_DEFAULT_CPUS_PER_TASK",
+    "SLURM_SUBMIT_DEFAULT_JOB_NAME",
+    "SLURM_SUBMIT_DEFAULT_SCRIPT",
+    "_display_path",
+    "dispatch",
+    "load_effective_config",
+]

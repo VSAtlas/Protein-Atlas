@@ -1,0 +1,315 @@
+chemotype:
+  order:
+    - Corticosteroid-like
+    - Steroid-like
+    - Quinazoline kinase-like
+    - Azole-like
+    - Ergoline-like
+    - Cardiac glycoside-like
+    - Piperazine-like
+    - Other / Unassigned
+  rules:
+    - category: Corticosteroid-like
+      exact_names:
+        - triamcinolone
+        - amcinonide
+        - flumethasone
+        - fluorometholone
+        - fluocinolone
+        - medrysone
+        - desoximetasone
+        - diflorasone
+      name_keywords:
+        - cinolone
+        - methasone
+        - cortisol
+        - corticoid
+        - prednis
+    - category: Steroid-like
+      exact_names:
+        - levonorgestrel
+        - norethindrone
+        - testosterone
+        - oxymetholone
+        - quinestrol
+        - estradiol
+        - medroxyprogesterone
+        - desogestrel
+        - nestorone
+        - gestronol
+        - trilostane
+        - darolutamide
+        - abiraterone
+        - canrenoate
+        - eplerenone
+      name_keywords:
+        - sterone
+        - estr
+        - progester
+        - androgen
+        - gestrel
+        - steroid
+        - hormone
+    - category: Quinazoline kinase-like
+      exact_names:
+        - icotinib
+        - dacomitinib
+        - rociletinib
+        - lazertinib
+        - almonertinib
+        - rezivertinib
+        - infigratinib
+        - capmatinib
+        - fruquintinib
+      name_keywords:
+        - tinib
+        - gefitinib
+        - erlotinib
+        - afatinib
+        - osimertinib
+        - lapatinib
+    - category: Azole-like
+      exact_names:
+        - itraconazole
+      name_keywords:
+        - azole
+        - conazole
+    - category: Ergoline-like
+      exact_names:
+        - dihydroergocristine
+      name_keywords:
+        - ergot
+        - ergoline
+    - category: Cardiac glycoside-like
+      exact_names:
+        - digitoxin
+      name_keywords:
+        - digoxin
+        - digitoxin
+        - glycoside
+    - category: Piperazine-like
+      exact_names:
+        - piperazine
+      name_keywords:
+        - piperazine
+
+drug_effect:
+  order:
+    - Glucocorticoid
+    - Steroid hormone / endocrine modulator
+    - EGFR inhibitor
+    - Kinase inhibitor
+    - Antifungal
+    - Anticoagulant
+    - Antiviral
+    - Antipsychotic / CNS
+    - Other / Unassigned
+  rules:
+    - category: Glucocorticoid
+      exact_names:
+        - triamcinolone
+        - amcinonide
+        - flumethasone
+        - fluorometholone
+        - fluocinolone
+        - medrysone
+        - desoximetasone
+        - diflorasone
+      name_keywords:
+        - corticoid
+        - glucocort
+        - methasone
+        - cinolone
+    - category: Steroid hormone / endocrine modulator
+      exact_names:
+        - levonorgestrel
+        - norethindrone
+        - testosterone
+        - oxymetholone
+        - quinestrol
+        - estradiol
+        - medroxyprogesterone
+        - desogestrel
+        - nestorone
+        - gestronol
+        - trilostane
+        - darolutamide
+        - abiraterone
+        - canrenoate
+        - eplerenone
+      name_keywords:
+        - progester
+        - androgen
+        - estrogen
+        - steroid
+        - gestrel
+    - category: EGFR inhibitor
+      exact_names:
+        - icotinib
+        - dacomitinib
+        - rociletinib
+        - lazertinib
+        - almonertinib
+        - rezivertinib
+      name_keywords:
+        - gefitinib
+        - erlotinib
+        - afatinib
+        - osimertinib
+        - egfr
+    - category: Kinase inhibitor
+      exact_names:
+        - infigratinib
+        - capmatinib
+        - fruquintinib
+        - dabrafenib
+        - belumosudil
+        - pamiparib
+        - niraparib
+        - rucaparib
+        - talazoparib
+      name_keywords:
+        - tinib
+        - parib
+        - kinase inhibitor
+    - category: Antifungal
+      exact_names:
+        - itraconazole
+      name_keywords:
+        - azole
+        - antifungal
+    - category: Anticoagulant
+      exact_names:
+        - apixaban
+        - dabigatran
+        - ticagrelor
+        - bevyxxa
+      name_keywords:
+        - xaban
+        - gatran
+        - anticoagul
+    - category: Antiviral
+      exact_names:
+        - ledipasvir
+        - velpatasvir
+        - voxilaprevir
+        - glecaprevir
+        - elbasvir
+        - letermovir
+      name_keywords:
+        - previr
+        - asvir
+        - antiviral
+    - category: Antipsychotic / CNS
+      exact_names:
+        - haloperidol
+        - lumateperone
+        - fluspirilene
+      name_keywords:
+        - antipsych
+        - neuroleptic
+
+motif_tags:
+  order:
+    - 3-hydroxy
+    - 3-phenyl
+    - para-halogen
+    - basic amine
+    - fused bicyclic
+    - steroidal core
+    - azole ring
+    - quinazoline-like
+  rules:
+    - tag: 3-hydroxy
+      exact_names:
+        - 4-hydroxy-2,5-dimethylfuran-2(3H)-one
+      name_keywords:
+        - hydroxy
+        - triol
+        - olone
+    - tag: 3-phenyl
+      name_keywords:
+        - phenyl
+        - benzyl
+    - tag: para-halogen
+      name_keywords:
+        - fluoro
+        - chloro
+        - bromo
+        - iodo
+    - tag: basic amine
+      exact_names:
+        - piperazine
+      name_keywords:
+        - amine
+        - piperazine
+        - piperid
+        - azepine
+    - tag: fused bicyclic
+      name_keywords:
+        - erg
+        - quinaz
+        - bicycl
+        - fused
+    - tag: steroidal core
+      name_keywords:
+        - ster
+        - gest
+        - estr
+        - andr
+        - cort
+    - tag: azole ring
+      name_keywords:
+        - azole
+        - conazole
+    - tag: quinazoline-like
+      name_keywords:
+        - tinib
+        - quinaz
+
+overrides:
+  by_ligand_base:
+    levonorgestrel:
+      chemotype_primary: Steroid-like
+      chemotype_series: Steroid-like
+      drug_effect_primary: Steroid hormone / endocrine modulator
+      drug_effect_memberships:
+        - Steroid hormone / endocrine modulator
+      motif_tags:
+        - steroidal core
+      confidence: high
+      sources:
+        - Ligand annotation override
+    triamcinolone:
+      chemotype_primary: Corticosteroid-like
+      chemotype_series: Corticosteroid-like
+      drug_effect_primary: Glucocorticoid
+      drug_effect_memberships:
+        - Glucocorticoid
+      motif_tags:
+        - steroidal core
+      confidence: high
+      sources:
+        - Ligand annotation override
+    itraconazole:
+      chemotype_primary: Azole-like
+      chemotype_series: Azole-like
+      drug_effect_primary: Antifungal
+      drug_effect_memberships:
+        - Antifungal
+      motif_tags:
+        - azole ring
+      confidence: high
+      sources:
+        - Ligand annotation override
+  by_ligand_name:
+    azilsartan:
+      free_cmax_um: 0.096
+      cmax_um: 9.6
+      fraction_unbound_plasma: 0.01
+      exposure_source: "FDA Edarbi label and molecular-weight conversion: azilsartan Cmax approximately 4.4 ug/mL; >99% protein bound, modeled as fu=0.01."
+    azilsartan medoxomil:
+      free_cmax_um: 0.096
+      cmax_um: 9.6
+      fraction_unbound_plasma: 0.01
+      exposure_source: "FDA Edarbi label and molecular-weight conversion: active azilsartan Cmax approximately 4.4 ug/mL after azilsartan medoxomil; >99% protein bound, modeled as fu=0.01."

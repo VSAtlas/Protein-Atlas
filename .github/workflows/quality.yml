@@ -1,0 +1,50 @@
+name: quality
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  lint-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy pyyaml
+
+      - name: Run quality gate
+        run: tools/quality_gate.sh
+
+  cli-public-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.core.yml
+          environment-name: docking-env
+          cache-environment: true
+          init-shell: bash
+
+      - name: Install package in env
+        shell: micromamba-shell {0}
+        run: |
+          python -m pip install -e .
+
+      - name: Run public smoke check
+        shell: micromamba-shell {0}
+        run: bash tools/public_smoke_check.sh
