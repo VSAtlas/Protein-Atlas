@@ -124,3 +124,28 @@ def test_mixed_mode_dud_plus_fda_with_empty_map_does_not_error(tmp_path: Path) -
 
     selected = main.select_pdb_files_for_run(cfg, ["main.py"])
     assert sorted(selected) == ["1ABC.pdb", "2DEF.pdb"]
+
+
+def test_pdb_selection_splits_comma_values_without_treating_flags_as_targets(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "input_pdbs"
+    _touch(input_dir / "1BN1.pdb")
+    _touch(input_dir / "2OJ9.pdb")
+    _touch(input_dir / "PDBS.pdb")
+
+    base_cfg = {"INPUT_DIR": str(input_dir), "SPECIFIED_PROTEINS": ""}
+
+    cfg = dict(base_cfg)
+    selected = main.select_pdb_files_for_run(
+        cfg, ["main.py", "--pdbs", "1BN1,2OJ9", "--fast"]
+    )
+    assert sorted(selected) == ["1BN1.pdb", "2OJ9.pdb"]
+    assert cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] == ["1BN1", "2OJ9"]
+
+    cfg = dict(base_cfg)
+    selected = main.select_pdb_files_for_run(
+        cfg, ["main.py", "--pdb", "1BN1,2OJ9", "--fast"]
+    )
+    assert sorted(selected) == ["1BN1.pdb", "2OJ9.pdb"]
+    assert cfg["_EFFECTIVE_SPECIFIED_PROTEINS"] == ["1BN1", "2OJ9"]

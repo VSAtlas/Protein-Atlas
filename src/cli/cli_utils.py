@@ -184,9 +184,9 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
         tok = argv[i]
         if tok in ("--pdb", "-pdb"):
             if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
-                nid = _norm_pdb_id(argv[i + 1])
-                if nid:
-                    cli_ids.append(nid)
+                ids = _split_ids(argv[i + 1])
+                if ids:
+                    cli_ids.extend(ids)
                     consumed_value_idx.add(i + 1)
             i += 2
             continue
@@ -221,9 +221,7 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
         flag, value = text.split("=", 1)
         normalized = _normalize_flag_name(flag)
         if normalized == "pdb":
-            nid = _norm_pdb_id(value)
-            if nid:
-                cli_ids.append(nid)
+            cli_ids.extend(_split_ids(value))
         elif normalized == "pdbs":
             cli_ids.extend(_split_ids(value))
 
@@ -253,7 +251,7 @@ def _parse_specified_proteins(argv, cfg) -> tuple[list[str], str]:
     for tok in argv:
         low = tok.lower()
         # don't treat command flags as PDB short-form tokens
-        if low in ("fast", "-fast", "--fast", "-dude", "--dude"):
+        if low in ("fast", "-fast", "--fast", "-dude", "--dude", "-pdb", "--pdb", "-pdbs", "--pdbs"):
             continue
         if (tok.startswith("--") and len(tok) == 6) or (
             tok.startswith("-") and len(tok) == 5
