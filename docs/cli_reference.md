@@ -174,3 +174,14 @@ python -m analysis.cli.run_ml_data_gap_report \
 ```
 
 Primary outputs are `ml_data_gap_report.csv`, `holdout_claim_readiness.csv`, `source_calibration_readiness.csv`, and `data_collection_priorities.csv`. Treat provenance-derived rates as audit/calibration context, not clean predictive features.
+
+## AtlasSPD Phase 1 PK context
+
+Refresh structured exposure context and join it to the frozen Phase 1 table:
+
+```bash
+python -m analysis.cli.refresh_phase1_pk_context \
+  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_01
+```
+
+The command writes `pk_context_long.csv`, `pk_context_representative.csv`, `AtlasSPD_phase1_pk_enriched.csv`, source coverage, and availability manifests. Existing `spd_exposure_label` values are never recomputed from external PK. Use `--drugbank-cmax` and `--drugbank-protein-binding` only with licensed local exports.

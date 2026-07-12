@@ -2681,3 +2681,9 @@ Change: Refreshed SPD Phase 1 label generation with censor-aware exposure negati
 Why: Existing SPD exposure labels were sparse because censored/weak-margin rows were excluded, and FDA-overlapping BindingDB/ChEMBL/GtoPdb evidence was not fully refreshed into the Phase 1 table.
 Impact: data/AtlasSPD_phase1/model_ready/AtlasSPD_phase1_model_ready.csv now carries spd_censor_aware_v2 labels; SPD binding has explicit measured negatives; refreshed source audits live under data/AtlasSPD_phase1/external_source_refresh_20260707/.
 Next: Use the refreshed Phase 1 CSV for the next training pass; AR/ESR1 BindingDB rows exist locally but current Phase 1 ligand overlap is limited, so expanded ligand mappings/runs should improve those joins.
+
+Date: 2026-07-12 | Task: Atlasv0.0.01 Phase 1 contextual PK ingestion | Owner: Codex
+Change: Added a context-preserving PK schema, cached openFDA/DailyMed label retrieval, representative-record selection, and a one-command AtlasSPD Phase 1 join. Added family-by-scaffold and family-by-chemotype acquisition audits that require same-source measured positive/negative support for the highest priority.
+Why: The prior PK loader collapsed dose, route, regimen, formulation, population, and source contexts into one row, while repeated pair rows overstated unique-drug coverage. Broad positive additions also worsened source and family shifts.
+Impact: SPD exposure labels are unchanged. External PK is stored under separate pk_context_* columns. NCATS FRDB currently returns HTTP 502, PK-DB exports an empty outputs.csv despite nonzero API counts, and DrugBank requires a licensed BYOL export; all are recorded as unavailable rather than silently treated as ingested.
+Next: Review low-confidence SPL numeric extractions, rerun when NCATS/PK-DB endpoints recover or DrugBank exports are supplied, and acquire measured same-source positive/negative rows in the ranked weak family/chemistry strata before retraining combined-source models.
