@@ -141,6 +141,9 @@ def write_audit_claim_readiness(
     source_transfer_findings: list[dict[str, Any]] | list[Any],
     independence_passed: bool | None,
     decoy_bias: dict[str, Any] | None = None,
+    score_scale: dict[str, Any] | None = None,
+    ligand_identity: dict[str, Any] | None = None,
+    binding_label_contract: dict[str, Any] | None = None,
     claim_mode: str = "exploratory",
 ) -> dict[str, Any]:
     out = Path(out_path)
@@ -180,6 +183,24 @@ def write_audit_claim_readiness(
         target.append("source-transfer audit emitted findings; inspect source_transfer outputs before external-validation claims")
     if decoy_bias and decoy_bias.get("flags"):
         warnings.append("decoy-bias audit emitted flags; decoy benchmark claims need caveats or stronger controls")
+    if score_scale and score_scale.get("status") == "failed":
+        blockers.append(
+            "selected score features mix raw consensus percentiles with decoy-standardized z-scores"
+        )
+    elif score_scale and score_scale.get("status") == "warning":
+        warnings.append("score-scale audit emitted warnings; inspect score_scale outputs")
+    if ligand_identity and ligand_identity.get("status") == "failed":
+        target = blockers if publication else warnings
+        target.append(
+            "ligand identity audit found "
+            f"{ligand_identity.get('n_drugs_with_multiple_practical_signatures', 0)} "
+            "drug IDs mapped to multiple RDKit descriptor constellations"
+        )
+    if binding_label_contract and binding_label_contract.get("status") == "failed":
+        blockers.append(
+            "SPD binding labels contradict the censor-aware AC50 relation policy or lack "
+            "the required binding-policy version"
+        )
     manifest = {
         "claim_mode": mode,
         "overall_status": _status(blockers, warnings),
@@ -197,6 +218,24 @@ def write_audit_claim_readiness(
         },
         "decoy_bias_status": decoy_bias.get("status") if decoy_bias else None,
         "decoy_bias_flags": decoy_bias.get("flags") if decoy_bias else [],
+        "score_scale_status": score_scale.get("status") if score_scale else None,
+        "score_scale_flags": score_scale.get("flags") if score_scale else [],
+        "ligand_identity_status": (
+            ligand_identity.get("status") if ligand_identity else None
+        ),
+        "ligand_identity_conflicted_drugs": (
+            ligand_identity.get("n_drugs_with_multiple_practical_signatures")
+            if ligand_identity
+            else None
+        ),
+        "binding_label_contract_status": (
+            binding_label_contract.get("status") if binding_label_contract else None
+        ),
+        "binding_label_contradictions": (
+            binding_label_contract.get("n_label_contradictions")
+            if binding_label_contract
+            else None
+        ),
     }
     out.mkdir(parents=True, exist_ok=True)
     (out / "ml_audit_claim_readiness.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")

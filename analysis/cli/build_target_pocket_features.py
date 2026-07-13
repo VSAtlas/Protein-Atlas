@@ -16,7 +16,13 @@ def build_parser() -> argparse.ArgumentParser:
             "per Atlas pocket PDB."
         )
     )
-    parser.add_argument("--pocket-map", type=Path, required=True, nargs="+")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--pocket-map", type=Path, nargs="+")
+    source.add_argument(
+        "--features-table",
+        type=Path,
+        help="Reuse a verified precomputed target_pocket_features.csv table.",
+    )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--model-table", type=Path, default=None)
@@ -26,23 +32,37 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    missing = [path for path in args.pocket_map if not path.exists()]
-    if missing:
-        raise FileNotFoundError(f"pocket maps not found: {missing}")
-    pocket_map = pd.concat(
-        [pd.read_csv(path, low_memory=False) for path in args.pocket_map],
-        ignore_index=True,
-    )
-    manifest = write_target_pocket_features(
-        pocket_map,
-        out_dir=args.out_dir,
-        cache_root=args.cache_dir,
-    )
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.features_table is not None:
+        if not args.features_table.exists():
+            raise FileNotFoundError(
+                f"pocket feature table not found: {args.features_table}"
+            )
+        target_table = pd.read_csv(args.features_table, low_memory=False)
+        manifest = {
+            "table": str(args.features_table),
+            "rows": int(len(target_table)),
+            "pdb_ids": int(target_table["pdb_id"].nunique()),
+            "source": "verified_precomputed_feature_table",
+        }
+    else:
+        missing = [path for path in args.pocket_map if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"pocket maps not found: {missing}")
+        pocket_map = pd.concat(
+            [pd.read_csv(path, low_memory=False) for path in args.pocket_map],
+            ignore_index=True,
+        )
+        manifest = write_target_pocket_features(
+            pocket_map,
+            out_dir=args.out_dir,
+            cache_root=args.cache_dir,
+        )
+        target_table = pd.read_csv(manifest["table"], low_memory=False)
     if args.model_table is not None:
         if not args.model_table.exists():
             raise FileNotFoundError(f"model table not found: {args.model_table}")
         model_table = pd.read_csv(args.model_table, low_memory=False)
-        target_table = pd.read_csv(manifest["table"], low_memory=False)
         if "pdb_id" not in model_table:
             raise ValueError("model table must include pdb_id")
         model_table["pdb_id"] = model_table["pdb_id"].astype(str).str.upper()
