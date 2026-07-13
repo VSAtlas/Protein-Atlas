@@ -13,6 +13,8 @@ from analysis.ml.spd_label_enrichment import enrich_spd_labels_for_run_master
 from analysis.ml.tissue_expression_projection import add_tissue_expression_context
 from analysis.ml.source_benchmark_tables import ID_COLS, MODEL_READY_PROVENANCE_COLS
 
+BINDING_LABEL_POLICY_VERSION = "spd_binding_censor_aware_v1"
+
 SCORE_FEATURE_COLS = [
     "atlas_score",
     "consensus_score",
@@ -196,12 +198,38 @@ def _add_common_provenance(
 def _binding_label(source: pd.DataFrame, *, active_um: float, inactive_um: float) -> pd.Series:
     direct = _first_label(source, ["spd_binding_label", "spd_activity_label", "activity_label"])
     ac50 = _numeric(source.get("spd_ac50_uM"), source.index)
+    relation = pd.Series("", index=source.index, dtype="string")
+    for column in (
+        "spd_activity_relation",
+        "activity_relation",
+        "standard_relation",
+        "relation",
+    ):
+        if column not in source.columns:
+            continue
+        values = source[column].astype("string").str.strip()
+        relation = relation.where(relation.ne(""), values)
+    relation = relation.replace(
+        {
+            "≤": "<=",
+            "≥": ">=",
+            "==": "=",
+            "eq": "=",
+            "lt": "<",
+            "gt": ">",
+        }
+    )
+
     derived = pd.Series(pd.NA, index=source.index, dtype="Int64")
-    active = ac50.le(active_um).fillna(False)
-    inactive = ac50.ge(inactive_um).fillna(False)
+    exact = relation.eq("=")
+    upper_bound = relation.isin(["<", "<="])
+    lower_bound = relation.isin([">", ">="])
+    active = ((exact | upper_bound) & ac50.le(active_um)).fillna(False)
+    inactive = ((exact | lower_bound) & ac50.ge(inactive_um)).fillna(False)
     derived = derived.mask(active, 1)
     derived = derived.mask(inactive, 0)
-    return direct.where(direct.notna(), derived).astype("Int64")
+    interpretable_measurement = ac50.notna() & (exact | upper_bound | lower_bound)
+    return direct.mask(interpretable_measurement, derived).astype("Int64")
 
 
 def _exposure_label(source: pd.DataFrame) -> pd.Series:
@@ -326,12 +354,17 @@ def build_spd_four_expert_tables(
 
     binding = base.copy()
     binding["spd_binding_label"] = _binding_label(source, active_um=active_um, inactive_um=inactive_um)
+    binding["spd_binding_label_policy_version"] = BINDING_LABEL_POLICY_VERSION
     binding = _add_common_provenance(
         binding,
         objective="spd_binding_activity",
         label_col="spd_binding_label",
         endpoint_type="AC50_potency",
-        policy=f"SPD activity: AC50 <= {active_um:g} uM positive, AC50 >= {inactive_um:g} uM measured weak/inactive negative, 1-10 uM gray zone unknown.",
+        policy=(
+            f"SPD censor-aware activity: exact or upper-bound AC50 <= {active_um:g} uM "
+            f"positive; exact or lower-bound AC50 >= {inactive_um:g} uM negative; "
+            "bounds that cross a threshold and the intermediate range remain unknown."
+        ),
     )
     tables["binding"] = binding
 
