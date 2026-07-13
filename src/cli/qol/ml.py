@@ -59,6 +59,24 @@ def _cmd_ml(argv: Sequence[str]) -> int:
     source_pu.add_argument("--out-dir")
     source_pu.add_argument("--claim-mode", choices=["exploratory", "publication"], default="exploratory")
 
+    score_addons = sub.add_parser(
+        "score-addons",
+        help="Score exact ML add-on pairs in a frozen full-reference Vina context.",
+    )
+    score_addons.add_argument("--run-id", required=True)
+    score_addons.add_argument(
+        "--pairs",
+        "--pair-manifest",
+        "--library-manifest",
+        dest="selected_pairs",
+        required=True,
+    )
+    score_addons.add_argument("--compare-run", required=True)
+    score_addons.add_argument("--out-dir")
+    score_addons.add_argument("--workers", type=int, default=8)
+    score_addons.add_argument("--minimum-exhaustiveness", type=int, default=2)
+    score_addons.add_argument("--dry-run", action="store_true")
+
     hpo = sub.add_parser("hpo", help="Run an optional Optuna-backed hyperparameter sweep.")
     hpo.add_argument("--run-id", default="pilotstudy")
     hpo.add_argument("--dataset", required=True)
@@ -167,6 +185,8 @@ def _cmd_ml(argv: Sequence[str]) -> int:
         return _cmd_ml_audit(args, extra, repo_root)
     if args.ml_cmd == "source-pu":
         return _cmd_ml_source_pu(args, extra, repo_root)
+    if args.ml_cmd == "score-addons":
+        return _cmd_ml_score_addons(args, extra, repo_root)
     if args.ml_cmd == "hpo":
         return _cmd_ml_hpo(args, extra, repo_root)
     if args.ml_cmd == "chemprop":
@@ -255,6 +275,36 @@ def _cmd_ml_source_pu(args: argparse.Namespace, extra: list[str], repo_root: Pat
     ]
     forwarded.extend(extra)
     return _run_module_main("analysis.cli.run_ml_source_pu_suite", forwarded)
+
+
+def _cmd_ml_score_addons(
+    args: argparse.Namespace,
+    extra: list[str],
+    repo_root: Path,
+) -> int:
+    run_id = str(args.run_id)
+    forwarded = [
+        "--selected-pairs",
+        str(args.selected_pairs),
+        "--compare-run",
+        str(args.compare_run),
+        "--out-dir",
+        str(
+            Path(args.out_dir)
+            if args.out_dir
+            else _default_run_dir(repo_root, run_id) / "reference_vina_full"
+        ),
+        "--repo-root",
+        str(repo_root),
+        "--workers",
+        str(args.workers),
+        "--minimum-exhaustiveness",
+        str(args.minimum_exhaustiveness),
+    ]
+    if args.dry_run:
+        forwarded.append("--dry-run")
+    forwarded.extend(extra)
+    return _run_module_main("analysis.cli.score_reference_run_vina", forwarded)
 
 
 def _cmd_ml_hpo(args: argparse.Namespace, extra: list[str], repo_root: Path) -> int:

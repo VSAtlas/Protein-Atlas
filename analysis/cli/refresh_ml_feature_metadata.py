@@ -31,20 +31,46 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Refresh Atlas ML feature metadata such as chemical clusters, target families, and source lineage."
     )
-    parser.add_argument("--run-dir", type=Path, default=Path("data/pilotstudy"))
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Run-local source directory. With explicit --dataset paths, defaults "
+            "to their shared parent instead of data/pilotstudy."
+        ),
+    )
     parser.add_argument("--dataset", nargs="*", type=Path, default=None)
     parser.add_argument("--include-glob", nargs="*", default=DEFAULT_PATTERNS)
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--in-place", action="store_true")
-    parser.add_argument("--chemical-cluster", choices=["auto", "scaffold", "smiles", "chemotype", "none"], default="auto")
+    parser.add_argument("--chemical-cluster", choices=["auto", "scaffold", "smiles", "chemotype", "butina", "ecfp", "none"], default="auto")
     parser.add_argument("--target-family", choices=["auto", "protein_class", "gene_heuristic", "none"], default="auto")
     parser.add_argument("--source-lineage", choices=["auto", "none"], default="auto")
     parser.add_argument("--drop-column", nargs="*", default=None)
     args = parser.parse_args(argv)
 
-    run_dir = args.run_dir.resolve()
-    paths = [path.resolve() for path in args.dataset] if args.dataset else _discover(run_dir, list(args.include_glob))
-    out_dir = args.out_dir.resolve() if args.out_dir else (run_dir / "ml_feature_metadata")
+    explicit_paths = [path.resolve() for path in args.dataset] if args.dataset else []
+    if args.run_dir is not None:
+        run_dir: Path | None = args.run_dir.resolve()
+    elif explicit_paths:
+        parents = {path.parent for path in explicit_paths}
+        run_dir = next(iter(parents)) if len(parents) == 1 else None
+    else:
+        run_dir = Path("data/pilotstudy").resolve()
+    paths = (
+        explicit_paths
+        if explicit_paths
+        else _discover(run_dir, list(args.include_glob))
+        if run_dir is not None
+        else []
+    )
+    default_out_dir = (
+        run_dir / "ml_feature_metadata"
+        if run_dir is not None
+        else Path("data/ml_feature_metadata").resolve()
+    )
+    out_dir = args.out_dir.resolve() if args.out_dir else default_out_dir
     manifest = refresh_tables(
         paths,
         out_dir=out_dir,

@@ -16,6 +16,8 @@ import pandas as pd
 
 CONSENSUS_PREFIX = "z_vs_compare_run_consensus"
 SCORCH_PREFIX = "z_vs_compare_run_scorch_composite"
+VINA_STAGE1_PREFIX = "z_vs_compare_run_vina_stage1"
+SCORE_PREFIXES = (SCORCH_PREFIX, VINA_STAGE1_PREFIX, CONSENSUS_PREFIX)
 PAIR_COLUMNS = ("pdb_id", "ligand_base")
 LABEL_STATUS = "strict_measured_matched_inactive"
 MISSING_TEXT = frozenset({"", "na", "n/a", "nan", "none", "null", "<na>"})
@@ -190,10 +192,10 @@ def _comparison_columns(frame: pd.DataFrame) -> list[str]:
     return [
         column
         for column in frame.columns
-        if column == CONSENSUS_PREFIX
-        or column.startswith(f"{CONSENSUS_PREFIX}_")
-        or column == SCORCH_PREFIX
-        or column.startswith(f"{SCORCH_PREFIX}_")
+        if any(
+            column == prefix or column.startswith(f"{prefix}_")
+            for prefix in SCORE_PREFIXES
+        )
     ]
 
 
@@ -254,10 +256,9 @@ def _truthy(value: Any) -> bool:
 
 
 def _training_allowed(row: Mapping[str, Any]) -> bool:
-    production = _truthy(row.get("production_truth_allowed"))
+    allowed = _truthy(row.get("training_allowed"))
     benchmark = _truthy(row.get("benchmark_only"))
-    probe_only = _truthy(row.get("probe_sensitivity_only"))
-    return production and not benchmark and not probe_only
+    return allowed and not benchmark
 
 
 def _provenance_errors(row: Mapping[str, Any], prefix: str) -> list[str]:
@@ -281,12 +282,19 @@ def _provenance_errors(row: Mapping[str, Any], prefix: str) -> list[str]:
 
 def _score_choice(row: Mapping[str, Any]) -> tuple[float | None, str, list[str]]:
     scorch = _finite_float(row.get(SCORCH_PREFIX))
+    vina_stage1 = _finite_float(row.get(VINA_STAGE1_PREFIX))
     consensus = _finite_float(row.get(CONSENSUS_PREFIX))
     if scorch is not None:
         return (
             scorch,
             "comparison_run_scorch_composite",
             _provenance_errors(row, SCORCH_PREFIX),
+        )
+    if vina_stage1 is not None:
+        return (
+            vina_stage1,
+            "comparison_run_vina_stage1",
+            _provenance_errors(row, VINA_STAGE1_PREFIX),
         )
     if consensus is not None:
         return (
@@ -545,10 +553,11 @@ def _candidate_row(
             "ligand_base": _clean_text(selected_row.get("ligand_base")),
             "final_score": final_score,
             "final_score_source": final_score_source,
-            "spd_binding_label": 0,
-            "spd_binding_label_policy_version": "spd_binding_censor_aware_v1",
+            "spd_binding_label": pd.NA,
+            "spd_binding_label_policy_version": pd.NA,
+            "external_four_state_ml_label": 0,
             "combined_activity_ml_label": 0,
-            "source_objective": "spd_binding_activity",
+            "source_objective": "external_binding_activity",
             "label_source": _first_nonmissing(
                 selected_row,
                 "evidence_source_names",
@@ -629,17 +638,18 @@ def merge_matched_inactive_scores(
         (*PAIR_COLUMNS, "projected_label", "projected_label_status"),
         name="selected matched-inactive pairs",
     )
-    required_score_columns = {
-        *PAIR_COLUMNS,
-        CONSENSUS_PREFIX,
-        SCORCH_PREFIX,
-        *(
-            f"{prefix}{suffix}"
-            for prefix in (CONSENSUS_PREFIX, SCORCH_PREFIX)
-            for suffix in PROVENANCE_SUFFIXES
-        ),
-    }
-    _require_columns(scores, required_score_columns, name="candidate score table")
+    _require_columns(scores, PAIR_COLUMNS, name="candidate score table")
+    available_prefixes = [prefix for prefix in SCORE_PREFIXES if prefix in scores]
+    if not available_prefixes:
+        raise ValueError(
+            "candidate score table has no supported comparison-run score column"
+        )
+    for prefix in available_prefixes:
+        _require_columns(
+            scores,
+            (prefix, *(f"{prefix}{suffix}" for suffix in PROVENANCE_SUFFIXES)),
+            name=f"candidate score table ({prefix})",
+        )
     comparison_columns = _comparison_columns(scores)
     ligand_authoritative_columns = _ligand_authoritative_columns(base)
     target_authoritative_columns = _target_authoritative_columns(base)
@@ -914,6 +924,7 @@ def merge_matched_inactive_scores(
                 "score_row": score_position if score_position is not None else "",
                 CONSENSUS_PREFIX: score_values.get(CONSENSUS_PREFIX),
                 SCORCH_PREFIX: score_values.get(SCORCH_PREFIX),
+                VINA_STAGE1_PREFIX: score_values.get(VINA_STAGE1_PREFIX),
                 "selected_final_score": final_score,
                 "selected_final_score_source": final_score_source,
                 "score_provenance_errors": ";".join(provenance_errors),
@@ -927,6 +938,7 @@ def merge_matched_inactive_scores(
         "final_score",
         "final_score_source",
         "spd_binding_label",
+        "external_four_state_ml_label",
         "combined_activity_ml_label",
         "activity_value_nm",
         "activity_units",
@@ -972,6 +984,10 @@ def merge_matched_inactive_scores(
     )
     appended_combined_labels = pd.to_numeric(
         candidate_frame.get("combined_activity_ml_label", pd.Series(dtype=float)),
+        errors="coerce",
+    )
+    appended_external_labels = pd.to_numeric(
+        candidate_frame.get("external_four_state_ml_label", pd.Series(dtype=float)),
         errors="coerce",
     )
     candidate_keys = {
@@ -1050,7 +1066,8 @@ def merge_matched_inactive_scores(
         ("base_row_count_preserved", len(base_prefix) == len(base)),
         ("output_row_count_expected", len(merged) == len(base) + len(candidate_frame)),
         ("output_columns_unique", merged.columns.is_unique),
-        ("all_appended_spd_labels_zero", appended_labels.eq(0).all()),
+        ("all_appended_spd_labels_unknown", appended_labels.isna().all()),
+        ("all_appended_external_labels_zero", appended_external_labels.eq(0).all()),
         ("all_appended_combined_labels_zero", appended_combined_labels.eq(0).all()),
         (
             "all_appended_final_scores_finite",
@@ -1117,6 +1134,7 @@ def merge_matched_inactive_scores(
                 "score_row",
                 CONSENSUS_PREFIX,
                 SCORCH_PREFIX,
+                VINA_STAGE1_PREFIX,
                 "selected_final_score",
                 "selected_final_score_source",
                 "score_provenance_errors",
@@ -1150,9 +1168,12 @@ def merge_matched_inactive_scores(
                         for row in selected.to_dict(orient="records")
                     )
                 ),
-                "appended_rows_passing": int(appended_labels.eq(0).sum()),
+                "appended_rows_passing": int(appended_external_labels.eq(0).sum()),
                 "appended_rows": int(len(candidate_frame)),
-                "passed": bool(appended_labels.eq(0).all()),
+                "passed": bool(
+                    appended_labels.isna().all()
+                    and appended_external_labels.eq(0).all()
+                ),
             },
             {
                 "contract": "selected_projected_label_status",
@@ -1257,12 +1278,14 @@ def merge_matched_inactive_scores(
             else "reject_candidate"
         ),
         "score_policy": (
-            f"finite {SCORCH_PREFIX} first, else finite {CONSENSUS_PREFIX}; "
+            f"finite {SCORCH_PREFIX} first, else finite {VINA_STAGE1_PREFIX}, "
+            f"else finite {CONSENSUS_PREFIX}; "
             "chosen comparison provenance is mandatory"
         ),
         "label_policy": (
             "append only selected rows with projected_label=0 and "
-            f"projected_label_status={LABEL_STATUS}; write both model labels as 0"
+            f"projected_label_status={LABEL_STATUS}; write external/combined "
+            "activity labels as 0 while SPD assay labels remain unknown"
         ),
         "identity_policy": (
             "drug_id and ligand metadata come only from a strict unique normalized "

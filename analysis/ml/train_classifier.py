@@ -19,7 +19,7 @@ from analysis.ml.decision_metrics import write_decision_metrics, write_group_top
 from analysis.ml.experiment_tracking import track_model_run
 from analysis.ml.explain import write_feature_importance
 from analysis.ml.feature_sets import RETAINED_CONTEXT_AUDIT_COLUMNS, effective_exclude_features, get_feature_set
-from analysis.ml.labels import binary_label_series
+from analysis.ml.labels import binary_label_series, training_eligibility_mask
 from analysis.ml.model_run_ledger import write_model_run_record
 from analysis.ml.leakage_checks import assert_no_leakage
 from analysis.ml.split_manifest import load_locked_split_manifest, write_split_manifest
@@ -100,6 +100,8 @@ def train_ml_model(
     group_reweight_max_factor: float = 5.0,
 ) -> dict[str, object]:
     df = pd.read_csv(dataset_path, low_memory=False)
+    eligibility, eligibility_summary = training_eligibility_mask(df)
+    df = df.loc[eligibility].copy()
     df["_atlas_observed_label"] = binary_label_series(df[label_col])
     excluded = effective_exclude_features(
         label_col,
@@ -138,6 +140,7 @@ def train_ml_model(
     data[label_col] = data[label_col].astype(int)
     locked_validation_idx = pd.Index([])
     locked_split_metadata: dict[str, object] | None = None
+    split_summary: dict[str, object] | None
     if split_manifest is not None:
         locked = load_locked_split_manifest(data, split_manifest, label_col=label_col, split_mode=split_mode)
         train_idx = locked["train_idx"]  # type: ignore[assignment]
@@ -157,7 +160,6 @@ def train_ml_model(
             max_missing_fraction=temporal_max_missing_fraction,
         )
         custom = _custom_split(data, split_column, train_values, test_values)
-        split_summary: dict[str, object] | None
         if temporal is not None:
             train_idx, test_idx, split_summary = temporal
         elif custom is not None:
@@ -173,6 +175,10 @@ def train_ml_model(
         raise ValueError(f"holdout split leakage detected: {split_summary}")
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+    (out_path / "training_eligibility_manifest.json").write_text(
+        json.dumps(eligibility_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     if model_params is not None and pu_mode in {
         "bagging_pu",
         "stratified_bagging_pu",
@@ -194,13 +200,30 @@ def train_ml_model(
         exclude_features=sorted(excluded),
         retained_excluded_features=retained_excluded_features,
         retained_context_not_trained=retained_context_not_trained,
-        provenance={"stage": "train_ml_model", "split_mode": split_mode, **dict(dataset_provenance or {})},
+        provenance={
+            "stage": "train_ml_model",
+            "split_mode": split_mode,
+            "training_eligibility": eligibility_summary,
+            **dict(dataset_provenance or {}),
+        },
     )
     unlabeled_pool = _exclude_unlabeled_holdout_entities(
         df.loc[df["_atlas_observed_label"].isna()].copy(),
         test,
         split_mode,
     )
+    validation_group_col = {
+        "drug_holdout": "drug_id",
+        "target_holdout": "target_id",
+        "scaffold_holdout": "scaffold_key",
+        "chemical_cluster_holdout": "chemical_cluster",
+        "target_family_holdout": "target_family",
+        "source_holdout": "label_source",
+    }.get(split_mode)
+    calibration_requested = str(calibration_method or "none").strip().lower() in {
+        "sigmoid",
+        "isotonic",
+    }
     if len(locked_validation_idx):
         model_train = train.copy()
         validation = data.loc[locked_validation_idx].copy()
@@ -211,7 +234,17 @@ def train_ml_model(
             validation_fold_col=validation_fold_col,
             validation_fold_value=validation_fold_value,
             seed=seed,
-            validation_fraction=validation_fraction if nested_model_selection or validation_fold_col or hpo_metadata is not None else 0.0,
+            validation_fraction=(
+                validation_fraction
+                if (
+                    nested_model_selection
+                    or validation_fold_col
+                    or hpo_metadata is not None
+                    or calibration_requested
+                )
+                else 0.0
+            ),
+            validation_group_col=validation_group_col,
         )
     x_train, preprocessing = _fit_design_matrix(model_train, features)
     x_test = _transform_design_matrix(test, preprocessing)
@@ -375,6 +408,7 @@ def train_ml_model(
                 {
                     "status": "fit",
                     "n_calibration": int(len(validation)),
+                    "calibration_group_col": validation_group_col,
                     "calibration_role": (
                         "validation_model_selection_and_calibration"
                         if nested_model_selection or validation_fold_col or hpo_metadata is not None

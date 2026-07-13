@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
 from typing import Any
 
 from analysis.ml.audit_data_card import write_ml_data_card
+from analysis.ml.audit_utils import load_table
 from analysis.ml.binding_label_contract_audit import audit_binding_label_contract
 from analysis.ml.claim_readiness import write_audit_claim_readiness
 from analysis.ml.data_gap_report import run_data_gap_report
@@ -14,6 +16,7 @@ from analysis.ml.descriptor_constellation_audit import (
     run_descriptor_constellation_audit,
 )
 from analysis.ml.leakage_overlap_audit import DEFAULT_SPLITS, audit_ml_leakage_overlap
+from analysis.ml.labels import training_eligibility_mask
 from analysis.ml.score_scale_audit import write_score_scale_audit
 from analysis.ml.source_transfer_audit import audit_source_transfer
 
@@ -40,18 +43,35 @@ def run_ml_audit_suite(
 ) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    data_card = write_ml_data_card(dataset_path, label_col, feature_set, exclude_features, out)
+    raw = load_table(Path(dataset_path))
+    eligibility, eligibility_summary = training_eligibility_mask(raw)
+    effective_dataset = Path(dataset_path)
+    if eligibility_summary["excluded_rows"]:
+        effective_dataset = out / "training_eligible_audit_input.csv"
+        raw.loc[eligibility].to_csv(effective_dataset, index=False)
+    (out / "training_eligibility_manifest.json").write_text(
+        json.dumps(eligibility_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    # Wide model-ready tables contain hundreds of object columns. Keeping the
+    # initial frame alive while each component reloads the table can double the
+    # peak memory of the audit suite and trigger an OOM kill.
+    del raw, eligibility
+    gc.collect()
+    data_card = write_ml_data_card(
+        effective_dataset, label_col, feature_set, exclude_features, out
+    )
     binding_label_contract = audit_binding_label_contract(
-        dataset_path, out / "binding_label_contract"
+        effective_dataset, out / "binding_label_contract"
     )
     score_scale = write_score_scale_audit(
-        dataset_path,
+        effective_dataset,
         out / "score_scale",
         feature_names=data_card.get("features_available") or [],
     )
     try:
         ligand_identity = run_descriptor_constellation_audit(
-            dataset_path,
+            effective_dataset,
             out / "ligand_identity",
             label_col=label_col,
         )
@@ -64,7 +84,7 @@ def run_ml_audit_suite(
             encoding="utf-8",
         )
     leakage = audit_ml_leakage_overlap(
-        dataset_path,
+        effective_dataset,
         label_col,
         out / "leakage",
         feature_set=feature_set,
@@ -89,12 +109,14 @@ def run_ml_audit_suite(
     }
     decoy_bias = audit_decoy_bias(dataset_path, out / "decoy_bias", seed=seed)
     outputs["decoy_bias"] = decoy_bias.get("outputs", str(out / "decoy_bias" / "decoy_bias_summary.json"))
-    data_gap = run_data_gap_report(dataset_path, out / "data_gap", labels=[label_col])
+    data_gap = run_data_gap_report(
+        effective_dataset, out / "data_gap", labels=[label_col]
+    )
     outputs["data_gap"] = data_gap.get("outputs", str(out / "data_gap" / "data_gap_manifest.json"))
     independence: dict[str, Any] | None = None
     if candidates:
         independence = audit_dataset_independence(
-            dataset_path,
+            effective_dataset,
             candidates,
             out / "independence",
             strict_pair_overlap=True,
@@ -104,7 +126,7 @@ def run_ml_audit_suite(
     source_transfer: dict[str, Any] | None = None
     if source_transfer_train and source_transfer_test:
         source_transfer = audit_source_transfer(
-            dataset_path,
+            effective_dataset,
             label_col,
             out / "source_transfer",
             train_sources=source_transfer_train,
@@ -128,6 +150,8 @@ def run_ml_audit_suite(
     outputs["claim_readiness"] = str(out / "ml_audit_claim_readiness.json")
     manifest: dict[str, Any] = {
         "dataset_path": str(dataset_path),
+        "effective_dataset_path": str(effective_dataset),
+        "training_eligibility": eligibility_summary,
         "label_col": label_col,
         "feature_set": feature_set,
         "claim_mode": claim_mode,
@@ -144,6 +168,9 @@ def run_ml_audit_suite(
         "claim_readiness": readiness,
         "outputs": outputs,
     }
+    outputs["training_eligibility"] = str(
+        out / "training_eligibility_manifest.json"
+    )
     (out / "ml_audit_suite_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True),
         encoding="utf-8",

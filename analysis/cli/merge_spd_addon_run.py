@@ -36,12 +36,39 @@ SCORE_COLS = [
     "source_csv",
 ]
 
+REFERENCE_VINA_COLS = [
+    "reference_vina_status",
+    "reference_vina_stage1_kcal_mol",
+    "reference_vina_empirical_p",
+    "reference_vina_q_bh_global",
+    "reference_vina_q_bh_target",
+    "reference_vina_empirical_tail_z",
+    "reference_vina_top10pct",
+    "reference_vina_config",
+    "reference_vina_pose",
+    "z_vs_compare_run_vina_stage1",
+    "z_vs_compare_run_vina_stage1_source",
+    "z_vs_compare_run_vina_stage1_run_id",
+    "z_vs_compare_run_vina_stage1_run_sha256",
+    "z_vs_compare_run_vina_stage1_null_sha256",
+    "z_vs_compare_run_vina_stage1_decoy_n",
+    "z_vs_compare_run_vina_stage1_decoy_mu",
+    "z_vs_compare_run_vina_stage1_decoy_sigma",
+    "z_vs_compare_run_vina_stage1_decoy_median",
+    "z_vs_compare_run_vina_stage1_decoy_mad",
+    "z_vs_compare_run_vina_stage1_decoy_unique_scores",
+    "z_vs_compare_run_vina_stage1_score_space_sha256",
+    "z_vs_compare_run_vina_stage1_receptor_sha256",
+    "z_vs_compare_run_vina_stage1_ligand_pdbqt_sha256",
+]
+
 ADDON_SCORE_PROVENANCE_COLS = [
     "addon_run_consensus_rank",
     "addon_run_consensus_rank_source",
     "addon_run_target_row_count",
     "addon_run_score_comparability",
     "addon_run_scorch_score",
+    *REFERENCE_VINA_COLS,
 ]
 
 ADDON_PROVENANCE_COLS = [
@@ -118,6 +145,24 @@ def _ligand_key(frame: pd.DataFrame) -> pd.Series:
 
 def _row_key(frame: pd.DataFrame) -> pd.Series:
     return frame["pdb_id"].astype(str).str.upper() + "|" + _ligand_key(frame)
+
+
+def _numeric_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame:
+        return pd.Series(float("nan"), index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _first_nonempty(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    """Return the first populated text value from each row."""
+
+    result = pd.Series("", index=frame.index, dtype="object")
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        candidate = frame[column].fillna("").astype(str).str.strip()
+        result = result.where(result.str.strip().ne(""), candidate)
+    return result.replace("", pd.NA)
 
 
 def _collapse_duplicate_score_pairs(
@@ -239,7 +284,9 @@ def build_addon_rows(base: pd.DataFrame, master: pd.DataFrame, selected: pd.Data
     selected["_addon_pair_key"] = _row_key(selected)
     master["_addon_pair_key"] = _row_key(master)
 
-    score_cols = [col for col in SCORE_COLS if col in master.columns]
+    score_cols = [
+        col for col in (*SCORE_COLS, *REFERENCE_VINA_COLS) if col in master.columns
+    ]
     score = master[["_addon_pair_key", *score_cols]].drop_duplicates("_addon_pair_key", keep="first")
     joined = selected.merge(score, on="_addon_pair_key", how="left", suffixes=("", "_score"))
 
@@ -266,11 +313,15 @@ def build_addon_rows(base: pd.DataFrame, master: pd.DataFrame, selected: pd.Data
         if source_col in joined.columns and dest_col in rows.columns:
             rows[dest_col] = joined[source_col]
 
-    rows["addon_run_consensus_rank"] = pd.to_numeric(
-        joined.get("consensus_score"), errors="coerce"
-    )
-    rows["addon_run_consensus_rank_source"] = (
-        "within_addon_target_library_rank_percentile"
+    consensus_rank = _numeric_column(joined, "consensus_score")
+    reference_z = _numeric_column(joined, "z_vs_compare_run_vina_stage1")
+    rows["addon_run_consensus_rank"] = consensus_rank
+    rows["addon_run_consensus_rank_source"] = consensus_rank.map(
+        lambda value: (
+            "within_addon_target_library_rank_percentile"
+            if pd.notna(value)
+            else pd.NA
+        )
     )
     master_target_counts = (
         master["pdb_id"].fillna("").astype(str).str.upper().value_counts()
@@ -278,8 +329,12 @@ def build_addon_rows(base: pd.DataFrame, master: pd.DataFrame, selected: pd.Data
     rows["addon_run_target_row_count"] = (
         joined["pdb_id"].fillna("").astype(str).str.upper().map(master_target_counts)
     )
-    rows["addon_run_score_comparability"] = (
-        "not_comparable_to_full_spd_dud_library"
+    rows["addon_run_score_comparability"] = reference_z.map(
+        lambda value: (
+            "common_spd90_raw_vina_stage1_dud_score_space"
+            if pd.notna(value)
+            else "not_comparable_to_full_spd_dud_library"
+        )
     )
     rows["addon_run_scorch_score"] = pd.to_numeric(
         joined.get("SCORCH_score_used"), errors="coerce"
@@ -338,12 +393,46 @@ def build_addon_rows(base: pd.DataFrame, master: pd.DataFrame, selected: pd.Data
             "fallback|missing_consensus_decoy_null",
             regex=True,
         )
-        rows["atlas_score"] = z_feature.where(z_feature.notna(), selected.where(valid_selected))
+        legacy_atlas = z_feature.where(
+            z_feature.notna(), selected.where(valid_selected)
+        )
+        rows["atlas_score"] = reference_z.where(reference_z.notna(), legacy_atlas)
+    if "final_score" in rows.columns:
+        legacy_final = pd.to_numeric(rows["final_score"], errors="coerce")
+        rows["final_score"] = reference_z.where(reference_z.notna(), legacy_final)
+    if "final_score_source" in rows.columns:
+        legacy_source = rows["final_score_source"]
+        rows["final_score_source"] = legacy_source.where(
+            reference_z.isna(), "comparison_run_vina_stage1"
+        )
 
     label = _binary_label(joined)
     for col in ["scenario_a_tier1_label", "external_four_state_ml_label", "external_four_state_label", "combined_activity_label", "combined_activity_ml_label"]:
         if col in rows.columns:
             rows[col] = label
+
+    # External direct assays have different semantics from the uniform SPD
+    # AC50 panel. They may train the combined activity sensitivity model, but
+    # they must never be represented as SPD assay or exposure truth.
+    for col in (
+        "spd_binding_label",
+        "spd_binding_ml_label",
+        "spd_activity_label",
+        "spd_activity_ml_label",
+        "spd_exposure_label",
+        "spd_exposure_ml_label",
+        "spd_exposure_relevant",
+        "spd_exposure_weak",
+        "spd_exposure_unlikely",
+        "spd_ac50",
+        "spd_ac50_nm",
+        "spd_ac50_uM",
+        "spd_exposure_margin",
+        "spd_activity_relation",
+        "spd_inchikey",
+    ):
+        if col in rows.columns:
+            rows[col] = pd.NA
 
     if "scenario_a_tier1_label_status" in rows.columns:
         rows["scenario_a_tier1_label_status"] = label.map({1: "projected_positive", 0: "projected_negative"}).fillna("projected_unknown")
@@ -395,7 +484,7 @@ def build_addon_rows(base: pd.DataFrame, master: pd.DataFrame, selected: pd.Data
             rows[dest_col] = joined[source_col]
 
     provenance = {
-        "source_objective": "spd_binding_activity",
+        "source_objective": "external_binding_activity",
         "label_source": f"{addon_name}_external",
         "source_family": f"{addon_name}_external",
         "upstream_source": "BindingDB;ChEMBL;DrugCentral;ToxCast;SPD",
@@ -414,6 +503,26 @@ def build_addon_rows(base: pd.DataFrame, master: pd.DataFrame, selected: pd.Data
             else:
                 rows[col] = value
 
+    row_source = _first_nonempty(
+        joined,
+        ("source_name", "source_family", "representative_source", "source", "sources"),
+    )
+    row_policy = _first_nonempty(
+        joined,
+        ("source_label_policy", "addon_label_policy", "measured_positive_policy"),
+    )
+    for column in ("source_family", "upstream_source"):
+        if column in rows.columns:
+            rows[column] = row_source.where(row_source.notna(), rows[column])
+    if "label_source" in rows.columns:
+        rows["label_source"] = row_source.map(
+            lambda value: f"{value}_{addon_name}" if pd.notna(value) else pd.NA
+        ).where(row_source.notna(), rows["label_source"])
+    if "source_label_policy" in rows.columns:
+        rows["source_label_policy"] = row_policy.where(
+            row_policy.notna(), rows["source_label_policy"]
+        )
+
     if "_internal_spd_addons_score_pair_key" in rows.columns:
         rows["_internal_spd_addons_score_pair_key"] = joined["_addon_pair_key"]
     if "_internal_spd_addons_run_mode" in rows.columns:
@@ -431,6 +540,135 @@ def build_addon_rows(base: pd.DataFrame, master: pd.DataFrame, selected: pd.Data
     return rows
 
 
+def _backfill_existing_reference_scores(
+    base: pd.DataFrame,
+    addon: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Fill missing score fields on existing pairs without touching labels/identity."""
+
+    if addon.empty:
+        return base, {"matched_rows": 0, "rows_updated": 0, "values_filled": 0}
+    out = base.copy()
+    out["_reference_backfill_key"] = _row_key(out)
+    source = addon.copy()
+    source["_reference_backfill_key"] = _row_key(source)
+    if source["_reference_backfill_key"].duplicated().any():
+        raise ValueError("reference-score backfill contains duplicate pair keys")
+    lookup = source.set_index("_reference_backfill_key")
+    matched = out["_reference_backfill_key"].isin(lookup.index)
+    rows_updated = pd.Series(False, index=out.index)
+    values_filled = 0
+    fill_columns = [
+        *REFERENCE_VINA_COLS,
+        "addon_run_score_comparability",
+        "final_score",
+        "final_score_source",
+        "atlas_score",
+    ]
+    for column in fill_columns:
+        if column not in out or column not in lookup:
+            continue
+        candidate = out["_reference_backfill_key"].map(lookup[column])
+        missing = out[column].isna()
+        if out[column].dtype == object:
+            missing |= out[column].fillna("").astype(str).str.strip().eq("")
+        fill_mask = matched & missing & candidate.notna()
+        if not fill_mask.any():
+            continue
+        out.loc[fill_mask, column] = candidate.loc[fill_mask]
+        rows_updated |= fill_mask
+        values_filled += int(fill_mask.sum())
+    out = out.drop(columns=["_reference_backfill_key"])
+    return out, {
+        "matched_rows": int(matched.sum()),
+        "rows_updated": int(rows_updated.sum()),
+        "values_filled": values_filled,
+    }
+
+
+def merge_spd_addon_tables(
+    *,
+    base_table: Path,
+    master_rows: Path,
+    selected_pairs: Path,
+    out: Path,
+    addon_name: str = "spdaddon",
+    addon_rows_out: Path | None = None,
+    strict_selected_coverage: bool = False,
+    backfill_existing_scores: bool = False,
+) -> dict[str, object]:
+    """Merge one scored add-on selection while preserving assay namespaces."""
+
+    base = pd.read_csv(base_table, low_memory=False)
+    for col in ADDON_PROVENANCE_COLS:
+        if col not in base.columns:
+            base[col] = pd.NA
+    base, base_collapse = _collapse_duplicate_score_pairs(base)
+    master = pd.read_csv(master_rows, low_memory=False)
+    selected = pd.read_csv(selected_pairs, low_memory=False)
+    selected_keys = set(_row_key(selected).astype(str))
+    master_keys = set(_row_key(master).astype(str))
+    missing_selected_keys = sorted(selected_keys - master_keys)
+    if strict_selected_coverage and missing_selected_keys:
+        preview = ", ".join(missing_selected_keys[:10])
+        raise ValueError(
+            f"{len(missing_selected_keys)} selected pair(s) have no scored master row; examples: {preview}"
+        )
+    addon = build_addon_rows(base, master, selected, addon_name=addon_name)
+    scored = pd.Series(False, index=addon.index)
+    for column in (
+        "z_vs_compare_run_vina_stage1",
+        "addon_run_consensus_rank",
+        "addon_run_scorch_score",
+    ):
+        if column in addon:
+            scored |= pd.to_numeric(addon[column], errors="coerce").notna()
+    addon = addon.loc[scored].copy()
+
+    base_keys = set(_row_key(base).astype(str)) if {"pdb_id", "ligand_base"}.issubset(base.columns) else set()
+    addon_keys = _row_key(addon).astype(str)
+    existing_addon = addon.loc[addon_keys.isin(base_keys)].copy()
+    backfill = {"matched_rows": 0, "rows_updated": 0, "values_filled": 0}
+    if backfill_existing_scores:
+        base, backfill = _backfill_existing_reference_scores(base, existing_addon)
+    addon = addon.loc[~addon_keys.isin(base_keys)].copy()
+
+    merged = pd.concat([base, addon], ignore_index=True, sort=False)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    merged.to_csv(out, index=False)
+    if addon_rows_out:
+        addon_rows_out.parent.mkdir(parents=True, exist_ok=True)
+        addon.to_csv(addon_rows_out, index=False)
+
+    manifest: dict[str, object] = {
+        "base_table": str(base_table),
+        "master_rows": str(master_rows),
+        "selected_pairs": str(selected_pairs),
+        "out": str(out),
+        "addon_rows_out": str(addon_rows_out) if addon_rows_out else None,
+        "base_rows": int(len(base)),
+        "base_pair_evidence_collapse": base_collapse,
+        "selected_rows": int(len(selected)),
+        "selected_unique_pairs": int(len(selected_keys)),
+        "selected_pairs_without_score": int(len(missing_selected_keys)),
+        "selected_pairs_without_score_examples": missing_selected_keys[:20],
+        "scored_selected_rows": int(len(addon)),
+        "merged_rows": int(len(merged)),
+        "addon_positive_rows": int((pd.to_numeric(addon.get("combined_activity_ml_label"), errors="coerce") == 1).sum()),
+        "addon_negative_rows": int((pd.to_numeric(addon.get("combined_activity_ml_label"), errors="coerce") == 0).sum()),
+        "addon_common_reference_vina_rows": int(
+            pd.to_numeric(
+                addon.get("z_vs_compare_run_vina_stage1"), errors="coerce"
+            ).notna().sum()
+        ),
+        "existing_pair_score_backfill": backfill,
+    }
+    out.with_suffix(".manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return manifest
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Merge a targeted SPD add-on docking run into a Phase 1 model-ready table.")
     parser.add_argument("--base-table", required=True, type=Path)
@@ -444,55 +682,25 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Fail when a selected PDB-ligand pair has no corresponding scored master row.",
     )
+    parser.add_argument(
+        "--backfill-existing-scores",
+        action="store_true",
+        help=(
+            "Fill only missing common-reference score fields for selected pairs "
+            "already present in the base table; labels and identities are untouched."
+        ),
+    )
     args = parser.parse_args(argv)
-
-    base = pd.read_csv(args.base_table, low_memory=False)
-    for col in ADDON_PROVENANCE_COLS:
-        if col not in base.columns:
-            base[col] = pd.NA
-    base, base_collapse = _collapse_duplicate_score_pairs(base)
-    master = pd.read_csv(args.master_rows, low_memory=False)
-    selected = pd.read_csv(args.selected_pairs, low_memory=False)
-    selected_keys = set(_row_key(selected).astype(str))
-    master_keys = set(_row_key(master).astype(str))
-    missing_selected_keys = sorted(selected_keys - master_keys)
-    if args.strict_selected_coverage and missing_selected_keys:
-        preview = ", ".join(missing_selected_keys[:10])
-        raise ValueError(
-            f"{len(missing_selected_keys)} selected pair(s) have no scored master row; examples: {preview}"
-        )
-    addon = build_addon_rows(base, master, selected, addon_name=args.addon_name)
-    addon = addon.dropna(subset=["addon_run_consensus_rank"], how="all")
-
-    base_keys = set(_row_key(base).astype(str)) if {"pdb_id", "ligand_base"}.issubset(base.columns) else set()
-    addon_keys = _row_key(addon).astype(str)
-    addon = addon.loc[~addon_keys.isin(base_keys)].copy()
-
-    merged = pd.concat([base, addon], ignore_index=True, sort=False)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(args.out, index=False)
-    if args.addon_rows_out:
-        args.addon_rows_out.parent.mkdir(parents=True, exist_ok=True)
-        addon.to_csv(args.addon_rows_out, index=False)
-
-    manifest = {
-        "base_table": str(args.base_table),
-        "master_rows": str(args.master_rows),
-        "selected_pairs": str(args.selected_pairs),
-        "out": str(args.out),
-        "addon_rows_out": str(args.addon_rows_out) if args.addon_rows_out else None,
-        "base_rows": int(len(base)),
-        "base_pair_evidence_collapse": base_collapse,
-        "selected_rows": int(len(selected)),
-        "selected_unique_pairs": int(len(selected_keys)),
-        "selected_pairs_without_score": int(len(missing_selected_keys)),
-        "selected_pairs_without_score_examples": missing_selected_keys[:20],
-        "scored_selected_rows": int(len(addon)),
-        "merged_rows": int(len(merged)),
-        "addon_positive_rows": int((pd.to_numeric(addon.get("combined_activity_ml_label"), errors="coerce") == 1).sum()),
-        "addon_negative_rows": int((pd.to_numeric(addon.get("combined_activity_ml_label"), errors="coerce") == 0).sum()),
-    }
-    args.out.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    manifest = merge_spd_addon_tables(
+        base_table=args.base_table,
+        master_rows=args.master_rows,
+        selected_pairs=args.selected_pairs,
+        out=args.out,
+        addon_name=args.addon_name,
+        addon_rows_out=args.addon_rows_out,
+        strict_selected_coverage=args.strict_selected_coverage,
+        backfill_existing_scores=args.backfill_existing_scores,
+    )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0
 

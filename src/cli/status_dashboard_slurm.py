@@ -50,12 +50,17 @@ def parse_sacct_output(text: str) -> list[dict[str, Any]]:
     return jobs
 
 
-def slurm_job_ids(manifest: Mapping[str, Any] | None) -> list[str]:
+def slurm_job_ids(
+    manifest: Mapping[str, Any] | None,
+    *,
+    include_environment: bool = True,
+) -> list[str]:
     ids: list[str] = []
-    for key in ("SLURM_ARRAY_JOB_ID", "SLURM_JOB_ID"):
-        raw = str(os.environ.get(key, "") or "").strip()
-        if raw and raw not in ids:
-            ids.append(raw)
+    if include_environment:
+        for key in ("SLURM_ARRAY_JOB_ID", "SLURM_JOB_ID"):
+            raw = str(os.environ.get(key, "") or "").strip()
+            if raw and raw not in ids:
+                ids.append(raw)
     resources = manifest.get("resources") if isinstance(manifest, Mapping) else None
     slurm = resources.get("slurm") if isinstance(resources, Mapping) else None
     if isinstance(slurm, Mapping):
@@ -66,8 +71,12 @@ def slurm_job_ids(manifest: Mapping[str, Any] | None) -> list[str]:
     return ids
 
 
-def slurm_status(manifest: Mapping[str, Any] | None) -> dict[str, Any]:
-    job_ids = slurm_job_ids(manifest)
+def slurm_status(
+    manifest: Mapping[str, Any] | None,
+    *,
+    include_environment: bool = True,
+) -> dict[str, Any]:
+    job_ids = slurm_job_ids(manifest, include_environment=include_environment)
     out: dict[str, Any] = {
         "available": bool(shutil.which("squeue") or shutil.which("sacct")),
         "job_ids": job_ids,

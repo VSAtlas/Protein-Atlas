@@ -8,6 +8,7 @@ import pandas as pd
 
 from analysis.ml.feature_backfill import backfill_training_features
 from analysis.ml.chemotype_backfill import add_structural_ligand_chemotypes
+from analysis.ml.chemical_clusters import add_butina_chemical_clusters
 from analysis.ml.ligand_descriptors import add_ligand_physchem_descriptors
 
 
@@ -38,6 +39,23 @@ SOURCE_FAMILY_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("sider", ("sider",)),
 ]
 
+TARGET_FAMILY_CANONICAL = {
+    "gpcr": "GPCR",
+    "ion channel": "Ion Channel",
+    "ion_channel": "Ion Channel",
+    "kinase": "Kinase",
+    "nuclear receptor": "Nuclear Hormone Receptor",
+    "nuclear hormone receptor": "Nuclear Hormone Receptor",
+    "nuclear_receptor": "Nuclear Hormone Receptor",
+    "transporter": "Transporter",
+    "enzyme": "Enzyme",
+    "cyp enzyme": "Enzyme",
+    "cyp_enzyme": "Enzyme",
+    "oxidoreductase": "Enzyme",
+    "phosphatase": "Enzyme",
+    "protease": "Protease",
+}
+
 
 def _clean(value: Any) -> str:
     if pd.isna(value):
@@ -51,6 +69,12 @@ def _clean_lower(value: Any) -> str:
 
 def _is_missing(value: Any) -> bool:
     return _clean_lower(value) in UNASSIGNED
+
+
+def _canonical_target_family(value: Any) -> str:
+    cleaned = _clean(value)
+    key = cleaned.casefold().replace("-", " ")
+    return TARGET_FAMILY_CANONICAL.get(key, cleaned)
 
 
 def _first_present(row: pd.Series, fields: list[str]) -> tuple[str, str]:
@@ -107,7 +131,7 @@ def enrich_ml_feature_metadata(
     drop_columns: list[str] | None = None,
     run_dir: Path | None = None,
     repo_root: Path | None = None,
-    extra_feature_tables: list[Path] | None = None,
+    extra_feature_tables: list[str | Path] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     out = df.copy()
     summary: dict[str, Any] = {
@@ -138,6 +162,8 @@ def enrich_ml_feature_metadata(
 
     if chemical_cluster != "none":
         out = _add_chemical_cluster(out, mode=chemical_cluster)
+        if out.attrs.get("chemical_cluster_summary"):
+            summary.update(out.attrs["chemical_cluster_summary"])
     if target_family != "none":
         out = _add_target_family(out, mode=target_family)
     if source_lineage != "none":
@@ -151,6 +177,11 @@ def enrich_ml_feature_metadata(
 
 
 def _add_chemical_cluster(df: pd.DataFrame, *, mode: str) -> pd.DataFrame:
+    if mode in {"butina", "ecfp"}:
+        clustered, summary = add_butina_chemical_clusters(df)
+        clustered.attrs["chemical_cluster_summary"] = summary
+        return clustered
+
     out = df.copy()
     existing = out["chemical_cluster"].map(_clean) if "chemical_cluster" in out.columns else pd.Series("", index=out.index)
     assigned = existing.map(lambda value: not _is_missing(value))
@@ -227,6 +258,7 @@ def _add_target_family(df: pd.DataFrame, *, mode: str) -> pd.DataFrame:
         sources.loc[mask] = family_sources.loc[mask]
 
     values = values.where(values.map(lambda value: not _is_missing(value)), "TARGET_FAMILY_UNASSIGNED")
+    values = values.map(_canonical_target_family)
     sources = sources.where(sources.astype(str).str.len().gt(0), "unassigned")
     out["target_family"] = values
     out["target_family_source"] = sources
@@ -300,7 +332,7 @@ def refresh_tables(
     target_family: str = "auto",
     source_lineage: str = "auto",
     drop_columns: list[str] | None = None,
-    extra_feature_tables: list[Path] | None = None,
+    extra_feature_tables: list[str | Path] | None = None,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     outputs: list[str] = []

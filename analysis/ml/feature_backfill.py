@@ -9,10 +9,20 @@ import pandas as pd
 
 MISSING_TEXT = {"", "nan", "none", "null", "na", "n/a", "other / unassigned", "other-unassigned"}
 SENSITIVE_SITE_TOKENS = ("heart", "liver", "kidney", "brain", "cns", "lung", "reproductive", "blood", "immune")
-SCORE_COLUMNS = ["atlas_score", "consensus_score", "SCORCH_score_used", "final_score", "banana_score"]
+SCORE_COLUMNS = ["atlas_score", "consensus_score", "consensus_z_score", "SCORCH_score_used", "final_score", "banana_score"]
 PAIR_FEATURE_COLUMNS = [
     "atlas_score",
     "consensus_score",
+    "consensus_score_raw",
+    "consensus_z_score",
+    "consensus_z_score_source",
+    "consensus_z_decoy_n",
+    "consensus_z_decoy_unique",
+    "consensus_z_decoy_zero_fraction",
+    "consensus_z_decoy_mu",
+    "consensus_z_decoy_sigma",
+    "atlas_binding_prior",
+    "atlas_binding_prior_source",
     "SCORCH_score_used",
     "final_score",
     "banana_score",
@@ -89,18 +99,34 @@ def _ensure_aliases(df: pd.DataFrame) -> pd.DataFrame:
                 out["target_id"] = out[col]
                 out["target_id_source"] = f"{col}_alias"
                 break
-    if "atlas_score" not in out.columns:
-        for col in ("z_selected", "final_score", "consensus_score"):
-            if col in out.columns:
-                out["atlas_score"] = pd.to_numeric(out[col], errors="coerce")
-                out["atlas_score_source_for_ml"] = col
-                break
-    if "consensus_score" not in out.columns:
-        for col in ("final_score", "z_selected"):
-            if col in out.columns:
-                out["consensus_score"] = pd.to_numeric(out[col], errors="coerce")
-                out["consensus_score_source_for_ml"] = col
-                break
+    if "final_score" in out.columns:
+        out["atlas_score"] = pd.to_numeric(out["final_score"], errors="coerce")
+        out["atlas_score_source_for_ml"] = "final_score"
+    elif "atlas_score" not in out.columns:
+        if "consensus_z_score" in out.columns:
+            out["atlas_score"] = pd.to_numeric(
+                out["consensus_z_score"],
+                errors="coerce",
+            )
+            out["atlas_score_source_for_ml"] = "consensus_z_score"
+        elif "z_selected" in out.columns:
+            selected = pd.to_numeric(out["z_selected"], errors="coerce")
+            selected_source = out.get(
+                "z_selected_source",
+                pd.Series("", index=out.index),
+            ).fillna("").astype(str).str.lower()
+            invalid = selected_source.str.contains(
+                "fallback|missing_consensus_decoy_null",
+                regex=True,
+            )
+            out["atlas_score"] = selected.mask(invalid)
+            out["atlas_score_source_for_ml"] = "z_selected_validated"
+    if "consensus_score" not in out.columns and "consensus_z_score" in out.columns:
+        out["consensus_score"] = pd.to_numeric(
+            out["consensus_z_score"],
+            errors="coerce",
+        )
+        out["consensus_score_source_for_ml"] = "consensus_z_score_legacy_alias"
     return out
 
 
@@ -196,6 +222,7 @@ def _fill_from_source(
     keys: list[str],
     columns: list[str],
     source_name: str,
+    overwrite: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     if source.empty or not set(keys).issubset(out.columns) or not set(keys).issubset(source.columns):
         return out, {}
@@ -221,35 +248,46 @@ def _fill_from_source(
         before = int((~_missing_mask(merged[col])).sum())
         missing = _missing_mask(merged[col])
         fill_present = ~_missing_mask(merged[fill_col])
-        merged.loc[missing & fill_present, col] = merged.loc[missing & fill_present, fill_col]
+        update = fill_present if overwrite else (missing & fill_present)
+        merged.loc[update, col] = merged.loc[update, fill_col]
         after = int((~_missing_mask(merged[col])).sum())
-        added = int(after - before)
-        if added > 0:
-            counts[col] = added
+        changed = int(update.sum()) if overwrite else int(after - before)
+        if changed > 0:
+            counts[col] = changed
             source_col = f"{col}_feature_source"
             if source_col not in merged.columns:
                 merged[source_col] = ""
-            merged.loc[missing & fill_present, source_col] = source_name
+            merged.loc[update, source_col] = source_name
     return merged.drop(columns=[col for col in merged.columns if col.endswith("__fill")]), counts
 
 
 def _fill_pair_features(df: pd.DataFrame, run_dir: Path | None, extra_tables: list[Path] | None) -> tuple[pd.DataFrame, dict[str, Any]]:
     out = df.copy()
     summary: dict[str, Any] = {"candidate_tables": [], "filled": {}}
+    # Fill ligand-specific keys before broader drug aliases. Once a value is
+    # filled it is intentionally not overwritten, so broad keys must be last.
     key_sets = [
-        ["drug_id", "target_id", "pdb_id"],
-        ["drug_id", "pdb_id"],
         ["ligand_base", "target_id", "pdb_id"],
         ["ligand_base", "pdb_id"],
+        ["drug_id", "target_id", "pdb_id"],
+        ["drug_id", "pdb_id"],
     ]
     columns = [*PAIR_FEATURE_COLUMNS, *TARGET_FEATURE_COLUMNS, *LIGAND_FEATURE_COLUMNS]
+    explicit_paths = {path.resolve() for path in (extra_tables or [])}
     for path in _existing_candidate_tables(run_dir, extra_tables):
         source = _read_candidate(path)
         if source.empty:
             continue
         source_summary: dict[str, Any] = {"path": str(path), "columns": int(len(source.columns)), "filled": {}}
         for keys in key_sets:
-            out, counts = _fill_from_source(out, source, keys=keys, columns=columns, source_name=str(path))
+            out, counts = _fill_from_source(
+                out,
+                source,
+                keys=keys,
+                columns=columns,
+                source_name=str(path),
+                overwrite=path.resolve() in explicit_paths and keys[0] == "ligand_base",
+            )
             for col, value in counts.items():
                 source_summary["filled"][col] = int(source_summary["filled"].get(col, 0)) + int(value)
                 summary["filled"][col] = int(summary["filled"].get(col, 0)) + int(value)
@@ -318,6 +356,10 @@ def _load_ligand_mapping(repo_root: Path) -> dict[str, dict[str, str]]:
 
 def _ligand_mapping_for_row(row: pd.Series, lookup: dict[str, dict[str, str]]) -> dict[str, str]:
     for field, key_type in (
+        ("rdk_id", "base"),
+        ("_join_rdk", "base"),
+        ("ligand_rdk_id", "base"),
+        ("rdk", "base"),
         ("ligand_base", "base"),
         ("drug_id", "name"),
         ("display_name", "name"),
@@ -334,8 +376,10 @@ def _ligand_mapping_for_row(row: pd.Series, lookup: dict[str, dict[str, str]]) -
 
 def _lookup_records_for_rows(out: pd.DataFrame, lookup: dict[str, dict[str, str]]) -> pd.Series:
     keys = pd.Series("", index=out.index, dtype="object")
-    if "ligand_base" in out.columns:
-        base_keys = "base:" + out["ligand_base"].fillna("").astype(str).str.strip().str.lower()
+    for col in ("rdk_id", "_join_rdk", "ligand_rdk_id", "rdk", "ligand_base"):
+        if col not in out.columns:
+            continue
+        base_keys = "base:" + out[col].fillna("").astype(str).str.strip().str.lower()
         keys = keys.where(base_keys.str.len().le(5), base_keys)
     for col in ("drug_id", "display_name", "generic_name"):
         if col not in out.columns:
@@ -469,41 +513,81 @@ def _fill_sensitive_offsite(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, i
 def _finalize_score_priors(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     out = df.copy()
     filled: dict[str, int] = {}
+    recomputed: dict[str, int] = {}
+    if "final_score" in out.columns:
+        final_score = pd.to_numeric(out["final_score"], errors="coerce")
+        out["atlas_score"] = final_score
+        out["atlas_score_source_for_ml"] = "final_score"
+        out["atlas_binding_prior"] = final_score
+        out["atlas_binding_prior_source"] = "final_score"
+        recomputed["atlas_score"] = int(final_score.notna().sum())
+        recomputed["atlas_binding_prior"] = int(final_score.notna().sum())
     for col in SCORE_COLUMNS:
         if col in out.columns:
             norm_col = f"{col}_normalized"
-            if norm_col not in out.columns or out[norm_col].isna().all():
-                out[norm_col] = _normalize(out[col])
+            normalized = _normalize(out[col])
+            if col == "atlas_score" or norm_col not in out.columns:
+                out[norm_col] = normalized
                 filled[norm_col] = int(out[norm_col].notna().sum())
-    if "banana_binding_probability" not in out.columns and "banana_score" in out.columns:
-        out["banana_binding_probability"] = pd.to_numeric(out["banana_score"], errors="coerce").map(_score_to_probability)
-        filled["banana_binding_probability"] = int(out["banana_binding_probability"].notna().sum())
-    if "banana_atlas_blend_score" not in out.columns:
-        out["banana_atlas_blend_score"] = _weighted_average(
-            out,
-            {
-                "banana_binding_probability": 0.50,
-                "banana_score_normalized": 0.20,
-                "atlas_score_normalized": 0.15,
-                "consensus_score_normalized": 0.10,
-                "SCORCH_score_used_normalized": 0.20,
-                "final_score_normalized": 0.10,
-            },
+            else:
+                missing = pd.to_numeric(out[norm_col], errors="coerce").isna() & normalized.notna()
+                out.loc[missing, norm_col] = normalized.loc[missing]
+                if missing.any():
+                    filled[norm_col] = int(missing.sum())
+
+    if "final_score" in out.columns:
+        pass
+    elif "consensus_z_score" in out.columns:
+        out["atlas_binding_prior"] = pd.to_numeric(
+            out["consensus_z_score"],
+            errors="coerce",
         )
-        filled["banana_atlas_blend_score"] = int(out["banana_atlas_blend_score"].notna().sum())
-    if "binding_expert_score" not in out.columns:
-        out["binding_expert_score"] = _weighted_average(
-            out,
-            {
-                "banana_atlas_blend_score": 1.0,
-                "atlas_score_normalized": 0.25,
-                "consensus_score_normalized": 0.20,
-            },
+        out["atlas_binding_prior_source"] = "consensus_z_score"
+        recomputed["atlas_binding_prior"] = int(out["atlas_binding_prior"].notna().sum())
+    elif "consensus_score" in out.columns:
+        out["atlas_binding_prior"] = pd.to_numeric(out["consensus_score"], errors="coerce")
+        out["atlas_binding_prior_source"] = "consensus_score_rank_percentile"
+        recomputed["atlas_binding_prior"] = int(out["atlas_binding_prior"].notna().sum())
+
+    if "banana_score" in out.columns:
+        banana_probability = pd.to_numeric(out["banana_score"], errors="coerce").map(_score_to_probability)
+        if "banana_binding_probability" not in out.columns:
+            out["banana_binding_probability"] = banana_probability
+            filled["banana_binding_probability"] = int(out["banana_binding_probability"].notna().sum())
+        else:
+            missing = pd.to_numeric(out["banana_binding_probability"], errors="coerce").isna() & banana_probability.notna()
+            out.loc[missing, "banana_binding_probability"] = banana_probability.loc[missing]
+            if missing.any():
+                filled["banana_binding_probability"] = int(missing.sum())
+
+    # BANANA is often joined after the first metadata pass. Always rebuilding
+    # these deterministic priors prevents stale Atlas-only cached values.
+    # The frozen full-library prior must use one comparable Atlas score family.
+    # ``final_score`` can mix Vina, conditional SCORCH, and comparison-run z
+    # values, so it remains available for explicit sensitivity analyses only.
+    blend_inputs = {
+        "banana_binding_probability": 0.50,
+        "consensus_score_normalized": 0.50,
+    }
+    if any(col in out.columns for col in blend_inputs):
+        out["banana_atlas_blend_score"] = _weighted_average(out, blend_inputs)
+        recomputed["banana_atlas_blend_score"] = int(out["banana_atlas_blend_score"].notna().sum())
+
+    expert_inputs = {
+        "banana_atlas_blend_score": 1.0,
+    }
+    if any(col in out.columns for col in expert_inputs):
+        out["binding_expert_score"] = _weighted_average(out, expert_inputs)
+        recomputed["binding_expert_score"] = int(out["binding_expert_score"].notna().sum())
+        banana_present = pd.to_numeric(
+            out.get("banana_score", pd.Series(pd.NA, index=out.index)),
+            errors="coerce",
+        ).notna()
+        out["binding_expert_source"] = "banana_consensus_blend"
+        out.loc[~banana_present, "binding_expert_source"] = (
+            "consensus_score_fallback"
         )
-        filled["binding_expert_score"] = int(out["binding_expert_score"].notna().sum())
-    if "binding_expert_source" not in out.columns and "binding_expert_score" in out.columns:
-        out["binding_expert_source"] = "feature_backfill_score_prior"
-    return out, {"filled": filled}
+    return out, {"filled": filled, "recomputed": recomputed}
 
 
 def backfill_training_features(

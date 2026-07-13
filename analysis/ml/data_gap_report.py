@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from analysis.ml.audit_utils import load_table, split_source_tokens
-from analysis.ml.labels import binary_label_series
+from analysis.ml.labels import binary_label_series, training_eligibility_mask
 
 
 DEFAULT_LABELS = [
@@ -107,7 +107,9 @@ def run_data_gap_report(
     dataset = Path(dataset_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    df = load_table(dataset)
+    raw = load_table(dataset)
+    eligibility, eligibility_summary = training_eligibility_mask(raw)
+    df = raw.loc[eligibility].copy()
     active_labels = [label for label in (labels or DEFAULT_LABELS) if label in df.columns]
     active_groups = [col for col in (group_cols or DEFAULT_GROUP_COLS) if col in df.columns]
 
@@ -156,6 +158,8 @@ def run_data_gap_report(
         "dataset": str(dataset),
         "out_dir": str(out),
         "n_rows": int(len(df)),
+        "n_input_rows": int(len(raw)),
+        "training_eligibility": eligibility_summary,
         "labels": active_labels,
         "group_cols": active_groups,
         "thresholds": {

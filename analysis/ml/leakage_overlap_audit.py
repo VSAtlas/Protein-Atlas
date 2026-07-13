@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,48 @@ DEFAULT_SPLITS = [
     "temporal_holdout",
 ]
 
+AUDIT_CONTEXT_COLUMNS = {
+    "canonical_pair_key",
+    "drug_id",
+    "target_id",
+    "pdb_id",
+    "ligand_chemotype",
+    "scaffold_key",
+    "chemical_cluster",
+    "chemical_cluster_id",
+    "ecfp_cluster",
+    "butina_cluster",
+    "umap_cluster",
+    "scaffold_cluster",
+    "ligand_cluster",
+    "target_family",
+    "protein_family",
+    "target_class",
+    "protein_class",
+    "dedup_drug_key",
+    "dedup_target_key",
+    "label_source",
+    "source_family",
+    "upstream_source",
+    "assay_type",
+    "assay_mode",
+    "endpoint_type",
+    "activity_type",
+    "standard_type",
+    "relation_domain",
+    "source_objective",
+    "benchmark_only",
+    "_sample_weight",
+    "negative_evidence_type",
+    "label_publication_year",
+    "evidence_publication_year",
+    "activity_publication_year",
+    "database_release_year",
+    "smiles",
+    "canonical_smiles",
+    "ligand_smiles",
+}
+
 
 def audit_ml_leakage_overlap(
     dataset_path: str | Path,
@@ -52,7 +95,7 @@ def audit_ml_leakage_overlap(
     allow_label_definition_features: bool = False,
 ) -> dict[str, Any]:
     df = load_table(dataset_path)
-    data = ensure_canonical_pair_key(df)
+    all_columns = list(df.columns)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -63,7 +106,19 @@ def audit_ml_leakage_overlap(
             exclude_features,
             allow_label_definition_features=allow_label_definition_features,
         )
-        features = [feature for feature in get_feature_set(feature_set) if feature in data.columns and feature not in excluded]
+        features = [
+            feature
+            for feature in get_feature_set(feature_set)
+            if feature in df.columns and feature not in excluded
+        ]
+    projection = [
+        column
+        for column in all_columns
+        if column in ({label_col, source_col, *features} | AUDIT_CONTEXT_COLUMNS)
+    ]
+    data = ensure_canonical_pair_key(df.loc[:, projection].copy())
+    del df
+    gc.collect()
     leaky_features = find_leaky_features(
         features,
         allow_label_definition_features=allow_label_definition_features,
@@ -138,12 +193,16 @@ def audit_ml_leakage_overlap(
         ["source_family", "upstream_source", "assay_type", "endpoint_type", "activity_type", "standard_type"],
     ).to_csv(out / "assay_context_label_balance.csv", index=False)
     label_evidence_composition(data, label_col).to_csv(out / "label_evidence_composition.csv", index=False)
-    high_risk_column_scan(list(data.columns), label_col, features).to_csv(out / "high_risk_columns.csv", index=False)
+    high_risk_column_scan(all_columns, label_col, features).to_csv(
+        out / "high_risk_columns.csv", index=False
+    )
 
     manifest: dict[str, Any] = {
         "dataset_path": str(dataset_path),
         "label_col": label_col,
         "n_rows": int(len(data)),
+        "input_column_count": int(len(all_columns)),
+        "audit_projection_columns": list(data.columns),
         "label_balance": label_balance(data, label_col),
         "duplicate_label_conflicts": duplicate_label_conflicts(data, label_col),
         "feature_set": feature_set,

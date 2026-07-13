@@ -80,6 +80,49 @@ python -m analysis.cli.run_ml_training_pass \
   --out-dir data/<run_id>/ml_training_pass
 ```
 
+After docking/scoring a timestamped SPD add-on, use the reusable merge pipeline
+instead of manually joining CSVs:
+
+```
+python -m analysis.cli.merge_spd_addon_pipeline \
+  --base-table data/AtlasSPD_phase1/<current_model_ready.csv> \
+  --addon-dir data/AtlasSPD_phase1/target_positive_addon_<YYYYMMDD_HHMMSS>
+```
+
+The command discovers the non-smoke full-reference Vina manifest, records its
+checksum, verifies the selected-pair checksum when the manifest declares one,
+and merges on normalized PDB plus ligand-stem/base pair keys. It reconciles
+against the active canonical `chemdb/data/fda_mapping_from_pdbqt.csv`, refreshes
+feature metadata, and quarantines identity-blocked rows from training. Compatible
+duplicate evidence is collapsed; conflicting or residual duplicate PDB-ligand
+pairs and accidental SPD truth on external rows block readiness. Binding,
+exposure, and combined-activity audits run by default. Use `--selected-pairs`,
+`--score-table`, or `--reference-manifest` only for explicit historical
+overrides. Do not use `--skip-audits` for a model-ready handoff.
+
+For ML add-on docking/scoring, never use raw `main.py`, `-fast`/`--fast`,
+`-dude`/`--dude`, or `--dud-library`. Those flags select low-exhaustiveness or
+DUD-only workflows and are not valid add-on shortcuts. Use the exact staged
+pair/library manifest and a completed full-accuracy comparison run:
+
+```
+atlas ml score-addons \
+  --run-id <ADDON_RUN_ID> \
+  --pairs data/<run_id>/target_positive_additions/selected_pairs.csv \
+  --compare-run <FULL_REFERENCE_RUN_ID> \
+  --workers 8
+```
+
+The pair manifest is the add-on library selector; do not substitute a DUD flag.
+This command copies receptor/grid/Vina settings from the comparison run,
+requires reference exhaustiveness >= 2, caps workers at 32, acquires an
+exclusive add-on lock, and refuses to start while another Atlas run has process,
+Slurm, or recent manifest evidence. Recent active manifests fail closed for 72
+hours; older status-only records are treated as stale unless execution evidence
+still exists. Run `atlas runs` first and resolve/finalize active records with
+`atlas status <RUN_ID> --errors --explain`. Do not launch a second docking or
+add-on scoring command while the first is active.
+
 
 Every model training/update run must write a compact model-run ledger row. `train_ml_model` writes `model_run_record.json` and `model_run_record.csv` automatically. For a standalone or backfilled record, run:
 

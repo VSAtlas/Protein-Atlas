@@ -16,9 +16,11 @@ Z_DEPENDENT_FEATURES = {
     "atlas_score",
     "z_selected",
     "atlas_binding_prior",
-    "binding_expert_score",
-    "banana_atlas_blend_score",
     "consensus_z_score",
+}
+SAFE_BINDING_PRIOR_SOURCES = {
+    "banana_consensus_blend",
+    "consensus_score_fallback",
 }
 
 
@@ -37,6 +39,9 @@ def audit_score_scale_frame(
 ) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
     selected = sorted(set(feature_names or []))
     selected_z_features = sorted(set(selected) & Z_DEPENDENT_FEATURES)
+    selected_binding_prior_features = sorted(
+        set(selected) & {"binding_expert_score", "banana_atlas_blend_score"}
+    )
     source = frame.get(
         "z_selected_source",
         pd.Series("", index=frame.index, dtype="object"),
@@ -49,6 +54,14 @@ def audit_score_scale_frame(
         pd.Series("", index=frame.index, dtype="object"),
     )
     raw_prior_mask = _source_mask(prior_source, ("rank_percentile", "raw_consensus"))
+    binding_source = frame.get(
+        "binding_expert_source",
+        pd.Series("", index=frame.index, dtype="object"),
+    ).fillna("").astype(str).str.strip().str.lower()
+    unsafe_binding_prior = (
+        binding_source.ne("")
+        & ~binding_source.isin(SAFE_BINDING_PRIOR_SOURCES)
+    )
 
     z_values = pd.to_numeric(
         frame.get("z_selected", pd.Series(pd.NA, index=frame.index)),
@@ -150,9 +163,20 @@ def audit_score_scale_frame(
             "selected z-dependent features contain raw-percentile fallback values: "
             + ", ".join(selected_z_features)
         )
+    n_unsafe_binding_prior = int(unsafe_binding_prior.sum())
+    if selected_binding_prior_features and n_unsafe_binding_prior:
+        flags.append(
+            "selected frozen binding-prior features use incompatible or legacy "
+            "score provenance: " + ", ".join(selected_binding_prior_features)
+        )
 
     status = "passed"
-    if selected_z_features and (n_fallback or n_raw_prior):
+    if (
+        selected_z_features
+        and (n_fallback or n_raw_prior)
+        or selected_binding_prior_features
+        and n_unsafe_binding_prior
+    ):
         status = "failed"
     elif flags or n_missing_z_with_raw:
         status = "warning"
@@ -162,8 +186,10 @@ def audit_score_scale_frame(
         "n_rows": int(len(frame)),
         "selected_features": selected,
         "selected_z_dependent_features": selected_z_features,
+        "selected_binding_prior_features": selected_binding_prior_features,
         "n_raw_consensus_fallback": n_fallback,
         "n_raw_atlas_prior": n_raw_prior,
+        "n_unsafe_binding_prior": n_unsafe_binding_prior,
         "n_missing_consensus_decoy_null": n_missing_null,
         "n_missing_z_with_raw_consensus": n_missing_z_with_raw,
         "n_low_resolution_decoy_null_pdbs": len(low_resolution_pdbs),

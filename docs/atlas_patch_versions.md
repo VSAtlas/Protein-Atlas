@@ -17,3 +17,15 @@ DrugBank remains an optional licensed input. Academic access is requested throug
 Adjudicates every cached SPL Cmax candidate against its source excerpt, rejects known SD/AUC/other-analyte extraction failures, and emits a context-specific accepted table without promoting any value to a universal per-drug Cmax. PK-DB health now distinguishes the working PostgreSQL study metadata from the broken Elasticsearch output index, and NCATS retrieval tries every current/archive URL published on the official download page.
 
 Adds a reproducible one-row-per-PDB target pocket feature table using label-independent residue composition, simple geometry, size, and metal-context descriptors. ESM-2 remains a frozen sequence-representation ablation; PocketVec remains a separate inverse-docking baseline rather than a name for the deterministic descriptors.
+
+## Atlasv0.0.07 - Safe reusable SPD add-on integration
+
+Adds a one-command SPD add-on merge with canonical FDA identity reconciliation,
+duplicate/conflict gates, training quarantine, metadata refresh, and mandatory
+post-ingestion audits. Adds `atlas ml score-addons` for exact staged PDB-ligand
+pairs in a frozen full-library comparison-run Vina context. The scorer rejects reference
+exhaustiveness below 2, caps workers at 32, refuses concurrent Atlas runs using
+manifest-owned Slurm IDs, local process evidence, and a 72-hour fail-closed
+manifest window, and holds an exclusive add-on lock. Stale historical lifecycle
+records no longer block forever, and fast or DUD-only runtime shortcuts are not
+accepted.
