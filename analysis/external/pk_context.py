@@ -209,6 +209,23 @@ def select_representative_pk_context(context: pd.DataFrame) -> pd.DataFrame:
     if context.empty:
         return context.copy()
     ranked = context.copy()
+    unreviewed_spl = ranked["source_name"].eq("DailyMed_openFDA_SPL") & ranked[
+        "source_confidence"
+    ].eq("low")
+    numeric_columns = [
+        "cmax_value_raw",
+        "cmax_unit_raw",
+        "cmax_um",
+        "protein_binding_percent",
+        "fraction_unbound_plasma",
+        "free_cmax_um",
+        "free_cmax_method",
+    ]
+    ranked.loc[unreviewed_spl, numeric_columns] = pd.NA
+    ranked.loc[unreviewed_spl, "context_status"] = (
+        ranked.loc[unreviewed_spl, "context_status"].fillna("").astype(str)
+        + "; numeric_quarantined_pending_source_text_review"
+    ).str.lstrip("; ")
     ranked["_source_rank"] = ranked["source_name"].map(SOURCE_PRIORITY).fillna(99)
     ranked["_free_rank"] = ranked["free_cmax_um"].isna().astype(int)
     ranked["_confidence_rank"] = ranked["source_confidence"].map(

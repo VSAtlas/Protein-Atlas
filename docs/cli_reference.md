@@ -181,7 +181,16 @@ Refresh structured exposure context and join it to the frozen Phase 1 table:
 
 ```bash
 python -m analysis.cli.refresh_phase1_pk_context \
-  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_01
+  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_02
 ```
 
-The command writes `pk_context_long.csv`, `pk_context_representative.csv`, `AtlasSPD_phase1_pk_enriched.csv`, source coverage, and availability manifests. Existing `spd_exposure_label` values are never recomputed from external PK. Use `--drugbank-cmax` and `--drugbank-protein-binding` only with licensed local exports.
+The command writes `pk_context_long.csv`, `pk_context_representative.csv`, `AtlasSPD_phase1_pk_enriched.csv`, source coverage, API-health manifests, and `openfda_source_text_review/`. Existing `spd_exposure_label` values are never recomputed from external PK. Unreviewed SPL numeric values remain in the long evidence table but are quarantined from representative ML features.
+
+Rerun only the cached SPL source-text review with:
+
+```bash
+python -m analysis.cli.audit_openfda_pk_source_text \
+  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_02/openfda_source_text_review
+```
+
+Use `--drugbank-cmax` and `--drugbank-protein-binding` only with licensed local exports. Apply for academic DrugBank access at https://go.drugbank.com/academic_research and verify current download availability at https://go.drugbank.com/releases/latest.

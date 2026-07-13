@@ -32,6 +32,15 @@ Canonical Atlas workflows:
 
 2. DEV PROTOCOL
 Use multiple agents for complex or multistep tasks
+
+Versioned commit/push handoff:
+
+- For each completed, verified Atlas patch, assign the next `AtlasvMAJOR.MINOR.PATCH` label and append a concise description to `docs/atlas_patch_versions.md`.
+- Commit only files changed for the current patch. Never stage `data/`, `outputs/`, caches, downloaded external archives, protected directories, backup files, or unrelated dirty-worktree changes.
+- Use the commit subject `AtlasvMAJOR.MINOR.PATCH: <concise description>`.
+- Push the current branch after verification when ongoing push was requested. Report the commit hash, branch, and push result.
+- Do not commit or push a patch whose required focused checks or smoke workflow failed; report the blocker instead.
+
 Explore (Low-Token):
 
 Read REPO_MAP.txt ? _skeletons/ (grep definitions) ? Source (only if strictly necessary).

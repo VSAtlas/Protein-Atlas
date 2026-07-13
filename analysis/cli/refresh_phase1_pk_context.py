@@ -10,6 +10,7 @@ import zipfile
 import pandas as pd
 
 from analysis.external.openfda_pk import fetch_openfda_pk_context
+from analysis.external.openfda_pk_review import audit_openfda_pk_cache
 from analysis.external.pk_context import (
     combine_pk_context,
     load_existing_phase1_pk_context,
@@ -17,10 +18,11 @@ from analysis.external.pk_context import (
     load_spd_pk_context,
     write_pk_context_outputs,
 )
+from analysis.external.pkdb_api import probe_pkdb_api
 from analysis.external.source_tables import download_to_cache
 
 
-VERSION = "Atlasv0.0.01"
+VERSION = "Atlasv0.0.02"
 NCATS_FRDB_URL = "https://drugs.ncats.io/downloads-public/frdb-v2024-12-30.zip"
 PKDB_BULK_URL = "https://pk-db.com/api/v1/filter/?download=true&concise=false"
 DEFAULT_MODEL_TABLE = Path(
@@ -92,9 +94,17 @@ def _prepare_ncats(
     source_dir = external_root / "ncats_inxight"
     archive = source_dir / "frdb-v2024-12-30.zip"
     extracted = source_dir / "frdb-v2024-12-30"
-    if download_sources and not archive.exists():
+    archive_valid = archive.exists() and zipfile.is_zipfile(archive)
+    if download_sources and not archive_valid:
         try:
-            download_to_cache(NCATS_FRDB_URL, archive, retries=2, sleep_sec=3.0)
+            download_to_cache(
+                NCATS_FRDB_URL,
+                archive,
+                retries=3,
+                sleep_sec=5.0,
+                overwrite=True,
+            )
+            archive_valid = zipfile.is_zipfile(archive)
         except Exception as exc:
             statuses.append(
                 {
@@ -105,7 +115,7 @@ def _prepare_ncats(
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
             )
-    if archive.exists() and not extracted.exists():
+    if archive_valid and not extracted.exists():
         try:
             _extract_archive(archive, extracted)
         except Exception as exc:
@@ -134,7 +144,10 @@ def _prepare_ncats(
                 "status": "unavailable",
                 "path": str(archive),
                 "rows": 0,
-                "reason": "official archive unavailable",
+                "reason": (
+                    "official current archive unavailable or invalid; endpoint "
+                    "verified against NCATS downloads page"
+                ),
             }
         )
 
@@ -147,11 +160,45 @@ def _prepare_pkdb(
     statuses: list[dict[str, object]],
 ) -> None:
     source_dir = external_root / "pkdb"
+    health_path = source_dir / "pkdb_api_health.json"
+    if download_sources:
+        health = probe_pkdb_api(out_dir=source_dir)
+    elif health_path.exists():
+        health = json.loads(health_path.read_text(encoding="utf-8"))
+    else:
+        health = {
+            "status": "not_checked",
+            "reason": "network checks disabled by --skip-download",
+        }
+    if health.get("status") != "available":
+        statuses.append(
+            {
+                "source": "PK-DB",
+                "status": str(health.get("status") or "unavailable"),
+                "path": str(source_dir / "pkdb_api_health.json"),
+                "rows": 0,
+                "reason": str(health.get("reason") or "PK-DB API unavailable"),
+                "advertised_outputs": health.get("filter_advertised_outputs", 0),
+                "retrieved_outputs": health.get("outputs_endpoint_count", 0),
+                "archive_outputs_csv_bytes": health.get(
+                    "archive_outputs_csv_bytes", 0
+                ),
+            }
+        )
+        return
     extracted = source_dir / "pkdb_all_full"
     archive = source_dir / "pkdb_all_full.zip"
-    if download_sources and not archive.exists():
+    output_path = extracted / "outputs.csv"
+    usable_output = output_path.exists() and output_path.stat().st_size > 3
+    if download_sources and not usable_output:
         try:
-            download_to_cache(PKDB_BULK_URL, archive, retries=2, sleep_sec=3.0)
+            download_to_cache(
+                PKDB_BULK_URL,
+                archive,
+                retries=2,
+                sleep_sec=3.0,
+                overwrite=True,
+            )
         except Exception as exc:
             statuses.append(
                 {
@@ -163,7 +210,7 @@ def _prepare_pkdb(
                 }
             )
             return
-    if archive.exists() and not extracted.exists():
+    if archive.exists() and zipfile.is_zipfile(archive) and not usable_output:
         try:
             _extract_archive(archive, extracted)
         except Exception as exc:
@@ -177,7 +224,6 @@ def _prepare_pkdb(
                 }
             )
             return
-    output_path = extracted / "outputs.csv"
     if output_path.exists() and output_path.stat().st_size > 3:
         _add_flat_source(
             parts,
@@ -193,7 +239,10 @@ def _prepare_pkdb(
                 "status": "api_export_incomplete",
                 "path": str(archive),
                 "rows": 0,
-                "reason": "PK-DB reports output counts but exported outputs.csv is empty",
+                "reason": (
+                    "PK-DB health probe passed but bulk outputs.csv remained empty; "
+                    "do not interpret as zero PK coverage"
+                ),
             }
         )
 
@@ -208,11 +257,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_01"),
+        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_02"),
     )
     parser.add_argument("--openfda", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--openfda-max-drugs", type=int, default=0)
     parser.add_argument("--openfda-sleep-sec", type=float, default=0.25)
+    parser.add_argument("--skip-openfda-source-review", action="store_true")
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--drugbank-cmax", type=Path, default=None)
     parser.add_argument("--drugbank-protein-binding", type=Path, default=None)
@@ -304,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     openfda_cache = args.external_root / "dailymed_spl" / "phase1_openfda"
+    openfda_review_manifest: dict[str, object] = {}
     if args.openfda != "never":
         openfda_context, openfda_manifest = fetch_openfda_pk_context(
             model_table,
@@ -324,6 +375,12 @@ def main(argv: list[str] | None = None) -> int:
                 **openfda_manifest,
             }
         )
+        if not args.skip_openfda_source_review:
+            openfda_review_manifest = audit_openfda_pk_cache(
+                cache_dir=openfda_cache / "records",
+                model_table=model_table,
+                out_dir=args.out_dir / "openfda_source_text_review",
+            )
     else:
         statuses.append(
             {
@@ -350,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         "output_manifest": manifest,
         "drugbank_policy": "optional BYOL; no licensed data bundled",
         "label_policy": "spd_exposure_label is not recomputed from external PK",
+        "openfda_source_text_review": openfda_review_manifest,
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "pk_source_status.json").write_text(
