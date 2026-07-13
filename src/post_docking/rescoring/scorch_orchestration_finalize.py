@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Dict, List, Set, cast
 
@@ -37,6 +38,26 @@ def finalize_orchestration_combos(
 ) -> Set[ComboKey]:
     local_completed_combos: Set[ComboKey] = set()
     prefix_value = decoy_prefix
+    rerank_weights: Dict[str, float] = {}
+    for config_key, argument_name in (
+        ("SCORCH_WEIGHT", "scorch_weight"),
+        ("CNN_WEIGHT", "cnn_weight"),
+    ):
+        raw_weight = cfg.get(config_key, cfg.get(config_key.lower()))
+        if raw_weight is None:
+            continue
+        try:
+            parsed_weight = float(str(raw_weight))
+        except (TypeError, ValueError):
+            logger.warning(
+                "%s action=rerank status=degraded reason=invalid_weight key=%s value=%s",
+                component,
+                config_key,
+                raw_weight,
+            )
+            continue
+        if math.isfinite(parsed_weight) and parsed_weight >= 0:
+            rerank_weights[argument_name] = parsed_weight
     for combo in sorted(combos_with_tasks):
         modes = combo_modes.get(combo, {"fda"})
         fda_all = None
@@ -245,6 +266,7 @@ def finalize_orchestration_combos(
                             logger,
                             overwrite=True,
                             decoy_prefix=prefix_value,
+                            **rerank_weights,
                         ))
                         expected_outputs = [out_csv]
                         if dud_all is not None:

@@ -14,11 +14,41 @@ PHYSICHEM_DESCRIPTOR_FEATURES = [
     "rdkit_qed",
 ]
 
+PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED = [
+    feature for feature in PHYSICHEM_DESCRIPTOR_FEATURES if feature != "rdkit_qed"
+]
+
+SHORTCUT_REDUCED_DESCRIPTOR_FEATURES = [
+    feature
+    for feature in PHYSICHEM_DESCRIPTOR_FEATURES
+    if feature not in {"rdkit_mol_wt", "rdkit_mol_logp", "rdkit_qed"}
+]
+
+PAIR_FINAL_SCORE_FEATURES = [
+    "final_score",
+    "banana_score_normalized",
+]
+
+PAIR_FINAL_FULL_NO_QED_FEATURES = [
+    *PAIR_FINAL_SCORE_FEATURES,
+    *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
+]
+
 # Default clean feature sets quarantine high-memorization context columns.
 # The columns remain in model-ready tables for splitting, audit, and ablation,
 # but clean models do not train on them unless a *_with_context feature set is
 # explicitly selected.
 QUARANTINED_CONTEXT_FEATURES = ["structure_quality", "protein_class", "target_family"]
+
+# Chemistry group identifiers are retained for leakage audits, OOD splits, and
+# data-gap reports, but they are not used as predictive inputs. They can encode
+# scaffold/chemotype priors directly enough to create memorization under weak
+# splits.
+QUARANTINED_CHEMISTRY_GROUP_FEATURES = [
+    "ligand_chemotype",
+    "scaffold_key",
+    "chemical_cluster",
+]
 
 CLEAN_BINDING_EXPERT_WITH_CONTEXT_FEATURES = [
     "consensus_score",
@@ -26,14 +56,35 @@ CLEAN_BINDING_EXPERT_WITH_CONTEXT_FEATURES = [
     "structure_quality",
     "protein_class",
     "target_family",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
 CLEAN_BINDING_EXPERT_FEATURES = [
     "consensus_score",
     "banana_score_normalized",
-    "ligand_chemotype",
+    *PHYSICHEM_DESCRIPTOR_FEATURES,
+]
+
+ATLAS_PRIOR_BINDING_FEATURES = [
+    "atlas_binding_prior",
+    "banana_score_normalized",
+    *PHYSICHEM_DESCRIPTOR_FEATURES,
+]
+
+CONSENSUS_Z_BINDING_FEATURES = [
+    "consensus_z_score",
+    "banana_score_normalized",
+    *PHYSICHEM_DESCRIPTOR_FEATURES,
+]
+
+CONSENSUS_Z_BANANA_SCORE_FEATURES = [
+    "consensus_z_score",
+    "banana_score_normalized",
+]
+
+CONSENSUS_Z_POTENCY_FEATURES = [
+    "consensus_z_score",
+    "banana_score_normalized",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
@@ -46,14 +97,12 @@ CONSENSUS_CONTEXT_BINDING_FEATURES = [
     "structure_quality",
     "protein_class",
     "target_family",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
 CONSENSUS_CONTEXT_BINDING_NO_TARGET_CLASS_FEATURES = [
     "consensus_score",
     "structure_quality",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
@@ -61,13 +110,11 @@ RDKIT_TARGET_METADATA_FEATURES = [
     "structure_quality",
     "protein_class",
     "target_family",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
 RDKIT_CHEMISTRY_ONLY_FEATURES = [
     "structure_quality",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
@@ -95,13 +142,11 @@ DIRECT_SPD_EXPOSURE_WITH_CONTEXT_FEATURES = [
     "structure_quality",
     "protein_class",
     "target_family",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
 DIRECT_SPD_EXPOSURE_FEATURES = [
     "binding_expert_score",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
@@ -177,7 +222,6 @@ CLEAN_MECHANISM_WITH_CONTEXT_FEATURES = [
     "structure_quality",
     "protein_class",
     "target_family",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
@@ -188,7 +232,6 @@ CLEAN_MECHANISM_FEATURES = [
     "site_relevance_score",
     "tissue_site_relevance_probability",
     "clean_tissue_site_relevance_score",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
 ]
 
@@ -198,7 +241,6 @@ FLAT_MECHANISM_BASELINE_WITH_CONTEXT_FEATURES = [
     "structure_quality",
     "protein_class",
     "target_family",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
     *TISSUE_EXPRESSION_FEATURES,
     "site_relevance_score",
@@ -207,7 +249,6 @@ FLAT_MECHANISM_BASELINE_WITH_CONTEXT_FEATURES = [
 FLAT_MECHANISM_BASELINE_FEATURES = [
     "consensus_score",
     "banana_score_normalized",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
     *TISSUE_EXPRESSION_FEATURES,
     "site_relevance_score",
@@ -217,7 +258,6 @@ CARDIAC_QT_MECHANISM_CLEAN_WITH_CONTEXT_FEATURES = [
     "consensus_score",
     "banana_score_normalized",
     "structure_quality",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
     "expression_presence_score",
     "site_specificity_score",
@@ -235,7 +275,6 @@ CARDIAC_QT_MECHANISM_CLEAN_WITH_CONTEXT_FEATURES = [
 CARDIAC_QT_MECHANISM_CLEAN_FEATURES = [
     "consensus_score",
     "banana_score_normalized",
-    "ligand_chemotype",
     *PHYSICHEM_DESCRIPTOR_FEATURES,
     "expression_presence_score",
     "site_specificity_score",
@@ -370,16 +409,36 @@ FEATURE_SETS = {
     "ligand_physchem_descriptors": [
         *PHYSICHEM_DESCRIPTOR_FEATURES,
     ],
+    "ligand_physchem_descriptors_no_qed": [
+        *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
+    ],
+    "ligand_physchem_shortcut_reduced": [
+        *SHORTCUT_REDUCED_DESCRIPTOR_FEATURES,
+    ],
+    "spd_binding_pair_final_scores_only": [
+        *PAIR_FINAL_SCORE_FEATURES,
+    ],
+    "spd_binding_pair_final_full_no_qed": [
+        *PAIR_FINAL_FULL_NO_QED_FEATURES,
+    ],
     "spd_exposure_descriptor_only": [
         *PHYSICHEM_DESCRIPTOR_FEATURES,
-        "ligand_chemotype",
-        "scaffold_key",
+            "scaffold_key",
     ],
     "spd_potency_physchem": [
         *CLEAN_BINDING_EXPERT_FEATURES,
     ],
+    "spd_potency_atlas_prior": [
+        *ATLAS_PRIOR_BINDING_FEATURES,
+    ],
+    "spd_potency_consensus_z": [
+        *CONSENSUS_Z_POTENCY_FEATURES,
+    ],
     "spd_binding_nonleaky": [
         *CLEAN_BINDING_EXPERT_FEATURES,
+    ],
+    "spd_binding_nonleaky_consensus_z": [
+        *CONSENSUS_Z_BINDING_FEATURES,
     ],
     "spd_binding_nonleaky_with_context": [
         *CLEAN_BINDING_EXPERT_WITH_CONTEXT_FEATURES,
@@ -401,6 +460,9 @@ FEATURE_SETS = {
     ],
     "spd_binding_consensus_banana_scores_only": [
         *CONSENSUS_BANANA_SCORE_FEATURES,
+    ],
+    "spd_binding_consensus_z_banana_scores_only": [
+        *CONSENSUS_Z_BANANA_SCORE_FEATURES,
     ],
     "spd_exposure_nonleaky": [
         *DIRECT_SPD_EXPOSURE_FEATURES,
@@ -451,8 +513,7 @@ FEATURE_SETS = {
         "structure_quality",
         "protein_class",
         "target_family",
-        "ligand_chemotype",
-        *PHYSICHEM_DESCRIPTOR_FEATURES,
+            *PHYSICHEM_DESCRIPTOR_FEATURES,
         "free_cmax_um",
         "cmax_um",
         "fraction_unbound_plasma",
@@ -498,18 +559,22 @@ FEATURE_SETS = {
         "pathway_evidence",
         "structure_quality",
         "protein_class",
-        "ligand_chemotype",
-    ],
+        ],
     "full_nonleaky": [
         "atlas_score",
         "mmgbsa_score",
         "tissue_expression",
         "structure_quality",
         "protein_class",
-        "ligand_chemotype",
-    ],
+        ],
 }
-FORBIDDEN_FEATURES = {"drug_id", "target_id", "pdb_id", "literature_supported_label"}
+FORBIDDEN_FEATURES = {
+    "drug_id",
+    "target_id",
+    "pdb_id",
+    "literature_supported_label",
+    *QUARANTINED_CHEMISTRY_GROUP_FEATURES,
+}
 SPD_EXPOSURE_LABELS = {
     "spd_exposure_label",
     "spd_exposure_relevant",

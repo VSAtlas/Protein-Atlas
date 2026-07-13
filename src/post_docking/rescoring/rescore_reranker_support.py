@@ -39,6 +39,8 @@ NUMERIC_PRIORITY = [
     "scorch_pct",
     "cnn_pct",
     "ml_blend_score",
+    "ml_blend_scorch_weight_effective",
+    "ml_blend_cnn_weight_effective",
     "n_engines_with_data",
     "selected_docking_score",
 ]
@@ -51,6 +53,8 @@ TEXT_PRIORITY = [
     "rescored_stage",
     "stage_match_flag",
     "stage_fallback_reason",
+    "ml_blend_mode",
+    "final_score_source",
 ]
 
 
@@ -281,6 +285,10 @@ def _ordered_fields(
         "scorch_pct",
         "cnn_pct",
         "ml_blend_score",
+        "ml_blend_mode",
+        "ml_blend_scorch_weight_effective",
+        "ml_blend_cnn_weight_effective",
+        "final_score_source",
         "library",
         "run_mode",
         "consensus_score_pre",

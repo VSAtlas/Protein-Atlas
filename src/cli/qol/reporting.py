@@ -27,6 +27,10 @@ def _cmd_report(argv: Sequence[str]) -> int:
         action="store_true",
         help="Regenerate outputs/data/<RUN_ID>/master_rows.csv before reporting.",
     )
+    parser.add_argument(
+        "--fda-mapping-csv",
+        help="FDA ligand identity mapping used by both master export and reporting.",
+    )
     parser.add_argument("--open", action="store_true", dest="open_after")
     parser.add_argument("extra", nargs=argparse.REMAINDER)
     args = parser.parse_args(list(argv))
@@ -36,6 +40,7 @@ def _cmd_report(argv: Sequence[str]) -> int:
             args.run_id,
             overwrite=args.overwrite_master,
             verbose=False,
+            fda_mapping_csv=args.fda_mapping_csv,
         )
         if export_rc != 0:
             return export_rc
@@ -45,6 +50,8 @@ def _cmd_report(argv: Sequence[str]) -> int:
         forwarded.append("--vina")
     if args.combined:
         forwarded.append("--combined")
+    if args.fda_mapping_csv:
+        forwarded.extend(["--fda-mapping-csv", args.fda_mapping_csv])
     forwarded.extend(args.extra)
     old_argv = sys.argv[:]
     rc = 1
@@ -106,6 +113,7 @@ def _cmd_analysis(argv: Sequence[str]) -> int:
     report.add_argument("--vina", action="store_true")
     report.add_argument("--combined", action="store_true")
     report.add_argument("--overwrite-master", action="store_true")
+    report.add_argument("--fda-mapping-csv")
     report.add_argument(
         "--status-html",
         action="store_true",
@@ -126,13 +134,16 @@ def _cmd_analysis(argv: Sequence[str]) -> int:
     args = parser.parse_args(list(argv))
 
     if args.analysis_cmd == "report":
-        report_args = [args.run_id]
+        report_args: list[str] = []
         if args.vina:
             report_args.append("--vina")
         if args.combined:
             report_args.append("--combined")
         if args.overwrite_master:
             report_args.append("--overwrite-master")
+        if args.fda_mapping_csv:
+            report_args.extend(["--fda-mapping-csv", args.fda_mapping_csv])
+        report_args.append(args.run_id)
         rc = _cmd_report(report_args)
         if rc == 0 and args.status_html:
             rc = _cmd_status([args.run_id, "--html"])

@@ -17,6 +17,7 @@ from analysis.ml.audit_suite import run_ml_audit_suite
 from analysis.ml.dataset_sampling import materialize_sampled_dataset, materialize_split_locked_sampled_dataset
 from analysis.ml.feature_metadata import enrich_ml_feature_metadata, refresh_tables
 from analysis.ml.feature_sets import get_feature_set
+from analysis.ml.preflight import dataset_preflight_checks
 from analysis.ml.mechanism_pu_tables import build_mechanism_pu_table
 from analysis.ml.mechanism_recovery import write_mechanism_topk_recovery
 from analysis.ml.spd_estimated_pk_exposure import run_spd_estimated_pk_exposure_model
@@ -29,7 +30,7 @@ from analysis.ml.tissue_pu_recovery import run_tissue_pu_recovery_report
 EXPERT_DEFAULTS: dict[str, dict[str, Any]] = {
     "binding": {
         "label": "spd_binding_label",
-        "feature_set": "spd_binding_nonleaky",
+        "feature_set": "spd_binding_pair_final_full_no_qed",
         "split": "drug_holdout",
         "candidates": [
             "spd_four_experts/model_ready/ml_spd_binding_model_ready.csv",
@@ -154,11 +155,6 @@ def _maybe_populate_banana_scores(
         manifest["status"] = "skipped_no_target_rows"
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
         return dataset
-    if mode == "auto" and any(count > 0 for count in cached_banana_nonmissing.values()):
-        manifest["status"] = "skipped_cached_banana_features_present"
-        manifest["policy"] = "auto mode treats existing BANANA-derived feature columns as cache; use --banana-scoring always to fill missing raw BANANA rows"
-        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
-        return dataset
     if mode == "auto" and missing_target_scores == 0:
         manifest["status"] = "skipped_scores_already_present"
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
@@ -184,11 +180,20 @@ def _maybe_populate_banana_scores(
             pocket_map_path=pocket_map,
         )
     input_df = pd.read_csv(banana_inputs, low_memory=False)
-    if scope == "labelable":
-        infer_inputs = banana_dir / "banana_inputs.labelable.csv"
-        input_df.loc[labelable].to_csv(infer_inputs, index=False)
+    if len(input_df) != len(df):
+        manifest["status"] = "skipped_banana_input_row_mismatch"
+        manifest["input_rows"] = int(len(input_df))
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        return dataset
+    if mode == "auto":
+        inference_mask = target_mask & score.isna()
     else:
-        infer_inputs = banana_inputs
+        inference_mask = target_mask
+    infer_inputs = banana_dir / (
+        "banana_inputs.missing.csv" if mode == "auto" else ("banana_inputs.labelable.csv" if scope == "labelable" else "banana_inputs.all.csv")
+    )
+    input_df.loc[inference_mask].to_csv(infer_inputs, index=False)
+    manifest["inference_rows"] = int(inference_mask.sum())
     infer_df = pd.read_csv(infer_inputs, low_memory=False)
     ready_rows = int(infer_df.get("banana_input_status", pd.Series("", index=infer_df.index)).astype(str).eq("ready").sum())
     manifest["ready_rows"] = ready_rows
@@ -384,7 +389,7 @@ def _metadata_refreshed_dataset(
 ) -> Path:
     if mode == "never":
         return dataset
-    policy = {
+    policy: dict[str, object] = {
         "chemical_cluster": chemical_cluster,
         "target_family": target_family,
         "source_lineage": source_lineage,
@@ -525,6 +530,23 @@ def _run_expert(
     }
     try:
         result["label_balance"] = _dataset_label_counts(dataset, label_col)
+        preflight = dataset_preflight_checks(
+            dataset,
+            label_col=label_col,
+            feature_set=feature_set,
+            claim_mode=claim_mode,
+        )
+        expert_dir.mkdir(parents=True, exist_ok=True)
+        (expert_dir / "dataset_preflight.json").write_text(
+            json.dumps(preflight, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        result["preflight"] = preflight
+        if preflight["status"] == "blocked":
+            raise ValueError(
+                "dataset preflight blocked training: "
+                + "; ".join(preflight.get("blockers", []))
+            )
         trained = train_ml_model(
             dataset,
             label_col,
@@ -653,14 +675,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--exposure-potency-feature-set", default="spd_potency_physchem")
     parser.add_argument("--exposure-pk-feature-set", default="ligand_physchem_descriptors")
-    parser.add_argument("--exposure-regressor", choices=["ridge", "random_forest"], default="ridge")
+    parser.add_argument("--exposure-regressor", choices=["ridge", "random_forest", "lightgbm"], default="ridge")
     parser.add_argument(
         "--feature-metadata",
         choices=["auto", "always", "never"],
         default="auto",
         help="Refresh chemical_cluster, target_family, and source-lineage columns before training.",
     )
-    parser.add_argument("--chemical-cluster", choices=["auto", "scaffold", "smiles", "chemotype", "none"], default="auto")
+    parser.add_argument("--chemical-cluster", choices=["auto", "scaffold", "smiles", "chemotype", "butina", "ecfp", "none"], default="auto")
     parser.add_argument("--target-family", choices=["auto", "protein_class", "gene_heuristic", "none"], default="auto")
     parser.add_argument("--source-lineage", choices=["auto", "none"], default="auto")
     parser.add_argument(

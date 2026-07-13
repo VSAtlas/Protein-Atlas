@@ -22,6 +22,7 @@ from post_docking.rescoring.scorch_orchestration_types import (
     OrchestrationDeps,
     OrchestrationLimits,
     OrchestrationResult,
+    receptor_path_for_combo as receptor_path_for_combo,
 )
 from post_docking.rescoring.scorch_types import StageSpec
 

@@ -165,9 +165,10 @@ def _is_decoy_file(filename: str, decoy_prefix: str) -> bool:
 def _row_is_decoy(row: Dict[str, Any], decoy_prefix: str) -> bool:
     if row_is_control(row):
         return False
+    explicit_decoy = str(row.get("is_decoy", "")).strip()
+    if explicit_decoy:
+        return row_has_explicit_decoy(row)
     if row_is_decoy_by_role(row):
-        return True
-    if row_has_explicit_decoy(row):
         return True
     lig_name = ligand_filename_from_row(row)
     return _is_decoy_file(lig_name, decoy_prefix)

@@ -57,8 +57,9 @@ def _is_decoy_filename(name: str, decoy_prefix: str) -> bool:
 def _row_is_decoy_for_split(row: Dict[str, Any], decoy_prefix: str) -> bool:
     if row_is_control(row):
         return False
-    if row_has_explicit_decoy(row):
-        return True
+    explicit_decoy = str(row.get("is_decoy", "")).strip()
+    if explicit_decoy:
+        return row_has_explicit_decoy(row)
     if row_is_decoy_by_role(row):
         return True
     ligand_file = clean_report_text(ligand_filename_from_row(row))

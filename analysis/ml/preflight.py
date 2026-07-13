@@ -95,6 +95,7 @@ def dataset_preflight_checks(
         try:
             from analysis.ml.feature_sets import effective_exclude_features, get_feature_set
             from analysis.ml.leakage_checks import find_leaky_features
+            from analysis.ml.score_scale_audit import audit_score_scale_frame
 
             excluded = effective_exclude_features(label_col, None)
             features = [feature for feature in get_feature_set(feature_set) if feature in frame.columns and feature not in excluded]
@@ -102,8 +103,60 @@ def dataset_preflight_checks(
             report["checks"]["features_available"] = len(features)
             if not features:
                 _add_issue(report, "blocker", f"feature set has no available non-excluded features: {feature_set}")
+            if "final_score" in features:
+                final_score = pd.to_numeric(frame["final_score"], errors="coerce")
+                eligible = pd.Series(True, index=frame.index)
+                if label_col and label_col in frame.columns:
+                    eligible = pd.to_numeric(frame[label_col], errors="coerce").isin([0, 1])
+                denominator = int(eligible.sum())
+                covered = int((eligible & final_score.notna()).sum())
+                coverage = float(covered / denominator) if denominator else 0.0
+                report["checks"]["final_score_coverage"] = {
+                    "eligible_rows": denominator,
+                    "covered_rows": covered,
+                    "fraction": coverage,
+                    "source_column_present": "final_score_source" in frame.columns,
+                }
+                if "final_score_source" in frame.columns:
+                    report["checks"]["final_score_source_counts"] = (
+                        frame.loc[eligible, "final_score_source"]
+                        .fillna("missing")
+                        .astype(str)
+                        .value_counts(dropna=False)
+                        .to_dict()
+                    )
+                if "ml_blend_mode" in frame.columns:
+                    mode_counts = (
+                        frame.loc[eligible & final_score.notna(), "ml_blend_mode"]
+                        .fillna("missing")
+                        .astype(str)
+                        .loc[lambda values: values.str.strip().ne("")]
+                        .value_counts()
+                        .to_dict()
+                    )
+                    report["checks"]["final_score_blend_mode_counts"] = mode_counts
+                    if len(mode_counts) > 1:
+                        severity = "blocker" if claim_mode == "publication" else "warning"
+                        _add_issue(report, severity, "final_score mixes SCORCH/CNN availability modes; use mode-stratified DUD nulls")
+                if coverage < 0.80:
+                    severity = "blocker" if claim_mode == "publication" else "warning"
+                    _add_issue(report, severity, f"final_score coverage is incomplete: {coverage:.3f} < 0.800")
             if leaky:
                 _add_issue(report, "blocker", f"leaky predictive features selected: {', '.join(leaky)}")
+            score_scale, _, _ = audit_score_scale_frame(frame, feature_names=features)
+            report["checks"]["score_scale"] = score_scale
+            if score_scale["status"] == "failed":
+                _add_issue(
+                    report,
+                    "blocker",
+                    "selected score features mix raw consensus percentiles with z-score semantics",
+                )
+            elif score_scale["status"] == "warning":
+                _add_issue(
+                    report,
+                    "warning",
+                    "score provenance is incomplete; inspect score-scale audit before interpretation",
+                )
         except Exception as exc:
             _add_issue(report, "warning", f"could not run feature leakage check: {exc}")
     if report["blockers"]:

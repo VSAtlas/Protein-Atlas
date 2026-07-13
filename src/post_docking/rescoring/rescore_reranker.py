@@ -269,8 +269,9 @@ def _row_identifier(row: Dict[str, Any]) -> str:
 def _is_dud_row(row: Dict[str, Any]) -> bool:
     if row_is_control(row):
         return False
-    if row_has_explicit_decoy(row):
-        return True
+    explicit_decoy = str(row.get("is_decoy", "")).strip()
+    if explicit_decoy:
+        return row_has_explicit_decoy(row)
     if decoy_role_token(row.get("run_mode")):
         return True
     if decoy_role_token(row.get("library")):
@@ -363,6 +364,36 @@ def _percentile_map(values: List[float]) -> Dict[float, float]:
         pct_by_value[v] = 1.0 - (avg_rank - 1.0) / (n - 1.0)
         i = j + 1
     return pct_by_value
+
+
+def _blend_available_percentiles(
+    scorch_pct: Optional[float],
+    cnn_pct: Optional[float],
+    *,
+    scorch_weight: float,
+    cnn_weight: float,
+) -> Tuple[Optional[float], str, float, float]:
+    """Blend only available components and expose their effective weights."""
+
+    components: List[Tuple[str, float, float]] = []
+    if scorch_pct is not None and math.isfinite(scorch_pct) and scorch_weight > 0:
+        components.append(("scorch", scorch_pct, scorch_weight))
+    if cnn_pct is not None and math.isfinite(cnn_pct) and cnn_weight > 0:
+        components.append(("cnn", cnn_pct, cnn_weight))
+    if not components:
+        return None, "none", 0.0, 0.0
+
+    weight_total = sum(component[2] for component in components)
+    if not math.isfinite(weight_total) or weight_total <= 0:
+        return None, "none", 0.0, 0.0
+
+    effective = {name: weight / weight_total for name, _value, weight in components}
+    value = sum(
+        component_value * effective[name]
+        for name, component_value, _weight in components
+    )
+    mode = "scorch_cnn" if len(components) == 2 else f"{components[0][0]}_only"
+    return value, mode, effective.get("scorch", 0.0), effective.get("cnn", 0.0)
 
 
 def rerank_consensus_with_scorch(
@@ -622,6 +653,10 @@ def rerank_consensus_with_scorch(
         rr["blend_mu_decoy"] = ""
         rr["blend_sigma_decoy"] = ""
         rr["blend_n_decoys"] = ""
+        rr["ml_blend_mode"] = ""
+        rr["ml_blend_scorch_weight_effective"] = ""
+        rr["ml_blend_cnn_weight_effective"] = ""
+        rr["final_score_source"] = ""
         _sync_z_t_aliases(rr)
 
         pdb_id = _normalize_scope_pdb(r.get("pdb_id", ""))
@@ -705,6 +740,9 @@ def rerank_consensus_with_scorch(
             rr["scorch_pct"] = ""
             rr["cnn_pct"] = ""
             rr["ml_blend_score"] = ""
+            rr["ml_blend_mode"] = ""
+            rr["ml_blend_scorch_weight_effective"] = ""
+            rr["ml_blend_cnn_weight_effective"] = ""
             rr["z_vs_decoys_blend"] = ""
         rr["final_score"] = ""
         _sync_z_t_aliases(rr)
@@ -733,6 +771,10 @@ def rerank_consensus_with_scorch(
         extra_row["blend_mu_decoy"] = ""
         extra_row["blend_sigma_decoy"] = ""
         extra_row["blend_n_decoys"] = ""
+        extra_row["ml_blend_mode"] = ""
+        extra_row["ml_blend_scorch_weight_effective"] = ""
+        extra_row["ml_blend_cnn_weight_effective"] = ""
+        extra_row["final_score_source"] = ""
         extra_row["best_engine"] = pick.source
         extra_row["scorch_source_used"] = pick.source
         extra_row["SCORCH_score_used"] = (
@@ -899,20 +941,38 @@ def rerank_consensus_with_scorch(
                 enriched[i]["cnn_pct"] = ""
                 enriched[i]["ml_blend_score"] = ""
                 continue
-            if scorch_val is None or not scorch_pct_map:
-                scorch_pct = 0.5
-            else:
-                scorch_pct = scorch_pct_map.get(scorch_val, 0.5)
-
-            if cnn_val is None or not cnn_pct_map:
-                cnn_pct = 0.5
-            else:
-                cnn_pct = cnn_pct_map.get(cnn_val, 0.5)
-
-            ml_blend = scorch_weight * scorch_pct + cnn_weight * cnn_pct
-            enriched[i]["scorch_pct"] = f"{scorch_pct:.6g}"
-            enriched[i]["cnn_pct"] = f"{cnn_pct:.6g}"
-            enriched[i]["ml_blend_score"] = f"{ml_blend:.6g}"
+            scorch_pct = (
+                scorch_pct_map.get(scorch_val)
+                if scorch_val is not None and scorch_pct_map
+                else None
+            )
+            cnn_pct = (
+                cnn_pct_map.get(cnn_val)
+                if cnn_val is not None and cnn_pct_map
+                else None
+            )
+            ml_blend, blend_mode, effective_scorch, effective_cnn = (
+                _blend_available_percentiles(
+                    scorch_pct,
+                    cnn_pct,
+                    scorch_weight=scorch_weight,
+                    cnn_weight=cnn_weight,
+                )
+            )
+            enriched[i]["scorch_pct"] = (
+                "" if scorch_pct is None else f"{scorch_pct:.6g}"
+            )
+            enriched[i]["cnn_pct"] = "" if cnn_pct is None else f"{cnn_pct:.6g}"
+            enriched[i]["ml_blend_score"] = (
+                "" if ml_blend is None else f"{ml_blend:.6g}"
+            )
+            enriched[i]["ml_blend_mode"] = blend_mode
+            enriched[i]["ml_blend_scorch_weight_effective"] = (
+                "" if ml_blend is None else f"{effective_scorch:.6g}"
+            )
+            enriched[i]["ml_blend_cnn_weight_effective"] = (
+                "" if ml_blend is None else f"{effective_cnn:.6g}"
+            )
 
     decoy_stats: Dict[str, Dict[str, float]] = {}
     for g_key, idxs in groups.items():
@@ -996,10 +1056,13 @@ def rerank_consensus_with_scorch(
         )
         if blend_val is not None and math.isfinite(blend_val):
             row["final_score"] = f"{blend_val:.6g}"
+            row["final_score_source"] = "z_vs_decoys_blend"
         elif cons_val is not None and math.isfinite(cons_val):
             row["final_score"] = f"{cons_val:.6g}"
+            row["final_score_source"] = "z_vs_decoys_consensus"
         else:
             row["final_score"] = ""
+            row["final_score_source"] = ""
 
     for _, idxs in groups.items():
 
@@ -1039,6 +1102,9 @@ def rerank_consensus_with_scorch(
             row["scorch_pct"] = ""
             row["cnn_pct"] = ""
             row["ml_blend_score"] = ""
+            row["ml_blend_mode"] = ""
+            row["ml_blend_scorch_weight_effective"] = ""
+            row["ml_blend_cnn_weight_effective"] = ""
             row["z_vs_decoys_blend"] = ""
         _sync_z_t_aliases(row)
 
