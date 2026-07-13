@@ -56,9 +56,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use the ligand to define the active site but hide it in the screenshots.",
     )
-    parser.add_argument(
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         "--out-dir",
         help="Output directory; defaults to outputs/data/<RUN_ID>/screenshots/",
+    )
+    output_group.add_argument(
+        "--output-subdir",
+        help=(
+            "Safe relative subdirectory beneath "
+            "outputs/data/<RUN_ID>/screenshots/"
+        ),
     )
     parser.add_argument("--label-top-n-res", type=int, default=0)
     parser.add_argument("--cutoff", type=float, default=6.0)
@@ -194,7 +202,22 @@ def _render_selections(
 def _resolve_output_dir(repo_root: Path, args: argparse.Namespace) -> Path:
     if args.out_dir:
         return Path(args.out_dir).expanduser().resolve()
-    return run_output_dir(repo_root, "data", args.run_id) / "screenshots"
+    screenshots_root = run_output_dir(repo_root, "data", args.run_id) / "screenshots"
+    output_subdir = str(getattr(args, "output_subdir", "") or "").strip()
+    if not output_subdir:
+        return screenshots_root
+    relative = Path(output_subdir)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise SystemExit("--output-subdir must be relative and must not contain '..'")
+    root_resolved = screenshots_root.resolve()
+    candidate = (root_resolved / relative).resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError as exc:
+        raise SystemExit(
+            "--output-subdir must remain beneath the run screenshots directory"
+        ) from exc
+    return candidate
 
 
 def _build_selections(

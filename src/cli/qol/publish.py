@@ -27,6 +27,7 @@ def _cmd_publish(argv: Sequence[str]) -> int:
     build.add_argument("--manifest", required=True, type=Path)
     build.add_argument("--out-dir", type=Path)
     build.add_argument("--overwrite", action="store_true")
+    build.add_argument("--no-parquet", action="store_true")
 
     args = parser.parse_args(list(argv))
     forwarded = [
@@ -40,6 +41,8 @@ def _cmd_publish(argv: Sequence[str]) -> int:
         forwarded.append("--strict")
     if args.publish_cmd == "build" and args.overwrite:
         forwarded.append("--overwrite")
+    if args.publish_cmd == "build" and args.no_parquet:
+        forwarded.append("--no-parquet")
 
     from analysis.cli import build_atlas_database
 

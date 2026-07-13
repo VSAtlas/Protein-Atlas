@@ -40,6 +40,7 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
     protein_slugs = _unique_slugs(protein_by_id)
     drug_slugs = _unique_slugs(drug_by_id)
     pair_ids, pair_slugs = _pair_identity(pairs)
+    pair_id_by_object = {id(pair): pair_id for pair, pair_id in zip(pairs, pair_ids)}
 
     pairs_by_protein: dict[str, list[Mapping[str, Any]]] = {}
     pairs_by_drug: dict[str, list[Mapping[str, Any]]] = {}
@@ -55,6 +56,13 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
     (output_dir / "pairs").mkdir(parents=True, exist_ok=True)
     (output_dir / "assets" / "atlas.css").write_text(_CSS, encoding="utf-8")
     (output_dir / "assets" / "atlas.js").write_text(_JS, encoding="utf-8")
+    analysis_payload = _analysis_payload(
+        payload, pairs, proteins=protein_by_id, drugs=drug_by_id
+    )
+    (output_dir / "assets" / "analysis_data.json").write_text(
+        json.dumps(analysis_payload, separators=(",", ":"), ensure_ascii=True),
+        encoding="utf-8",
+    )
 
     title = _text(release.get("title")) or "Docking Atlas"
     index_body = _overview_body(
@@ -65,9 +73,15 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
         pairs,
         protein_slugs,
         drug_slugs,
+        _mapping(payload.get("coverage")),
+        payload.get("downloads", release.get("downloads")),
     )
     (output_dir / "index.html").write_text(
         _document(title, index_body, depth=0, release=release), encoding="utf-8"
+    )
+    (output_dir / "analysis.html").write_text(
+        _document(f"Guided analysis | {title}", _analysis_body(), depth=0, release=release),
+        encoding="utf-8",
     )
 
     for protein_id, protein in protein_by_id.items():
@@ -77,7 +91,7 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
             _display_pairs(pairs_by_protein.get(protein_id, []), "protein"),
             drug_by_id,
             drug_slugs,
-            pair_ids,
+            pair_id_by_object,
             pair_slugs,
         )
         page_title = f"{_entity_name(protein, protein_id)} | {title}"
@@ -92,7 +106,7 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
             _display_pairs(pairs_by_drug.get(drug_id, []), "drug"),
             protein_by_id,
             protein_slugs,
-            pair_ids,
+            pair_id_by_object,
             pair_slugs,
         )
         page_title = f"{_entity_name(drug, drug_id)} | {title}"
@@ -209,7 +223,7 @@ def _document(title: str, body: str, *, depth: int, release: Mapping[str, Any]) 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_h(title)}</title><link rel="stylesheet" href="{root}assets/atlas.css"></head>
-<body><header class="site-header"><a class="brand" href="{root}index.html">Docking Atlas</a>
+<body><header class="site-header"><a class="brand" href="{root}index.html">Docking Atlas</a><nav><a href="{root}analysis.html">Guided analysis</a></nav>
 <span class="release">Release {_h(release_label)}</span></header>
 <main>{body}</main><footer>Atlas rankings describe computational docking results, not validated binding.</footer>
 <script src="{root}assets/atlas.js"></script></body></html>"""
@@ -223,6 +237,8 @@ def _overview_body(
     pairs: list[Mapping[str, Any]],
     protein_slugs: Mapping[str, str],
     drug_slugs: Mapping[str, str],
+    coverage: Mapping[str, Any],
+    downloads: Any,
 ) -> str:
     summary = _text(release.get("summary") or release.get("description"))
     protein_cards = "".join(
@@ -241,10 +257,140 @@ def _overview_body(
 <section class="metrics"><div><strong>{len(proteins)}</strong><span>proteins</span></div><div><strong>{len(drugs)}</strong><span>drugs</span></div>
 <div><strong>{len(pairs)}</strong><span>matrix cells</span></div><div><strong>{valid_count}</strong><span>valid</span></div>
 <div><strong>{invalid_count}</strong><span>invalid</span></div><div><strong>{failed_count}</strong><span>failed / missing</span></div></section>
+{_coverage_callout(coverage)}
+{_download_section(downloads)}
 <section><div class="section-head"><h2>Protein explorer</h2><input data-filter="protein-list" type="search" placeholder="Search protein, PDB, gene…"></div>
 <div id="protein-list" class="card-grid">{protein_cards or _empty('No proteins in this release.')}</div></section>
 <section><div class="section-head"><h2>Drug explorer</h2><input data-filter="drug-list" type="search" placeholder="Search drug or ligand ID…"></div>
 <div id="drug-list" class="card-grid">{drug_cards or _empty('No drugs in this release.')}</div></section>"""
+
+
+def _coverage_callout(coverage: Mapping[str, Any]) -> str:
+    if not coverage:
+        return ""
+    count = _number(coverage.get("primary_score_count", coverage.get("count")))
+    pair_count = _number(coverage.get("pair_count"))
+    fraction = _number(
+        coverage.get("primary_score_fraction", coverage.get("fraction"))
+    )
+    if fraction is None and count is not None and pair_count:
+        fraction = count / pair_count
+    incomplete = (fraction is not None and fraction < 1.0) or (
+        count is not None and pair_count is not None and count < pair_count
+    )
+    count_label = _display(int(count)) if count is not None else "not supplied"
+    pair_label = _display(int(pair_count)) if pair_count is not None else "not supplied"
+    fraction_label = f"{fraction:.1%}" if fraction is not None else "fraction not supplied"
+    note = (
+        "Secondary scores are not substituted for missing primary scores."
+        if incomplete
+        else "Primary-score coverage is complete for the declared release matrix."
+    )
+    return f'<p class="callout {"danger" if incomplete else "ok"}"><strong>Primary final_score coverage:</strong> {_h(count_label)} / {_h(pair_label)} pairs ({_h(fraction_label)}). {_h(note)}</p>'
+
+
+def _download_section(downloads: Any) -> str:
+    if not downloads:
+        return ""
+    return (
+        '<section class="release-downloads"><h2>Download release</h2>'
+        '<p class="muted">Frozen release files and content hashes.</p>'
+        f"{_artifact_list(downloads)}</section>"
+    )
+
+
+def _analysis_payload(
+    payload: Mapping[str, Any],
+    pairs: list[Mapping[str, Any]],
+    *,
+    proteins: Mapping[str, Mapping[str, Any]],
+    drugs: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build a browser-safe, allowlisted analysis dataset from release fields."""
+
+    config = _mapping(payload.get("analysis"))
+    base_dimensions = [
+        "target_id", "protein_name", "drug_id", "drug_name", "status",
+        "failure_reason", "quality_status", "native_redock_status",
+        "rank_eligible", "ranking_eligibility_reason",
+    ]
+    base_measures = [
+        "final_score", "normalized_score", "atlas_score", "z_score", "raw_score",
+        "percentile_rank",
+    ]
+    dimension_keys = _allowed_analysis_keys(base_dimensions, config.get("dimensions", []))
+    measure_keys = _allowed_analysis_keys(base_measures, config.get("measures", []))
+    rows: list[dict[str, Any]] = []
+    for pair in pairs:
+        protein_id = _pair_ref(pair, "protein")
+        drug_id = _pair_ref(pair, "drug")
+        protein = proteins.get(protein_id, {})
+        drug = drugs.get(drug_id, {})
+        scores = _mapping(pair.get("scores"))
+        row: dict[str, Any] = {
+            "target_id": protein_id,
+            "protein_name": _entity_name(protein, protein_id),
+            "drug_id": drug_id,
+            "drug_name": _entity_name(drug, drug_id),
+            "status": _status(pair),
+            "failure_reason": _text(pair.get("failure_reason") or pair.get("invalid_reason")),
+            "quality_status": _text(protein.get("quality_status") or protein.get("qualification_status")),
+            "native_redock_status": _text(protein.get("native_redock_status") or protein.get("redock_status")),
+        }
+        for key in dimension_keys:
+            if key not in row:
+                value = pair.get(key)
+                if isinstance(value, (str, int, float, bool)):
+                    row[key] = value
+        for key in measure_keys:
+            row[key] = _number(pair.get(key, scores.get(key)))
+        rows.append(row)
+    dimensions = [key for key in dimension_keys if any(row.get(key) not in (None, "") for row in rows)]
+    measures = [key for key in measure_keys if any(row.get(key) is not None for row in rows)]
+    duckdb = _mapping(config.get("duckdb_wasm"))
+    return {
+        "schema_version": 1,
+        "dimensions": dimensions,
+        "measures": measures,
+        "rows": rows,
+        "optional_engine": {
+            "name": "duckdb-wasm",
+            "enabled": bool(duckdb.get("enabled", False)),
+            "module_url": _text(duckdb.get("module_url")),
+            "worker_url": _text(duckdb.get("worker_url")),
+            "note": "Optional hook only; this static release never loads CDN code automatically.",
+        },
+    }
+
+
+def _allowed_analysis_keys(defaults: list[str], requested: Any) -> list[str]:
+    keys = list(defaults)
+    if isinstance(requested, list):
+        for raw in requested:
+            key = _text(raw)
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", key) and key not in keys:
+                keys.append(key)
+    return keys
+
+
+def _analysis_body() -> str:
+    return """<section class="hero compact"><p class="eyebrow">Guided browser analysis</p>
+<h1>Explore the released matrix</h1><p>Filter and summarize supplied release values locally in your browser. These controls do not recalculate docking scores or receptor normalization.</p></section>
+<noscript><p class="callout danger">JavaScript is required for the guided analysis page. Entity and pair pages remain available without it.</p></noscript>
+<section id="analysis-app" class="analysis-app" data-source="assets/analysis_data.json">
+<div id="analysis-message" class="callout">Loading release data…</div>
+<div id="analysis-controls" class="analysis-controls" hidden>
+<label>Filter dimension<select id="analysis-filter-dimension"></select></label>
+<label>Filter value<select id="analysis-filter-value"><option value="">All values</option></select></label>
+<label>Group by<select id="analysis-group"></select></label>
+<label>Measure<select id="analysis-measure"></select></label>
+<label>Aggregation<select id="analysis-aggregation"><option value="count">Count</option><option value="mean">Mean</option><option value="min">Minimum</option><option value="max">Maximum</option></select></label>
+<button id="analysis-reset" type="button">Reset</button><button id="analysis-download" type="button">Download current CSV</button>
+</div>
+<div class="analysis-tabs" role="tablist"><button data-analysis-view="table" class="is-active">Table</button><button data-analysis-view="histogram">Histogram</button><button data-analysis-view="matrix">Matrix</button></div>
+<p id="analysis-summary" class="muted"></p><div id="analysis-result" class="analysis-result"></div>
+</section>
+<section><h2>Optional large-release engine</h2><p class="muted">The baseline uses dependency-free browser JavaScript. A release may declare explicit DuckDB-Wasm module and worker URLs; no CDN or remote script is loaded silently.</p></section>"""
 
 
 def _entity_card(item: Mapping[str, Any], item_id: str, href: str, kind: str) -> str:
@@ -261,16 +407,16 @@ def _protein_body(
     pairs: list[Mapping[str, Any]],
     drugs: Mapping[str, Mapping[str, Any]],
     drug_slugs: Mapping[str, str],
-    pair_ids: list[str],
+    pair_id_by_object: Mapping[int, str],
     pair_slugs: Mapping[str, str],
 ) -> str:
     heading = _entity_name(protein, protein_id)
     meta = _definition_list(protein, exclude={"id", "name", "display_name", "description", "images"})
-    rows = _pair_rows(pairs, pair_ids, pair_slugs, drugs, drug_slugs, "drug")
+    rows = _pair_rows(pairs, pair_id_by_object, pair_slugs, drugs, drug_slugs, "drug")
     return f"""{_breadcrumbs(('Proteins', None), (heading, None))}<section class="hero compact"><p class="eyebrow">Protein</p><h1>{_h(heading)}</h1>
 <p>{_h(_text(protein.get('description')) or protein_id)}</p></section>{_qualification(protein)}
 <section class="split"><div><h2>Receptor record</h2>{meta}</div>{_image_gallery(protein.get('images'))}</section>
-<section><div class="section-head"><h2>Ranked drugs</h2><input data-table-filter="pair-table" type="search" placeholder="Filter drugs or status…"></div>
+<section><div class="section-head"><h2>Ranked drugs</h2><label class="show-all"><input data-show-all-pairs="pair-table" type="checkbox"> Show invalid, failed, and unranked cells</label><input data-table-filter="pair-table" type="search" placeholder="Filter drugs or status…"></div>
 {_pair_table(rows, 'Drug', 'Protein-normalized rank')}</section>"""
 
 
@@ -280,21 +426,28 @@ def _drug_body(
     pairs: list[Mapping[str, Any]],
     proteins: Mapping[str, Mapping[str, Any]],
     protein_slugs: Mapping[str, str],
-    pair_ids: list[str],
+    pair_id_by_object: Mapping[int, str],
     pair_slugs: Mapping[str, str],
 ) -> str:
     heading = _entity_name(drug, drug_id)
     meta = _definition_list(drug, exclude={"id", "name", "display_name", "description", "images"})
-    rows = _pair_rows(pairs, pair_ids, pair_slugs, proteins, protein_slugs, "protein")
+    rows = _pair_rows(pairs, pair_id_by_object, pair_slugs, proteins, protein_slugs, "protein")
     return f"""{_breadcrumbs(('Drugs', None), (heading, None))}<section class="hero compact"><p class="eyebrow">Drug</p><h1>{_h(heading)}</h1>
 <p>{_h(_text(drug.get('description')) or drug_id)}</p></section>
 <section class="split"><div><h2>Ligand record</h2>{meta}</div>{_image_gallery(drug.get('images'))}</section>
-<section><div class="section-head"><h2>Ranked proteins</h2><input data-table-filter="pair-table" type="search" placeholder="Filter proteins or status…"></div>
+<section><div class="section-head"><h2>Ranked proteins</h2><label class="show-all"><input data-show-all-pairs="pair-table" type="checkbox"> Show invalid, failed, and unranked cells</label><input data-table-filter="pair-table" type="search" placeholder="Filter proteins or status…"></div>
 {_pair_table(rows, 'Protein', 'Receptor-normalized rank')}</section>"""
 
 
 def _display_pairs(pairs: list[Mapping[str, Any]], perspective: str) -> list[Mapping[str, Any]]:
-    rank_keys = ("protein_rank", "rank_for_protein", "rank") if perspective == "protein" else ("drug_rank", "rank_for_drug", "cross_protein_rank")
+    rank_keys = (
+        ("rank_within_receptor", "protein_rank", "rank_for_protein", "rank")
+        if perspective == "protein"
+        else (
+            "rank_across_receptors", "drug_rank", "rank_for_drug",
+            "cross_protein_rank", "rank",
+        )
+    )
 
     def key(pair: Mapping[str, Any]) -> tuple[Any, ...]:
         rank = next((_number(pair.get(name)) for name in rank_keys if _number(pair.get(name)) is not None), None)
@@ -305,7 +458,7 @@ def _display_pairs(pairs: list[Mapping[str, Any]], perspective: str) -> list[Map
 
 def _pair_rows(
     pairs: list[Mapping[str, Any]],
-    pair_ids: list[str],
+    pair_id_by_object: Mapping[int, str],
     pair_slugs: Mapping[str, str],
     entities: Mapping[str, Mapping[str, Any]],
     entity_slugs: Mapping[str, str],
@@ -313,36 +466,40 @@ def _pair_rows(
 ) -> list[str]:
     rows = []
     for pair in pairs:
-        pair_id = _resolve_pair_id(pair, pair_ids)
+        pair_id = pair_id_by_object[id(pair)]
         entity_id = _pair_ref(pair, entity_kind)
         entity = entities.get(entity_id, {})
         name = _entity_name(entity, entity_id or "Unresolved entity")
         entity_href = f"../{'drugs' if entity_kind == 'drug' else 'proteins'}/{entity_slugs.get(entity_id, '')}.html"
-        rank = _first(pair, "protein_rank", "rank_for_protein", "drug_rank", "rank_for_drug", "cross_protein_rank", "rank")
+        rank_keys = (
+            ("rank_within_receptor", "protein_rank", "rank_for_protein", "rank")
+            if entity_kind == "drug"
+            else (
+                "rank_across_receptors", "drug_rank", "rank_for_drug",
+                "cross_protein_rank", "rank",
+            )
+        )
+        rank = _first(pair, *rank_keys)
         score = _score_summary(pair)
         status = _status(pair)
+        eligible_value = pair.get("rank_eligible")
+        rank_ineligible = eligible_value is not None and str(eligible_value).lower() in {
+            "0", "false", "no",
+        }
+        visibility = ' data-rank-eligible="false" hidden' if rank_ineligible else ""
         rows.append(
-            f'<tr data-search="{_h((name + " " + entity_id + " " + status).lower())}"><td><a href="{_h(entity_href)}">{_h(name)}</a><small>{_h(entity_id)}</small></td>'
+            f'<tr data-search="{_h((name + " " + entity_id + " " + status).lower())}"{visibility}><td><a href="{_h(entity_href)}">{_h(name)}</a><small>{_h(entity_id)}</small></td>'
             f'<td>{_h(_display(rank))}</td><td>{score}</td><td>{_badge(status)}</td>'
             f'<td><a class="button small" href="../pairs/{_h(pair_slugs[pair_id])}.html">Inspect</a></td></tr>'
         )
     return rows
 
 
-def _resolve_pair_id(pair: Mapping[str, Any], pair_ids: list[str]) -> str:
-    explicit = _text(pair.get("id") or pair.get("pair_id"))
-    base = explicit or f"{_pair_ref(pair, 'protein')}--{_pair_ref(pair, 'drug')}"
-    if base in pair_ids:
-        return base
-    matches = [pair_id for pair_id in pair_ids if pair_id.startswith(f"{base}--")]
-    return matches[0] if matches else base
-
-
 def _pair_table(rows: list[str], entity_label: str, rank_label: str) -> str:
     if not rows:
         return _empty("No pair records are available for this entity.")
     return f"""<div class="table-wrap"><table id="pair-table"><thead><tr><th>{_h(entity_label)}</th><th>{_h(rank_label)}</th>
-<th>Atlas score</th><th>Status</th><th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"""
+<th>Final score</th><th>Status</th><th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"""
 
 
 def _pair_body(
@@ -362,9 +519,9 @@ def _pair_body(
     validity = _mapping(pair.get("validity") or pair.get("validation"))
     provenance = _mapping(pair.get("provenance"))
     failure = _text(pair.get("failure_reason") or validity.get("reason") or pair.get("invalid_reason"))
-    status_note = f'<p class="callout {"danger" if status in {"failed", "invalid", "missing"} else "ok"}">{_badge(status)} {_h(failure or "No structured failure reason supplied.")}</p>'
+    status_note = f'<p class="callout {"danger" if status not in {"valid", "success"} else "ok"}">{_badge(status)} {_h(failure or "No structured failure reason supplied.")}</p>'
     score_data = dict(scores)
-    for key in ("atlas_score", "normalized_score", "z_score", "percentile_rank", "raw_score", "protein_rank", "drug_rank"):
+    for key in ("final_score", "atlas_score", "normalized_score", "z_score", "percentile_rank", "raw_score", "protein_rank", "drug_rank"):
         if key in pair and key not in score_data:
             score_data[key] = pair[key]
     reserved = {"id", "pair_id", "protein_id", "target_id", "pdb_id", "drug_id", "ligand_id", "scores", "validity", "validation", "provenance", "artifacts", "images", "failure_reason", "invalid_reason"}
@@ -392,14 +549,16 @@ def _qualification(protein: Mapping[str, Any]) -> str:
 
 def _score_summary(pair: Mapping[str, Any]) -> str:
     scores = _mapping(pair.get("scores"))
-    value = _first(pair, "atlas_score", "normalized_score", "z_score")
+    value = pair.get("final_score")
     if value in (None, ""):
-        value = _first(scores, "atlas_score", "normalized_score", "z_score", "selected")
+        value = scores.get("final_score")
     return _h(_display(value))
 
 
 def _status(pair: Mapping[str, Any]) -> str:
     value = _text(pair.get("status") or pair.get("final_status")).lower()
+    aliases = {"ok": "valid", "completed": "valid", "unsuccessful": "failed", "error": "failed"}
+    value = aliases.get(value, value)
     validity = _mapping(pair.get("validity") or pair.get("validation"))
     if not value and validity.get("valid") is not None:
         value = "valid" if bool(validity.get("valid")) else "invalid"
@@ -424,8 +583,6 @@ def _value_html(value: Any) -> str:
     if isinstance(value, list):
         return "<ul>" + "".join(f"<li>{_value_html(item)}</li>" for item in value) + "</ul>"
     text = _display(value)
-    if _safe_url(text):
-        return f'<a href="{_h(text)}">{_h(text)}</a>'
     return _h(text)
 
 
@@ -507,7 +664,8 @@ def _display(value: Any) -> str:
 
 
 def _label(value: str) -> str:
-    return value.replace("_", " ").strip().title()
+    label = value.replace("_", " ").strip().title()
+    return f"{label} (Secondary)" if value == "atlas_score" else label
 
 
 def _safe_url(value: str) -> bool:
@@ -526,11 +684,32 @@ def _empty(message: str) -> str:
 
 
 _CSS = r"""
-:root{--ink:#17231b;--muted:#5c695f;--paper:#f6f7f2;--card:#fff;--line:#dce2d9;--green:#285b3b;--gold:#d39a2e;--red:#9f3939;--blue:#315d7c}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:var(--green)}.site-header{height:64px;padding:0 max(24px,calc((100vw - 1180px)/2));display:flex;align-items:center;justify-content:space-between;background:#183626;color:#fff}.brand{color:#fff;text-decoration:none;font-weight:800;font-size:1.15rem}.release{font-size:.85rem;opacity:.8}main{max-width:1180px;margin:auto;padding:36px 24px 80px}footer{padding:24px;text-align:center;background:#e8ece5;color:var(--muted);font-size:.85rem}.hero{padding:48px;border-radius:22px;background:linear-gradient(135deg,#e6efe5,#fff);border:1px solid var(--line);margin-bottom:24px}.hero.compact{padding:30px}.hero h1{font-size:clamp(2rem,5vw,4.2rem);line-height:1.03;margin:.2em 0}.hero.compact h1{font-size:clamp(1.8rem,4vw,3rem)}.hero p{max-width:780px;color:#405047}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-weight:800;font-size:.75rem;color:var(--green)!important}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:24px 0 50px}.metrics div,.qualification div{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.metrics strong{display:block;font-size:2rem}.metrics span,.qualification span{color:var(--muted);font-size:.8rem}.section-head{display:flex;gap:18px;align-items:center;justify-content:space-between;margin-top:46px}.section-head input{min-width:280px;padding:11px 14px;border:1px solid #abb8ac;border-radius:10px;background:#fff}.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}.entity-card{display:block;padding:20px;background:var(--card);border:1px solid var(--line);border-radius:14px;text-decoration:none;color:inherit;transition:.15s}.entity-card:hover{transform:translateY(-2px);border-color:#8da393;box-shadow:0 8px 20px #18362614}.entity-card h3{margin:0}.entity-card p{color:var(--muted);margin:.4rem 0 0}.breadcrumbs{color:var(--muted);font-size:.85rem;margin-bottom:18px}.split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.4fr);gap:28px}.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.record{display:grid;grid-template-columns:minmax(130px,.7fr) 1.5fr;margin:0}.record dt,.record dd{padding:9px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record dt{color:var(--muted);font-size:.82rem;font-weight:700}.record dd{margin:0}.record .record{grid-column:1/-1}.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}.gallery figure{margin:0;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}.gallery img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:#e5e8e3}.gallery figcaption{padding:8px 12px;color:var(--muted);font-size:.8rem}.table-wrap{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px;border-bottom:1px solid var(--line)}th{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}td small{display:block;color:var(--muted)}.badge{display:inline-block;border-radius:999px;background:#e8ebe7;padding:3px 9px;font-size:.75rem;font-weight:750}.status-valid,.status-success,.status-qualified,.status-pass{background:#d8eddf;color:#215234}.status-invalid,.status-warning{background:#fff0c9;color:#72500d}.status-failed,.status-missing,.status-fail{background:#f5dada;color:#792727}.button{display:inline-block;padding:8px 13px;border-radius:8px;background:var(--green);color:#fff;text-decoration:none}.button.small{padding:5px 10px;font-size:.8rem}.qualification{display:flex;gap:12px;align-items:stretch;margin:20px 0}.qualification h2{margin-right:auto}.qualification div{min-width:150px}.qualification span{display:block;margin-top:6px}.callout{padding:14px 18px;border-radius:12px}.callout.ok{background:#dff0e4}.callout.danger{background:#f5e1d9}.artifacts{padding:0;list-style:none}.artifacts li{display:flex;justify-content:space-between;gap:20px;padding:10px;border-bottom:1px solid var(--line)}code{font-size:.82em;overflow-wrap:anywhere}.empty{color:var(--muted);font-style:italic;padding:18px;background:#fff;border:1px dashed #bdc7bd;border-radius:10px}@media(max-width:760px){main{padding:20px 14px 60px}.hero{padding:28px 20px}.split,.three-col{grid-template-columns:1fr}.section-head{align-items:stretch;flex-direction:column}.section-head input{min-width:0;width:100%}.qualification{display:grid}.record{grid-template-columns:1fr}.record dd{padding-top:0}}
+:root{--ink:#17231b;--muted:#5c695f;--paper:#f6f7f2;--card:#fff;--line:#dce2d9;--green:#285b3b;--gold:#d39a2e;--red:#9f3939;--blue:#315d7c}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:var(--green)}.site-header{height:64px;padding:0 max(24px,calc((100vw - 1180px)/2));display:flex;align-items:center;justify-content:space-between;background:#183626;color:#fff}.brand{color:#fff;text-decoration:none;font-weight:800;font-size:1.15rem}.release{font-size:.85rem;opacity:.8}main{max-width:1180px;margin:auto;padding:36px 24px 80px}footer{padding:24px;text-align:center;background:#e8ece5;color:var(--muted);font-size:.85rem}.hero{padding:48px;border-radius:22px;background:linear-gradient(135deg,#e6efe5,#fff);border:1px solid var(--line);margin-bottom:24px}.hero.compact{padding:30px}.hero h1{font-size:clamp(2rem,5vw,4.2rem);line-height:1.03;margin:.2em 0}.hero.compact h1{font-size:clamp(1.8rem,4vw,3rem)}.hero p{max-width:780px;color:#405047}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-weight:800;font-size:.75rem;color:var(--green)!important}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:24px 0 50px}.metrics div,.qualification div{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.metrics strong{display:block;font-size:2rem}.metrics span,.qualification span{color:var(--muted);font-size:.8rem}.section-head{display:flex;gap:18px;align-items:center;justify-content:space-between;margin-top:46px}.section-head input{min-width:280px;padding:11px 14px;border:1px solid #abb8ac;border-radius:10px;background:#fff}.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}.entity-card{display:block;padding:20px;background:var(--card);border:1px solid var(--line);border-radius:14px;text-decoration:none;color:inherit;transition:.15s}.entity-card:hover{transform:translateY(-2px);border-color:#8da393;box-shadow:0 8px 20px #18362614}.entity-card h3{margin:0}.entity-card p{color:var(--muted);margin:.4rem 0 0}.breadcrumbs{color:var(--muted);font-size:.85rem;margin-bottom:18px}.split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.4fr);gap:28px}.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.record{display:grid;grid-template-columns:minmax(130px,.7fr) 1.5fr;margin:0}.record dt,.record dd{padding:9px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record dt{color:var(--muted);font-size:.82rem;font-weight:700}.record dd{margin:0}.record .record{grid-column:1/-1}.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}.gallery figure{margin:0;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}.gallery img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:#e5e8e3}.gallery figcaption{padding:8px 12px;color:var(--muted);font-size:.8rem}.table-wrap{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px;border-bottom:1px solid var(--line)}th{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}td small{display:block;color:var(--muted)}.badge{display:inline-block;border-radius:999px;background:#e8ebe7;padding:3px 9px;font-size:.75rem;font-weight:750}.status-valid,.status-success,.status-qualified,.status-pass{background:#d8eddf;color:#215234}.status-invalid,.status-warning{background:#fff0c9;color:#72500d}.status-failed,.status-missing,.status-fail{background:#f5dada;color:#792727}.button{display:inline-block;padding:8px 13px;border-radius:8px;background:var(--green);color:#fff;text-decoration:none}.button.small{padding:5px 10px;font-size:.8rem}.qualification{display:flex;gap:12px;align-items:stretch;margin:20px 0}.qualification h2{margin-right:auto}.qualification div{min-width:150px}.qualification span{display:block;margin-top:6px}.callout{padding:14px 18px;border-radius:12px}.callout.ok{background:#dff0e4}.callout.danger{background:#f5e1d9}.artifacts{padding:0;list-style:none}.artifacts li{display:flex;justify-content:space-between;gap:20px;padding:10px;border-bottom:1px solid var(--line)}code{font-size:.82em;overflow-wrap:anywhere}.empty{color:var(--muted);font-style:italic;padding:18px;background:#fff;border:1px dashed #bdc7bd;border-radius:10px}@media(max-width:760px){main{padding:20px 14px 60px}.hero{padding:28px 20px}.split,.three-col{grid-template-columns:1fr}.section-head{align-items:stretch;flex-direction:column}.section-head input{min-width:0;width:100%}.qualification{display:grid}.record{grid-template-columns:1fr}.record dd{padding-top:0}}.show-all{font-size:.82rem;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap}.analysis-app{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px}.analysis-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;align-items:end}.analysis-controls label{display:grid;gap:5px;color:var(--muted);font-size:.8rem;font-weight:700}.analysis-controls select,.analysis-controls button,.analysis-tabs button{min-height:40px;border:1px solid #aebcaf;border-radius:9px;background:#fff;padding:7px 10px}.analysis-controls button,.analysis-tabs button{cursor:pointer;color:var(--green);font-weight:750}.analysis-tabs{display:flex;gap:8px;margin:22px 0}.analysis-tabs .is-active{background:var(--green);color:#fff}.analysis-result{overflow:auto}.analysis-bars{display:grid;gap:8px}.analysis-bar{display:grid;grid-template-columns:minmax(120px,220px) 1fr 70px;gap:10px;align-items:center}.analysis-bar-track{height:18px;background:#edf0eb;border-radius:5px;overflow:hidden}.analysis-bar-fill{height:100%;background:var(--green)}.matrix td{min-width:58px;text-align:center;font-variant-numeric:tabular-nums}.matrix th{position:sticky;background:#fff}.matrix-cell{background:color-mix(in srgb,var(--blue) calc(var(--heat)*85%),white);color:var(--ink)}.muted{color:var(--muted)}.site-header nav a{color:#fff;font-size:.9rem}
 """
 
 
 _JS = r"""
 document.querySelectorAll('[data-filter]').forEach(function(input){input.addEventListener('input',function(){var q=input.value.trim().toLowerCase();var root=document.getElementById(input.dataset.filter);if(!root)return;root.querySelectorAll('[data-search]').forEach(function(item){item.hidden=q && !item.dataset.search.includes(q);});});});
-document.querySelectorAll('[data-table-filter]').forEach(function(input){input.addEventListener('input',function(){var q=input.value.trim().toLowerCase();var root=document.getElementById(input.dataset.tableFilter);if(!root)return;root.querySelectorAll('tbody tr').forEach(function(row){row.hidden=q && !row.dataset.search.includes(q);});});});
+function updateAtlasPairTable(id){var root=document.getElementById(id);if(!root)return;var input=document.querySelector('[data-table-filter="'+id+'"]'),toggle=document.querySelector('[data-show-all-pairs="'+id+'"]'),q=input?input.value.trim().toLowerCase():'';root.querySelectorAll('tbody tr').forEach(function(row){var excluded=row.dataset.rankEligible==='false'&&!(toggle&&toggle.checked),filtered=q&&!row.dataset.search.includes(q);row.hidden=excluded||filtered;});}document.querySelectorAll('[data-table-filter]').forEach(function(input){input.addEventListener('input',function(){updateAtlasPairTable(input.dataset.tableFilter);});});document.querySelectorAll('[data-show-all-pairs]').forEach(function(toggle){toggle.addEventListener('change',function(){updateAtlasPairTable(toggle.dataset.showAllPairs);});});
+(function(){
+  var app=document.getElementById('analysis-app'); if(!app)return;
+  var message=document.getElementById('analysis-message'), controls=document.getElementById('analysis-controls'), result=document.getElementById('analysis-result'), summary=document.getElementById('analysis-summary');
+  var dim=document.getElementById('analysis-filter-dimension'), val=document.getElementById('analysis-filter-value'), group=document.getElementById('analysis-group'), measure=document.getElementById('analysis-measure'), agg=document.getElementById('analysis-aggregation');
+  var state={data:null,view:'table',current:[]};
+  function esc(x){return String(x==null?'':x).replace(/[&<>\"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c];});}
+  function label(x){var text=String(x).replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});return x==='atlas_score'?text+' (secondary)':text;}
+  function option(x){return '<option value="'+esc(x)+'">'+esc(label(x))+'</option>';}
+  function csv(rows){if(!rows.length)return '';var keys=Object.keys(rows[0]);function cell(x){var t=String(x==null?'':x);return /[\",\n]/.test(t)?'\"'+t.replace(/\"/g,'\"\"')+'\"':t;}return keys.map(cell).join(',')+'\n'+rows.map(function(r){return keys.map(function(k){return cell(r[k]);}).join(',');}).join('\n')+'\n';}
+  function filtered(){var key=dim.value,want=val.value;return state.data.rows.filter(function(r){return !want||String(r[key])===want;});}
+  function refreshValues(){var values={};state.data.rows.forEach(function(r){if(r[dim.value]!=null&&r[dim.value]!=='')values[String(r[dim.value])]=1;});if(dim.value==='rank_eligible')values['1']=1;val.innerHTML='<option value="">All values</option>'+Object.keys(values).sort().map(function(x){var shown=dim.value==='rank_eligible'?((x==='1'||x==='true')?'Eligible':'Excluded'):x;return '<option value="'+esc(x)+'">'+esc(shown)+'</option>';}).join('');render();}
+  function aggregate(rows){var buckets={};rows.forEach(function(r){var k=String(r[group.value]==null?'Not supplied':r[group.value]);(buckets[k]||(buckets[k]=[])).push(r);});var mode=agg.value,m=measure.value;return Object.keys(buckets).map(function(k){var values=buckets[k].map(function(r){return Number(r[m]);}).filter(Number.isFinite),out;if(mode==='count')out=buckets[k].length;else if(!values.length)out=null;else if(mode==='mean')out=values.reduce(function(a,b){return a+b;},0)/values.length;else if(mode==='min')out=Math.min.apply(Math,values);else out=Math.max.apply(Math,values);return {group:k,value:out,rows:buckets[k].length};}).sort(function(a,b){return (b.value==null?-Infinity:b.value)-(a.value==null?-Infinity:a.value);});}
+  function table(data){return '<div class="table-wrap"><table><thead><tr><th>'+esc(label(group.value))+'</th><th>'+esc(label(agg.value))+'</th><th>Rows</th></tr></thead><tbody>'+data.map(function(r){return '<tr><td>'+esc(r.group)+'</td><td>'+esc(r.value==null?'—':Number(r.value).toPrecision(6))+'</td><td>'+r.rows+'</td></tr>';}).join('')+'</tbody></table></div>';}
+  function bars(data){var finite=data.map(function(r){return r.value;}).filter(Number.isFinite),max=Math.max.apply(Math,[0].concat(finite.map(Math.abs)));return '<div class="analysis-bars">'+data.slice(0,40).map(function(r){var w=max&&Number.isFinite(r.value)?Math.abs(r.value)/max*100:0;return '<div class="analysis-bar"><span>'+esc(r.group)+'</span><div class="analysis-bar-track"><div class="analysis-bar-fill" style="width:'+w+'%"></div></div><strong>'+esc(r.value==null?'—':Number(r.value).toPrecision(4))+'</strong></div>';}).join('')+'</div>';}
+  function matrix(rows){var xs=[],ys=[],cells={};rows.forEach(function(r){var x=String(r.drug_name||r.drug_id||'Unknown drug'),y=String(r.protein_name||r.target_id||'Unknown protein'),k=y+'\u0000'+x;(cells[k]||(cells[k]=[])).push(r);if(xs.indexOf(x)<0)xs.push(x);if(ys.indexOf(y)<0)ys.push(y);});xs=xs.slice(0,25);ys=ys.slice(0,25);var values=[];function value(y,x){var rs=cells[y+'\u0000'+x]||[];if(agg.value==='count')return rs.length||null;var nums=rs.map(function(r){return Number(r[measure.value]);}).filter(Number.isFinite);if(!nums.length)return null;if(agg.value==='min')return Math.min.apply(Math,nums);if(agg.value==='max')return Math.max.apply(Math,nums);return nums.reduce(function(a,b){return a+b;},0)/nums.length;}ys.forEach(function(y){xs.forEach(function(x){var v=value(y,x);if(v!=null)values.push(Math.abs(v));});});var max=Math.max.apply(Math,[0].concat(values));return '<div class="table-wrap"><table class="matrix"><thead><tr><th>Protein \\ Drug</th>'+xs.map(function(x){return '<th>'+esc(x)+'</th>';}).join('')+'</tr></thead><tbody>'+ys.map(function(y){return '<tr><th>'+esc(y)+'</th>'+xs.map(function(x){var v=value(y,x),heat=max&&v!=null?Math.abs(v)/max:0;return '<td class="matrix-cell" style="--heat:'+heat.toFixed(3)+'" title="'+esc(y+' × '+x)+'">'+esc(v==null?'—':Number(v).toPrecision(3))+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table></div>'+(xs.length===25||ys.length===25?'<p class="muted">Matrix preview limited to 25 × 25 groups; CSV export includes the current grouped result.</p>':'');}
+  function render(){if(!state.data)return;var rows=filtered(),data=aggregate(rows);state.current=data.map(function(r){var out={};out[group.value]=r.group;out[agg.value+'_'+(agg.value==='count'?'rows':measure.value)]=r.value;out.source_rows=r.rows;return out;});summary.textContent=rows.length+' of '+state.data.rows.length+' pair rows · '+data.length+' groups';result.innerHTML=state.view==='matrix'?matrix(rows):(state.view==='histogram'?bars(data):table(data));}
+  function setup(data){state.data=data;window.AtlasAnalysisDuckDBConfig=data.optional_engine||{enabled:false};if(!Array.isArray(data.rows)||!Array.isArray(data.dimensions))throw new Error('analysis dataset has an unsupported shape');if(!data.rows.length){message.textContent='No pair rows are available for browser analysis.';return;}if(!data.dimensions.length){message.textContent='No allowed analysis dimensions are populated in this release.';return;}dim.innerHTML=data.dimensions.map(option).join('');group.innerHTML=data.dimensions.map(option).join('');measure.innerHTML=(data.measures||[]).map(option).join('');if(!data.measures.length){measure.innerHTML='<option value="">No numeric measure</option>';agg.value='count';agg.querySelectorAll('option:not([value="count"])').forEach(function(o){o.disabled=true;});}message.hidden=true;controls.hidden=false;if(data.dimensions.indexOf('rank_eligible')>=0){dim.value='rank_eligible';refreshValues();var eligible=Array.from(val.options).find(function(o){return o.value==='1'||o.value==='true';});if(eligible){val.value=eligible.value;render();}}else{refreshValues();}}
+  [val,group,measure,agg].forEach(function(el){el.addEventListener('change',render);});dim.addEventListener('change',refreshValues);document.getElementById('analysis-reset').addEventListener('click',function(){if(state.data.dimensions.indexOf('rank_eligible')>=0){dim.value='rank_eligible';refreshValues();val.value='1';}else{val.value='';}agg.value='count';render();});document.getElementById('analysis-download').addEventListener('click',function(){var blob=new Blob([csv(state.current)],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='atlas-analysis-current.csv';a.click();setTimeout(function(){URL.revokeObjectURL(a.href);},1000);});document.querySelectorAll('[data-analysis-view]').forEach(function(b){b.addEventListener('click',function(){state.view=b.dataset.analysisView;document.querySelectorAll('[data-analysis-view]').forEach(function(x){x.classList.toggle('is-active',x===b);});render();});});
+  fetch(app.dataset.source).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(setup).catch(function(e){message.className='callout danger';message.innerHTML='Browser analysis data could not be loaded. Serve this directory with a static web server, or use the entity pages and downloadable release files. <small>'+esc(e.message)+'</small>';});
+})();
+
 """

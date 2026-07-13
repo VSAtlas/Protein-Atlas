@@ -126,6 +126,9 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE INDEX IF NOT EXISTS idx_pair_cells_status ON pair_cells(final_status);
 CREATE INDEX IF NOT EXISTS idx_pair_cells_score ON pair_cells(atlas_score DESC);
 CREATE INDEX IF NOT EXISTS idx_pair_cells_ligand ON pair_cells(ligand_id, atlas_score DESC);
+CREATE INDEX IF NOT EXISTS idx_pair_cells_final_score ON pair_cells(final_score DESC);
+CREATE INDEX IF NOT EXISTS idx_pair_cells_ligand_final_score
+    ON pair_cells(ligand_id, final_score DESC);
 CREATE INDEX IF NOT EXISTS idx_context_pdb ON receptor_contexts(pdb_id, variant, ph_label);
 CREATE INDEX IF NOT EXISTS idx_attempt_status ON docking_attempts(status);
 CREATE INDEX IF NOT EXISTS idx_artifact_pair ON artifacts(pair_cell_id);

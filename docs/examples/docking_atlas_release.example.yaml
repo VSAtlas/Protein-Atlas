@@ -1,0 +1,45 @@
+# Replace every angle-bracket placeholder before audit or build.
+schema_version: 1
+release_id: <RELEASE_ID>
+title: <PUBLIC_RELEASE_TITLE>
+description: <SHORT_SCOPE_AND_LIMITATIONS_STATEMENT>
+
+runs:
+  - run_id: <RUN_ID>
+    # Optional integration overrides. Omit these when canonical outputs/<kind>/<run_id>
+    # locations are available.
+    paths:
+      run_manifest: <RUN_MANIFEST_YAML>
+      master_rows: <MASTER_ROWS_CSV>
+      docked: <DOCKED_RUN_DIRECTORY>
+      archive_index: <ARTIFACT_ARCHIVE_INDEX_JSON>
+
+scientific_policies:
+  receptor_selection:
+    policy_id: <RECEPTOR_SELECTION_POLICY_ID>
+    statement: <EXPLICIT_EXPERIMENTAL_STRUCTURE_AND_QUALITY_POLICY>
+    outcome_source: <FILE_OR_RECORD_CONTAINING_PER_RECEPTOR_OUTCOMES>
+  native_redocking:
+    policy_id: <NATIVE_REDOCK_POLICY_ID>
+    required_for_every_receptor: true
+    method: <REDOCK_QUALIFICATION_METHOD>
+    threshold: <EXPLICIT_THRESHOLD_AND_UNITS>
+    outcome_source: <FILE_OR_RECORD_CONTAINING_PER_RECEPTOR_OUTCOMES>
+  failure_handling:
+    complete_matrix_required: true
+    retain_unsuccessful_and_invalid_cells: true
+    taxonomy: <STRUCTURED_FAILURE_TAXONOMY_ID>
+  normalization:
+    primary_rank_field: final_score
+    primary_rank_direction: higher_is_better
+    cross_receptor_field: <DECLARED_RECEPTOR_NORMALIZED_FIELD>
+    comparison_scope: <DECLARED_REFERENCE_POPULATION>
+
+image_plan:
+  known_pairs:
+    - run_id: <RUN_ID>
+      pdb_id: <PDB_ID>
+      variant: <VARIANT_OR_EMPTY>
+      ph_label: <PH_LABEL_OR_EMPTY>
+      canonical_id: <CANONICAL_LIGAND_ID>
+      evidence_reference: <CURATED_KNOWN_PAIR_SOURCE>
