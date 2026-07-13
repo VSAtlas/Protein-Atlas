@@ -1,0 +1,2 @@
+run_id,pdb_id,variant,ph_label,ligand_canonical_id,selection_label,evidence_reference,provenance
+<RUN_ID>,<PDB_ID>,<EXPLICIT_VARIANT>,<EXPLICIT_PH_LABEL>,<CANONICAL_LIGAND_ID>,<PUBLIC_SELECTION_LABEL>,<FROZEN_EVIDENCE_REFERENCE>,"{""source"":""<KNOWN_PAIR_SOURCE>"",""record"":""<SOURCE_RECORD>""}"

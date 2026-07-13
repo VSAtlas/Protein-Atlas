@@ -18,6 +18,23 @@ Adjudicates every cached SPL Cmax candidate against its source excerpt, rejects 
 
 Adds a reproducible one-row-per-PDB target pocket feature table using label-independent residue composition, simple geometry, size, and metal-context descriptors. ESM-2 remains a frozen sequence-representation ablation; PocketVec remains a separate inverse-docking baseline rather than a name for the deterministic descriptors.
 
+
+## Atlasv0.0.04 - Stage SPD add-ons and matched controls
+
+Adds the versioned SPD positive-add-on workflow, same-source control staging, and
+fail-closed score-scale/provenance handling for small-library additions.
+
+## Atlasv0.0.05 - Build the auditable docking-atlas foundation
+
+Adds release-manifest ingestion, failure-complete receptor-ligand cells, immutable
+SQLite provenance, explicit primary-score ranking contracts, and bidirectional
+target/drug exports without inferring scientific approvals.
+
+## Atlasv0.0.06 - Ship the conference atlas release builder
+
+Adds `atlas publish audit|build`, a path-redacted public database and flat
+downloads, receptor/drug/pair static exploration, readiness evidence, guided local
+analysis, and deterministic conference image planning.
 ## Atlasv0.0.07 - Safe reusable SPD add-on integration
 
 Adds a one-command SPD add-on merge with canonical FDA identity reconciliation,
@@ -29,3 +46,16 @@ manifest-owned Slurm IDs, local process evidence, and a 72-hour fail-closed
 manifest window, and holds an exclusive add-on lock. Stale historical lifecycle
 records no longer block forever, and fast or DUD-only runtime shortcuts are not
 accepted.
+
+## Atlasv0.0.08 - Harden qualified and scalable docking-atlas releases
+
+Adds hashed scientific annotation sources, separate receptor-quality and
+native-redock gates, rerun-preserving normalized completion records, compact public
+SQLite projection, deterministic bundle integrity verification, paginated static
+exploration, and a bounded read-only Worker/R2 architecture prototype.
+
+Corrupt completion inputs, duplicate canonical master results, unsafe edge output
+locations, forged overwrite markers, untracked in-site verification reports, and
+private-path leaks now fail closed. Pair artifacts are visible in static pages and
+missing image artifacts become explicit preflight gaps; the full 760,878-cell edge
+export remains blocked on a future SQLite-streaming implementation.

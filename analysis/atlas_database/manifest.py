@@ -9,6 +9,8 @@ from typing import Any, Mapping
 
 import yaml  # type: ignore[import-untyped]
 
+from analysis.atlas_database.annotations import ANNOTATION_SOURCE_NAMES
+
 REQUIRED_POLICY_NAMES = (
     "receptor_selection",
     "native_redocking",
@@ -31,7 +33,9 @@ def load_release_manifest(path: Path) -> dict[str, Any]:
             else:
                 loaded = yaml.safe_load(handle)
     except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
-        raise ReleaseManifestError(f"could not read release manifest {path}: {exc}") from exc
+        raise ReleaseManifestError(
+            f"could not read release manifest {path}: {exc}"
+        ) from exc
     if not isinstance(loaded, dict):
         raise ReleaseManifestError("release manifest must be a mapping")
     errors = validate_release_manifest(loaded)
@@ -83,6 +87,29 @@ def validate_release_manifest(manifest: Mapping[str, Any]) -> list[str]:
             value = policies.get(name)
             if not isinstance(value, Mapping) or not value:
                 errors.append(f"scientific_policies.{name} must be a non-empty mapping")
+
+    annotations = manifest.get("annotations")
+    if annotations is not None:
+        if not isinstance(annotations, Mapping):
+            errors.append("annotations must be a mapping")
+        else:
+            unknown = sorted(set(annotations) - set(ANNOTATION_SOURCE_NAMES))
+            for name in unknown:
+                errors.append(f"unknown annotations source: {name}")
+            for name in ANNOTATION_SOURCE_NAMES:
+                if name not in annotations:
+                    continue
+                spec = annotations[name]
+                if isinstance(spec, str):
+                    valid = bool(spec.strip())
+                elif isinstance(spec, Mapping):
+                    valid = bool(str(spec.get("path") or "").strip())
+                else:
+                    valid = False
+                if not valid:
+                    errors.append(
+                        f"annotations.{name} must be a path string or mapping with path"
+                    )
 
     return errors
 

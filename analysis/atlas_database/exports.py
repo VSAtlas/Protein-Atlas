@@ -9,6 +9,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from analysis.atlas_database.annotations import is_explicitly_qualified
+
+
 PAIR_COLUMNS = (
     "pair_cell_id",
     "run_id",
@@ -18,6 +21,9 @@ PAIR_COLUMNS = (
     "target_key",
     "target_id",
     "receptor_label",
+    "receptor_classification",
+    "receptor_qualification_status",
+    "native_redock_status",
     "ligand_id",
     "ligand_canonical_id",
     "drug_id",
@@ -62,9 +68,7 @@ def _receptor_label(row: Mapping[str, Any]) -> str:
 
 def _target_key(row: Mapping[str, Any]) -> str:
     return "|".join(
-        value
-        for value in (str(row.get("run_id") or ""), _receptor_label(row))
-        if value
+        value for value in (str(row.get("run_id") or ""), _receptor_label(row)) if value
     )
 
 
@@ -78,9 +82,14 @@ def _component_coverage(row: Mapping[str, Any]) -> str:
     return ",".join(name for name in names if row.get(name) is not None)
 
 
-def _final_score_source(result_json: Any, final_score: Any) -> str | None:
+def _final_score_source(
+    result_json: Any, final_score: Any, stored_source: Any = None
+) -> str | None:
     if final_score is None:
         return None
+    source = str(stored_source or "").strip()
+    if source:
+        return source
     try:
         result = json.loads(str(result_json or "{}"))
     except (TypeError, ValueError):
@@ -89,17 +98,42 @@ def _final_score_source(result_json: Any, final_score: Any) -> str | None:
     return source or "legacy_unclassified_final_score"
 
 
-def _ranking_eligibility(row: Mapping[str, Any]) -> tuple[int, str | None]:
+def receptor_ranking_eligibility(
+    row: Mapping[str, Any],
+) -> tuple[int, str | None]:
+    """Apply only the explicit receptor-level headline ranking gates."""
+    if row.get("is_control") == 1:
+        return 0, "native_control"
+    if row.get("is_decoy") == 1:
+        return 0, "decoy"
+    variant = str(row.get("variant") or "").strip().upper()
+    if variant == "APO":
+        return 0, "apo_receptor"
+    if variant != "HOLO":
+        return 0, "receptor_variant_not_holo"
+    # Classification vocabulary and run/source conflict handling are scientific
+    # policies awaiting user approval. Preserve the annotation for display and
+    # provenance, but never interpret its free text in a headline rank.
+    if str(row.get("receptor_classification") or "").strip():
+        return 0, "receptor_classification_policy_pending"
+    if not is_explicitly_qualified(row.get("receptor_qualification_status")):
+        return 0, "receptor_quality_not_qualified"
+    if not is_explicitly_qualified(row.get("native_redock_status")):
+        return 0, "native_redock_not_qualified"
+    return 1, None
+
+
+def ranking_eligibility(row: Mapping[str, Any]) -> tuple[int, str | None]:
+    """Apply receptor qualification and pair-level primary ranking gates."""
+    receptor_eligible, reason = receptor_ranking_eligibility(row)
+    if not receptor_eligible:
+        return receptor_eligible, reason
     if row.get("final_score") is None:
         return 0, "missing_final_score"
     if row.get("pose_valid") == 0:
         return 0, "pose_invalid"
     if row.get("pose_valid") is None:
         return 0, "pose_validation_missing"
-    if row.get("is_control") == 1:
-        return 0, "native_control"
-    if row.get("is_decoy") == 1:
-        return 0, "decoy"
     return 1, None
 
 
@@ -129,11 +163,15 @@ def _pair_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     connection.row_factory = sqlite3.Row
     query = """
         SELECT p.pair_cell_id, r.run_id, r.pdb_id, r.variant, r.ph_label,
+            ra.receptor_classification,
+            ra.qualification_status AS receptor_qualification_status,
+            COALESCE(ra.native_redock_status, r.native_redock_status)
+                AS native_redock_status,
             l.ligand_id, l.canonical_id AS ligand_canonical_id,
             COALESCE(l.display_name, l.canonical_id) AS ligand_display_name,
             p.final_status, p.failure_code, p.failure_reason, p.expected,
             p.has_result, p.pose_valid, p.is_control, p.is_decoy, p.final_score,
-            p.final_rank, p.atlas_score, p.atlas_score_source,
+            p.final_score_source, p.final_rank, p.atlas_score, p.atlas_score_source,
             p.selected_docking_score, p.consensus_score, p.result_json,
             COUNT(a.artifact_id) AS artifact_count,
             COALESCE(SUM(CASE WHEN a.verified = 1 THEN 1 ELSE 0 END), 0)
@@ -142,6 +180,8 @@ def _pair_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         JOIN receptor_contexts r
           ON r.receptor_context_id = p.receptor_context_id
         JOIN ligands l ON l.ligand_id = p.ligand_id
+        LEFT JOIN receptor_annotations ra
+          ON ra.receptor_context_id = r.receptor_context_id
         LEFT JOIN artifacts a ON a.pair_cell_id = p.pair_cell_id
         GROUP BY p.pair_cell_id
         ORDER BY r.run_id, r.pdb_id, r.variant, r.ph_label, l.canonical_id
@@ -154,13 +194,15 @@ def _pair_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         row["target_id"] = row["target_key"]
         row["drug_id"] = row["ligand_canonical_id"]
         row["final_score_source"] = _final_score_source(
-            row.pop("result_json", None), row["final_score"]
+            row.pop("result_json", None),
+            row["final_score"],
+            row.get("final_score_source"),
         )
         row["primary_score_present"] = int(row["final_score"] is not None)
         (
             row["rank_eligible"],
             row["ranking_eligibility_reason"],
-        ) = _ranking_eligibility(row)
+        ) = ranking_eligibility(row)
         row["score_component_coverage"] = _component_coverage(row)
         row["rank_within_receptor"] = None
         row["rank_across_receptors"] = None
@@ -174,9 +216,7 @@ def _write_csv(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(PAIR_COLUMNS))
         writer.writeheader()
-        writer.writerows(
-            {name: row.get(name) for name in PAIR_COLUMNS} for row in rows
-        )
+        writer.writerows({name: row.get(name) for name in PAIR_COLUMNS} for row in rows)
 
 
 def _write_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -235,11 +275,23 @@ def _browser_payload(
     target_rows = [
         dict(row)
         for row in connection.execute(
-            """SELECT receptor_context_id, run_id, pdb_id, variant, ph_label,
-            library, status, failure_reason, pocket_method, center_json, box_json,
-            native_redock_status, native_redock_reason
-            FROM receptor_contexts
-            ORDER BY run_id, pdb_id, variant, ph_label"""
+            """SELECT r.receptor_context_id, r.run_id, r.pdb_id, r.variant,
+            r.ph_label, r.library, r.status, r.failure_reason, r.pocket_method,
+            r.center_json, r.box_json,
+            COALESCE(a.native_redock_status, r.native_redock_status)
+                AS native_redock_status,
+            COALESCE(a.native_redock_reason, r.native_redock_reason)
+                AS native_redock_reason,
+            a.receptor_classification, a.qualification_status,
+            a.qualification_reason, a.native_redock_rmsd,
+            p.protein_key, p.uniprot_id, p.gene_symbol,
+            p.display_name
+            FROM receptor_contexts r
+            LEFT JOIN receptor_annotations a
+              ON a.receptor_context_id=r.receptor_context_id
+            LEFT JOIN protein_identities p
+              ON p.protein_identity_id=a.protein_identity_id
+            ORDER BY r.run_id, r.pdb_id, r.variant, r.ph_label"""
         )
     ]
     targets: list[dict[str, Any]] = []
@@ -314,9 +366,7 @@ def _browser_payload(
             "primary_score_missing_count": len(rows) - len(scored),
             "primary_score_fraction": (len(scored) / len(rows)) if rows else 0.0,
             "rank_eligible_count": len(rank_eligible),
-            "rank_eligible_fraction": (
-                len(rank_eligible) / len(rows) if rows else 0.0
-            ),
+            "rank_eligible_fraction": (len(rank_eligible) / len(rows) if rows else 0.0),
             "final_score_source_counts": source_counts,
             "classified_final_score_source_count": sum(
                 count
@@ -327,9 +377,7 @@ def _browser_payload(
         },
         "targets": targets,
         "ligands": ligands,
-        "pairs": [
-            {name: row.get(name) for name in PAIR_COLUMNS} for row in rows
-        ],
+        "pairs": [{name: row.get(name) for name in PAIR_COLUMNS} for row in rows],
         "artifacts": artifacts,
     }
 

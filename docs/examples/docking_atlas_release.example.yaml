@@ -35,11 +35,10 @@ scientific_policies:
     cross_receptor_field: <DECLARED_RECEPTOR_NORMALIZED_FIELD>
     comparison_scope: <DECLARED_REFERENCE_POPULATION>
 
-image_plan:
-  known_pairs:
-    - run_id: <RUN_ID>
-      pdb_id: <PDB_ID>
-      variant: <VARIANT_OR_EMPTY>
-      ph_label: <PH_LABEL_OR_EMPTY>
-      canonical_id: <CANONICAL_LIGAND_ID>
-      evidence_reference: <CURATED_KNOWN_PAIR_SOURCE>
+# Optional, explicit scientific records. Relative paths resolve from this manifest.
+# CSV, JSON, and YAML are supported; no mappings or outcomes are inferred.
+annotations:
+  proteins: <PROTEIN_IDENTITY_CSV_OR_YAML>
+  receptors:
+    path: <RECEPTOR_ANNOTATION_CSV_OR_YAML>
+  known_pairs: <FROZEN_KNOWN_PAIR_CSV_OR_YAML>

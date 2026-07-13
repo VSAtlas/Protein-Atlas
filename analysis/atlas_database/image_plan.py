@@ -25,13 +25,21 @@ def build_release_image_plan(
     connection = sqlite3.connect(Path(database_path))
     connection.row_factory = sqlite3.Row
     try:
-        manifest = _release_manifest(connection)
-        supplied_known = list(known_pairs) if known_pairs is not None else _manifest_known_pairs(manifest)
+        if known_pairs is not None:
+            supplied_known = list(known_pairs)
+        else:
+            supplied_known = _database_known_pairs(connection)
         contexts = connection.execute(
-            """SELECT receptor_context_id, run_id, pdb_id, variant, ph_label,
-                      native_redock_status, native_redock_reason
-               FROM receptor_contexts
-               ORDER BY run_id, pdb_id, variant, ph_label"""
+            """SELECT r.receptor_context_id, r.run_id, r.pdb_id, r.variant,
+                      r.ph_label,
+                      COALESCE(a.native_redock_status, r.native_redock_status)
+                          AS native_redock_status,
+                      COALESCE(a.native_redock_reason, r.native_redock_reason)
+                          AS native_redock_reason
+               FROM receptor_contexts r
+               LEFT JOIN receptor_annotations a
+                 ON a.receptor_context_id=r.receptor_context_id
+               ORDER BY r.run_id, r.pdb_id, r.variant, r.ph_label"""
         ).fetchall()
         safe_output_root = _safe_relative_root(image_output_root)
         plans = [
@@ -44,10 +52,13 @@ def build_release_image_plan(
         "schema_version": 1,
         "database_file": Path(database_path).name,
         "selection_policy": {
-            "native_control": "explicit is_control pair with a valid available pose",
+            "native_control": "explicit is_control pair with a valid pose result",
             "top_valid": "top 5 non-control, non-decoy, valid poses by final_score descending",
-            "known_pair": "manifest-supplied pair when valid and not already selected",
-            "best_invalid": "never selected",
+            "known_pair": "annotation-backed pair when valid and not already selected",
+            "artifact_preflight": (
+                "selected rows report a gap unless a pair-linked artifact is verified"
+            ),
+            "invalid_poses": "retained as release cells but never selected for conference images",
             "score_field": "final_score",
         },
         "contexts": plans,
@@ -75,29 +86,29 @@ def write_release_image_plan(
     )
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_text(
+        json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return plan
 
 
-def _release_manifest(connection: sqlite3.Connection) -> Mapping[str, Any]:
-    row = connection.execute("SELECT manifest_json FROM releases ORDER BY release_id LIMIT 1").fetchone()
-    if row is None:
-        return {}
-    try:
-        value = json.loads(row["manifest_json"])
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, Mapping) else {}
-
-
-def _manifest_known_pairs(manifest: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    image_plan = manifest.get("image_plan")
-    candidates = image_plan.get("known_pairs") if isinstance(image_plan, Mapping) else None
-    if candidates is None:
-        candidates = manifest.get("known_pair_selections")
-    if not isinstance(candidates, list):
-        return []
-    return [value for value in candidates if isinstance(value, Mapping)]
+def _database_known_pairs(
+    connection: sqlite3.Connection,
+) -> list[Mapping[str, Any]]:
+    rows = connection.execute(
+        """SELECT receptor_context_id, ligand_canonical_id,
+        evidence_reference, selection_label
+        FROM known_pair_selections ORDER BY receptor_context_id"""
+    ).fetchall()
+    return [
+        {
+            "receptor_context_id": row["receptor_context_id"],
+            "canonical_id": row["ligand_canonical_id"],
+            "evidence_reference": row["evidence_reference"],
+            "selection_label": row["selection_label"],
+        }
+        for row in rows
+    ]
 
 
 def _context_plan(
@@ -109,6 +120,11 @@ def _context_plan(
     context_id = int(context["receptor_context_id"])
     rows = connection.execute(
         """SELECT p.pair_cell_id, p.final_status, p.has_result, p.pose_valid,
+                  (SELECT COUNT(*) FROM artifacts ar
+                   WHERE ar.pair_cell_id=p.pair_cell_id) AS artifact_count,
+                  (SELECT COUNT(*) FROM artifacts ar
+                   WHERE ar.pair_cell_id=p.pair_cell_id AND ar.verified=1)
+                      AS verified_artifact_count,
                   p.is_control, p.is_decoy, p.final_score,
                   l.canonical_id, l.display_name
            FROM pair_cells p JOIN ligands l ON l.ligand_id = p.ligand_id
@@ -130,16 +146,33 @@ def _context_plan(
     control_rows = [row for row in rows if int(row["is_control"] or 0) == 1]
     native_status = _text(context["native_redock_status"])
     if not native_status:
-        gaps.append(_gap("native_status_missing", "native redock status is not recorded"))
+        gaps.append(
+            _gap("native_status_missing", "native redock status is not recorded")
+        )
     if len(control_rows) != 1:
-        gaps.append(_gap("native_control_not_unique", f"expected one control pair; found {len(control_rows)}"))
+        gaps.append(
+            _gap(
+                "native_control_not_unique",
+                f"expected one control pair; found {len(control_rows)}",
+            )
+        )
     elif not _renderable(control_rows[0]):
-        gaps.append(_gap("native_control_pose_unavailable", "control pair lacks a successful valid pose"))
+        gaps.append(
+            _gap(
+                "native_control_pose_unavailable",
+                "control pair lacks a successful valid pose",
+            )
+        )
     elif native_status:
         _select(
-            selections, selected_ligands, context, control_rows[0],
-            "native_control", image_output_root,
+            selections,
+            selected_ligands,
+            context,
+            control_rows[0],
+            "native_control",
+            image_output_root,
         )
+        _record_artifact_gap(gaps, control_rows[0])
 
     valid_scored = [
         row
@@ -149,20 +182,42 @@ def _context_plan(
         and _renderable(row)
         and row["final_score"] is not None
     ]
-    valid_scored.sort(key=lambda row: (-float(row["final_score"]), _text(row["canonical_id"])))
+    valid_scored.sort(
+        key=lambda row: (-float(row["final_score"]), _text(row["canonical_id"]))
+    )
     if not valid_scored:
-        gaps.append(_gap("top_valid_final_score_missing", "no valid non-control ligand has final_score"))
+        gaps.append(
+            _gap(
+                "top_valid_final_score_missing",
+                "no valid non-control ligand has final_score",
+            )
+        )
     elif len(valid_scored) < 5:
-        gaps.append(_gap("top_valid_fewer_than_five", f"only {len(valid_scored)} valid scored ligands are available"))
+        gaps.append(
+            _gap(
+                "top_valid_fewer_than_five",
+                f"only {len(valid_scored)} valid scored ligands are available",
+            )
+        )
     for index, row in enumerate(valid_scored[:5], 1):
         _select(
-            selections, selected_ligands, context, row,
-            f"top_valid_{index}", image_output_root,
+            selections,
+            selected_ligands,
+            context,
+            row,
+            f"top_valid_{index}",
+            image_output_root,
         )
+        _record_artifact_gap(gaps, row)
 
     known = _known_for_context(context, known_pairs)
     if not known:
-        gaps.append(_gap("known_pair_not_supplied", "no known-pair ligand was supplied for this receptor context"))
+        gaps.append(
+            _gap(
+                "known_pair_not_supplied",
+                "no known-pair ligand was supplied for this receptor context",
+            )
+        )
     elif len(known) > 1:
         gaps.append(
             _gap(
@@ -172,22 +227,48 @@ def _context_plan(
         )
     else:
         requested = known[0]
-        ligand = _text(requested.get("canonical_id") or requested.get("ligand_id") or requested.get("drug_id"))
+        ligand = _text(
+            requested.get("canonical_id")
+            or requested.get("ligand_id")
+            or requested.get("drug_id")
+        )
         if not ligand:
-            gaps.append(_gap("known_pair_ligand_missing", "known-pair selection lacks canonical_id/ligand_id/drug_id"))
+            gaps.append(
+                _gap(
+                    "known_pair_ligand_missing",
+                    "known-pair selection lacks canonical_id/ligand_id/drug_id",
+                )
+            )
         else:
-            match = next((row for row in rows if _text(row["canonical_id"]) == ligand), None)
+            match = next(
+                (row for row in rows if _text(row["canonical_id"]) == ligand), None
+            )
             if match is None:
-                gaps.append(_gap("known_pair_not_in_matrix", f"known ligand {ligand} is absent from this receptor context"))
+                gaps.append(
+                    _gap(
+                        "known_pair_not_in_matrix",
+                        f"known ligand {ligand} is absent from this receptor context",
+                    )
+                )
             elif ligand in selected_ligands:
                 pass
             elif not _renderable(match):
-                gaps.append(_gap("known_pair_pose_unavailable", f"known ligand {ligand} lacks a successful valid pose"))
+                gaps.append(
+                    _gap(
+                        "known_pair_pose_unavailable",
+                        f"known ligand {ligand} lacks a successful valid pose",
+                    )
+                )
             else:
                 _select(
-                    selections, selected_ligands, context, match,
-                    "known_pair", image_output_root,
+                    selections,
+                    selected_ligands,
+                    context,
+                    match,
+                    "known_pair",
+                    image_output_root,
                 )
+                _record_artifact_gap(gaps, match)
 
     return {
         "receptor_context_id": context_id,
@@ -217,11 +298,17 @@ def _known_for_context(
             continue
         if _text(value.get("run_id")) not in ("", _text(context["run_id"])):
             continue
-        if _text(value.get("pdb_id") or value.get("target_id")).upper() != _text(context["pdb_id"]).upper():
+        if (
+            _text(value.get("pdb_id") or value.get("target_id")).upper()
+            != _text(context["pdb_id"]).upper()
+        ):
             continue
         if _text(value.get("variant")) not in ("", _text(context["variant"])):
             continue
-        if _text(value.get("ph_label") or value.get("ph")) not in ("", _text(context["ph_label"])):
+        if _text(value.get("ph_label") or value.get("ph")) not in (
+            "",
+            _text(context["ph_label"]),
+        ):
             continue
         result.append(value)
     return result
@@ -235,6 +322,26 @@ def _renderable(row: sqlite3.Row) -> bool:
     )
 
 
+def _record_artifact_gap(gaps: list[dict[str, str]], row: sqlite3.Row) -> None:
+    artifact_count = int(row["artifact_count"] or 0)
+    verified_count = int(row["verified_artifact_count"] or 0)
+    if verified_count:
+        return
+    ligand = _text(row["canonical_id"])
+    code = (
+        "pair_artifact_not_indexed"
+        if artifact_count == 0
+        else "pair_artifact_not_verified"
+    )
+    gaps.append(
+        _gap(
+            code,
+            f"{ligand} has no verified pair-linked artifact; preflight the "
+            "screenshot command before conference use",
+        )
+    )
+
+
 def _select(
     selections: list[dict[str, Any]],
     selected_ligands: set[str],
@@ -245,23 +352,38 @@ def _select(
 ) -> None:
     ligand = _text(row["canonical_id"])
     selected_ligands.add(ligand)
-    argv = ["atlas", "screenshot", _text(context["run_id"]), "--pdb", _text(context["pdb_id"]), "--ligand", ligand]
+    argv = [
+        "atlas",
+        "screenshot",
+        _text(context["run_id"]),
+        "--pdb",
+        _text(context["pdb_id"]),
+        "--ligand",
+        ligand,
+    ]
     if _text(context["variant"]):
         argv.extend(["--variant", _text(context["variant"])])
     if _text(context["ph_label"]):
         argv.extend(["--ph", _text(context["ph_label"])])
     output_stem = (
-        f"context-{int(context['receptor_context_id'])}/"
-        f"{role}-{_safe_token(ligand)}"
+        f"context-{int(context['receptor_context_id'])}/{role}-{_safe_token(ligand)}"
     )
     pocket_out = f"{image_output_root}/{output_stem}/pocket"
     full_out = f"{image_output_root}/{output_stem}/full"
     pocket_argv = [
-        *argv, "--view-context", "pocket", "--gallery-html",
-        "--output-subdir", pocket_out,
+        *argv,
+        "--view-context",
+        "pocket",
+        "--gallery-html",
+        "--output-subdir",
+        pocket_out,
     ]
     full_argv = [
-        *argv, "--view-context", "full", "--output-subdir", full_out,
+        *argv,
+        "--view-context",
+        "full",
+        "--output-subdir",
+        full_out,
     ]
     selections.append(
         {
@@ -292,12 +414,12 @@ def _text(value: Any) -> str:
 def _safe_relative_root(value: str) -> str:
     path = Path(_text(value))
     if not _text(value) or path.is_absolute() or ".." in path.parts:
-        raise ValueError("image_output_root must be a non-empty relative path without '..'")
+        raise ValueError(
+            "image_output_root must be a non-empty relative path without '..'"
+        )
     return path.as_posix().rstrip("/")
 
 
 def _safe_token(value: str) -> str:
-    token = "".join(
-        char if char.isalnum() or char in "._-" else "-" for char in value
-    )
+    token = "".join(char if char.isalnum() or char in "._-" else "-" for char in value)
     return token.strip("-") or "ligand"

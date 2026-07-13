@@ -2717,3 +2717,9 @@ Change: Hardened the add-on launch guard to use exact run-id process markers, ma
 Why: Atlas contains many completed or abandoned manifests whose root lifecycle remained running, while the shared Slurm helper could otherwise inherit an unrelated caller job ID and create false active-run evidence.
 Impact: New add-on scoring is blocked by current process, scheduler, or recent manifest evidence and by concurrent add-on lock ownership. The guard currently identifies postFDAfixSPDrun and postFDAfixSPDrun_prepcheck_20260713 as active records and launches no docking while they remain unresolved.
 Next: Finalize or explicitly resolve those two manifests, then use atlas ml score-addons with the exact pair manifest and completed SPD90 comparison run; do not use raw main.py, fast, or DUD-only flags.
+
+Date: 2026-07-13 | Task: Atlasv0.0.08 qualified and scalable docking-atlas release | Owner: Codex
+Change: Added hashed scientific annotations, independent receptor-quality and native-redock gates, rerun-preserving completion records, compact public exports, deterministic release verification, a paginated explorer, and a bounded read-only Worker/R2 bundle.
+Why: Conference delivery needs a fast auditable release path without silently converting historical output, missing artifacts, or unapproved scientific policies into qualified rankings.
+Impact: Corrupt inputs, duplicate canonical results, unsafe deployment paths, unverified image artifacts, and private-path leaks now fail closed. The 760,878-cell historical candidate still has no qualified ranks or generated atlas images, and the edge prototype intentionally stops at 50,000 pairs pending a streaming exporter.
+Next: Obtain user-approved receptor/redock/pose policies and annotations, index verified pose/image artifacts, implement the full-matrix streaming export, then build and deploy the frozen v0.1 snapshot.

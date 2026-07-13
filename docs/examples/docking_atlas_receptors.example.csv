@@ -1,0 +1,2 @@
+run_id,pdb_id,variant,ph_label,protein_key,receptor_classification,qualification_status,qualification_reason,native_redock_status,native_redock_reason,native_redock_rmsd,provenance
+<RUN_ID>,<PDB_ID>,<EXPLICIT_VARIANT>,<EXPLICIT_PH_LABEL>,<PROTEIN_KEY>,<APO_OR_HOLO_CLASSIFICATION>,<USER_APPROVED_QUALIFICATION_STATUS>,<QUALIFICATION_REASON>,<USER_APPROVED_REDOCK_STATUS>,<NATIVE_REDOCK_REASON>,<RMSD_ANGSTROM>,"{""source"":""<RECEPTOR_REVIEW_SOURCE>"",""reviewer"":""<REVIEWER>""}"

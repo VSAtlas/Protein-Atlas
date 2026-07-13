@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 from analysis.atlas_database.exports import export_release_database
+from analysis.atlas_database.readiness import audit_release_readiness
 from analysis.atlas_database.schema import create_schema
 
 
@@ -73,6 +74,14 @@ def test_export_ranks_only_pose_valid_final_scores_without_fallback(
             [(1, "P1"), (2, "P2")],
         )
         connection.executemany(
+            """INSERT INTO receptor_annotations
+            (receptor_context_id, qualification_status, native_redock_status,
+             source_path, source_sha256, source_record_index, source_record_json)
+            VALUES (?, 'qualification_passed', 'qualification_passed',
+                    'annotations.csv', 'source-hash', ?, '{}')""",
+            [(1, 1), (2, 2)],
+        )
+        connection.executemany(
             "INSERT INTO ligands(ligand_id, canonical_id) VALUES (?, ?)",
             [(1, "ranked"), (2, "invalid"), (3, "unvalidated"), (4, "atlas-only")],
         )
@@ -96,9 +105,7 @@ def test_export_ranks_only_pose_valid_final_scores_without_fallback(
     assert summary["pair_count"] == 5
     assert summary["primary_score_count"] == 4
     assert summary["rank_eligible_count"] == 2
-    payload = json.loads(
-        (out_dir / "release_browser.json").read_text(encoding="utf-8")
-    )
+    payload = json.loads((out_dir / "release_browser.json").read_text(encoding="utf-8"))
     assert payload["score_contract"] == {
         "primary_field": "final_score",
         "source_field": "final_score_source",
@@ -107,9 +114,7 @@ def test_export_ranks_only_pose_valid_final_scores_without_fallback(
         "normalized_comparison_field": "atlas_score",
         "normalized_comparison_source_field": "atlas_score_source",
     }
-    rows = {
-        (row["pdb_id"], row["drug_id"]): row for row in payload["pairs"]
-    }
+    rows = {(row["pdb_id"], row["drug_id"]): row for row in payload["pairs"]}
     high = rows[("P1", "ranked")]
     low = rows[("P2", "ranked")]
     assert high["final_score"] == 2.5
@@ -146,3 +151,104 @@ def test_export_ranks_only_pose_valid_final_scores_without_fallback(
         "unvalidated",
         "atlas-only",
     }
+
+
+def test_headline_ranking_requires_quality_redock_and_non_apo_context(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "qualified-release.sqlite"
+    with sqlite3.connect(database) as connection:
+        create_schema(connection)
+        connection.execute(
+            "INSERT INTO releases VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("qualified-release", "1", None, None, "hash", "{}", "now"),
+        )
+        connection.execute(
+            "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "run-qualified",
+                "qualified-release",
+                "completed",
+                "manifest.yaml",
+                "hash",
+                "{}",
+                "{}",
+                "{}",
+                "{}",
+                "{}",
+                "{}",
+            ),
+        )
+        connection.executemany(
+            """INSERT INTO receptor_contexts
+            (receptor_context_id, run_id, pdb_id, variant, ph_label,
+             native_redock_status)
+            VALUES (?, 'run-qualified', ?, ?, '7.4', ?)""",
+            [
+                (1, "P1", "HOLO", None),
+                (2, "P2", "APO", None),
+                (3, "P3", "HOLO", None),
+                (4, "P4", "HOLO", "observed_valid_control_result_unqualified"),
+                (5, "P5", "HOLO", None),
+            ],
+        )
+        connection.execute(
+            "INSERT INTO ligands(ligand_id, canonical_id) VALUES (1, 'drug-a')"
+        )
+        connection.executemany(
+            """INSERT INTO receptor_annotations
+            (receptor_context_id, receptor_classification,
+             qualification_status, native_redock_status, source_path,
+             source_sha256, source_record_index, source_record_json)
+            VALUES (?, ?, ?, ?, 'annotations.csv', 'hash', ?, '{}')""",
+            [
+                (1, None, "qualification_passed", "qualified", 1),
+                (2, None, "qualification_passed", "qualified", 2),
+                (3, None, None, "qualified", 3),
+                (4, None, "qualified", None, 4),
+                (5, "non-apo", "qualified", "qualified", 5),
+            ],
+        )
+        for context_id in range(1, 6):
+            _insert_pair(
+                connection,
+                context_id,
+                1,
+                final_score=float(10 - context_id),
+                pose_valid=1,
+            )
+        connection.commit()
+
+    out_dir = tmp_path / "qualified-exports"
+    summary = export_release_database(database, out_dir, include_parquet=False)
+    payload = json.loads((out_dir / "release_browser.json").read_text(encoding="utf-8"))
+    rows = {row["pdb_id"]: row for row in payload["pairs"]}
+
+    assert summary["pair_count"] == 5
+    assert summary["rank_eligible_count"] == 1
+    assert rows["P1"]["rank_eligible"] == 1
+    assert rows["P2"]["ranking_eligibility_reason"] == "apo_receptor"
+    assert rows["P3"]["ranking_eligibility_reason"] == "receptor_quality_not_qualified"
+    assert rows["P4"]["ranking_eligibility_reason"] == "native_redock_not_qualified"
+    assert (
+        rows["P5"]["ranking_eligibility_reason"]
+        == "receptor_classification_policy_pending"
+    )
+    assert all(
+        row["rank_within_receptor"] is None
+        for row in rows.values()
+        if row["pdb_id"] != "P1"
+    )
+
+    readiness = audit_release_readiness(database)
+    assert readiness["metrics"]["scores"]["ranking_eligibility_reason_counts"] == {
+        "apo_receptor": 1,
+        "eligible": 1,
+        "native_redock_not_qualified": 1,
+        "receptor_classification_policy_pending": 1,
+        "receptor_quality_not_qualified": 1,
+    }
+    checks = {item["check"]: item for item in readiness["checklist"]}
+    assert checks["receptor_classification_policy_approval"]["missing_count"] == 1
+    assert checks["receptor_quality_explicit_qualification"]["missing_count"] == 1
+    assert checks["native_redock_explicit_qualification"]["missing_count"] == 1

@@ -1,0 +1,2 @@
+protein_key,uniprot_id,gene_symbol,display_name,provenance
+<PROTEIN_KEY>,<UNIPROT_ID>,<GENE_SYMBOL>,<PUBLIC_PROTEIN_NAME>,"{""source"":""<IDENTITY_SOURCE>"",""record"":""<SOURCE_RECORD>""}"

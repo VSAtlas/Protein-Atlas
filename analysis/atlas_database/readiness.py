@@ -8,10 +8,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-READINESS_SCHEMA_VERSION = 1
-_EXPLICIT_QUALIFIED_STATUSES = frozenset(
-    {"qualified", "explicitly_qualified", "qualification_passed"}
+from analysis.atlas_database.annotations import is_explicitly_qualified
+from analysis.atlas_database.exports import (
+    ranking_eligibility,
+    receptor_ranking_eligibility,
 )
+
+READINESS_SCHEMA_VERSION = 3
 _FAILURE_STATUSES = {
     "expected",
     "failed",
@@ -30,14 +33,14 @@ def _status_counts(values: Iterable[Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _explicitly_qualified(value: Any) -> bool:
-    status = str(value or "").strip().lower()
-    return status in _EXPLICIT_QUALIFIED_STATUSES
-
-
-def _final_score_source(result_json: Any, final_score: Any) -> str:
+def _final_score_source(
+    result_json: Any, final_score: Any, stored_source: Any = None
+) -> str:
     if final_score is None:
         return "missing_final_score"
+    source = str(stored_source or "").strip()
+    if source:
+        return source
     try:
         payload = json.loads(str(result_json or "{}"))
     except (TypeError, ValueError):
@@ -82,16 +85,34 @@ def audit_release_readiness(
         pairs = [
             dict(row)
             for row in connection.execute(
-                """SELECT pair_cell_id, final_status, failure_code,
-                failure_reason, expected, has_result, pose_valid, is_control,
-                is_decoy, final_score, result_json FROM pair_cells"""
+                """SELECT p.pair_cell_id, p.final_status, p.failure_code,
+                p.failure_reason, p.expected, p.has_result, p.pose_valid,
+                p.is_control, p.is_decoy, p.final_score,
+                p.final_score_source, p.result_json, r.variant,
+                a.receptor_classification,
+                a.qualification_status AS receptor_qualification_status,
+                COALESCE(a.native_redock_status, r.native_redock_status)
+                    AS native_redock_status
+                FROM pair_cells p
+                JOIN receptor_contexts r
+                  ON r.receptor_context_id=p.receptor_context_id
+                LEFT JOIN receptor_annotations a
+                  ON a.receptor_context_id=r.receptor_context_id"""
             )
         ]
         receptors = [
             dict(row)
             for row in connection.execute(
-                """SELECT receptor_context_id, variant, native_redock_status,
-                native_redock_reason FROM receptor_contexts"""
+                """SELECT r.receptor_context_id, r.variant,
+                a.receptor_classification,
+                a.qualification_status AS receptor_qualification_status,
+                COALESCE(a.native_redock_status, r.native_redock_status)
+                    AS native_redock_status,
+                COALESCE(a.native_redock_reason, r.native_redock_reason)
+                    AS native_redock_reason
+                FROM receptor_contexts r
+                LEFT JOIN receptor_annotations a
+                  ON a.receptor_context_id=r.receptor_context_id"""
             )
         ]
         artifacts = [
@@ -120,32 +141,43 @@ def audit_release_readiness(
     valid_drug_candidates = [
         row
         for row in pairs
-        if row["pose_valid"] == 1
-        and row["is_control"] != 1
-        and row["is_decoy"] != 1
+        if row["pose_valid"] == 1 and receptor_ranking_eligibility(row)[0] == 1
     ]
     scored_valid_drug_candidates = [
         row for row in valid_drug_candidates if row["final_score"] is not None
     ]
+    ranking_results = [ranking_eligibility(row) for row in pairs]
     rank_eligible = [
-        row
-        for row in pairs
-        if row["final_score"] is not None
-        and row["pose_valid"] == 1
-        and row["is_control"] != 1
-        and row["is_decoy"] != 1
+        row for row, (eligible, _) in zip(pairs, ranking_results) if eligible == 1
     ]
+    ranking_reason_counts = _status_counts(
+        reason or "eligible" for _, reason in ranking_results
+    )
     pose_valid = [row for row in pairs if row["pose_valid"] == 1]
     pose_invalid = [row for row in pairs if row["pose_valid"] == 0]
     pose_unvalidated = [row for row in pairs if row["pose_valid"] is None]
 
+    quality_status_counts = _status_counts(
+        row["receptor_qualification_status"] for row in receptors
+    )
     redock_status_counts = _status_counts(
         row["native_redock_status"] for row in receptors
     )
-    explicitly_qualified = [
+    classification_policy_pending = [
+        row for row in receptors if str(row["receptor_classification"] or "").strip()
+    ]
+    headline_receptors = [
         row
         for row in receptors
-        if _explicitly_qualified(row["native_redock_status"])
+        if receptor_ranking_eligibility(row)[1] != "apo_receptor"
+    ]
+    explicitly_quality_qualified = [
+        row
+        for row in headline_receptors
+        if is_explicitly_qualified(row["receptor_qualification_status"])
+    ]
+    explicitly_qualified = [
+        row for row in receptors if is_explicitly_qualified(row["native_redock_status"])
     ]
     variant_counts = {"HOLO": 0, "APO": 0, "other": 0}
     for row in receptors:
@@ -156,19 +188,18 @@ def audit_release_readiness(
     artifacts_hashed = [row for row in artifacts if str(row["sha256"] or "").strip()]
     artifacts_verified = [row for row in artifacts if row["verified"] == 1]
     pairs_with_artifacts = {
-        int(row["pair_cell_id"])
-        for row in artifacts
-        if row["pair_cell_id"] is not None
+        int(row["pair_cell_id"]) for row in artifacts if row["pair_cell_id"] is not None
     }
     source_counts = _status_counts(
-        _final_score_source(row["result_json"], row["final_score"])
+        _final_score_source(
+            row["result_json"], row["final_score"], row["final_score_source"]
+        )
         for row in pairs
     )
     classified_sources = sum(
         count
         for source, count in source_counts.items()
-        if source
-        not in {"missing_final_score", "legacy_unclassified_final_score"}
+        if source not in {"missing_final_score", "legacy_unclassified_final_score"}
     )
 
     checklist = [
@@ -188,14 +219,10 @@ def audit_release_readiness(
         ),
         _check(
             "valid_drug_final_score_coverage",
-            complete=(
-                len(scored_valid_drug_candidates) == len(valid_drug_candidates)
-            ),
+            complete=(len(scored_valid_drug_candidates) == len(valid_drug_candidates)),
             observed=len(scored_valid_drug_candidates),
             total=len(valid_drug_candidates),
-            missing=(
-                len(valid_drug_candidates) - len(scored_valid_drug_candidates)
-            ),
+            missing=(len(valid_drug_candidates) - len(scored_valid_drug_candidates)),
         ),
         _check(
             "pose_validation_coverage",
@@ -203,6 +230,20 @@ def audit_release_readiness(
             observed=len(pose_valid) + len(pose_invalid),
             total=pair_count,
             missing=len(pose_unvalidated),
+        ),
+        _check(
+            "receptor_classification_policy_approval",
+            complete=not classification_policy_pending,
+            observed=len(receptors) - len(classification_policy_pending),
+            total=len(receptors),
+            missing=len(classification_policy_pending),
+        ),
+        _check(
+            "receptor_quality_explicit_qualification",
+            complete=len(explicitly_quality_qualified) == len(headline_receptors),
+            observed=len(explicitly_quality_qualified),
+            total=len(headline_receptors),
+            missing=len(headline_receptors) - len(explicitly_quality_qualified),
         ),
         _check(
             "native_redock_explicit_qualification",
@@ -261,9 +302,7 @@ def audit_release_readiness(
                 "count": pair_count,
                 "expected_count": len(expected_pairs),
                 "nonterminal_expected_count": len(nonterminal_expected),
-                "status_counts": _status_counts(
-                    row["final_status"] for row in pairs
-                ),
+                "status_counts": _status_counts(row["final_status"] for row in pairs),
                 "failure_row_count": len(failure_rows),
                 "failure_reason_present_count": len(failures_with_reason),
                 "failure_reason_missing_count": (
@@ -273,13 +312,10 @@ def audit_release_readiness(
             "scores": {
                 "final_score_present_count": len(scored),
                 "final_score_missing_count": pair_count - len(scored),
-                "final_score_coverage_fraction": _fraction(
-                    len(scored), pair_count
-                ),
+                "final_score_coverage_fraction": _fraction(len(scored), pair_count),
                 "rank_eligible_count": len(rank_eligible),
-                "rank_eligible_fraction": _fraction(
-                    len(rank_eligible), pair_count
-                ),
+                "rank_eligible_fraction": _fraction(len(rank_eligible), pair_count),
+                "ranking_eligibility_reason_counts": ranking_reason_counts,
                 "final_score_source_counts": source_counts,
                 "classified_final_score_source_count": classified_sources,
                 "valid_drug_candidate_count": len(valid_drug_candidates),
@@ -295,6 +331,20 @@ def audit_release_readiness(
                 "valid_count": len(pose_valid),
                 "invalid_count": len(pose_invalid),
                 "unvalidated_count": len(pose_unvalidated),
+            },
+            "receptor_quality": {
+                "receptor_classification": {
+                    "policy": "pending_user_approval",
+                    "recorded_but_unapproved_count": len(classification_policy_pending),
+                    "ranking_behavior": "excluded_without_free_text_inference",
+                },
+                "receptor_count": len(receptors),
+                "headline_non_apo_receptor_count": len(headline_receptors),
+                "status_counts": quality_status_counts,
+                "explicitly_qualified_count": len(explicitly_quality_qualified),
+                "not_explicitly_qualified_count": (
+                    len(headline_receptors) - len(explicitly_quality_qualified)
+                ),
             },
             "native_redocking": {
                 "receptor_count": len(receptors),

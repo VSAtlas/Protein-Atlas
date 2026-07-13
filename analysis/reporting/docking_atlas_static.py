@@ -17,9 +17,12 @@ from urllib.parse import urlsplit
 
 
 _STATUS_ORDER = {"valid": 0, "success": 0, "invalid": 1, "failed": 2, "missing": 3}
+_PAGE_SIZE = 100
 
 
-def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> dict[str, Any]:
+def generate_static_explorer(
+    payload: Mapping[str, Any], output_dir: Path
+) -> dict[str, Any]:
     """Write overview, protein, drug, and pair pages under ``output_dir``.
 
     Accepted top-level collections are ``proteins``/``targets``,
@@ -33,6 +36,7 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
     proteins = _records(payload.get("proteins", payload.get("targets", [])), "protein")
     drugs = _records(payload.get("drugs", payload.get("ligands", [])), "drug")
     pairs = _records(payload.get("pairs", payload.get("results", [])), "pair")
+    artifacts = _records(payload.get("artifacts", []), "artifact")
     release = _mapping(payload.get("release"))
 
     protein_by_id = {_record_id(item, "protein"): item for item in proteins}
@@ -41,6 +45,11 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
     drug_slugs = _unique_slugs(drug_by_id)
     pair_ids, pair_slugs = _pair_identity(pairs)
     pair_id_by_object = {id(pair): pair_id for pair, pair_id in zip(pairs, pair_ids)}
+    artifacts_by_pair: dict[str, list[Mapping[str, Any]]] = {}
+    for artifact in artifacts:
+        pair_reference = _text(artifact.get("pair_cell_id") or artifact.get("pair_id"))
+        if pair_reference:
+            artifacts_by_pair.setdefault(pair_reference, []).append(artifact)
 
     pairs_by_protein: dict[str, list[Mapping[str, Any]]] = {}
     pairs_by_drug: dict[str, list[Mapping[str, Any]]] = {}
@@ -80,7 +89,9 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
         _document(title, index_body, depth=0, release=release), encoding="utf-8"
     )
     (output_dir / "analysis.html").write_text(
-        _document(f"Guided analysis | {title}", _analysis_body(), depth=0, release=release),
+        _document(
+            f"Guided analysis | {title}", _analysis_body(), depth=0, release=release
+        ),
         encoding="utf-8",
     )
 
@@ -122,6 +133,7 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
             drug_by_id,
             protein_slugs,
             drug_slugs,
+            artifacts_by_pair.get(_pair_artifact_ref(pair), []),
         )
         (output_dir / "pairs" / f"{pair_slugs[pair_id]}.html").write_text(
             _document(f"Pair {pair_id} | {title}", body, depth=1, release=release),
@@ -139,7 +151,9 @@ def generate_static_explorer(payload: Mapping[str, Any], output_dir: Path) -> di
     return manifest
 
 
-def generate_static_explorer_from_json(release_json: Path, output_dir: Path) -> dict[str, Any]:
+def generate_static_explorer_from_json(
+    release_json: Path, output_dir: Path
+) -> dict[str, Any]:
     """Load a JSON object and pass it to :func:`generate_static_explorer`."""
 
     with Path(release_json).open(encoding="utf-8") as handle:
@@ -182,12 +196,21 @@ def _record_id(record: Mapping[str, Any], kind: str) -> str:
 
 
 def _pair_ref(pair: Mapping[str, Any], kind: str) -> str:
-    keys = ("protein_id", "target_id", "pdb_id") if kind == "protein" else ("drug_id", "ligand_id")
+    keys = (
+        ("protein_id", "target_id", "pdb_id")
+        if kind == "protein"
+        else ("drug_id", "ligand_id")
+    )
     for key in keys:
         value = _text(pair.get(key))
         if value:
             return value
+
     return ""
+
+
+def _pair_artifact_ref(pair: Mapping[str, Any]) -> str:
+    return _text(pair.get("pair_cell_id") or pair.get("id") or pair.get("pair_id"))
 
 
 def _pair_identity(pairs: list[Mapping[str, Any]]) -> tuple[list[str], dict[str, str]]:
@@ -241,28 +264,56 @@ def _overview_body(
     downloads: Any,
 ) -> str:
     summary = _text(release.get("summary") or release.get("description"))
-    protein_cards = "".join(
-        _entity_card(item, _record_id(item, "protein"), f"proteins/{protein_slugs[_record_id(item, 'protein')]}.html", "protein")
+    protein_cards = [
+        _entity_card(
+            item,
+            _record_id(item, "protein"),
+            f"proteins/{protein_slugs[_record_id(item, 'protein')]}.html",
+            "protein",
+        )
         for item in proteins
-    )
-    drug_cards = "".join(
-        _entity_card(item, _record_id(item, "drug"), f"drugs/{drug_slugs[_record_id(item, 'drug')]}.html", "drug")
+    ]
+    drug_cards = [
+        _entity_card(
+            item,
+            _record_id(item, "drug"),
+            f"drugs/{drug_slugs[_record_id(item, 'drug')]}.html",
+            "drug",
+        )
         for item in drugs
-    )
+    ]
     valid_count = sum(_status(pair) in {"valid", "success"} for pair in pairs)
     invalid_count = sum(_status(pair) == "invalid" for pair in pairs)
     failed_count = len(pairs) - valid_count - invalid_count
     return f"""<section class="hero"><p class="eyebrow">Auditable docking release</p><h1>{_h(title)}</h1>
-<p>{_h(summary or 'Explore receptor-qualified docking results in both directions: protein to drug and drug to protein.')}</p></section>
+<p>{_h(summary or "Explore receptor-qualified docking results in both directions: protein to drug and drug to protein.")}</p></section>
 <section class="metrics"><div><strong>{len(proteins)}</strong><span>proteins</span></div><div><strong>{len(drugs)}</strong><span>drugs</span></div>
 <div><strong>{len(pairs)}</strong><span>matrix cells</span></div><div><strong>{valid_count}</strong><span>valid</span></div>
 <div><strong>{invalid_count}</strong><span>invalid</span></div><div><strong>{failed_count}</strong><span>failed / missing</span></div></section>
 {_coverage_callout(coverage)}
 {_download_section(downloads)}
 <section><div class="section-head"><h2>Protein explorer</h2><input data-filter="protein-list" type="search" placeholder="Search protein, PDB, gene…"></div>
-<div id="protein-list" class="card-grid">{protein_cards or _empty('No proteins in this release.')}</div></section>
+{_paged_card_grid(protein_cards, "protein-list", "No proteins in this release.")}</section>
 <section><div class="section-head"><h2>Drug explorer</h2><input data-filter="drug-list" type="search" placeholder="Search drug or ligand ID…"></div>
-<div id="drug-list" class="card-grid">{drug_cards or _empty('No drugs in this release.')}</div></section>"""
+{_paged_card_grid(drug_cards, "drug-list", "No drugs in this release.")}</section>"""
+
+
+def _paged_card_grid(cards: list[str], element_id: str, empty_message: str) -> str:
+    if not cards:
+        return f'<div id="{_h(element_id)}" class="card-grid">{_empty(empty_message)}</div>'
+    data = [
+        {"html": card, "search": html.unescape(_html_data_value(card, "search"))}
+        for card in cards
+    ]
+    initial = "".join(cards[:_PAGE_SIZE])
+    payload = _json_script(data)
+    return (
+        f'<div id="{_h(element_id)}" class="card-grid">{initial}</div>'
+        f'<div class="pager" data-card-pager="{_h(element_id)}">'
+        '<button type="button" data-page-prev>Previous</button>'
+        '<span data-page-status></span><button type="button" data-page-next>Next</button></div>'
+        f'<script type="application/json" data-card-source="{_h(element_id)}">{payload}</script>'
+    )
 
 
 def _coverage_callout(coverage: Mapping[str, Any]) -> str:
@@ -270,9 +321,7 @@ def _coverage_callout(coverage: Mapping[str, Any]) -> str:
         return ""
     count = _number(coverage.get("primary_score_count", coverage.get("count")))
     pair_count = _number(coverage.get("pair_count"))
-    fraction = _number(
-        coverage.get("primary_score_fraction", coverage.get("fraction"))
-    )
+    fraction = _number(coverage.get("primary_score_fraction", coverage.get("fraction")))
     if fraction is None and count is not None and pair_count:
         fraction = count / pair_count
     incomplete = (fraction is not None and fraction < 1.0) or (
@@ -280,7 +329,9 @@ def _coverage_callout(coverage: Mapping[str, Any]) -> str:
     )
     count_label = _display(int(count)) if count is not None else "not supplied"
     pair_label = _display(int(pair_count)) if pair_count is not None else "not supplied"
-    fraction_label = f"{fraction:.1%}" if fraction is not None else "fraction not supplied"
+    fraction_label = (
+        f"{fraction:.1%}" if fraction is not None else "fraction not supplied"
+    )
     note = (
         "Secondary scores are not substituted for missing primary scores."
         if incomplete
@@ -310,15 +361,28 @@ def _analysis_payload(
 
     config = _mapping(payload.get("analysis"))
     base_dimensions = [
-        "target_id", "protein_name", "drug_id", "drug_name", "status",
-        "failure_reason", "quality_status", "native_redock_status",
-        "rank_eligible", "ranking_eligibility_reason",
+        "target_id",
+        "protein_name",
+        "drug_id",
+        "drug_name",
+        "status",
+        "failure_reason",
+        "quality_status",
+        "native_redock_status",
+        "rank_eligible",
+        "ranking_eligibility_reason",
     ]
     base_measures = [
-        "final_score", "normalized_score", "atlas_score", "z_score", "raw_score",
+        "final_score",
+        "normalized_score",
+        "atlas_score",
+        "z_score",
+        "raw_score",
         "percentile_rank",
     ]
-    dimension_keys = _allowed_analysis_keys(base_dimensions, config.get("dimensions", []))
+    dimension_keys = _allowed_analysis_keys(
+        base_dimensions, config.get("dimensions", [])
+    )
     measure_keys = _allowed_analysis_keys(base_measures, config.get("measures", []))
     rows: list[dict[str, Any]] = []
     for pair in pairs:
@@ -333,9 +397,15 @@ def _analysis_payload(
             "drug_id": drug_id,
             "drug_name": _entity_name(drug, drug_id),
             "status": _status(pair),
-            "failure_reason": _text(pair.get("failure_reason") or pair.get("invalid_reason")),
-            "quality_status": _text(protein.get("quality_status") or protein.get("qualification_status")),
-            "native_redock_status": _text(protein.get("native_redock_status") or protein.get("redock_status")),
+            "failure_reason": _text(
+                pair.get("failure_reason") or pair.get("invalid_reason")
+            ),
+            "quality_status": _text(
+                protein.get("quality_status") or protein.get("qualification_status")
+            ),
+            "native_redock_status": _text(
+                protein.get("native_redock_status") or protein.get("redock_status")
+            ),
         }
         for key in dimension_keys:
             if key not in row:
@@ -345,8 +415,14 @@ def _analysis_payload(
         for key in measure_keys:
             row[key] = _number(pair.get(key, scores.get(key)))
         rows.append(row)
-    dimensions = [key for key in dimension_keys if any(row.get(key) not in (None, "") for row in rows)]
-    measures = [key for key in measure_keys if any(row.get(key) is not None for row in rows)]
+    dimensions = [
+        key
+        for key in dimension_keys
+        if any(row.get(key) not in (None, "") for row in rows)
+    ]
+    measures = [
+        key for key in measure_keys if any(row.get(key) is not None for row in rows)
+    ]
     duckdb = _mapping(config.get("duckdb_wasm"))
     return {
         "schema_version": 1,
@@ -395,9 +471,17 @@ def _analysis_body() -> str:
 
 def _entity_card(item: Mapping[str, Any], item_id: str, href: str, kind: str) -> str:
     name = _entity_name(item, item_id)
-    subtitle_keys = ("gene", "pdb_id", "quality_status") if kind == "protein" else ("generic_name", "library", "approval_status")
-    subtitle = " · ".join(_text(item.get(key)) for key in subtitle_keys if _text(item.get(key)))
-    searchable = " ".join(_text(value) for value in item.values() if isinstance(value, (str, int, float)))
+    subtitle_keys = (
+        ("gene", "pdb_id", "quality_status")
+        if kind == "protein"
+        else ("generic_name", "library", "approval_status")
+    )
+    subtitle = " · ".join(
+        _text(item.get(key)) for key in subtitle_keys if _text(item.get(key))
+    )
+    searchable = " ".join(
+        _text(value) for value in item.values() if isinstance(value, (str, int, float))
+    )
     return f'<a class="entity-card" href="{_h(href)}" data-search="{_h(searchable.lower())}"><h3>{_h(name)}</h3><p>{_h(subtitle or item_id)}</p></a>'
 
 
@@ -411,13 +495,15 @@ def _protein_body(
     pair_slugs: Mapping[str, str],
 ) -> str:
     heading = _entity_name(protein, protein_id)
-    meta = _definition_list(protein, exclude={"id", "name", "display_name", "description", "images"})
+    meta = _definition_list(
+        protein, exclude={"id", "name", "display_name", "description", "images"}
+    )
     rows = _pair_rows(pairs, pair_id_by_object, pair_slugs, drugs, drug_slugs, "drug")
-    return f"""{_breadcrumbs(('Proteins', None), (heading, None))}<section class="hero compact"><p class="eyebrow">Protein</p><h1>{_h(heading)}</h1>
-<p>{_h(_text(protein.get('description')) or protein_id)}</p></section>{_qualification(protein)}
-<section class="split"><div><h2>Receptor record</h2>{meta}</div>{_image_gallery(protein.get('images'))}</section>
+    return f"""{_breadcrumbs(("Proteins", None), (heading, None))}<section class="hero compact"><p class="eyebrow">Protein</p><h1>{_h(heading)}</h1>
+<p>{_h(_text(protein.get("description")) or protein_id)}</p></section>{_qualification(protein)}
+<section class="split"><div><h2>Receptor record</h2>{meta}</div>{_image_gallery(protein.get("images"))}</section>
 <section><div class="section-head"><h2>Ranked drugs</h2><label class="show-all"><input data-show-all-pairs="pair-table" type="checkbox"> Show invalid, failed, and unranked cells</label><input data-table-filter="pair-table" type="search" placeholder="Filter drugs or status…"></div>
-{_pair_table(rows, 'Drug', 'Protein-normalized rank')}</section>"""
+{_pair_table(rows, "Drug", "Protein-normalized rank")}</section>"""
 
 
 def _drug_body(
@@ -430,28 +516,48 @@ def _drug_body(
     pair_slugs: Mapping[str, str],
 ) -> str:
     heading = _entity_name(drug, drug_id)
-    meta = _definition_list(drug, exclude={"id", "name", "display_name", "description", "images"})
-    rows = _pair_rows(pairs, pair_id_by_object, pair_slugs, proteins, protein_slugs, "protein")
-    return f"""{_breadcrumbs(('Drugs', None), (heading, None))}<section class="hero compact"><p class="eyebrow">Drug</p><h1>{_h(heading)}</h1>
-<p>{_h(_text(drug.get('description')) or drug_id)}</p></section>
-<section class="split"><div><h2>Ligand record</h2>{meta}</div>{_image_gallery(drug.get('images'))}</section>
+    meta = _definition_list(
+        drug, exclude={"id", "name", "display_name", "description", "images"}
+    )
+    rows = _pair_rows(
+        pairs, pair_id_by_object, pair_slugs, proteins, protein_slugs, "protein"
+    )
+    return f"""{_breadcrumbs(("Drugs", None), (heading, None))}<section class="hero compact"><p class="eyebrow">Drug</p><h1>{_h(heading)}</h1>
+<p>{_h(_text(drug.get("description")) or drug_id)}</p></section>
+<section class="split"><div><h2>Ligand record</h2>{meta}</div>{_image_gallery(drug.get("images"))}</section>
 <section><div class="section-head"><h2>Ranked proteins</h2><label class="show-all"><input data-show-all-pairs="pair-table" type="checkbox"> Show invalid, failed, and unranked cells</label><input data-table-filter="pair-table" type="search" placeholder="Filter proteins or status…"></div>
-{_pair_table(rows, 'Protein', 'Receptor-normalized rank')}</section>"""
+{_pair_table(rows, "Protein", "Receptor-normalized rank")}</section>"""
 
 
-def _display_pairs(pairs: list[Mapping[str, Any]], perspective: str) -> list[Mapping[str, Any]]:
+def _display_pairs(
+    pairs: list[Mapping[str, Any]], perspective: str
+) -> list[Mapping[str, Any]]:
     rank_keys = (
         ("rank_within_receptor", "protein_rank", "rank_for_protein", "rank")
         if perspective == "protein"
         else (
-            "rank_across_receptors", "drug_rank", "rank_for_drug",
-            "cross_protein_rank", "rank",
+            "rank_across_receptors",
+            "drug_rank",
+            "rank_for_drug",
+            "cross_protein_rank",
+            "rank",
         )
     )
 
     def key(pair: Mapping[str, Any]) -> tuple[Any, ...]:
-        rank = next((_number(pair.get(name)) for name in rank_keys if _number(pair.get(name)) is not None), None)
-        return (rank is None, rank if rank is not None else 0, _STATUS_ORDER.get(_status(pair), 9))
+        rank = next(
+            (
+                _number(pair.get(name))
+                for name in rank_keys
+                if _number(pair.get(name)) is not None
+            ),
+            None,
+        )
+        return (
+            rank is None,
+            rank if rank is not None else 0,
+            _STATUS_ORDER.get(_status(pair), 9),
+        )
 
     return sorted(pairs, key=key)
 
@@ -475,21 +581,28 @@ def _pair_rows(
             ("rank_within_receptor", "protein_rank", "rank_for_protein", "rank")
             if entity_kind == "drug"
             else (
-                "rank_across_receptors", "drug_rank", "rank_for_drug",
-                "cross_protein_rank", "rank",
+                "rank_across_receptors",
+                "drug_rank",
+                "rank_for_drug",
+                "cross_protein_rank",
+                "rank",
             )
         )
         rank = _first(pair, *rank_keys)
         score = _score_summary(pair)
         status = _status(pair)
         eligible_value = pair.get("rank_eligible")
-        rank_ineligible = eligible_value is not None and str(eligible_value).lower() in {
-            "0", "false", "no",
+        rank_ineligible = eligible_value is not None and str(
+            eligible_value
+        ).lower() in {
+            "0",
+            "false",
+            "no",
         }
-        visibility = ' data-rank-eligible="false" hidden' if rank_ineligible else ""
+        visibility = ' data-rank-eligible="false"' if rank_ineligible else ""
         rows.append(
             f'<tr data-search="{_h((name + " " + entity_id + " " + status).lower())}"{visibility}><td><a href="{_h(entity_href)}">{_h(name)}</a><small>{_h(entity_id)}</small></td>'
-            f'<td>{_h(_display(rank))}</td><td>{score}</td><td>{_badge(status)}</td>'
+            f"<td>{_h(_display(rank))}</td><td>{score}</td><td>{_badge(status)}</td>"
             f'<td><a class="button small" href="../pairs/{_h(pair_slugs[pair_id])}.html">Inspect</a></td></tr>'
         )
     return rows
@@ -498,8 +611,42 @@ def _pair_rows(
 def _pair_table(rows: list[str], entity_label: str, rank_label: str) -> str:
     if not rows:
         return _empty("No pair records are available for this entity.")
+    data = [
+        {
+            "html": row,
+            "search": html.unescape(_html_data_value(row, "search")),
+            "eligible": 'data-rank-eligible="false"' not in row,
+        }
+        for row in rows
+    ]
+    initial_rows = [row for row in rows if 'data-rank-eligible="false"' not in row][
+        :_PAGE_SIZE
+    ]
+    initial = "".join(initial_rows)
+    if not initial:
+        initial = (
+            '<tr><td colspan="5" class="muted">No eligible rows. Use “Show invalid, '
+            "failed, and unranked cells” to inspect excluded cells.</td></tr>"
+        )
+    payload = _json_script(data)
     return f"""<div class="table-wrap"><table id="pair-table"><thead><tr><th>{_h(entity_label)}</th><th>{_h(rank_label)}</th>
-<th>Final score</th><th>Status</th><th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"""
+<th>Final score</th><th>Status</th><th></th></tr></thead><tbody>{initial}</tbody></table></div>
+<div class="pager" data-pair-pager="pair-table"><button type="button" data-page-prev>Previous</button><span data-page-status></span><button type="button" data-page-next>Next</button></div>
+<script type="application/json" data-pair-source="pair-table">{payload}</script>"""
+
+
+def _html_data_value(markup: str, name: str) -> str:
+    match = re.search(rf'\bdata-{re.escape(name)}="([^"]*)"', markup)
+    return match.group(1) if match else ""
+
+
+def _json_script(value: Any) -> str:
+    return (
+        json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
 
 
 def _pair_body(
@@ -509,37 +656,76 @@ def _pair_body(
     drugs: Mapping[str, Mapping[str, Any]],
     protein_slugs: Mapping[str, str],
     drug_slugs: Mapping[str, str],
+    linked_artifacts: list[Mapping[str, Any]],
 ) -> str:
     protein_id = _pair_ref(pair, "protein")
     drug_id = _pair_ref(pair, "drug")
-    protein_name = _entity_name(proteins.get(protein_id, {}), protein_id or "Unknown protein")
+    protein_name = _entity_name(
+        proteins.get(protein_id, {}), protein_id or "Unknown protein"
+    )
     drug_name = _entity_name(drugs.get(drug_id, {}), drug_id or "Unknown drug")
     status = _status(pair)
     scores = _mapping(pair.get("scores"))
     validity = _mapping(pair.get("validity") or pair.get("validation"))
+    artifact_value = pair.get("artifacts") or linked_artifacts
     provenance = _mapping(pair.get("provenance"))
-    failure = _text(pair.get("failure_reason") or validity.get("reason") or pair.get("invalid_reason"))
+    failure = _text(
+        pair.get("failure_reason")
+        or validity.get("reason")
+        or pair.get("invalid_reason")
+    )
     status_note = f'<p class="callout {"danger" if status not in {"valid", "success"} else "ok"}">{_badge(status)} {_h(failure or "No structured failure reason supplied.")}</p>'
     score_data = dict(scores)
-    for key in ("final_score", "atlas_score", "normalized_score", "z_score", "percentile_rank", "raw_score", "protein_rank", "drug_rank"):
+    for key in (
+        "final_score",
+        "atlas_score",
+        "normalized_score",
+        "z_score",
+        "percentile_rank",
+        "raw_score",
+        "protein_rank",
+        "drug_rank",
+    ):
         if key in pair and key not in score_data:
             score_data[key] = pair[key]
-    reserved = {"id", "pair_id", "protein_id", "target_id", "pdb_id", "drug_id", "ligand_id", "scores", "validity", "validation", "provenance", "artifacts", "images", "failure_reason", "invalid_reason"}
-    extra = {key: value for key, value in pair.items() if key not in reserved and key not in score_data}
+    reserved = {
+        "id",
+        "pair_id",
+        "protein_id",
+        "target_id",
+        "pdb_id",
+        "drug_id",
+        "ligand_id",
+        "scores",
+        "validity",
+        "validation",
+        "provenance",
+        "artifacts",
+        "images",
+        "failure_reason",
+        "invalid_reason",
+    }
+    extra = {
+        key: value
+        for key, value in pair.items()
+        if key not in reserved and key not in score_data
+    }
     protein_href = f"../proteins/{protein_slugs.get(protein_id, '')}.html"
     drug_href = f"../drugs/{drug_slugs.get(drug_id, '')}.html"
-    return f"""{_breadcrumbs(('Protein', protein_href), (protein_name, protein_href), ('Drug', drug_href), (drug_name, drug_href))}
+    return f"""{_breadcrumbs(("Protein", protein_href), (protein_name, protein_href), ("Drug", drug_href), (drug_name, drug_href))}
 <section class="hero compact"><p class="eyebrow">Protein–ligand result</p><h1>{_h(drug_name)} × {_h(protein_name)}</h1><p>Pair ID: <code>{_h(pair_id)}</code></p></section>
-{status_note}{_image_gallery(pair.get('images'))}
+{status_note}{_image_gallery(pair.get("images"))}
 <section class="three-col"><div><h2>Scores and ranks</h2>{_definition_list(score_data)}</div>
-<div><h2>Validation</h2>{_definition_list(validity) or _empty('No validation fields supplied.')}</div>
-<div><h2>Run fields</h2>{_definition_list(extra) or _empty('No additional run fields supplied.')}</div></section>
-<section><h2>Pair-level provenance</h2>{_definition_list(provenance) or _empty('No provenance fields supplied.')}</section>
-<section><h2>Artifacts and reconstructable inputs</h2>{_artifact_list(pair.get('artifacts'))}</section>"""
+<div><h2>Validation</h2>{_definition_list(validity) or _empty("No validation fields supplied.")}</div>
+<div><h2>Run fields</h2>{_definition_list(extra) or _empty("No additional run fields supplied.")}</div></section>
+<section><h2>Pair-level provenance</h2>{_definition_list(provenance) or _empty("No provenance fields supplied.")}</section>
+<section><h2>Artifacts and reconstructable inputs</h2>{_artifact_list(artifact_value)}</section>"""
 
 
 def _qualification(protein: Mapping[str, Any]) -> str:
-    quality = _text(protein.get("quality_status") or protein.get("qualification_status"))
+    quality = _text(
+        protein.get("quality_status") or protein.get("qualification_status")
+    )
     redock = _text(protein.get("native_redock_status") or protein.get("redock_status"))
     rmsd = _display(protein.get("native_redock_rmsd") or protein.get("redock_rmsd"))
     if not any((quality, redock, rmsd)):
@@ -557,7 +743,12 @@ def _score_summary(pair: Mapping[str, Any]) -> str:
 
 def _status(pair: Mapping[str, Any]) -> str:
     value = _text(pair.get("status") or pair.get("final_status")).lower()
-    aliases = {"ok": "valid", "completed": "valid", "unsuccessful": "failed", "error": "failed"}
+    aliases = {
+        "ok": "valid",
+        "completed": "valid",
+        "unsuccessful": "failed",
+        "error": "failed",
+    }
     value = aliases.get(value, value)
     validity = _mapping(pair.get("validity") or pair.get("validation"))
     if not value and validity.get("valid") is not None:
@@ -581,7 +772,11 @@ def _value_html(value: Any) -> str:
     if isinstance(value, Mapping):
         return _definition_list(value)
     if isinstance(value, list):
-        return "<ul>" + "".join(f"<li>{_value_html(item)}</li>" for item in value) + "</ul>"
+        return (
+            "<ul>"
+            + "".join(f"<li>{_value_html(item)}</li>" for item in value)
+            + "</ul>"
+        )
     text = _display(value)
     return _h(text)
 
@@ -595,7 +790,9 @@ def _image_gallery(value: Any) -> str:
             continue
         label = _text(image.get("label") or image.get("title")) or "Docked pose"
         alt = _text(image.get("alt")) or label
-        cards.append(f'<figure><a href="{_h(url)}"><img loading="lazy" src="{_h(url)}" alt="{_h(alt)}"></a><figcaption>{_h(label)}</figcaption></figure>')
+        cards.append(
+            f'<figure><a href="{_h(url)}"><img loading="lazy" src="{_h(url)}" alt="{_h(alt)}"></a><figcaption>{_h(label)}</figcaption></figure>'
+        )
     return f'<div class="gallery">{"".join(cards)}</div>' if cards else ""
 
 
@@ -604,19 +801,54 @@ def _artifact_list(value: Any) -> str:
     rows = []
     for artifact in artifacts:
         url = _text(artifact.get("url") or artifact.get("path") or artifact.get("href"))
-        if not _safe_url(url):
+        label = _text(
+            artifact.get("label")
+            or artifact.get("name")
+            or artifact.get("kind")
+            or artifact.get("member_name")
+            or artifact.get("file_type")
+            or artifact.get("stage")
+        )
+        digest = _text(
+            artifact.get("content_hash")
+            or artifact.get("sha256")
+            or artifact.get("digest")
+        )
+        label = (
+            label
+            or url
+            or (
+                f"Artifact {artifact['artifact_id']}"
+                if artifact.get("artifact_id") is not None
+                else ""
+            )
+        )
+        if not label and not digest:
             continue
-        label = _text(artifact.get("label") or artifact.get("name") or artifact.get("kind")) or url
-        digest = _text(artifact.get("content_hash") or artifact.get("sha256") or artifact.get("digest"))
-        rows.append(f'<li><a href="{_h(url)}">{_h(label)}</a>{f"<code>{_h(digest)}</code>" if digest else ""}</li>')
-    return f'<ul class="artifacts">{"".join(rows)}</ul>' if rows else _empty("No downloadable artifacts supplied.")
+        content = (
+            f'<a href="{_h(url)}">{_h(label or url)}</a>'
+            if _safe_url(url)
+            else f"<span>{_h(label or 'Unlinked artifact')}</span>"
+        )
+        rows.append(
+            f"<li>{content}{f'<code>{_h(digest)}</code>' if digest else ''}</li>"
+        )
+    return (
+        f'<ul class="artifacts">{"".join(rows)}</ul>'
+        if rows
+        else _empty("No pair-linked artifacts supplied.")
+    )
 
 
 def _breadcrumbs(*items: tuple[str, str | None]) -> str:
     parts = ['<a href="../index.html">Atlas</a>']
     for label, href in items:
         parts.append(f'<a href="{_h(href)}">{_h(label)}</a>' if href else _h(label))
-    return '<nav class="breadcrumbs" aria-label="Breadcrumb">' + " / ".join(parts) + "</nav>"
+    return (
+        '<nav class="breadcrumbs" aria-label="Breadcrumb">'
+        + " / ".join(parts)
+        + "</nav>"
+    )
 
 
 def _badge(status: str) -> str:
@@ -625,7 +857,10 @@ def _badge(status: str) -> str:
 
 
 def _entity_name(record: Mapping[str, Any], fallback: str) -> str:
-    return _text(record.get("display_name") or record.get("name") or record.get("title")) or fallback
+    return (
+        _text(record.get("display_name") or record.get("name") or record.get("title"))
+        or fallback
+    )
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -634,14 +869,21 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 def _iter_objects(value: Any) -> list[Mapping[str, Any]]:
     if isinstance(value, Mapping):
-        return [dict(item, label=item.get("label", key)) if isinstance(item, Mapping) else {"label": key, "url": item} for key, item in value.items()]
+        return [
+            dict(item, label=item.get("label", key))
+            if isinstance(item, Mapping)
+            else {"label": key, "url": item}
+            for key, item in value.items()
+        ]
     if isinstance(value, list):
         return [item if isinstance(item, Mapping) else {"url": item} for item in value]
     return []
 
 
 def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
-    return next((mapping[key] for key in keys if mapping.get(key) not in (None, "")), None)
+    return next(
+        (mapping[key] for key in keys if mapping.get(key) not in (None, "")), None
+    )
 
 
 def _number(value: Any) -> float | None:
@@ -672,7 +914,9 @@ def _safe_url(value: str) -> bool:
     if not value or any(char in value for char in ('"', "'", "<", ">", "\n", "\r")):
         return False
     parsed = urlsplit(value)
-    return parsed.scheme in {"", "http", "https"} and not value.lower().startswith(("javascript:", "data:"))
+    return parsed.scheme in {"", "http", "https"} and not value.lower().startswith(
+        ("javascript:", "data:")
+    )
 
 
 def _h(value: Any) -> str:
@@ -684,13 +928,34 @@ def _empty(message: str) -> str:
 
 
 _CSS = r"""
-:root{--ink:#17231b;--muted:#5c695f;--paper:#f6f7f2;--card:#fff;--line:#dce2d9;--green:#285b3b;--gold:#d39a2e;--red:#9f3939;--blue:#315d7c}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:var(--green)}.site-header{height:64px;padding:0 max(24px,calc((100vw - 1180px)/2));display:flex;align-items:center;justify-content:space-between;background:#183626;color:#fff}.brand{color:#fff;text-decoration:none;font-weight:800;font-size:1.15rem}.release{font-size:.85rem;opacity:.8}main{max-width:1180px;margin:auto;padding:36px 24px 80px}footer{padding:24px;text-align:center;background:#e8ece5;color:var(--muted);font-size:.85rem}.hero{padding:48px;border-radius:22px;background:linear-gradient(135deg,#e6efe5,#fff);border:1px solid var(--line);margin-bottom:24px}.hero.compact{padding:30px}.hero h1{font-size:clamp(2rem,5vw,4.2rem);line-height:1.03;margin:.2em 0}.hero.compact h1{font-size:clamp(1.8rem,4vw,3rem)}.hero p{max-width:780px;color:#405047}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-weight:800;font-size:.75rem;color:var(--green)!important}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:24px 0 50px}.metrics div,.qualification div{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.metrics strong{display:block;font-size:2rem}.metrics span,.qualification span{color:var(--muted);font-size:.8rem}.section-head{display:flex;gap:18px;align-items:center;justify-content:space-between;margin-top:46px}.section-head input{min-width:280px;padding:11px 14px;border:1px solid #abb8ac;border-radius:10px;background:#fff}.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}.entity-card{display:block;padding:20px;background:var(--card);border:1px solid var(--line);border-radius:14px;text-decoration:none;color:inherit;transition:.15s}.entity-card:hover{transform:translateY(-2px);border-color:#8da393;box-shadow:0 8px 20px #18362614}.entity-card h3{margin:0}.entity-card p{color:var(--muted);margin:.4rem 0 0}.breadcrumbs{color:var(--muted);font-size:.85rem;margin-bottom:18px}.split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.4fr);gap:28px}.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.record{display:grid;grid-template-columns:minmax(130px,.7fr) 1.5fr;margin:0}.record dt,.record dd{padding:9px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record dt{color:var(--muted);font-size:.82rem;font-weight:700}.record dd{margin:0}.record .record{grid-column:1/-1}.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}.gallery figure{margin:0;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}.gallery img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:#e5e8e3}.gallery figcaption{padding:8px 12px;color:var(--muted);font-size:.8rem}.table-wrap{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px;border-bottom:1px solid var(--line)}th{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}td small{display:block;color:var(--muted)}.badge{display:inline-block;border-radius:999px;background:#e8ebe7;padding:3px 9px;font-size:.75rem;font-weight:750}.status-valid,.status-success,.status-qualified,.status-pass{background:#d8eddf;color:#215234}.status-invalid,.status-warning{background:#fff0c9;color:#72500d}.status-failed,.status-missing,.status-fail{background:#f5dada;color:#792727}.button{display:inline-block;padding:8px 13px;border-radius:8px;background:var(--green);color:#fff;text-decoration:none}.button.small{padding:5px 10px;font-size:.8rem}.qualification{display:flex;gap:12px;align-items:stretch;margin:20px 0}.qualification h2{margin-right:auto}.qualification div{min-width:150px}.qualification span{display:block;margin-top:6px}.callout{padding:14px 18px;border-radius:12px}.callout.ok{background:#dff0e4}.callout.danger{background:#f5e1d9}.artifacts{padding:0;list-style:none}.artifacts li{display:flex;justify-content:space-between;gap:20px;padding:10px;border-bottom:1px solid var(--line)}code{font-size:.82em;overflow-wrap:anywhere}.empty{color:var(--muted);font-style:italic;padding:18px;background:#fff;border:1px dashed #bdc7bd;border-radius:10px}@media(max-width:760px){main{padding:20px 14px 60px}.hero{padding:28px 20px}.split,.three-col{grid-template-columns:1fr}.section-head{align-items:stretch;flex-direction:column}.section-head input{min-width:0;width:100%}.qualification{display:grid}.record{grid-template-columns:1fr}.record dd{padding-top:0}}.show-all{font-size:.82rem;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap}.analysis-app{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px}.analysis-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;align-items:end}.analysis-controls label{display:grid;gap:5px;color:var(--muted);font-size:.8rem;font-weight:700}.analysis-controls select,.analysis-controls button,.analysis-tabs button{min-height:40px;border:1px solid #aebcaf;border-radius:9px;background:#fff;padding:7px 10px}.analysis-controls button,.analysis-tabs button{cursor:pointer;color:var(--green);font-weight:750}.analysis-tabs{display:flex;gap:8px;margin:22px 0}.analysis-tabs .is-active{background:var(--green);color:#fff}.analysis-result{overflow:auto}.analysis-bars{display:grid;gap:8px}.analysis-bar{display:grid;grid-template-columns:minmax(120px,220px) 1fr 70px;gap:10px;align-items:center}.analysis-bar-track{height:18px;background:#edf0eb;border-radius:5px;overflow:hidden}.analysis-bar-fill{height:100%;background:var(--green)}.matrix td{min-width:58px;text-align:center;font-variant-numeric:tabular-nums}.matrix th{position:sticky;background:#fff}.matrix-cell{background:color-mix(in srgb,var(--blue) calc(var(--heat)*85%),white);color:var(--ink)}.muted{color:var(--muted)}.site-header nav a{color:#fff;font-size:.9rem}
+:root{--ink:#17231b;--muted:#5c695f;--paper:#f6f7f2;--card:#fff;--line:#dce2d9;--green:#285b3b;--gold:#d39a2e;--red:#9f3939;--blue:#315d7c}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:var(--green)}.site-header{height:64px;padding:0 max(24px,calc((100vw - 1180px)/2));display:flex;align-items:center;justify-content:space-between;background:#183626;color:#fff}.brand{color:#fff;text-decoration:none;font-weight:800;font-size:1.15rem}.release{font-size:.85rem;opacity:.8}main{max-width:1180px;margin:auto;padding:36px 24px 80px}footer{padding:24px;text-align:center;background:#e8ece5;color:var(--muted);font-size:.85rem}.hero{padding:48px;border-radius:22px;background:linear-gradient(135deg,#e6efe5,#fff);border:1px solid var(--line);margin-bottom:24px}.hero.compact{padding:30px}.hero h1{font-size:clamp(2rem,5vw,4.2rem);line-height:1.03;margin:.2em 0}.hero.compact h1{font-size:clamp(1.8rem,4vw,3rem)}.hero p{max-width:780px;color:#405047}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-weight:800;font-size:.75rem;color:var(--green)!important}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:24px 0 50px}.metrics div,.qualification div{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.metrics strong{display:block;font-size:2rem}.metrics span,.qualification span{color:var(--muted);font-size:.8rem}.section-head{display:flex;gap:18px;align-items:center;justify-content:space-between;margin-top:46px}.section-head input{min-width:280px;padding:11px 14px;border:1px solid #abb8ac;border-radius:10px;background:#fff}.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}.entity-card{display:block;padding:20px;background:var(--card);border:1px solid var(--line);border-radius:14px;text-decoration:none;color:inherit;transition:.15s}.entity-card:hover{transform:translateY(-2px);border-color:#8da393;box-shadow:0 8px 20px #18362614}.entity-card h3{margin:0}.entity-card p{color:var(--muted);margin:.4rem 0 0}.breadcrumbs{color:var(--muted);font-size:.85rem;margin-bottom:18px}.split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,1.4fr);gap:28px}.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.record{display:grid;grid-template-columns:minmax(130px,.7fr) 1.5fr;margin:0}.record dt,.record dd{padding:9px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record dt{color:var(--muted);font-size:.82rem;font-weight:700}.record dd{margin:0}.record .record{grid-column:1/-1}.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}.gallery figure{margin:0;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}.gallery img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:#e5e8e3}.gallery figcaption{padding:8px 12px;color:var(--muted);font-size:.8rem}.table-wrap{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px;border-bottom:1px solid var(--line)}th{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}td small{display:block;color:var(--muted)}.badge{display:inline-block;border-radius:999px;background:#e8ebe7;padding:3px 9px;font-size:.75rem;font-weight:750}.status-valid,.status-success,.status-qualified,.status-pass{background:#d8eddf;color:#215234}.status-invalid,.status-warning{background:#fff0c9;color:#72500d}.status-failed,.status-missing,.status-fail{background:#f5dada;color:#792727}.button{display:inline-block;padding:8px 13px;border-radius:8px;background:var(--green);color:#fff;text-decoration:none}.button.small{padding:5px 10px;font-size:.8rem}.qualification{display:flex;gap:12px;align-items:stretch;margin:20px 0}.qualification h2{margin-right:auto}.qualification div{min-width:150px}.qualification span{display:block;margin-top:6px}.callout{padding:14px 18px;border-radius:12px}.callout.ok{background:#dff0e4}.callout.danger{background:#f5e1d9}.artifacts{padding:0;list-style:none}.artifacts li{display:flex;justify-content:space-between;gap:20px;padding:10px;border-bottom:1px solid var(--line)}code{font-size:.82em;overflow-wrap:anywhere}.empty{color:var(--muted);font-style:italic;padding:18px;background:#fff;border:1px dashed #bdc7bd;border-radius:10px}@media(max-width:760px){main{padding:20px 14px 60px}.hero{padding:28px 20px}.split,.three-col{grid-template-columns:1fr}.section-head{align-items:stretch;flex-direction:column}.section-head input{min-width:0;width:100%}.qualification{display:grid}.record{grid-template-columns:1fr}.record dd{padding-top:0}}.show-all{font-size:.82rem;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap}.pager{display:flex;align-items:center;justify-content:center;gap:12px;margin:14px 0 28px}.pager button{border:1px solid #aebcaf;border-radius:8px;background:#fff;color:var(--green);padding:7px 12px;cursor:pointer}.pager button:disabled{cursor:default;opacity:.4}.pager span{min-width:150px;text-align:center;color:var(--muted);font-size:.82rem}.analysis-app{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px}.analysis-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;align-items:end}.analysis-controls label{display:grid;gap:5px;color:var(--muted);font-size:.8rem;font-weight:700}.analysis-controls select,.analysis-controls button,.analysis-tabs button{min-height:40px;border:1px solid #aebcaf;border-radius:9px;background:#fff;padding:7px 10px}.analysis-controls button,.analysis-tabs button{cursor:pointer;color:var(--green);font-weight:750}.analysis-tabs{display:flex;gap:8px;margin:22px 0}.analysis-tabs .is-active{background:var(--green);color:#fff}.analysis-result{overflow:auto}.analysis-bars{display:grid;gap:8px}.analysis-bar{display:grid;grid-template-columns:minmax(120px,220px) 1fr 70px;gap:10px;align-items:center}.analysis-bar-track{height:18px;background:#edf0eb;border-radius:5px;overflow:hidden}.analysis-bar-fill{height:100%;background:var(--green)}.matrix td{min-width:58px;text-align:center;font-variant-numeric:tabular-nums}.matrix th{position:sticky;background:#fff}.matrix-cell{background:color-mix(in srgb,var(--blue) calc(var(--heat)*85%),white);color:var(--ink)}.muted{color:var(--muted)}.site-header nav a{color:#fff;font-size:.9rem}
 """
 
 
 _JS = r"""
 document.querySelectorAll('[data-filter]').forEach(function(input){input.addEventListener('input',function(){var q=input.value.trim().toLowerCase();var root=document.getElementById(input.dataset.filter);if(!root)return;root.querySelectorAll('[data-search]').forEach(function(item){item.hidden=q && !item.dataset.search.includes(q);});});});
 function updateAtlasPairTable(id){var root=document.getElementById(id);if(!root)return;var input=document.querySelector('[data-table-filter="'+id+'"]'),toggle=document.querySelector('[data-show-all-pairs="'+id+'"]'),q=input?input.value.trim().toLowerCase():'';root.querySelectorAll('tbody tr').forEach(function(row){var excluded=row.dataset.rankEligible==='false'&&!(toggle&&toggle.checked),filtered=q&&!row.dataset.search.includes(q);row.hidden=excluded||filtered;});}document.querySelectorAll('[data-table-filter]').forEach(function(input){input.addEventListener('input',function(){updateAtlasPairTable(input.dataset.tableFilter);});});document.querySelectorAll('[data-show-all-pairs]').forEach(function(toggle){toggle.addEventListener('change',function(){updateAtlasPairTable(toggle.dataset.showAllPairs);});});
+
+(function(){
+  var size=100;
+  function parse(script){try{return JSON.parse(script.textContent||'[]');}catch(e){return [];}}
+  function pager(root,kind){return document.querySelector('[data-'+kind+'-pager="'+root.id+'"]');}
+  document.querySelectorAll('script[data-card-source]').forEach(function(script){
+    var root=document.getElementById(script.dataset.cardSource),rows=parse(script),page=0,input=document.querySelector('[data-filter="'+script.dataset.cardSource+'"]'),nav=pager(root,'card');
+    root._atlasCards=rows;
+    function filtered(){var q=input?input.value.trim().toLowerCase():'';return rows.filter(function(row){return !q||String(row.search||'').toLowerCase().indexOf(q)!==-1;});}
+    function render(reset){if(reset)page=0;var data=filtered(),pages=Math.max(1,Math.ceil(data.length/size));page=Math.min(page,pages-1);root.innerHTML=data.slice(page*size,(page+1)*size).map(function(row){return row.html;}).join('')||'<p class="empty">No matching records.</p>';if(nav){nav.querySelector('[data-page-status]').textContent=data.length+' records · page '+(page+1)+' of '+pages;nav.querySelector('[data-page-prev]').disabled=page===0;nav.querySelector('[data-page-next]').disabled=page>=pages-1;}}
+    if(input)input.addEventListener('input',function(){render(true);});if(nav){nav.querySelector('[data-page-prev]').addEventListener('click',function(){if(page>0){page--;render(false);}});nav.querySelector('[data-page-next]').addEventListener('click',function(){if((page+1)*size<filtered().length){page++;render(false);}});}render(false);
+  });
+  document.querySelectorAll('script[data-pair-source]').forEach(function(script){
+    var table=document.getElementById(script.dataset.pairSource),body=table&&table.querySelector('tbody'),rows=parse(script),page=0,input=document.querySelector('[data-table-filter="'+script.dataset.pairSource+'"]'),toggle=document.querySelector('[data-show-all-pairs="'+script.dataset.pairSource+'"]'),nav=pager(table,'pair');
+    if(!table||!body)return;table._atlasRows=rows;
+    function filtered(){var q=input?input.value.trim().toLowerCase():'',all=toggle&&toggle.checked;return rows.filter(function(row){return (all||row.eligible)&&(!q||String(row.search||'').toLowerCase().indexOf(q)!==-1);});}
+    function render(reset){if(reset)page=0;var data=filtered(),pages=Math.max(1,Math.ceil(data.length/size));page=Math.min(page,pages-1);body.innerHTML=data.slice(page*size,(page+1)*size).map(function(row){return row.html;}).join('')||'<tr><td colspan="5" class="muted">No matching rows. Select “Show invalid, failed, and unranked cells” to include excluded cells.</td></tr>';if(nav){nav.querySelector('[data-page-status]').textContent=data.length+' rows · page '+(page+1)+' of '+pages;nav.querySelector('[data-page-prev]').disabled=page===0;nav.querySelector('[data-page-next]').disabled=page>=pages-1;}}
+    if(input)input.addEventListener('input',function(){render(true);});if(toggle)toggle.addEventListener('change',function(){render(true);});if(nav){nav.querySelector('[data-page-prev]').addEventListener('click',function(){if(page>0){page--;render(false);}});nav.querySelector('[data-page-next]').addEventListener('click',function(){if((page+1)*size<filtered().length){page++;render(false);}});}render(false);
+  });
+})();
+
 (function(){
   var app=document.getElementById('analysis-app'); if(!app)return;
   var message=document.getElementById('analysis-message'), controls=document.getElementById('analysis-controls'), result=document.getElementById('analysis-result'), summary=document.getElementById('analysis-summary');
