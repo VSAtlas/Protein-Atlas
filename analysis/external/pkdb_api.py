@@ -27,6 +27,15 @@ def _response_count(response: requests.Response) -> int:
     except (TypeError, ValueError):
         return 0
 
+def _response_rows(response: requests.Response) -> list[dict[str, Any]]:
+    try:
+        payload = response.json()
+    except ValueError:
+        return []
+    data = payload.get("data") if isinstance(payload, dict) else None
+    rows = data.get("data") if isinstance(data, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict)]
+
 
 def _zip_member_size(content: bytes, member: str) -> int:
     try:
@@ -82,6 +91,31 @@ def probe_pkdb_api(
         payload["filter_http_status"] = filter_response.status_code
         payload["filter_uuid"] = query_uuid
         payload["filter_advertised_outputs"] = advertised_outputs
+        study_response = client.get(
+            f"{PKDB_API_BASE}/studies/",
+            params={"name": PKDB_DOCUMENTED_EXAMPLE, "format": "json"},
+            timeout=timeout,
+        )
+        study_response.raise_for_status()
+        study_rows = _response_rows(study_response)
+        study_row = study_rows[0] if study_rows else {}
+        outputset = study_row.get("outputset")
+        study_output_ids = (
+            outputset.get("outputs") if isinstance(outputset, dict) else []
+        ) or []
+        payload["study_endpoint_count"] = _response_count(study_response)
+        payload["study_reported_output_count"] = int(
+            study_row.get("output_count") or 0
+        )
+        payload["study_embedded_output_id_count"] = len(study_output_ids)
+
+        alpha_response = client.get(
+            "https://alpha.pk-db.com/api/v1/outputs/",
+            params={"page_size": 1, "format": "json"},
+            timeout=timeout,
+        )
+        alpha_response.raise_for_status()
+        payload["alpha_outputs_endpoint_count"] = _response_count(alpha_response)
 
         outputs_response = client.get(
             f"{PKDB_API_BASE}/outputs/",
@@ -115,8 +149,10 @@ def probe_pkdb_api(
         if advertised_outputs > 0 and not outputs_retrievable:
             payload["status"] = "server_inconsistent"
             payload["reason"] = (
-                "filter advertises output rows but /outputs/ and outputs.csv "
-                "are empty"
+                "the PostgreSQL-backed study endpoint exposes output counts and "
+                "IDs, but Elasticsearch-backed /outputs/ and generated "
+                "outputs.csv are empty on both production and alpha; numeric "
+                "PK values are not publicly recoverable until the source index is rebuilt"
             )
         elif outputs_retrievable:
             payload["status"] = "available"

@@ -22,8 +22,15 @@ from analysis.external.pkdb_api import probe_pkdb_api
 from analysis.external.source_tables import download_to_cache
 
 
-VERSION = "Atlasv0.0.02"
+VERSION = "Atlasv0.0.03"
 NCATS_FRDB_URL = "https://drugs.ncats.io/downloads-public/frdb-v2024-12-30.zip"
+NCATS_FRDB_SOURCES = (
+    ("2024-12-30", NCATS_FRDB_URL),
+    ("2023-07-05", "https://drugs.ncats.io/downloads-public/frdb-v2023-07-05.zip"),
+    ("2023-02-15", "https://drugs.ncats.io/downloads-public/frdb-v2023-02-15.zip"),
+    ("2021-09-09", "https://drugs.ncats.io/downloads-public/frdb-v2021-09-09.zip"),
+    ("2021-05-10", "https://drugs.ncats.io/downloads-public/frdb-v2021-05-10.zip"),
+)
 PKDB_BULK_URL = "https://pk-db.com/api/v1/filter/?download=true&concise=false"
 DEFAULT_MODEL_TABLE = Path(
     "data/AtlasSPD_phase1/combined_activity_source_matched_20260709/"
@@ -83,7 +90,6 @@ def _add_flat_source(
         }
     )
 
-
 def _prepare_ncats(
     *,
     external_root: Path,
@@ -94,6 +100,8 @@ def _prepare_ncats(
     source_dir = external_root / "ncats_inxight"
     archive = source_dir / "frdb-v2024-12-30.zip"
     extracted = source_dir / "frdb-v2024-12-30"
+    selected_version = "2024-12-30"
+    download_errors: list[str] = []
     archive_valid = archive.exists() and zipfile.is_zipfile(archive)
     if download_sources and not archive_valid:
         try:
@@ -106,15 +114,27 @@ def _prepare_ncats(
             )
             archive_valid = zipfile.is_zipfile(archive)
         except Exception as exc:
-            statuses.append(
-                {
-                    "source": "NCATS_Inxight_FRDB",
-                    "status": "download_failed",
-                    "path": str(archive),
-                    "rows": 0,
-                    "reason": f"{type(exc).__name__}: {exc}",
-                }
-            )
+            download_errors.append(f"2024-12-30: {type(exc).__name__}: {exc}")
+    if download_sources and not archive_valid:
+        for version, url in NCATS_FRDB_SOURCES[1:]:
+            candidate = source_dir / f"frdb-v{version}.zip"
+            try:
+                download_to_cache(
+                    url,
+                    candidate,
+                    retries=2,
+                    sleep_sec=5.0,
+                    overwrite=True,
+                )
+            except Exception as exc:
+                download_errors.append(f"{version}: {type(exc).__name__}: {exc}")
+                continue
+            if zipfile.is_zipfile(candidate):
+                archive = candidate
+                extracted = source_dir / f"frdb-v{version}"
+                selected_version = version
+                archive_valid = True
+                break
     if archive_valid and not extracted.exists():
         try:
             _extract_archive(archive, extracted)
@@ -135,7 +155,7 @@ def _prepare_ncats(
             statuses,
             path=candidates[0],
             source_name="NCATS_Inxight_FRDB",
-            version="2024-12-30",
+            version=selected_version,
         )
     elif not any(row["source"] == "NCATS_Inxight_FRDB" for row in statuses):
         statuses.append(
@@ -145,8 +165,12 @@ def _prepare_ncats(
                 "path": str(archive),
                 "rows": 0,
                 "reason": (
-                    "official current archive unavailable or invalid; endpoint "
-                    "verified against NCATS downloads page"
+                    "all official current/archive downloads were unavailable; "
+                    + (
+                        " | ".join(download_errors)
+                        if download_errors
+                        else "network retry skipped for this refresh"
+                    )
                 ),
             }
         )
@@ -257,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_02"),
+        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_03"),
     )
     parser.add_argument("--openfda", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--openfda-max-drugs", type=int, default=0)

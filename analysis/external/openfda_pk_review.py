@@ -8,6 +8,11 @@ from typing import Any
 
 import pandas as pd
 
+from analysis.external.openfda_pk_adjudication import (
+    adjudicate_openfda_cmax,
+    cmax_adjudication_summary,
+)
+
 from analysis.external.openfda_pk import (
     _dose_context,
     _first_text,
@@ -248,6 +253,17 @@ def audit_openfda_pk_cache(
     review = pd.DataFrame(rows)
     review_path = output / "openfda_spl_source_text_review.csv"
     review.to_csv(review_path, index=False)
+    adjudicated = adjudicate_openfda_cmax(review)
+    adjudicated_path = output / "openfda_spl_cmax_adjudicated.csv"
+    adjudicated.to_csv(adjudicated_path, index=False)
+    cmax_adjudication_summary(adjudicated).to_csv(
+        output / "openfda_spl_cmax_adjudication_summary.csv",
+        index=False,
+    )
+    adjudicated.loc[adjudicated["acceptable_for_contextual_pk"]].to_csv(
+        output / "openfda_spl_cmax_accepted_contexts.csv",
+        index=False,
+    )
     if review.empty:
         queue = review.copy()
         summary = pd.DataFrame(columns=["review_status", "records", "drugs"])
@@ -301,6 +317,18 @@ def audit_openfda_pk_cache(
             "no SPL numeric value is promoted automatically"
         ),
         "review_output": str(review_path),
+        "adjudication_output": str(adjudicated_path),
+        "accepted_contextual_records": int(
+            adjudicated["acceptable_for_contextual_pk"].sum()
+        ),
+        "accepted_model_context_records": int(
+            adjudicated["acceptable_for_model_training"].sum()
+        ),
+        "accepted_universal_drug_cmax_records": 0,
+        "adjudication_policy": (
+            "accepted values remain dose/route/regimen/formulation-specific; "
+            "no SPL value is a universal per-drug Cmax"
+        ),
     }
     (output / "openfda_spl_source_text_manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n",

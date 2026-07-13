@@ -24,6 +24,46 @@ The current clean binding model has ligand descriptors and Atlas docking scores 
    - Compare a frozen pocket descriptor such as DeeplyTough or a PocketVec-style representation with the deterministic and ESM baselines.
    - Treat this as an ablation, not a required dependency for Phase 1.
 
+## Exact Phase 1 feature contract
+
+The first target-representation ablation uses these cached, label-independent
+features from each reviewed pocket PDB:
+
+- composition: `pocket_frac_polar`, `pocket_frac_hydrophobic`,
+  `pocket_frac_aromatic`, `pocket_frac_charged_pos`,
+  `pocket_frac_charged_neg`, and `pocket_net_charge_proxy`;
+- geometry: `pocket_rgyr`, `pocket_bbox_vol`, `pocket_pca_ratio1`, and
+  `pocket_pca_ratio2`;
+- size/definition: `pocket_atom_count`, `pocket_residue_count`, and
+  `pocket_radius_a`;
+- bound metal context: `pocket_metal_zn`, `pocket_metal_fe`,
+  `pocket_metal_mg`, `pocket_metal_ca`, `pocket_metal_mn`,
+  `pocket_metal_cu`, `pocket_metal_co`, and `pocket_metal_ni`.
+
+`pocket_definition_source`, `pocket_control_ligand_id`, and pocket-map status
+are provenance/audit columns, not clean predictive features. The descriptor
+table is generated with:
+
+```bash
+python -m analysis.cli.build_target_pocket_features \
+  --pocket-map <primary_pocket_map.csv> [recovery_pocket_map.csv ...] \
+  --out-dir data/<run_id>/target_representations
+```
+
+ESM-2 is not ESMFold. ESM-2 is a sequence language model; ESMFold adds a
+structure-prediction head. Frozen ESM-2 embeddings are useful here because they
+provide evolutionary and sequence-context information for unseen targets, while
+the pocket descriptors provide the explicit structural signal. Atlas should
+compare them separately and together.
+
+PocketVec does not expose a small list of physicochemical variables to copy. Its
+descriptor is a fixed vector of rankings produced by docking a reference
+lead-like ligand panel against each pocket. Reproducing it would therefore be a
+separate inverse-screening baseline. Atlas should not call the deterministic
+features above "PocketVec"; a true PocketVec-style vector should be added only
+as an explicit, fixed-probe-library ablation.
+
+
 ## Model integration
 
 For the first publishable comparison, concatenate the target representation with the existing nonleaky pair features and fit the existing logistic/elastic-net, EBM, CatBoost, or shallow LightGBM candidates. Run the same immutable splits for:

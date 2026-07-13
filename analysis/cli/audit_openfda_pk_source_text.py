@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--out-dir",
         type=Path,
         default=Path(
-            "data/AtlasSPD_phase1/pk_context_v0_0_02/openfda_source_text_review"
+            "data/AtlasSPD_phase1/pk_context_v0_0_03/openfda_source_text_review"
         ),
     )
     return parser
