@@ -181,10 +181,18 @@ Refresh structured exposure context and join it to the frozen Phase 1 table:
 
 ```bash
 python -m analysis.cli.refresh_phase1_pk_context \
-  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_02
+  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_09 \
+  --reviewed-openfda-context <openfda_spl_cmax_accepted_contexts.csv>
 ```
 
-The command writes `pk_context_long.csv`, `pk_context_representative.csv`, `AtlasSPD_phase1_pk_enriched.csv`, source coverage, API-health manifests, and `openfda_source_text_review/`. Existing `spd_exposure_label` values are never recomputed from external PK. Unreviewed SPL numeric values remain in the long evidence table but are quarantined from representative ML features.
+The command writes `pk_context_long.csv`, `pk_context_representative.csv`,
+`AtlasSPD_phase1_pk_enriched.csv`, source coverage, API-health manifests, and
+`openfda_source_text_review/`. The NCATS FRDB adapter preserves dose, route,
+regimen, formulation, Cmax, and fraction-unbound context. Existing
+`spd_exposure_label` values are never recomputed from external PK. Unreviewed
+SPL numeric values remain quarantined; pass `--openfda never` with
+`--reviewed-openfda-context` to reuse adjudicated contexts without network
+queries.
 
 Rerun only the cached SPL source-text review with:
 

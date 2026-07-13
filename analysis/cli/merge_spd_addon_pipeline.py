@@ -123,6 +123,49 @@ def _resolve_inputs(
     return manifest_path, selected, scores, manifest
 
 
+def discover_latest_scored_addon(root: Path) -> tuple[Path, dict[str, Any]]:
+    """Select the newest timestamped add-on with a complete score contract."""
+
+    candidates = sorted(
+        (
+            path.resolve()
+            for path in root.glob("target_positive_addon_*")
+            if path.is_dir()
+        ),
+        key=lambda path: (path.name, path.stat().st_mtime_ns),
+        reverse=True,
+    )
+    rejected: list[dict[str, str]] = []
+    for candidate in candidates:
+        try:
+            manifest, selected, scores, _ = _resolve_inputs(
+                candidate,
+                reference_manifest=None,
+                selected_pairs=None,
+                score_table=None,
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+            rejected.append(
+                {
+                    "path": str(candidate),
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
+        return candidate, {
+            "mode": "latest_completed_score_ready",
+            "root": str(root.resolve()),
+            "selected": str(candidate),
+            "reference_manifest": str(manifest),
+            "selected_pairs": str(selected),
+            "score_table": str(scores),
+            "rejected_newer_candidates": rejected,
+        }
+    raise FileNotFoundError(
+        f"no completed score-ready target_positive_addon_* directory under {root}"
+    )
+
+
 def _pair_key(frame: pd.DataFrame) -> pd.Series:
     required = {"pdb_id", "ligand_base"}
     missing = required - set(frame.columns)
@@ -211,6 +254,7 @@ def run_spd_addon_merge_pipeline(
     addon_name: str = "external_activity_addon",
     run_audits: bool = True,
     audit_labels: list[str] | None = None,
+    addon_selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Merge, identity-reconcile, enrich, validate, and audit one add-on pass."""
 
@@ -346,6 +390,10 @@ def run_spd_addon_merge_pipeline(
         "inputs": {
             "base_table": {"path": str(base), "sha256": _sha256(base)},
             "addon_dir": str(addon),
+            "addon_selection": addon_selection or {
+                "mode": "explicit",
+                "selected": str(addon),
+            },
             "reference_manifest": {
                 "path": str(manifest_path),
                 "sha256": _sha256(manifest_path),
@@ -399,7 +447,20 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--base-table", required=True, type=Path)
-    parser.add_argument("--addon-dir", required=True, type=Path)
+    parser.add_argument(
+        "--addon-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit scored add-on directory. When omitted, select the newest "
+            "completed score-ready timestamped directory under --addon-root."
+        ),
+    )
+    parser.add_argument(
+        "--addon-root",
+        type=Path,
+        default=Path("data/AtlasSPD_phase1"),
+    )
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--mapping", type=Path, default=None)
     parser.add_argument("--reference-manifest", type=Path, default=None)
@@ -413,10 +474,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    out_dir = args.out_dir or args.addon_dir / "merged_pipeline"
+    if args.addon_dir is None:
+        addon_dir, addon_selection = discover_latest_scored_addon(
+            args.addon_root
+        )
+    else:
+        addon_dir = args.addon_dir
+        addon_selection = {
+            "mode": "explicit",
+            "selected": str(addon_dir.resolve()),
+        }
+    out_dir = args.out_dir or addon_dir / "merged_pipeline"
     manifest = run_spd_addon_merge_pipeline(
         base_table=args.base_table,
-        addon_dir=args.addon_dir,
+        addon_dir=addon_dir,
         out_dir=out_dir,
         mapping=args.mapping,
         reference_manifest=args.reference_manifest,
@@ -425,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         addon_name=args.addon_name,
         run_audits=not args.skip_audits,
         audit_labels=args.audit_label,
+        addon_selection=addon_selection,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 2 if manifest["status"] == "blocked" else 0

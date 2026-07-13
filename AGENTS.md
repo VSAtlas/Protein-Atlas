@@ -89,6 +89,12 @@ python -m analysis.cli.merge_spd_addon_pipeline \
   --addon-dir data/AtlasSPD_phase1/target_positive_addon_<YYYYMMDD_HHMMSS>
 ```
 
+When several agents produce timestamped add-on directories, omit `--addon-dir`
+and optionally set `--addon-root data/AtlasSPD_phase1`. The command then selects
+the newest completed score-ready directory, skips newer incomplete directories,
+and records the selection and rejection reasons in the merge manifest. It never
+selects a directory merely because its timestamp is newest.
+
 The command discovers the non-smoke full-reference Vina manifest, records its
 checksum, verifies the selected-pair checksum when the manifest declares one,
 and merges on normalized PDB plus ligand-stem/base pair keys. It reconciles

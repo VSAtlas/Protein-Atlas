@@ -59,3 +59,12 @@ locations, forged overwrite markers, untracked in-site verification reports, and
 private-path leaks now fail closed. Pair artifacts are visible in static pages and
 missing image artifacts become explicit preflight gaps; the full 760,878-cell edge
 export remains blocked on a future SQLite-streaming implementation.
+
+## Atlasv0.0.09 - Complete contextual PK and add-on discovery
+
+Adds a source-specific NCATS FRDB PK adapter with unit-safe Cmax conversion,
+structured dose/route/regimen/formulation and fraction-unbound context, reusable
+source-text-adjudicated DailyMed scenarios, FDA-only openFDA query filtering, and
+atomic replacement of stale derived PK columns. The SPD exposure label remains
+unchanged. Timestamped SPD add-on merges can now select the newest completed
+score-ready directory while rejecting and recording newer incomplete branches.

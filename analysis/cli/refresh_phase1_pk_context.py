@@ -15,6 +15,8 @@ from analysis.external.pk_context import (
     combine_pk_context,
     load_existing_phase1_pk_context,
     load_flat_pk_context,
+    load_ncats_frdb_pk_context,
+    load_reviewed_openfda_pk_context,
     load_spd_pk_context,
     write_pk_context_outputs,
 )
@@ -22,7 +24,7 @@ from analysis.external.pkdb_api import probe_pkdb_api
 from analysis.external.source_tables import download_to_cache
 
 
-VERSION = "Atlasv0.0.03"
+VERSION = "Atlasv0.0.09"
 NCATS_FRDB_URL = "https://drugs.ncats.io/downloads-public/frdb-v2024-12-30.zip"
 NCATS_FRDB_SOURCES = (
     ("2024-12-30", NCATS_FRDB_URL),
@@ -150,13 +152,31 @@ def _prepare_ncats(
             )
     candidates = list(extracted.glob("**/frdb-pk.tsv")) if extracted.exists() else []
     if candidates:
-        _add_flat_source(
-            parts,
-            statuses,
-            path=candidates[0],
-            source_name="NCATS_Inxight_FRDB",
-            version=selected_version,
-        )
+        try:
+            context = load_ncats_frdb_pk_context(
+                candidates[0], source_version=selected_version
+            )
+        except Exception as exc:
+            statuses.append(
+                {
+                    "source": "NCATS_Inxight_FRDB",
+                    "status": "parse_failed",
+                    "path": str(candidates[0]),
+                    "rows": 0,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            )
+        else:
+            parts.append(context)
+            statuses.append(
+                {
+                    "source": "NCATS_Inxight_FRDB",
+                    "status": "ingested",
+                    "path": str(candidates[0]),
+                    "rows": int(len(context)),
+                    "reason": "source-specific FRDB schema adapter",
+                }
+            )
     elif not any(row["source"] == "NCATS_Inxight_FRDB" for row in statuses):
         statuses.append(
             {
@@ -281,12 +301,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_03"),
+        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_09"),
     )
     parser.add_argument("--openfda", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--openfda-max-drugs", type=int, default=0)
     parser.add_argument("--openfda-sleep-sec", type=float, default=0.25)
     parser.add_argument("--skip-openfda-source-review", action="store_true")
+    parser.add_argument(
+        "--reviewed-openfda-context",
+        type=Path,
+        default=None,
+        help=(
+            "Previously source-text-adjudicated DailyMed context CSV. "
+            "These rows can be reused with --openfda never."
+        ),
+    )
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--drugbank-cmax", type=Path, default=None)
     parser.add_argument("--drugbank-protein-binding", type=Path, default=None)
@@ -379,6 +408,25 @@ def main(argv: list[str] | None = None) -> int:
 
     openfda_cache = args.external_root / "dailymed_spl" / "phase1_openfda"
     openfda_review_manifest: dict[str, object] = {}
+    if args.reviewed_openfda_context is not None:
+        if not args.reviewed_openfda_context.is_file():
+            raise FileNotFoundError(
+                "reviewed openFDA context does not exist: "
+                f"{args.reviewed_openfda_context}"
+            )
+        reviewed_context = load_reviewed_openfda_pk_context(
+            args.reviewed_openfda_context
+        )
+        parts.append(reviewed_context)
+        statuses.append(
+            {
+                "source": "DailyMed_openFDA_SPL_reviewed",
+                "status": "ingested",
+                "path": str(args.reviewed_openfda_context),
+                "rows": int(len(reviewed_context)),
+                "reason": "source-text-adjudicated contextual PK only",
+            }
+        )
     if args.openfda != "never":
         openfda_context, openfda_manifest = fetch_openfda_pk_context(
             model_table,

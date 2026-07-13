@@ -151,6 +151,32 @@ def _record_context(
     return row
 
 
+def _openfda_eligible_mask(frame: pd.DataFrame) -> tuple[pd.Series, str]:
+    status = frame.get(
+        "canonical_identity_regulatory_status",
+        pd.Series("", index=frame.index),
+    ).fillna("").astype(str).str.casefold()
+    approved = status.isin(
+        {"fda_approved_current_or_historical", "drugcentral_fda_approved"}
+    )
+    claim_flag = frame.get(
+        "primary_fda_claim_allowed", pd.Series(False, index=frame.index)
+    )
+    claim_flag = claim_flag.astype("string").fillna("").str.casefold().isin(
+        {"1", "true", "yes", "y"}
+    )
+    probe_flag = frame.get(
+        "probe_sensitivity_only", pd.Series(False, index=frame.index)
+    )
+    probe_flag = probe_flag.astype("string").fillna("").str.casefold().isin(
+        {"1", "true", "yes", "y"}
+    )
+    eligible = (approved | claim_flag) & ~probe_flag
+    if eligible.any():
+        return eligible, "canonical_fda_status_or_primary_claim"
+    return pd.Series(True, index=frame.index), "no_populated_eligibility_axis"
+
+
 def fetch_openfda_pk_context(
     model_table: pd.DataFrame,
     *,
@@ -160,10 +186,17 @@ def fetch_openfda_pk_context(
     timeout: int = 30,
     sleep_sec: float = 0.25,
     reuse_cache: bool = True,
+    eligible_only: bool = True,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     cache = Path(cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
-    drugs = model_table.drop_duplicates("drug_id").copy()
+    all_drugs = model_table.drop_duplicates("drug_id").copy()
+    eligibility_policy = "disabled"
+    if eligible_only:
+        eligible, eligibility_policy = _openfda_eligible_mask(all_drugs)
+        drugs = all_drugs.loc[eligible].copy()
+    else:
+        drugs = all_drugs
     if max_drugs > 0:
         drugs = drugs.head(max_drugs)
     session = requests.Session()
@@ -243,6 +276,9 @@ def fetch_openfda_pk_context(
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_display": OPENFDA_LABEL_SOURCE,
+        "candidate_drugs": int(len(all_drugs)),
+        "eligibility_policy": eligibility_policy,
+        "drugs_excluded_by_eligibility": int(len(all_drugs) - len(drugs)),
         "drugs_queried": int(len(drugs)),
         "drugs_with_records": int(status_frame["records"].gt(0).sum()) if not status_frame.empty else 0,
         "records": int(len(rows)),
