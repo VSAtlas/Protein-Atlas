@@ -28,6 +28,7 @@ from cli.qol.run_panel import _cmd_run_panel
 from cli.qol.ligands import _cmd_ligands, _cmd_library_alias
 from cli.qol.ml import _cmd_ml
 from cli.qol.pipeline import _cmd_run
+from cli.qol.publish import _cmd_publish
 
 
 def dispatch(argv: Sequence[str] | None = None) -> int | None:
@@ -64,6 +65,7 @@ def dispatch(argv: Sequence[str] | None = None) -> int | None:
         "chebi": lambda rest: _cmd_library_alias("chebi", rest),
         "coconut": lambda rest: _cmd_library_alias("coconut", rest),
         "run": _cmd_run,
+        "publish": _cmd_publish,
     }
     handler = handlers.get(command)
     if handler is None:

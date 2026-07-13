@@ -63,6 +63,7 @@ from cli.qol.onboarding import (
     _write_example_input_docs,
 )
 from cli.qol.pipeline import _cmd_run
+from cli.qol.publish import _cmd_publish
 from cli.qol.reporting import _cmd_analysis, _cmd_report, _run_master_export
 from cli.qol.run_panel import (
     _build_run_panel_parser,
@@ -140,6 +141,7 @@ __all__ = [
     "_cmd_ml",
     "_cmd_new_run",
     "_cmd_report",
+    "_cmd_publish",
     "_cmd_repair_manifest",
     "_cmd_reproduce",
     "_cmd_run",

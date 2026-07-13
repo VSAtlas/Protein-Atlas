@@ -39,6 +39,7 @@ packages = [
   "protein_prep",
   "config",
   "analysis",
+  "analysis.atlas_database",
   "atlas",
   "chemdb",
   "ml",
