@@ -14,6 +14,25 @@ runs:
       docked: <DOCKED_RUN_DIRECTORY>
       archive_index: <ARTIFACT_ARCHIVE_INDEX_JSON>
 
+    # Optional and fail-closed. Add a row only when the release build reports multiple
+    # successful completion attempts or multiple master-result rows for this exact
+    # receptor/ligand key; remove this entire block when no ambiguity is reported.
+    # Supply the relevant completion fields, result fields,
+    # or both; Atlas preserves every candidate and marks only this exact match.
+    attempt_selections:
+      - pdb_id: <PDB_ID>
+        variant: <EXACT_VARIANT_OR_EMPTY_STRING>
+        ph_label: <EXACT_PH_LABEL_OR_EMPTY_STRING>
+        ligand_canonical_id: <CANONICAL_LIGAND_ID>
+        completion_relpath: <PATH_RELATIVE_TO_DOCKED>
+        completion_sha256: <COMPLETION_JSON_SHA256>
+        result_row_number: <LOGICAL_CSV_RECORD_NUMBER_HEADER_IS_1>
+        result_sha256: <CANONICAL_RESULT_ROW_JSON_SHA256>
+
+    # The referenced archive index must type every entry with artifact_role.
+    # Ligand- and pair-scoped roles also require ligand_canonical_id. Typing an
+    # artifact records what it is; it does not make it public or scientifically valid.
+
 scientific_policies:
   receptor_selection:
     policy_id: <RECEPTOR_SELECTION_POLICY_ID>

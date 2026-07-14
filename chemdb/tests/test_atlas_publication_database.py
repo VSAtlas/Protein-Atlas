@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -505,12 +506,49 @@ def test_completion_attempts_preserve_same_key_reruns(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    audit = audit_release_inputs(release_manifest, tmp_path)
+    audit_run = audit["runs"][0]
+    assert audit_run["duplicate_successful_completion_pair_count"] == 1
+    assert audit_run["attempt_selection_valid"] is False
+    assert any(
+        "multiple successful completion attempts" in error
+        for error in audit["errors"]
+    )
+    with pytest.raises(ValueError, match="multiple successful completion attempts"):
+        build_release_database(
+            release_manifest, tmp_path / "ambiguous-rerun.sqlite", tmp_path
+        )
+
+    release_payload = yaml.safe_load(release_manifest.read_text(encoding="utf-8"))
+    release_payload["runs"][0]["attempt_selections"] = [
+        {
+            "pdb_id": "1ABC",
+            "variant": "HOLO",
+            "ph_label": "base",
+            "ligand_canonical_id": "drug-a",
+            "completion_relpath": "second/completion_stage3.json",
+            "completion_sha256": hashlib.sha256(
+                json.dumps(completion_payload).encode("utf-8")
+            ).hexdigest(),
+        }
+    ]
+    release_manifest.write_text(yaml.safe_dump(release_payload), encoding="utf-8")
+
+    selected_audit = audit_release_inputs(release_manifest, tmp_path)
+    selected_run = selected_audit["runs"][0]
+    assert selected_run["duplicate_successful_completion_pair_count"] == 1
+    assert selected_run["attempt_selection_valid"] is True
+    assert not any(
+        "completion attempt" in error or "completion selector" in error
+        for error in selected_audit["errors"]
+    )
     database = tmp_path / "rerun-history.sqlite"
     build_release_database(release_manifest, database, tmp_path)
 
     with sqlite3.connect(database) as connection:
         attempts = connection.execute(
-            """SELECT c.completion_path
+            """SELECT c.completion_path, a.selected_for_release,
+                      a.selection_method, a.selection_manifest_index
             FROM docking_attempts a
             JOIN completion_records c
               ON c.completion_record_id=a.completion_record_id
@@ -521,7 +559,10 @@ def test_completion_attempts_preserve_same_key_reruns(tmp_path: Path) -> None:
             == 2
         )
     assert len(attempts) == 2
-    assert [Path(row[0]).parent.name for row in attempts] == ["first", "second"]
+    assert [(Path(row[0]).parent.name, *row[1:]) for row in attempts] == [
+        ("first", 0, None, None),
+        ("second", 1, "manifest_explicit", 1),
+    ]
 
 
 def _minimal_release_manifest(
@@ -621,14 +662,134 @@ def test_duplicate_master_result_key_requires_explicit_selection(
         "is_decoy": "0",
         "final_score": "1.0",
     }
+    selected_row = {**row, "final_score": "2.0"}
     manifest = _minimal_release_manifest(
         tmp_path,
         completion_text=completion,
-        master_rows=[row, {**row, "final_score": "2.0"}],
+        master_rows=[row, selected_row],
     )
 
-    with pytest.raises(ValueError, match="duplicate master result key"):
+    audit = audit_release_inputs(manifest, tmp_path)
+    audit_run = audit["runs"][0]
+    assert audit_run["master_result_row_count"] == 2
+    assert audit_run["master_result_pair_count"] == 1
+    assert audit_run["duplicate_result_pair_count"] == 1
+    assert audit_run["attempt_selection_valid"] is False
+    assert any("multiple result attempts" in error for error in audit["errors"])
+    with pytest.raises(ValueError, match="multiple result attempts"):
         build_release_database(manifest, tmp_path / "duplicate.sqlite", tmp_path)
+
+    release_payload = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    release_payload["runs"][0]["attempt_selections"] = [
+        {
+            "pdb_id": "1ABC",
+            "variant": "HOLO",
+            "ph_label": "base",
+            "ligand_canonical_id": "drug-a",
+            "result_row_number": 3,
+            "result_sha256": hashlib.sha256(
+                json.dumps(selected_row, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
+        }
+    ]
+    manifest.write_text(yaml.safe_dump(release_payload), encoding="utf-8")
+    selected_audit = audit_release_inputs(manifest, tmp_path)
+    assert selected_audit["runs"][0]["attempt_selection_valid"] is True
+    assert not any("result attempt" in error for error in selected_audit["errors"])
+    database = tmp_path / "selected-result.sqlite"
+    build_release_database(manifest, database, tmp_path)
+
+    with sqlite3.connect(database) as connection:
+        attempts = connection.execute(
+            """SELECT source_row_number, selected_for_release,
+                      selection_method, selection_manifest_index
+               FROM result_attempts ORDER BY source_row_number"""
+        ).fetchall()
+        selected_score = connection.execute(
+            "SELECT final_score FROM pair_cells WHERE has_result=1"
+        ).fetchone()[0]
+    assert attempts == [
+        (2, 0, None, None),
+        (3, 1, "manifest_explicit", 1),
+    ]
+    assert selected_score == 2.0
+
+
+def test_strict_audit_reports_unmatched_explicit_attempt_selectors(
+    tmp_path: Path,
+) -> None:
+    completion_payload = {
+        "pdb_id": "1ABC",
+        "variant": "HOLO",
+        "ph_label": "base",
+        "engine": "vina",
+        "stage": "stage3",
+        "chunk_id": "0",
+        "expected_ligands": ["drug-a.pdbqt"],
+        "missing_ligands_after": [],
+        "failure_markers": {},
+    }
+    row = {
+        "pdb_id": "1ABC",
+        "variant": "HOLO",
+        "ph_label": "base",
+        "ligand_base": "drug-a",
+        "pose_valid_any": "1",
+        "final_score": "1.0",
+    }
+    manifest = _minimal_release_manifest(
+        tmp_path,
+        completion_text=json.dumps(completion_payload),
+        master_rows=[row],
+    )
+    release_payload = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    release_payload["runs"][0]["attempt_selections"] = [
+        {
+            "pdb_id": "1ABC",
+            "variant": "HOLO",
+            "ph_label": "base",
+            "ligand_canonical_id": "drug-a",
+            "completion_relpath": "completion_stage3.json",
+            "completion_sha256": "a" * 64,
+            "result_row_number": 2,
+            "result_sha256": "b" * 64,
+        }
+    ]
+    manifest.write_text(yaml.safe_dump(release_payload), encoding="utf-8")
+
+    audit = audit_release_inputs(manifest, tmp_path)
+
+    assert audit["failure_complete_run_count"] == 0
+    assert audit["runs"][0]["attempt_selection_valid"] is False
+    assert any("completion selector matched 0" in error for error in audit["errors"])
+    assert any("result selector matched 0" in error for error in audit["errors"])
+
+    database = tmp_path / "unmatched-selector.sqlite"
+    with pytest.raises(ValueError, match="release input audit failed"):
+        build_release_database(manifest, database, tmp_path)
+    assert not database.exists()
+
+    audit_out = tmp_path / "strict-audit"
+    assert (
+        build_database_cli.main(
+            [
+                "audit",
+                "--manifest",
+                str(manifest),
+                "--repo-root",
+                str(tmp_path),
+                "--out-dir",
+                str(audit_out),
+                "--strict",
+            ]
+        )
+        == 2
+    )
+    assert (audit_out / "audit.json").is_file()
+    assert not (audit_out / "site").exists()
+    assert not database.exists()
 
 
 @pytest.mark.parametrize(
@@ -749,6 +910,8 @@ def test_artifact_index_does_not_create_unscheduled_pair_cell(
                     {
                         "stage_dir": "stage3",
                         "mode": "poses",
+                        "artifact_role": "docking_pose",
+                        "ligand_canonical_id": "drug-a",
                         "original_path": f"/stor/private/{pdb_id}/drug-a.pdbqt",
                         "archive_path": archive_name,
                         "member_name": "drug-a.pdbqt",
@@ -799,14 +962,17 @@ def test_artifact_index_does_not_create_unscheduled_pair_cell(
             ORDER BY r.pdb_id"""
         ).fetchall()
         artifacts = connection.execute(
-            """SELECT r.pdb_id, a.pair_cell_id
+            """SELECT r.pdb_id, a.pair_cell_id, a.artifact_role,
+                      a.artifact_scope, l.canonical_id
             FROM artifacts a
             JOIN receptor_contexts r
               ON r.receptor_context_id=a.receptor_context_id
+            LEFT JOIN ligands l ON l.ligand_id=a.ligand_id
             ORDER BY r.pdb_id"""
         ).fetchall()
 
     assert pairs == [("1ABC", "drug-a")]
     assert artifacts[0][0] == "1ABC"
     assert artifacts[0][1] is not None
-    assert artifacts[1] == ("2DEF", None)
+    assert artifacts[0][2:] == ("docking_pose", "pair", "drug-a")
+    assert artifacts[1] == ("2DEF", None, "docking_pose", "pair", "drug-a")

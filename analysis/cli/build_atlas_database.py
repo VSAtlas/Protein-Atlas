@@ -26,9 +26,11 @@ _PUBLIC_PATH_COLUMNS = {
     "ligands": ("source_path",),
     "pair_cells": ("source_csv",),
     "completion_records": ("completion_path",),
+    "result_attempts": ("input_csv_path", "source_csv"),
     "artifacts": ("original_path", "archive_path"),
     "protein_identities": ("source_path",),
     "receptor_annotations": ("source_path",),
+    "receptor_audits": ("source_path",),
     "known_pair_selections": ("source_path",),
 }
 _PUBLIC_JSON_COLUMNS = {
@@ -44,15 +46,33 @@ _PUBLIC_JSON_COLUMNS = {
     ),
     "receptor_contexts": ("manifest_entry_json",),
     "ligands": ("prepared_state_json",),
-    "pair_cells": ("result_json",),
+    "pair_cells": ("result_json", "pose_validation_thresholds_json"),
     "completion_records": ("completion_json",),
+    "result_attempts": (
+        "result_json", "pose_validation_thresholds_json",
+        "completion_link_evidence_json",
+    ),
     "artifacts": ("artifact_json",),
     "protein_identities": ("source_record_json", "provenance_json"),
     "receptor_annotations": ("source_record_json", "provenance_json"),
+    "receptor_audits": ("audit_json",),
     "known_pair_selections": ("source_record_json", "provenance_json"),
 }
-_ABSOLUTE_PUBLIC_PATH = re.compile(r"/(?:stor|home|tmp)/[^\s\"'\\,\]\}]+")
-_FORBIDDEN_PUBLIC_PREFIXES = ("/stor/", "/home/", "/tmp/")
+_ABSOLUTE_PUBLIC_PATH = re.compile(
+    r"(?<![A-Za-z0-9._:/-])/(?!/)[^\s\"'\\,\]\}]+"
+)
+_FORBIDDEN_PUBLIC_PREFIXES = (
+    "/stor/",
+    "/home/",
+    "/tmp/",
+    "/scratch/",
+    "/work/",
+    "/mnt/",
+    "/var/",
+    "/opt/",
+    "/root/",
+    "/Users/",
+)
 _OMITTED_COMPLETION_JSON = json.dumps(
     {
         "public_projection": "omitted",
@@ -117,6 +137,7 @@ def _sanitize_public_database(database_path: Path, repo_root: Path) -> dict[str,
         "json_path_values_redacted": 0,
         "score_sources_materialized": 0,
         "pair_result_json_omitted": 0,
+        "result_attempt_json_omitted": 0,
         "completion_json_omitted": 0,
     }
     with sqlite3.connect(database_path) as connection:
@@ -145,6 +166,14 @@ def _sanitize_public_database(database_path: Path, repo_root: Path) -> dict[str,
         )
         connection.execute(
             "UPDATE pair_cells SET result_json=NULL WHERE result_json IS NOT NULL"
+        )
+        counts["result_attempt_json_omitted"] = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM result_attempts WHERE result_json IS NOT NULL"
+            ).fetchone()[0]
+        )
+        connection.execute(
+            "UPDATE result_attempts SET result_json=NULL WHERE result_json IS NOT NULL"
         )
         counts["completion_json_omitted"] = int(
             connection.execute(
@@ -240,8 +269,13 @@ def _assert_public_database_safe(database_path: Path) -> None:
                 for (value,) in connection.execute(
                     f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL"
                 ):
-                    if any(
-                        prefix in str(value) for prefix in _FORBIDDEN_PUBLIC_PREFIXES
+                    text = str(value)
+                    if (
+                        Path(text).is_absolute()
+                        or _ABSOLUTE_PUBLIC_PATH.search(text)
+                        or any(
+                            prefix in text for prefix in _FORBIDDEN_PUBLIC_PREFIXES
+                        )
                     ):
                         raise ValueError(
                             f"public database contains a machine-local path in {table}.{column}"

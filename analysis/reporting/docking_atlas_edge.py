@@ -20,6 +20,10 @@ from analysis.reporting.docking_atlas_edge_assets import (
     WORKER_SOURCE,
     WRANGLER_TEMPLATE,
 )
+from analysis.reporting.docking_atlas_delivery import (
+    DOWNLOAD_MANIFEST_NAME,
+    build_download_projection,
+)
 
 _PRIVATE_PATH_MARKERS = (b"/stor/", b"/home/", b"/tmp/")
 _BUNDLE_MARKER = ".atlas-edge-bundle.json"
@@ -252,7 +256,7 @@ def _source_payload(site_dir: Path) -> tuple[dict[str, Any], bytes]:
             "bounded edge projection refuses release_browser.json larger than "
             f"{MAX_BROWSER_PAYLOAD_BYTES} bytes (found {payload_size}); this command "
             "loads browser JSON in memory and is not the publication-scale path. "
-            "Use a future streaming SQLite edge projection rather than generating "
+            "Use the --database streaming SQLite projection rather than generating "
             "per-pair static HTML."
         )
     raw = browser_path.read_bytes()
@@ -302,6 +306,7 @@ def build_edge_bundle(
     output_dir: Path,
     *,
     overwrite: bool = False,
+    download_base_url: str | None = None,
 ) -> dict[str, Any]:
     """Decompose a public browser payload into immutable, R2-ready objects."""
     _validate_locations(site_dir, output_dir)
@@ -310,6 +315,16 @@ def build_edge_bundle(
     release = _required_mapping(payload.get("release"), "release")
     release_id = _identifier(release, ("id", "release_id", "version"), "release")
     release_token = _release_token(release_id, source_sha256)
+    download_projection = (
+        build_download_projection(
+            site_dir,
+            release_id=release_id,
+            release_token=release_token,
+            download_base_url=download_base_url,
+        )
+        if download_base_url
+        else None
+    )
 
     targets, target_routes, target_labels = _entity_rows(
         payload,
@@ -587,6 +602,9 @@ def build_edge_bundle(
         "coverage": coverage,
         "score_contract": payload.get("score_contract", {}),
         "scientific_policies": payload.get("scientific_policies", {}),
+        "downloads": (
+            download_projection["public_entries"] if download_projection else []
+        ),
         "route_templates": {
             "release": f"/releases/{release_token}",
             "target": f"/releases/{release_token}/targets/{{target_route_id}}",
@@ -631,6 +649,8 @@ def build_edge_bundle(
         "objects": object_entries,
     }
     _write_json(output_dir / "object_manifest.json", object_manifest)
+    if download_projection is not None:
+        _write_json(output_dir / DOWNLOAD_MANIFEST_NAME, download_projection)
     summary = {
         "schema_version": 1,
         "release_id": release_id,
@@ -652,6 +672,15 @@ def build_edge_bundle(
         "r2_bytes": sum(int(row["size_bytes"]) for row in object_entries),
         "entrypoint": f"/releases/{release_token}",
         "object_manifest": "object_manifest.json",
+        "download_projection": (
+            DOWNLOAD_MANIFEST_NAME if download_projection is not None else None
+        ),
+        "download_count": (
+            int(download_projection["upload_count"]) if download_projection else 0
+        ),
+        "download_bytes": (
+            int(download_projection["upload_bytes"]) if download_projection else 0
+        ),
         "worker": "src/index.mjs",
         "wrangler_template": "wrangler.toml",
     }
@@ -675,14 +704,62 @@ def main(argv: Sequence[str] | None = None) -> int:
             "R2 object tree from an existing public Atlas site."
         ),
     )
-    parser.add_argument("--site-dir", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--site-dir", type=Path)
+    source.add_argument(
+        "--database",
+        type=Path,
+        help=(
+            "Stream a public Atlas SQLite snapshot into coarse pair shards "
+            "without materializing the pair matrix"
+        ),
+    )
+    parser.add_argument("--source-site-dir", type=Path)
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--batch-rows", type=int, default=1000)
+    parser.add_argument("--coarse-shard-rows", type=int, default=2000)
+    parser.add_argument("--max-pairs", type=int, default=2_000_000)
+    parser.add_argument(
+        "--download-base-url",
+        help=(
+            "HTTPS object-origin base URL used to project verified release "
+            "downloads; no files are uploaded"
+        ),
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
-    site_dir = args.site_dir
-    output_dir = args.out_dir or site_dir.parent / "edge"
     try:
-        summary = build_edge_bundle(site_dir, output_dir, overwrite=args.overwrite)
+        if args.database is not None:
+            from analysis.reporting.docking_atlas_edge_sqlite import (
+                build_streaming_edge_bundle,
+            )
+
+            database_path = Path(args.database)
+            default_root = (
+                database_path.parent.parent.parent
+                if database_path.parent.name == "downloads"
+                else database_path.parent
+            )
+            output_dir = args.out_dir or default_root / "edge"
+            summary = build_streaming_edge_bundle(
+                database_path,
+                output_dir,
+                source_site_dir=args.source_site_dir,
+                overwrite=args.overwrite,
+                download_base_url=args.download_base_url,
+                batch_rows=args.batch_rows,
+                coarse_shard_rows=args.coarse_shard_rows,
+                max_pairs=args.max_pairs,
+            )
+        else:
+            site_dir = Path(args.site_dir)
+            output_dir = args.out_dir or site_dir.parent / "edge"
+            summary = build_edge_bundle(
+                site_dir,
+                output_dir,
+                overwrite=args.overwrite,
+                download_base_url=args.download_base_url,
+            )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     print(json.dumps(summary, indent=2, sort_keys=True))

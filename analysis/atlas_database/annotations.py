@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
@@ -16,6 +17,8 @@ ANNOTATION_SOURCE_NAMES = ("proteins", "receptors", "known_pairs")
 EXPLICIT_QUALIFIED_STATUSES = frozenset(
     {"qualified", "explicitly_qualified", "qualification_passed"}
 )
+CONTROLLED_RECEPTOR_CLASSIFICATIONS = frozenset({"APO", "HOLO"})
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class ScientificAnnotationError(ValueError):
@@ -184,6 +187,201 @@ def _optional_float(value: Any, field: str, label: str) -> float | None:
     return parsed
 
 
+def _optional_nonnegative_int(value: Any, field: str, label: str) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        raise ScientificAnnotationError(f"{label} has invalid {field}: {value!r}")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ScientificAnnotationError(
+            f"{label} has invalid {field}: {value!r}"
+        ) from exc
+    if parsed < 0:
+        raise ScientificAnnotationError(f"{label} requires non-negative {field}")
+    return parsed
+
+
+def _optional_bool(value: Any, field: str, label: str) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    token = _text(value).lower()
+    if token in {"1", "true", "yes"}:
+        return 1
+    if token in {"0", "false", "no"}:
+        return 0
+    raise ScientificAnnotationError(f"{label} has invalid {field}: {value!r}")
+
+
+def _optional_sha256(value: Any, field: str, label: str) -> str | None:
+    token = _text(value).lower()
+    if not token:
+        return None
+    if not _SHA256.fullmatch(token):
+        raise ScientificAnnotationError(
+            f"{label}.{field} must be 64 hexadecimal digits"
+        )
+    return token
+
+
+def _evidence_value(
+    field: str,
+    record: Mapping[str, Any],
+    chemistry: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+) -> Any:
+    for source in (record, chemistry, provenance):
+        value = source.get(field)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _receptor_evidence_contract(
+    record: Mapping[str, Any], label: str
+) -> tuple[str | None, dict[str, Any], list[dict[str, Any]]]:
+    provenance_value = record.get("provenance")
+    if provenance_value in (None, "", {}):
+        provenance: Mapping[str, Any] = {}
+    elif isinstance(provenance_value, Mapping):
+        provenance = provenance_value
+    else:
+        raise ScientificAnnotationError(f"{label}.provenance must be a mapping")
+
+    chemistry_value = provenance.get("prepared_receptor_chemistry")
+    if chemistry_value in (None, "", {}):
+        chemistry: Mapping[str, Any] = {}
+    elif isinstance(chemistry_value, Mapping):
+        chemistry = chemistry_value
+    else:
+        raise ScientificAnnotationError(
+            f"{label}.provenance.prepared_receptor_chemistry must be a mapping"
+        )
+
+    classification = _text(record.get("receptor_classification")).upper()
+    if classification and classification not in CONTROLLED_RECEPTOR_CLASSIFICATIONS:
+        allowed = ", ".join(sorted(CONTROLLED_RECEPTOR_CLASSIFICATIONS))
+        raise ScientificAnnotationError(
+            f"{label}.receptor_classification must be one of: {allowed}"
+        )
+    chemistry_classification = _text(
+        chemistry.get("receptor_classification")
+        or provenance.get("observed_receptor_classification")
+    ).upper()
+    if (
+        classification
+        and chemistry_classification
+        and classification != chemistry_classification
+    ):
+        raise ScientificAnnotationError(
+            f"{label} receptor classification disagrees with chemistry evidence"
+        )
+
+    evidence_status = _text(
+        _evidence_value("chemistry_evidence_status", record, chemistry, provenance)
+    )
+    if evidence_status == "observed" and not classification:
+        raise ScientificAnnotationError(
+            f"{label} has observed chemistry evidence but no controlled classification"
+        )
+
+    fields = {
+        "classification_method": _text(
+            _evidence_value("classification_method", record, chemistry, provenance)
+        )
+        or None,
+        "chemistry_evidence_status": evidence_status or None,
+        "prepared_receptor_sha256": _optional_sha256(
+            _evidence_value("prepared_receptor_sha256", record, chemistry, provenance),
+            "prepared_receptor_sha256",
+            label,
+        ),
+        "canonical_chemistry_policy_sha256": _optional_sha256(
+            _evidence_value(
+                "canonical_chemistry_policy_sha256", record, chemistry, provenance
+            ),
+            "canonical_chemistry_policy_sha256",
+            label,
+        ),
+        "retained_metal_atom_count": _optional_nonnegative_int(
+            _evidence_value("retained_metal_atom_count", record, chemistry, provenance),
+            "retained_metal_atom_count",
+            label,
+        ),
+        "retained_cofactor_residue_count": _optional_nonnegative_int(
+            _evidence_value(
+                "retained_cofactor_residue_count", record, chemistry, provenance
+            ),
+            "retained_cofactor_residue_count",
+            label,
+        ),
+        "requested_observed_conflict": _optional_bool(
+            _evidence_value(
+                "requested_observed_conflict", record, chemistry, provenance
+            ),
+            "requested_observed_conflict",
+            label,
+        ),
+    }
+
+    audits: list[dict[str, Any]] = []
+    identities: set[tuple[str, str]] = set()
+    audit_sources = (
+        ("structured_receptor_audits", False),
+        ("structured_receptor_audit_rejections", True),
+    )
+    for source_name, rejected in audit_sources:
+        audits_value = provenance.get(source_name)
+        if audits_value in (None, ""):
+            continue
+        if not isinstance(audits_value, list):
+            raise ScientificAnnotationError(
+                f"{label}.provenance.{source_name} must be a list"
+            )
+        for audit_index, audit_value in enumerate(audits_value, start=1):
+            audit_label = (
+                f"{label}.provenance.{source_name}[{audit_index}]"
+            )
+            if not isinstance(audit_value, Mapping):
+                raise ScientificAnnotationError(f"{audit_label} must be a mapping")
+            audit = dict(audit_value)
+            audit_kind = _required(audit, "audit_kind", audit_label)
+            source_path = _required(audit, "source_path", audit_label)
+            source_sha256 = _optional_sha256(
+                audit.get("source_sha256"), "source_sha256", audit_label
+            )
+            if source_sha256 is None:
+                raise ScientificAnnotationError(
+                    f"{audit_label}.source_sha256 is required"
+                )
+            if rejected:
+                rejection_reason = _required(
+                    audit, "rejection_reason", audit_label
+                )
+                parse_status = f"rejected:{rejection_reason}"
+            else:
+                parse_status = _required(audit, "parse_status", audit_label)
+            identity = (audit_kind, source_sha256)
+            if identity in identities:
+                raise ScientificAnnotationError(
+                    f"{audit_label} duplicates audit kind/hash {identity!r}"
+                )
+            identities.add(identity)
+            audits.append(
+                {
+                    "audit_kind": audit_kind,
+                    "source_path": source_path,
+                    "source_sha256": source_sha256,
+                    "parse_status": parse_status,
+                    "audit_json": _json(audit),
+                }
+            )
+    return classification or None, fields, audits
+
+
 def _ingest_proteins(
     connection: sqlite3.Connection,
     records: list[dict[str, Any]],
@@ -244,7 +442,13 @@ def _ingest_receptors(
     )
     for key, index, record in prepared:
         label = f"annotations.receptors record {index}"
-        if not any(record.get(field) not in (None, "") for field in fields):
+        receptor_classification, evidence_fields, receptor_audits = (
+            _receptor_evidence_contract(record, label)
+        )
+        has_legacy_field = any(
+            record.get(field) not in (None, "") for field in fields
+        )
+        if not has_legacy_field and not any(evidence_fields.values()) and not receptor_audits:
             raise ScientificAnnotationError(
                 f"{label} requires at least one explicit annotation field"
             )
@@ -271,15 +475,26 @@ def _ingest_receptors(
         connection.execute(
             """INSERT INTO receptor_annotations
             (receptor_context_id, protein_identity_id, receptor_classification,
+             classification_method, chemistry_evidence_status,
+             prepared_receptor_sha256, canonical_chemistry_policy_sha256,
+             retained_metal_atom_count, retained_cofactor_residue_count,
+             requested_observed_conflict,
              qualification_status, qualification_reason, native_redock_status,
              native_redock_reason, native_redock_rmsd, source_path,
              source_sha256, source_record_index, source_record_json,
              provenance_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 context_id,
                 protein_identity_id,
-                _text(record.get("receptor_classification")) or None,
+                receptor_classification,
+                evidence_fields["classification_method"],
+                evidence_fields["chemistry_evidence_status"],
+                evidence_fields["prepared_receptor_sha256"],
+                evidence_fields["canonical_chemistry_policy_sha256"],
+                evidence_fields["retained_metal_atom_count"],
+                evidence_fields["retained_cofactor_residue_count"],
+                evidence_fields["requested_observed_conflict"],
                 _text(record.get("qualification_status")) or None,
                 _text(record.get("qualification_reason")) or None,
                 _text(record.get("native_redock_status")) or None,
@@ -292,6 +507,21 @@ def _ingest_receptors(
                 _provenance(record),
             ),
         )
+        for audit in receptor_audits:
+            connection.execute(
+                """INSERT INTO receptor_audits
+                (receptor_context_id, audit_kind, source_path, source_sha256,
+                 parse_status, audit_json)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    context_id,
+                    audit["audit_kind"],
+                    audit["source_path"],
+                    audit["source_sha256"],
+                    audit["parse_status"],
+                    audit["audit_json"],
+                ),
+            )
     return len(prepared)
 
 

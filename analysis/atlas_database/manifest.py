@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import PurePosixPath
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -18,6 +19,17 @@ REQUIRED_POLICY_NAMES = (
     "normalization",
 )
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_ATTEMPT_SELECTOR_FIELDS = {
+    "pdb_id",
+    "variant",
+    "ph_label",
+    "ligand_canonical_id",
+    "completion_relpath",
+    "completion_sha256",
+    "result_row_number",
+    "result_sha256",
+}
 
 
 class ReleaseManifestError(ValueError):
@@ -52,6 +64,90 @@ def _run_id(entry: Any) -> str:
     return ""
 
 
+def _selector_context_token(value: Any) -> str:
+    token = str(value or "").strip()
+    if token.lower() in {"base", "none", "null"} or token.lower().endswith(".csv"):
+        return ""
+    return token
+
+
+def _validate_attempt_selections(
+    entry: Mapping[str, Any], run_index: int, errors: list[str]
+) -> None:
+    selectors = entry.get("attempt_selections")
+    if selectors is None:
+        return
+    prefix = f"runs[{run_index}].attempt_selections"
+    if not isinstance(selectors, list):
+        errors.append(f"{prefix} must be a list")
+        return
+    seen: set[tuple[str, str, str, str]] = set()
+    for selector_index, selector in enumerate(selectors):
+        item_prefix = f"{prefix}[{selector_index}]"
+        if not isinstance(selector, Mapping):
+            errors.append(f"{item_prefix} must be a mapping")
+            continue
+        unknown = sorted(set(selector) - _ATTEMPT_SELECTOR_FIELDS)
+        for field in unknown:
+            errors.append(f"{item_prefix} has unknown field: {field}")
+        for field in ("pdb_id", "variant", "ph_label", "ligand_canonical_id"):
+            if field not in selector:
+                errors.append(f"{item_prefix}.{field} must be present")
+        pdb_id = str(selector.get("pdb_id") or "").strip().upper()
+        ligand = str(selector.get("ligand_canonical_id") or "").strip()
+        if not pdb_id:
+            errors.append(f"{item_prefix}.pdb_id must be non-empty")
+        if not ligand:
+            errors.append(f"{item_prefix}.ligand_canonical_id must be non-empty")
+        key = (
+            pdb_id,
+            str(selector.get("variant") or "").strip().upper(),
+            _selector_context_token(selector.get("ph_label")),
+            ligand,
+        )
+        if key in seen:
+            errors.append(f"{item_prefix} duplicates selector key {key!r}")
+        seen.add(key)
+
+        completion_relpath = str(selector.get("completion_relpath") or "").strip()
+        completion_sha256 = str(selector.get("completion_sha256") or "").strip()
+        has_completion = bool(completion_relpath or completion_sha256)
+        if has_completion and not completion_relpath:
+            errors.append(f"{item_prefix}.completion_relpath is required")
+        if has_completion and not _SHA256.fullmatch(completion_sha256):
+            errors.append(
+                f"{item_prefix}.completion_sha256 must be 64 hexadecimal digits"
+            )
+        if completion_relpath:
+            path = PurePosixPath(completion_relpath)
+            if (
+                path.is_absolute()
+                or ".." in path.parts
+                or "\\" in completion_relpath
+                or completion_relpath.endswith("/")
+            ):
+                errors.append(
+                    f"{item_prefix}.completion_relpath must be a safe POSIX path "
+                    "relative to paths.docked"
+                )
+
+        result_row = selector.get("result_row_number")
+        result_sha256 = str(selector.get("result_sha256") or "").strip()
+        has_result = result_row is not None or bool(result_sha256)
+        if has_result and (
+            isinstance(result_row, bool)
+            or not isinstance(result_row, int)
+            or result_row < 2
+        ):
+            errors.append(f"{item_prefix}.result_row_number must be an integer >= 2")
+        if has_result and not _SHA256.fullmatch(result_sha256):
+            errors.append(f"{item_prefix}.result_sha256 must be 64 hexadecimal digits")
+        if not has_completion and not has_result:
+            errors.append(
+                f"{item_prefix} must select a completion attempt, a result attempt, or both"
+            )
+
+
 def validate_release_manifest(manifest: Mapping[str, Any]) -> list[str]:
     """Return all structural errors without touching runtime artifacts."""
     errors: list[str] = []
@@ -78,6 +174,8 @@ def validate_release_manifest(manifest: Mapping[str, Any]) -> list[str]:
                 errors.append(f"duplicate run_id: {run_id}")
             else:
                 seen.add(run_id)
+            if isinstance(entry, Mapping):
+                _validate_attempt_selections(entry, index, errors)
 
     policies = manifest.get("scientific_policies")
     if not isinstance(policies, Mapping):

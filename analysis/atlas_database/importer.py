@@ -14,7 +14,25 @@ from typing import Any, Mapping
 import yaml  # type: ignore[import-untyped]
 
 from analysis.atlas_database.annotations import ingest_scientific_annotations
+from analysis.atlas_database.attempt_selection import (
+    AttemptKey,
+    _key_label as _attempt_key_label,
+    _selector_key as _attempt_selector_key,
+    _selectors as _attempt_selectors,
+    apply_attempt_selections,
+)
+from analysis.atlas_database.artifact_contract import (
+    ArtifactContractError,
+    artifact_role_counts,
+    artifact_scope,
+    load_artifact_index,
+)
 from analysis.atlas_database.manifest import iter_run_entries, load_release_manifest
+from analysis.atlas_database.pose_validation_contract import (
+    LEGACY_POSE_VALIDATION_METHOD,
+    LEGACY_POSE_VALIDATION_SCOPE,
+    legacy_pose_validation_thresholds_json,
+)
 from analysis.atlas_database.schema import SCHEMA_VERSION, create_schema
 from config.output_paths import output_root
 
@@ -159,6 +177,312 @@ def _load_completion_payload(path: Path) -> dict[str, Any]:
     return dict(payload)
 
 
+def _record_sha256(value: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
+
+
+def _artifact_index_audit(path: Path) -> tuple[dict[str, int], list[str]]:
+    if not path.is_file():
+        return {}, []
+    try:
+        return artifact_role_counts(load_artifact_index(path)), []
+    except ArtifactContractError as exc:
+        return {}, [str(exc)]
+
+
+def _group_attempt_candidate(
+    first: dict[AttemptKey, Any],
+    duplicates: dict[AttemptKey, list[Any]],
+    key: AttemptKey,
+    candidate: Any,
+) -> None:
+    if key in duplicates:
+        duplicates[key].append(candidate)
+    elif key in first:
+        duplicates[key] = [first.pop(key), candidate]
+    else:
+        first[key] = candidate
+
+
+def _completion_selector_present(selector: Mapping[str, Any]) -> bool:
+    return bool(
+        _text(selector.get("completion_relpath"))
+        or _text(selector.get("completion_sha256"))
+    )
+
+
+def _result_selector_present(selector: Mapping[str, Any]) -> bool:
+    return bool(
+        selector.get("result_row_number") is not None
+        or _text(selector.get("result_sha256"))
+    )
+
+
+def _pooled_attempt_key(
+    value: Mapping[str, Any], token_pool: dict[str, str]
+) -> AttemptKey:
+    key = _attempt_selector_key(value)
+    return (
+        token_pool.setdefault(key[0], key[0]),
+        token_pool.setdefault(key[1], key[1]),
+        token_pool.setdefault(key[2], key[2]),
+        token_pool.setdefault(key[3], key[3]),
+    )
+
+
+def _manifest_context_keys(manifest: Mapping[str, Any]) -> set[tuple[str, str, str]]:
+    contexts: set[tuple[str, str, str]] = set()
+    for key, raw in _mapping(manifest.get("proteins")).items():
+        if isinstance(raw, Mapping):
+            contexts.add(_context_values(str(key), raw))
+    return contexts
+
+
+def _completion_attempt_audit(
+    *,
+    run_id: str,
+    docked: Path,
+    completion_paths: list[Path],
+    run_manifest: Mapping[str, Any],
+    selectors: Mapping[AttemptKey, tuple[int, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    errors: list[dict[str, str]] = []
+    first: dict[AttemptKey, tuple[str, str]] = {}
+    duplicates: dict[AttemptKey, list[tuple[str, str]]] = {}
+    contexts = _manifest_context_keys(run_manifest)
+    token_pool: dict[str, str] = {}
+    valid_count = 0
+
+    for path in completion_paths:
+        try:
+            payload = _load_completion_payload(path)
+            pdb_id = _text(payload.get("pdb_id")).upper()
+            variant = _text(payload.get("variant")).upper()
+            ph = _normalize_ph(payload.get("ph_label"))
+            variant, ph = _resolve_context_candidates(
+                [
+                    (candidate_variant, candidate_ph)
+                    for candidate_pdb, candidate_variant, candidate_ph in contexts
+                    if candidate_pdb == pdb_id
+                ],
+                run_id,
+                pdb_id,
+                variant,
+                ph,
+            )
+        except ValueError as exc:
+            errors.append({"path": str(path), "error": str(exc)})
+            continue
+
+        valid_count += 1
+        contexts.add((pdb_id, variant, ph))
+        missing = {
+            canonical_ligand_id(item)
+            for item in payload.get("missing_ligands_after", [])
+        }
+        markers = _mapping(payload.get("failure_markers"))
+        candidate = (path.relative_to(docked).as_posix(), _sha256(path))
+        for ligand_path in payload.get("expected_ligands", []):
+            canonical = canonical_ligand_id(ligand_path)
+            reason = _text(
+                markers.get(canonical) or markers.get(Path(_text(ligand_path)).name)
+            )
+            if canonical in missing or reason:
+                continue
+            key = _pooled_attempt_key(
+                {
+                    "pdb_id": pdb_id,
+                    "variant": variant,
+                    "ph_label": ph,
+                    "ligand_canonical_id": canonical,
+                },
+                token_pool,
+            )
+            _group_attempt_candidate(first, duplicates, key, candidate)
+
+    selection_errors: list[str] = []
+    for key in sorted(duplicates):
+        candidates = duplicates[key]
+        selected = selectors.get(key)
+        has_explicit = bool(selected and _completion_selector_present(selected[1]))
+        if not has_explicit:
+            choices = ", ".join(
+                f"{path} sha256={digest}" for path, digest in candidates
+            )
+            selection_errors.append(
+                "multiple successful completion attempts for "
+                f"{_attempt_key_label(key)}; add an explicit attempt_selections "
+                f"entry; candidates: {choices}"
+            )
+
+    for key, (_, selector) in selectors.items():
+        if not _completion_selector_present(selector):
+            continue
+        if key not in first and key not in duplicates:
+            selection_errors.append(
+                "completion selector does not match a successful attempt for "
+                f"{_attempt_key_label(key)}"
+            )
+            continue
+        candidates = duplicates.get(key) or [first[key]]
+        expected = (
+            _text(selector.get("completion_relpath")),
+            _text(selector.get("completion_sha256")).lower(),
+        )
+        match_count = sum(candidate == expected for candidate in candidates)
+        if match_count != 1:
+            selection_errors.append(
+                f"completion selector matched {match_count} successful attempts "
+                f"for {_attempt_key_label(key)}"
+            )
+
+    return {
+        "errors": errors,
+        "valid_count": valid_count,
+        "successful_attempt_count": len(first)
+        + sum(len(values) for values in duplicates.values()),
+        "successful_pair_count": len(first) + len(duplicates),
+        "duplicate_successful_pair_count": len(duplicates),
+        "selection_errors": selection_errors,
+    }
+
+
+def _result_attempt_audit(
+    path: Path,
+    selectors: Mapping[AttemptKey, tuple[int, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    if not path.is_file():
+        return {
+            "errors": [],
+            "row_count": 0,
+            "pair_count": 0,
+            "duplicate_pair_count": 0,
+            "selection_errors": [
+                "result selector does not match an attempt for "
+                f"{_attempt_key_label(key)}"
+                for key, (_, selector) in selectors.items()
+                if _result_selector_present(selector)
+            ],
+        }
+
+    first_rows: dict[AttemptKey, int] = {}
+    duplicate_keys: set[AttemptKey] = set()
+    selector_match_counts: dict[AttemptKey, int] = {}
+    token_pool: dict[str, str] = {}
+    errors: list[dict[str, str]] = []
+    row_count = 0
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for row_number, row in enumerate(csv.DictReader(handle), start=2):
+                pdb_id = _text(row.get("pdb_id")).upper()
+                variant = _text(row.get("variant")).upper()
+                ph = _normalize_ph(row.get("ph_label"))
+                canonical = canonical_ligand_id(
+                    row.get("ligand_base")
+                    or row.get("ligand_file")
+                    or row.get("ligand")
+                )
+                if not canonical:
+                    continue
+                row_count += 1
+                key = _pooled_attempt_key(
+                    {
+                        "pdb_id": pdb_id,
+                        "variant": variant,
+                        "ph_label": ph,
+                        "ligand_canonical_id": canonical,
+                    },
+                    token_pool,
+                )
+                if key in first_rows:
+                    duplicate_keys.add(key)
+                else:
+                    first_rows[key] = row_number
+                selected = selectors.get(key)
+                if selected and _result_selector_present(selected[1]):
+                    expected = (
+                        selected[1].get("result_row_number"),
+                        _text(selected[1].get("result_sha256")).lower(),
+                    )
+                    candidate = (row_number, _record_sha256(row))
+                    if candidate == expected:
+                        selector_match_counts[key] = (
+                            selector_match_counts.get(key, 0) + 1
+                        )
+    except (OSError, UnicodeDecodeError, csv.Error, TypeError, ValueError) as exc:
+        errors.append({"path": str(path), "error": str(exc)})
+
+    choice_keys = {
+        key
+        for key in duplicate_keys
+        if not (
+            selectors.get(key)
+            and _result_selector_present(selectors[key][1])
+        )
+    }
+    choices: dict[AttemptKey, list[tuple[int, str]]] = {
+        key: [] for key in choice_keys
+    }
+    if choice_keys and not errors:
+        try:
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                for row_number, row in enumerate(csv.DictReader(handle), start=2):
+                    canonical = canonical_ligand_id(
+                        row.get("ligand_base")
+                        or row.get("ligand_file")
+                        or row.get("ligand")
+                    )
+                    if not canonical:
+                        continue
+                    key = _pooled_attempt_key(
+                        {
+                            "pdb_id": _text(row.get("pdb_id")).upper(),
+                            "variant": _text(row.get("variant")).upper(),
+                            "ph_label": _normalize_ph(row.get("ph_label")),
+                            "ligand_canonical_id": canonical,
+                        },
+                        token_pool,
+                    )
+                    if key in choices:
+                        choices[key].append((row_number, _record_sha256(row)))
+        except (OSError, UnicodeDecodeError, csv.Error, TypeError, ValueError) as exc:
+            errors.append({"path": str(path), "error": str(exc)})
+
+    selection_errors: list[str] = []
+    for key in sorted(choice_keys):
+        candidate_text = ", ".join(
+            f"record={row_number} sha256={digest}"
+            for row_number, digest in choices[key]
+        )
+        selection_errors.append(
+            f"multiple result attempts for {_attempt_key_label(key)}; add an "
+            f"explicit attempt_selections entry; candidates: {candidate_text}"
+        )
+
+    for key, (_, selector) in selectors.items():
+        if not _result_selector_present(selector):
+            continue
+        if key not in first_rows:
+            selection_errors.append(
+                f"result selector does not match an attempt for {_attempt_key_label(key)}"
+            )
+            continue
+        match_count = selector_match_counts.get(key, 0)
+        if match_count != 1:
+            selection_errors.append(
+                f"result selector matched {match_count} attempts for "
+                f"{_attempt_key_label(key)}"
+            )
+
+    return {
+        "errors": errors,
+        "row_count": row_count,
+        "pair_count": len(first_rows),
+        "duplicate_pair_count": len(duplicate_keys),
+        "selection_errors": selection_errors,
+    }
+
+
 def audit_release_inputs(manifest_path: Path, repo_root: Path) -> dict[str, Any]:
     """Audit release inputs without creating a database."""
     manifest = load_release_manifest(manifest_path)
@@ -168,30 +492,69 @@ def audit_release_inputs(manifest_path: Path, repo_root: Path) -> dict[str, Any]
         manifest_exists = paths["manifest"].is_file()
         master_exists = paths["master_rows"].is_file()
         completion_paths = _completion_manifest_paths(paths["docked"])
-        completion_errors: list[dict[str, str]] = []
-        for completion_path in completion_paths:
+        run_manifest: dict[str, Any] = {}
+        run_manifest_errors: list[dict[str, str]] = []
+        if manifest_exists:
             try:
-                _load_completion_payload(completion_path)
-            except ValueError as exc:
-                completion_errors.append(
-                    {"path": str(completion_path), "error": str(exc)}
+                run_manifest = _load_mapping(paths["manifest"])
+            except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+                run_manifest_errors.append(
+                    {"path": str(paths["manifest"]), "error": str(exc)}
                 )
-        completion_valid_count = len(completion_paths) - len(completion_errors)
+        selectors = _attempt_selectors(entry.get("attempt_selections", []))
+        completion_audit = _completion_attempt_audit(
+            run_id=_text(entry["run_id"]),
+            docked=paths["docked"],
+            completion_paths=completion_paths,
+            run_manifest=run_manifest,
+            selectors=selectors,
+        )
+        result_audit = _result_attempt_audit(paths["master_rows"], selectors)
+        attempt_selection_errors = [
+            *completion_audit["selection_errors"],
+            *result_audit["selection_errors"],
+        ]
+        artifact_roles, artifact_errors = _artifact_index_audit(paths["archive_index"])
+        completion_errors = completion_audit["errors"]
+        completion_valid_count = completion_audit["valid_count"]
         runs.append(
             {
                 "run_id": entry["run_id"],
                 "paths": {name: str(path) for name, path in paths.items()},
                 "run_manifest_present": manifest_exists,
+                "run_manifest_errors": run_manifest_errors,
                 "master_rows_present": master_exists,
+                "master_rows_valid": master_exists and not result_audit["errors"],
+                "master_rows_errors": result_audit["errors"],
+                "master_result_row_count": result_audit["row_count"],
+                "master_result_pair_count": result_audit["pair_count"],
+                "duplicate_result_pair_count": result_audit["duplicate_pair_count"],
                 "archive_index_present": paths["archive_index"].is_file(),
+                "archive_index_valid": not artifact_errors,
+                "archive_index_errors": artifact_errors,
+                "artifact_role_counts": artifact_roles,
                 "completion_manifest_count": len(completion_paths),
                 "completion_manifest_valid_count": completion_valid_count,
                 "completion_manifest_invalid_count": len(completion_errors),
                 "completion_manifest_errors": completion_errors,
+                "successful_completion_attempt_count": completion_audit[
+                    "successful_attempt_count"
+                ],
+                "successful_completion_pair_count": completion_audit[
+                    "successful_pair_count"
+                ],
+                "duplicate_successful_completion_pair_count": completion_audit[
+                    "duplicate_successful_pair_count"
+                ],
+                "attempt_selection_valid": not attempt_selection_errors,
+                "attempt_selection_errors": attempt_selection_errors,
                 "failure_complete_inputs_present": manifest_exists
                 and master_exists
+                and not run_manifest_errors
+                and not result_audit["errors"]
                 and completion_valid_count > 0
-                and not completion_errors,
+                and not completion_errors
+                and not attempt_selection_errors,
             }
         )
     errors = [
@@ -200,10 +563,27 @@ def audit_release_inputs(manifest_path: Path, repo_root: Path) -> dict[str, Any]
         if not run["run_manifest_present"]
     ]
     for run in runs:
+        for issue in run["run_manifest_errors"]:
+            errors.append(
+                f"{run['run_id']}: invalid run manifest "
+                f"{issue['path']}: {issue['error']}"
+            )
         for issue in run["completion_manifest_errors"]:
             errors.append(
                 f"{run['run_id']}: invalid completion manifest "
                 f"{issue['path']}: {issue['error']}"
+            )
+        for issue in run["master_rows_errors"]:
+            errors.append(
+                f"{run['run_id']}: invalid master result table "
+                f"{issue['path']}: {issue['error']}"
+            )
+        for issue in run["attempt_selection_errors"]:
+            errors.append(f"{run['run_id']}: {issue}")
+        for issue in run["archive_index_errors"]:
+            errors.append(
+                f"{run['run_id']}: invalid artifact index "
+                f"{run['paths']['archive_index']}: {issue}"
             )
     return {
         "release_id": manifest["release_id"],
@@ -297,24 +677,20 @@ def _upsert_context(
     return int(row[0])
 
 
-def _resolve_context(
-    connection: sqlite3.Connection,
+def _resolve_context_candidates(
+    context_values: list[tuple[str, str]],
     run_id: str,
     pdb_id: str,
     variant: str,
     ph: str,
 ) -> tuple[str, str]:
-    """Fill omitted legacy completion dimensions from an unambiguous context."""
     if variant and ph:
         return variant, ph
-    rows = connection.execute(
-        "SELECT variant, ph_label FROM receptor_contexts WHERE run_id=? AND pdb_id=?",
-        (run_id, pdb_id),
-    ).fetchall()
     candidates = [
-        (str(row[0]), str(row[1]))
-        for row in rows
-        if (not variant or str(row[0]) == variant) and (not ph or str(row[1]) == ph)
+        (candidate_variant, candidate_ph)
+        for candidate_variant, candidate_ph in context_values
+        if (not variant or candidate_variant == variant)
+        and (not ph or candidate_ph == ph)
     ]
     if len(candidates) == 1:
         return candidates[0]
@@ -325,6 +701,27 @@ def _resolve_context(
             f"ph_label={ph!r}: {candidates!r}"
         )
     return variant, ph
+
+
+def _resolve_context(
+    connection: sqlite3.Connection,
+    run_id: str,
+    pdb_id: str,
+    variant: str,
+    ph: str,
+) -> tuple[str, str]:
+    """Fill omitted legacy completion dimensions from an unambiguous context."""
+    rows = connection.execute(
+        "SELECT variant, ph_label FROM receptor_contexts WHERE run_id=? AND pdb_id=?",
+        (run_id, pdb_id),
+    ).fetchall()
+    return _resolve_context_candidates(
+        [(str(row[0]), str(row[1])) for row in rows],
+        run_id,
+        pdb_id,
+        variant,
+        ph,
+    )
 
 
 def _ligand(connection: sqlite3.Connection, canonical_id: str, **values: Any) -> int:
@@ -472,7 +869,7 @@ def _completion_files(
 def _master_rows(connection: sqlite3.Connection, run_id: str, path: Path) -> None:
     if not path.is_file():
         return
-    seen_master_keys: dict[tuple[int, str], int] = {}
+    input_csv_sha256 = _sha256(path)
     with path.open("r", encoding="utf-8", newline="") as handle:
         for row_number, row in enumerate(csv.DictReader(handle), start=2):
             pdb_id = _text(row.get("pdb_id")).upper()
@@ -497,16 +894,6 @@ def _master_rows(connection: sqlite3.Connection, run_id: str, path: Path) -> Non
             )
             if not canonical:
                 continue
-            key = (context_id, canonical)
-            previous_row = seen_master_keys.get(key)
-            if previous_row is not None:
-                raise ValueError(
-                    f"{path}: duplicate master result key for run={run_id!r}, "
-                    f"context_id={context_id}, ligand={canonical!r} in CSV rows "
-                    f"{previous_row} and {row_number}; explicit attempt selection "
-                    "is required"
-                )
-            seen_master_keys[key] = row_number
             ligand_id = _ligand(
                 connection,
                 canonical,
@@ -536,18 +923,34 @@ def _master_rows(connection: sqlite3.Connection, run_id: str, path: Path) -> Non
                 or row.get("dud_eval_status_reason")
             )
             connection.execute(
-                """UPDATE pair_cells SET final_status=?, failure_code=?, failure_reason=?,
-                has_result=1, pose_valid=?, is_control=?, is_decoy=?, atlas_score=?,
-                atlas_score_source=?, selected_docking_score=?, consensus_score=?,
-                final_score=?, final_score_source=?, final_rank=?, source_csv=?,
-                result_json=? WHERE pair_cell_id=?""",
+                """INSERT INTO result_attempts
+                (pair_cell_id, input_csv_path, input_csv_sha256, source_row_number,
+                 result_sha256, final_status, failure_code, failure_reason,
+                 pose_valid, pose_validation_method, pose_validation_scope,
+                 pose_validation_thresholds_json, is_control, is_decoy,
+                 atlas_score, atlas_score_source,
+                 selected_docking_score, consensus_score, final_score,
+                 final_score_source, final_rank, source_csv, result_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    pair_id,
+                    str(path),
+                    input_csv_sha256,
+                    row_number,
+                    _record_sha256(row),
                     status,
                     "pose_invalid"
                     if pose_valid == 0
                     else ("no_numeric_result" if not has_numeric else None),
                     reason or None,
                     pose_valid,
+                    (LEGACY_POSE_VALIDATION_METHOD if pose_valid is not None else None),
+                    LEGACY_POSE_VALIDATION_SCOPE if pose_valid is not None else None,
+                    (
+                        legacy_pose_validation_thresholds_json()
+                        if pose_valid is not None
+                        else None
+                    ),
                     int(_text(row.get("is_control")) == "1"),
                     int(_text(row.get("is_decoy")) == "1"),
                     score,
@@ -559,7 +962,6 @@ def _master_rows(connection: sqlite3.Connection, run_id: str, path: Path) -> Non
                     _int(row.get("final_rank")),
                     _text(row.get("source_csv")) or None,
                     _json(row),
-                    pair_id,
                 ),
             )
 
@@ -601,46 +1003,63 @@ def _finalize_missing(connection: sqlite3.Connection, run_id: str) -> None:
 def _artifacts(connection: sqlite3.Connection, run_id: str, path: Path) -> None:
     if not path.is_file():
         return
-    try:
-        index = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
+    index = load_artifact_index(path)
     for group in index.get("groups", []):
-        if not isinstance(group, Mapping):
-            continue
         group_key = _mapping(group.get("group"))
         pdb_id = _text(group_key.get("pdb_id")).upper()
         variant = _text(group_key.get("variant")).upper()
         ph = _normalize_ph(group_key.get("ph"))
-        context_id = _upsert_context(connection, run_id, pdb_id, variant, ph)
-        for entry in group.get("entries", []):
-            if not isinstance(entry, Mapping):
-                continue
-            candidate = canonical_ligand_id(
-                entry.get("member_name") or entry.get("original_path")
+        variant, ph = _resolve_context(connection, run_id, pdb_id, variant, ph)
+        context_row = connection.execute(
+            """SELECT receptor_context_id FROM receptor_contexts
+               WHERE run_id=? AND pdb_id=? AND variant=? AND ph_label=?""",
+            (run_id, pdb_id, variant, ph),
+        ).fetchone()
+        if context_row is None:
+            raise ValueError(
+                "artifact group does not match an imported receptor context: "
+                f"run_id={run_id!r}, pdb_id={pdb_id!r}, variant={variant!r}, "
+                f"ph_label={ph!r}"
             )
-            ligand_row = connection.execute(
-                "SELECT ligand_id FROM ligands WHERE canonical_id=?", (candidate,)
-            ).fetchone()
-            pair_row = (
-                connection.execute(
+        context_id = int(context_row[0])
+        for entry in group.get("entries", []):
+            role = _text(entry.get("artifact_role"))
+            scope = artifact_scope(role)
+            associated_context_id = (
+                context_id if scope in {"receptor", "pair"} else None
+            )
+            ligand_id: int | None = None
+            if scope in {"ligand", "pair"}:
+                declared_ligand = _text(entry.get("ligand_canonical_id"))
+                canonical = canonical_ligand_id(declared_ligand)
+                if not canonical or canonical != declared_ligand:
+                    raise ValueError(
+                        "artifact ligand_canonical_id must already be canonical: "
+                        f"{declared_ligand!r}"
+                    )
+                ligand_id = _ligand(connection, canonical)
+            pair_row = None
+            if scope == "pair" and ligand_id is not None:
+                pair_row = connection.execute(
                     "SELECT pair_cell_id FROM pair_cells "
                     "WHERE receptor_context_id=? AND ligand_id=?",
-                    (context_id, int(ligand_row[0])),
+                    (context_id, ligand_id),
                 ).fetchone()
-                if ligand_row
-                else None
-            )
             pair_id = int(pair_row[0]) if pair_row else None
             connection.execute(
-                """INSERT OR REPLACE INTO artifacts
-                (run_id, receptor_context_id, pair_cell_id, stage, mode, original_path,
-                 archive_path, member_name, sha256, size_bytes, file_type, verified, artifact_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO artifacts
+                (run_id, receptor_context_id, ligand_id, pair_cell_id,
+                 artifact_role, artifact_scope, stage, mode, original_path,
+                 archive_path, member_name, sha256, size_bytes, file_type,
+                 verified, artifact_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
-                    context_id,
+                    associated_context_id,
+                    ligand_id,
                     pair_id,
+                    role,
+                    scope,
                     _text(entry.get("stage_dir")) or None,
                     _text(entry.get("mode")) or None,
                     _text(entry.get("original_path")) or None,
@@ -664,9 +1083,11 @@ def _summary(
             "runs",
             "receptor_contexts",
             "ligands",
+            "receptor_audits",
             "pair_cells",
             "completion_records",
             "docking_attempts",
+            "result_attempts",
             "artifacts",
             "protein_identities",
             "receptor_annotations",
@@ -763,6 +1184,9 @@ def build_release_database(
             _manifest_contexts(connection, run_id, run_manifest)
             _completion_files(connection, run_id, paths["docked"])
             _master_rows(connection, run_id, paths["master_rows"])
+            apply_attempt_selections(
+                connection, run_id, paths["docked"], entry.get("attempt_selections", [])
+            )
             _finalize_missing(connection, run_id)
             _artifacts(connection, run_id, paths["archive_index"])
         annotation_counts = ingest_scientific_annotations(

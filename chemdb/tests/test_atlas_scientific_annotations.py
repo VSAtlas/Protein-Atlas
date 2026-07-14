@@ -97,6 +97,14 @@ def test_ingests_explicit_annotations_with_provenance_and_no_inference(
         (receptor_context_id, ligand_id, final_status, has_result, pose_valid,
          final_score) VALUES (1, 7, 'invalid', 1, 0, 999.0)"""
     )
+    connection.execute(
+        "INSERT INTO ligands(ligand_id, canonical_id) VALUES (8, 'unvalidated-high')"
+    )
+    connection.execute(
+        """INSERT INTO pair_cells
+        (receptor_context_id, ligand_id, final_status, has_result, pose_valid,
+         final_score) VALUES (1, 8, 'valid', 1, NULL, 1000.0)"""
+    )
     proteins = tmp_path / "proteins.yaml"
     receptors = tmp_path / "receptors.csv"
     known_pairs = tmp_path / "known_pairs.yaml"
@@ -129,7 +137,7 @@ def test_ingests_explicit_annotations_with_provenance_and_no_inference(
                 "variant": "APO",
                 "ph_label": "7.4",
                 "protein_key": "protein-alpha",
-                "receptor_classification": "experimentally_holo",
+                "receptor_classification": "HOLO",
                 "qualification_status": "selected_under_policy",
                 "qualification_reason": "explicit curator decision",
                 "native_redock_status": "qualification_passed",
@@ -191,7 +199,7 @@ def test_ingests_explicit_annotations_with_provenance_and_no_inference(
     ).fetchone()
     assert receptor == (
         "protein-alpha",
-        "experimentally_holo",
+        "HOLO",
         "selected_under_policy",
         "explicit curator decision",
         "qualification_passed",
@@ -217,13 +225,17 @@ def test_ingests_explicit_annotations_with_provenance_and_no_inference(
         "top_valid_3",
         "top_valid_4",
         "top_valid_5",
+        "best_invalid",
         "known_pair",
     ]
-    assert "best_invalid" not in roles
-    assert "invalid-high" not in {
-        item["ligand_id"] for item in plan["contexts"][0]["selections"]
-    }
-    assert "never selected" in plan["selection_policy"]["invalid_poses"]
+    selected_invalid = next(
+        item
+        for item in plan["contexts"][0]["selections"]
+        if item["role"] == "best_invalid"
+    )
+    assert selected_invalid["ligand_id"] == "invalid-high"
+    assert selected_invalid["pose_valid"] == 0
+    assert "pose_valid=0" in plan["selection_policy"]["best_invalid"]
     assert "pair_artifact_not_indexed" in {
         gap["code"] for gap in plan["contexts"][0]["gaps"]
     }
@@ -239,7 +251,7 @@ def test_ingests_explicit_annotations_with_provenance_and_no_inference(
     assert target["uniprot_id"] == "P12345"
     assert target["gene_symbol"] == "GENE1"
     assert target["display_name"] == "Protein Alpha"
-    assert target["receptor_classification"] == "experimentally_holo"
+    assert target["receptor_classification"] == "HOLO"
     assert target["qualification_status"] == "selected_under_policy"
     assert target["native_redock_status"] == "qualification_passed"
     assert target["native_redock_reason"] == "RMSD met the frozen redock threshold"
@@ -371,3 +383,178 @@ def test_frozen_image_plan_ignores_inline_known_pair_without_annotation_record(
     assert "known_pair" not in {
         item["role"] for item in plan["contexts"][0]["selections"]
     }
+
+
+def test_ingests_typed_receptor_chemistry_and_metal_audit(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "receptor-evidence.sqlite"
+    connection = _seed_database(database)
+    receptors = tmp_path / "receptor_evidence.yaml"
+    receptor_hash = "a" * 64
+    policy_hash = "b" * 64
+    audit_hash = "c" * 64
+    rejected_audit_hash = "d" * 64
+    receptors.write_text(
+        yaml.safe_dump(
+            {
+                "records": [
+                    {
+                        "run_id": "run-1",
+                        "pdb_id": "1ABC",
+                        "variant": "APO",
+                        "ph_label": "7.4",
+                        "receptor_classification": "HOLO",
+                        "qualification_status": "pending_receptor_quality_review",
+                        "provenance": {
+                            "chemistry_evidence_status": "observed",
+                            "requested_observed_conflict": True,
+                            "prepared_receptor_chemistry": {
+                                "classification_method": (
+                                    "atlas_prepared_receptor_retained_chemistry_v1"
+                                ),
+                                "receptor_classification": "HOLO",
+                                "prepared_receptor_sha256": receptor_hash,
+                                "canonical_chemistry_policy_sha256": policy_hash,
+                                "retained_metal_atom_count": 1,
+                                "retained_cofactor_residue_count": 0,
+                            },
+                            "structured_receptor_audits": [
+                                {
+                                    "audit_kind": "metal_site_interaction",
+                                    "source_path": "/stor/private/metal_site_audit.json",
+                                    "source_sha256": audit_hash,
+                                    "parse_status": "parsed",
+                                    "payload": {"lost_donor_count": 0},
+                                }
+                            ],
+                            "structured_receptor_audit_rejections": [
+                                {
+                                    "audit_kind": "retained_chemistry",
+                                    "source_path": (
+                                        "/stor/private/intermediate_audit.json"
+                                    ),
+                                    "source_sha256": rejected_audit_hash,
+                                    "rejection_reason": "receptor_path_mismatch",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    manifest = _base_manifest()
+    manifest["annotations"] = {"receptors": receptors.name}
+    manifest_path = tmp_path / "release.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    counts = ingest_scientific_annotations(connection, manifest, manifest_path)
+    connection.commit()
+
+    assert counts["receptors"] == 1
+    annotation = connection.execute(
+        """SELECT receptor_classification, classification_method,
+        chemistry_evidence_status, prepared_receptor_sha256,
+        canonical_chemistry_policy_sha256, retained_metal_atom_count,
+        retained_cofactor_residue_count, requested_observed_conflict
+        FROM receptor_annotations"""
+    ).fetchone()
+    assert annotation == (
+        "HOLO",
+        "atlas_prepared_receptor_retained_chemistry_v1",
+        "observed",
+        receptor_hash,
+        policy_hash,
+        1,
+        0,
+        1,
+    )
+    audits = connection.execute(
+        """SELECT audit_kind, source_path, source_sha256, parse_status, audit_json
+        FROM receptor_audits ORDER BY parse_status"""
+    ).fetchall()
+    audit = audits[0]
+    assert audit[:4] == (
+        "metal_site_interaction",
+        "/stor/private/metal_site_audit.json",
+        audit_hash,
+        "parsed",
+    )
+    assert json.loads(audit[4])["payload"]["lost_donor_count"] == 0
+    assert audits[1][:4] == (
+        "retained_chemistry",
+        "/stor/private/intermediate_audit.json",
+        rejected_audit_hash,
+        "rejected:receptor_path_mismatch",
+    )
+    connection.close()
+
+    readiness = audit_release_readiness(database)
+    assert readiness["metrics"]["receptor_audits"]["accepted_count"] == 1
+    assert readiness["metrics"]["receptor_audits"]["rejected_count"] == 1
+
+    export_dir = tmp_path / "receptor-evidence-export"
+    export_release_database(database, export_dir, include_parquet=False)
+    browser = json.loads(
+        (export_dir / "release_browser.json").read_text(encoding="utf-8")
+    )
+    target = browser["targets"][0]
+    assert target["receptor_classification"] == "HOLO"
+    assert target["prepared_receptor_sha256"] == receptor_hash
+    assert target["receptor_audit_kinds"] == [
+        "metal_site_interaction",
+        "retained_chemistry",
+    ]
+    assert target["accepted_receptor_audit_kinds"] == ["metal_site_interaction"]
+    assert target["rejected_receptor_audit_count"] == 1
+    assert target["receptor_audit_status_counts"] == {
+        "parsed": 1,
+        "rejected:receptor_path_mismatch": 1,
+    }
+    assert browser["receptor_audits"][0]["source_sha256"] == audit_hash
+    assert (
+        browser["pose_validation_contract"]["thresholds"]["relative_distance_cutoff"][
+            "cli_default"
+        ]
+        == 0.92
+    )
+
+def test_accepts_chemistry_only_receptor_evidence_record(tmp_path: Path) -> None:
+    database = tmp_path / "chemistry-only.sqlite"
+    connection = _seed_database(database)
+    receptors = tmp_path / "chemistry_only.yaml"
+    receptor_hash = "d" * 64
+    receptors.write_text(
+        yaml.safe_dump(
+            {
+                "records": [
+                    {
+                        "run_id": "run-1",
+                        "pdb_id": "1ABC",
+                        "variant": "APO",
+                        "ph_label": "7.4",
+                        "chemistry_evidence_status": "unresolved",
+                        "prepared_receptor_sha256": receptor_hash,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = _base_manifest()
+    manifest["annotations"] = {"receptors": receptors.name}
+    manifest_path = tmp_path / "release.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    counts = ingest_scientific_annotations(connection, manifest, manifest_path)
+    connection.commit()
+
+    assert counts["receptors"] == 1
+    assert connection.execute(
+        """SELECT chemistry_evidence_status, prepared_receptor_sha256
+        FROM receptor_annotations"""
+    ).fetchone() == ("unresolved", receptor_hash)
+    connection.close()

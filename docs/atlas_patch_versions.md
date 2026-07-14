@@ -68,3 +68,11 @@ source-text-adjudicated DailyMed scenarios, FDA-only openFDA query filtering, an
 atomic replacement of stale derived PK columns. The SPD exposure label remains
 unchanged. Timestamped SPD add-on merges can now select the newest completed
 score-ready directory while rejecting and recording newer incomplete branches.
+
+## Atlasv0.0.10 - Stream and qualify auditable docking-atlas delivery
+
+Adds bounded-memory SQLite export with coarse pair shards, provider-neutral
+download projection and deployment preflight, typed pair-level artifact roles,
+fail-closed retry selection and causal-lineage readiness, exact prepared-receptor
+APO/HOLO evidence with metal-audit acceptance/rejection provenance, selected-pose
+validation gates, and the conference top-valid/best-invalid image plan.

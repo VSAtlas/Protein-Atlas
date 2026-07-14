@@ -32,10 +32,25 @@ atlas publish audit \
 The audit always returns nonzero for a missing run manifest or an invalid
 completion JSON/shape. Add `--strict` to also return nonzero when any run lacks
 master rows or valid completion records needed for a failure-complete import. It
-writes `audit.json` and does not create a database. This command checks run inputs
-and annotation declarations, but it does
-not parse annotation files or validate their context keys; the build performs
-those annotation checks during ingestion and aborts on an invalid record.
+writes `audit.json` and does not create a database. It scans completion and
+master-result identities before database creation, so duplicate successful
+attempts, duplicate result rows, and unmatched explicit selectors are visible in
+the audit and make strict mode fail. This command checks run inputs and annotation
+declarations, but it does not parse annotation files or validate their context
+keys; the build performs those annotation checks during ingestion and aborts on an
+invalid record.
+
+Generate exact prepared-receptor chemistry evidence separately. This records
+observations and exact-context metal-audit acceptance or rejection; it never
+assigns receptor-quality or redocking qualification:
+
+```bash
+atlas publish receptor-evidence \
+  --manifest <RELEASE_MANIFEST.yaml> \
+  --out <RECEPTOR_ANNOTATIONS.yaml> \
+  --expected-context-count <FROZEN_COUNT> \
+  --expected-inventory-sha256 <FROZEN_CONTEXT_KEYSET_SHA256>
+```
 
 Build the private database, public downloads, and static site:
 
@@ -146,33 +161,57 @@ such as `releases/<RELEASE_ID>/downloads/`. Preserve the content types from
 existing release prefix. No credentials, bucket operations, CORS policy, or public
 URLs are inferred by Atlas.
 
-The generated site continues to use its local `downloads/...` links, so an R2 copy
-is an archive/mirror rather than an automatic link rewrite. It does not make an
-otherwise oversized Pages bundle deployable. Serving downloads directly from an R2
-or other domain requires a future supported URL-projection build option and an
-origin-specific CORS decision; do not hand-edit the verified payload. Until that
-projection exists, serve the complete verified site from a host that accepts its
-files or retain it as a local conference backup.
+The generated static site continues to use its local `downloads/...` links, so an R2
+copy alone is an archive/mirror and does not make an otherwise oversized Pages
+bundle deployable. Do not hand-edit the verified static payload. For the bounded
+edge explorer, use the supported `--download-base-url` projection below; it validates
+all declared hashes and emits release-qualified HTTPS links without changing the
+static fallback. A future static-site overlay would be a separate build contract.
 
-For bounded conference/intermediate snapshots, Atlas also provides a separate,
-non-deploying edge delivery projection:
+Atlas provides two non-deploying edge projections. Preserve the existing
+browser-JSON path for bounded conference/intermediate snapshots:
 
 ```bash
 atlas publish edge-bundle \
   --site-dir outputs/data/<RELEASE_ID>/site \
-  --out-dir outputs/data/<RELEASE_ID>/edge
+  --out-dir outputs/data/<RELEASE_ID>/edge \
+  --download-base-url https://downloads.example.org
 ```
 
-This keeps the static site unchanged and emits one dependency-free SPA shell, a
-GET/HEAD-only Worker, and an immutable R2 JSON object tree. See
-[the optional Cloudflare Worker + R2 handoff](docking_atlas_edge_delivery.md) for
-routes, object layout, limits, cost tiers, and manual deployment safeguards.
+For larger matrices, stream the compact public SQLite snapshot into coarse pair
+shards without generating one pair object or static HTML page per cell:
 
-The current command is capped at a 128 MiB browser payload and 50,000 pair cells;
-it explicitly does not support the audited 760,878-cell publication candidate.
-Publication scale requires a future SQLite-streaming exporter that bypasses both
-the monolithic `release_browser.json` and per-pair static HTML generation. Do not
-run the static build solely to feed the bounded edge command.
+```bash
+atlas publish edge-bundle \
+  --database outputs/data/<RELEASE_ID>/site/downloads/docking_atlas.sqlite \
+  --source-site-dir outputs/data/<RELEASE_ID>/site \
+  --out-dir outputs/data/<RELEASE_ID>/edge-streamed \
+  --batch-rows 1000 \
+  --coarse-shard-rows 2000 \
+  --download-base-url https://downloads.example.org
+```
+
+Run the same provider-neutral or provider-specific integrity preflight on either
+result:
+
+```bash
+atlas publish preflight \
+  --edge-dir outputs/data/<RELEASE_ID>/edge-streamed \
+  --site-dir outputs/data/<RELEASE_ID>/site \
+  --provider generic
+```
+
+Both paths keep the static site unchanged and emit one dependency-free SPA shell,
+a GET/HEAD-only Worker, and an immutable JSON object tree. See
+[the optional edge-delivery handoff](docking_atlas_edge_delivery.md) for routes,
+object layouts, limits, cost tiers, and manual deployment safeguards.
+
+The browser-JSON path remains capped at a 128 MiB payload and 50,000 pair cells.
+The SQLite path uses bounded fetch batches, a disposable on-disk work database,
+SQLite ranking windows, and configurable coarse shards. It supports the engineering
+scale required by the audited 760,878-cell candidate, but that full export has not
+yet been executed or deployment-preflighted. Do not generate the per-pair static
+site solely to feed the streaming path.
 
 The conference-safe fallback is to keep the complete verified `site/` directory
 together on a static HTTP host whose file-count and asset-size limits have been
@@ -183,10 +222,11 @@ application server remains optional.
 
 Until an authoritative PDB-to-protein mapping is supplied, entries under
 `proteins/` are receptor-context target pages identified by run, PDB, variant, and
-pH—not claims of one canonical biological protein per page. The current generator
-creates one page per receptor context, drug, and pair. Whether a full FDA-scale
-matrix should continue using pre-generated pages, use pagination, or move to
-client-side/on-demand rendering is a future engineering and hosting decision.
+pH—not claims of one canonical biological protein per page. The static generator
+creates one page per receptor context, drug, and pair. A full
+FDA-scale matrix should use the coarse-sharded streaming edge projection rather
+than pre-generating every pair page; the final host and any additional pagination
+or caching policy remain deployment decisions.
 
 ## Scientific and ranking contract
 
@@ -195,25 +235,40 @@ unvalidated, and missing-result cells are not dropped, and structured status and
 failure fields remain available in SQLite, CSV, Parquet, and pair pages.
 
 `final_score` is the only primary ranking field. There is no fallback to
-`atlas_score`, `consensus_score`, or a raw docking score. A pair is rank-eligible
-only when all of the following are true:
+`atlas_score`, `consensus_score`, or a raw docking score. Every non-null primary
+score also carries `final_score_source`, so consensus-Z, SCORCH-Z, and other
+materialization families are not silently conflated. A pair is rank-eligible only
+when all of the following are true:
 
-- the imported receptor variant is exactly `HOLO`;
-- `receptor_classification` is blank while the controlled vocabulary and
-  run/source conflict policy await user approval;
+- `receptor_classification` is exactly the controlled token `HOLO`, based on
+  retained chemistry in the exact prepared receptor rather than a run-directory
+  label;
 - receptor quality has one of the controlled explicit qualification tokens;
 - native redocking has one of the controlled explicit qualification tokens;
 - `final_score` is present;
 - `pose_valid == 1`;
+- `pose_validation_scope == selected_final_score_pose`;
 - the pair is neither a native control nor a decoy.
 
-All other cells are shown without a rank and carry an eligibility reason such as
-`apo_receptor`, `receptor_variant_not_holo`,
-`receptor_classification_policy_pending`, `receptor_quality_not_qualified`,
-`native_redock_not_qualified`, `missing_final_score`, `pose_invalid`,
-`pose_validation_missing`, `native_control`, or `decoy`. `atlas_score` and its
-source remain available as secondary normalized evidence, not a substitute
-primary rank.
+The requested run variant remains visible for provenance, but it cannot override
+observed receptor content. An observed `APO` receptor is excluded even when it was
+produced under a run labeled HOLO. Missing or unresolved chemistry is also excluded.
+All other cells remain visible without a rank and carry an eligibility reason such
+as `apo_receptor`, `receptor_classification_missing`,
+`receptor_quality_not_qualified`, `native_redock_not_qualified`,
+`missing_final_score`, `pose_invalid`, `pose_validation_missing`,
+`pose_validation_scope_unqualified`, `native_control`, or `decoy`.
+
+Legacy `pose_valid_any` values are retained as
+`atlas_posebusters_any_stage_legacy_v1` with scope
+`any_stage_for_ligand`. The browser discloses the checks performed by
+`tools/pose_bust.py`: molecule loading, sanitization, valence, internal clash,
+bond-length, bond-angle, and the protein-clash/relative-distance rule. It shows the
+0.92 CLI default but labels the exact historical run cutoff as unresolved when it
+was not recorded. A legacy any-stage pass does not prove that the pose associated
+with `final_score` passed, so it cannot enter headline rankings until that
+alignment is supplied. `atlas_score` and its source remain available as secondary
+normalized evidence, not a substitute primary rank.
 
 ## Release manifest
 
@@ -296,41 +351,86 @@ than falling back or choosing a pair.
 `atlas publish build` generates `downloads/image_plan.json`, hashes it, and adds it
 to the explorer download manifest automatically. The plan records deterministic
 `atlas screenshot` argument vectors for a unique, valid native-control pose with a
-recorded native-redock status, up to five top valid scored ligands, and the supplied
-known pair when it is not already selected. It does not render images, does not
-select the best invalid ligand, and does not invent missing structures or scores.
+recorded native-redock status, up to five top valid scored ligands, the best-scoring
+invalid ligand when present, and the supplied known pair when it is not already
+selected. It does not render images or invent missing structures or scores.
 Missing prerequisites become structured gaps. Every selected row also receives a
 `pair_artifact_not_indexed` or `pair_artifact_not_verified` gap until a
-pair-linked artifact is verified. That artifact flag is an engineering preflight
-signal, not proof that the artifact is the required pose member; execute screenshot
-commands only after checking the resolved receptor and pose inputs. The advanced
-Python callable
+pair-linked artifact with the controlled `docking_pose` role is verified. This is
+an engineering identity/hash preflight, not a scientific pose-validity decision;
+execute screenshot commands only after checking the resolved receptor and pose
+inputs. The advanced Python callable
 `analysis.atlas_database.write_release_image_plan` can regenerate a plan for review,
 but a public release should be rebuilt with `atlas publish build` so the download
 hashes and site manifest remain consistent.
 
 `release_readiness.json` is generated automatically during a site build. It is a
-descriptive audit, not a scientific verdict. It reports pair/failure completeness,
-qualified-headline score coverage, pose validation, distinct explicitly stored
-receptor-quality and native-redock statuses, receptor variants,
-artifacts/hashes/verification, rank-exclusion reasons, score-source classification,
-and the schema-3 `receptor_classification_policy_approval` blocker for any
-non-empty classification recorded before the controlled vocabulary and conflict
-policy are approved.
+descriptive audit, not a scientific verdict. Readiness schema 5 reports
+pair/failure completeness, qualified-headline score coverage, PoseBusters coverage,
+selected-final-score-pose alignment, controlled APO/HOLO coverage, chemistry
+evidence state and run-label conflicts, explicitly stored receptor-quality and
+native-redock statuses, artifacts/hashes/verification, rank-exclusion reasons, and
+score-source classification. It also blocks publication when a selected result
+lacks a structured causal link to its matching selected completion attempt. A
+controlled label is evidence, not a receptor-quality or native-redock
+qualification.
 
 Completion manifests are normalized in the private database. Each source file and
 its JSON payload are stored once in `completion_records`; pair-level
 `docking_attempts` reference that row by `completion_record_id`, so retries with
-the same engine, stage, and chunk remain separate attempts. Corrupt, non-object, or
-structurally unsupported completion JSON aborts the input audit/build instead of
-being counted as failure-complete. Duplicate canonical receptor-ligand result keys
-in a master CSV also abort the build until an explicit attempt/result selection is
-provided; CSV order never chooses a silent winner.
+the same engine, stage, and chunk remain separate attempts. Every master CSV row is
+stored separately in `result_attempts` with its input-table path/hash, one-based CSV
+line number, canonical row hash, parsed fields, and original row JSON. The selected
+row is then materialized into `pair_cells`; CSV order never chooses a silent winner.
+
+When a pair has multiple successful completion attempts or multiple result rows,
+the build fails closed unless that run's `attempt_selections` entry identifies one
+candidate exactly. Completion selection requires `completion_relpath` relative to
+`paths.docked` plus `completion_sha256`. Result selection requires
+`result_row_number` (the logical CSV record number, with the header counted as
+record 1) plus `result_sha256`, computed from Atlas's sorted compact JSON
+representation of the CSV row. A selector may contain either pair of fields or both.
+The receptor key
+(`pdb_id`, exact `variant`, exact `ph_label`) and `ligand_canonical_id` are always
+required. Unique candidates are selected automatically and record that fact;
+ambiguous, unmatched, unsafe-path, partial-hash, and duplicate selectors abort.
+An ambiguity error prints each candidate's safe relative path or logical record
+number together with the SHA-256 values needed for the manifest entry.
+Both selected and unselected attempts retain `selected_for_release`,
+`selection_method`, and the one-based selector index for auditability.
+Explicitly choosing one completion and one result does not prove that the selected
+completion produced that result. The nullable result-attempt fields
+`completion_record_id`, `completion_link_method`, and
+`completion_link_evidence_json` preserve this distinction; no link is inferred
+from matching names, row order, or independent selectors.
+
+Corrupt, non-object, or structurally unsupported completion JSON aborts the input
+audit/build instead of being counted as failure-complete. The private database
+retains raw completion and result-attempt JSON. The compact public projection omits
+those raw payloads and redacts their source paths while keeping hashes, row numbers,
+statuses, and selection provenance.
+
+Artifact archive indexes are also fail-closed release inputs. Every entry needs a
+controlled `artifact_role`, content SHA-256, non-negative size, file type, archive
+path, and member name. Controlled roles are `source_receptor`,
+`prepared_receptor`, `source_ligand`, `prepared_ligand`, `docking_pose`,
+`pose_image`, `receptor_validation_report`,
+`native_redock_validation_report`, `pose_validation_report`,
+`search_box_definition`, `run_configuration`, `raw_stdout`, `raw_stderr`, and
+`software_environment`. The role determines a `run`, `receptor`, `ligand`, or
+`pair` scope. Ligand- and pair-scoped entries must explicitly name
+`ligand_canonical_id`; Atlas no longer guesses association from a filename. A
+`raw_stdout` or `raw_stderr` artifact is pair-scoped so the private ledger can
+reconstruct one receptor-ligand calculation rather than attaching a log to a
+whole receptor by inference. A pair-scoped artifact for an unscheduled pair
+remains preserved with a null
+`pair_cell_id` and never creates a phantom matrix cell. Role typing records artifact
+identity only: it does not decide scientific validity or whether that role may be
+published.
 
 Database storage is therefore proportional to the number and size of completion
-files, rather than multiplying each payload by the number of expected ligands in
-the file. The source path and SHA-256 remain available for provenance, while the
-public projection redacts the private path and raw payload.
+files plus the number of master result rows, rather than multiplying each completion
+payload by the number of expected ligands in the file.
 
 ## Unresolved prerequisites before a public scientific release
 
@@ -356,8 +456,10 @@ The following data must be supplied or completed; the builder does not infer the
    conference image set requires it.
 10. Restorable receptor/pose artifacts and verified variant/pH resolution before
     executing image-plan screenshot commands.
-11. A hosting and scaling decision, including whether the complete static page set is
-    acceptable for the final matrix size and browser/device targets.
+11. Causal completion linkage for every selected result attempt.
+12. A production download origin/provider, immutable release prefix, and measured
+    full-scale streaming rehearsal. The provider-neutral coarse-shard architecture
+    is selected; account creation alone does not authorize upload or deployment.
 
 Treat every readiness blocker as a concrete missing-coverage item. Resolve it in the
 source run artifacts or manifest, rebuild the private database, and regenerate the

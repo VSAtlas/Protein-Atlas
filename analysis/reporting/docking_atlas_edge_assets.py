@@ -26,6 +26,10 @@ function objectKey(pathname) {
     }
     return null;
   }
+  if (parts.length === 5 && parts[3] === "pair-shards") {
+    if (!TOKEN.test(parts[4])) return null;
+    return `${prefix}/records/pair-shards/${parts[4]}.json`;
+  }
   if (parts.length === 5 && ["targets", "drugs", "pairs"].includes(parts[3])) {
     if (!TOKEN.test(parts[4])) return null;
     return `${prefix}/records/${parts[3]}/${parts[4]}.json`;
@@ -273,7 +277,11 @@ APP_JS = r"""(() => {
           element("td", row.failure_code || row.ranking_eligibility_reason || "—"),
         );
         const record = element("td");
-        record.append(link("Open", route("pairs", row.pair_route_id)));
+        let pairHref = route("pairs", row.pair_route_id);
+        if (row.pair_shard_id) {
+          pairHref += `?shard=${encodeURIComponent(row.pair_shard_id)}`;
+        }
+        record.append(link("Open", pairHref));
         tr.append(record);
         body.append(tr);
       });
@@ -294,6 +302,33 @@ APP_JS = r"""(() => {
     return host;
   }
 
+  function downloadPanel(rows) {
+    const panel = element("section", undefined, "panel");
+    panel.append(
+      element("h2", "Download frozen release"),
+      element("p", "Release-qualified public files with SHA-256 content hashes.", "muted"),
+    );
+    const cards = element("div", undefined, "cards");
+    rows.forEach((row) => {
+      try {
+        const target = new URL(row.url);
+        if (target.protocol !== "https:") throw new Error("download URL is not HTTPS");
+        const card = link(row.label || "Download", target.href, "card");
+        card.target = "_blank";
+        card.rel = "noopener noreferrer";
+        const size = Number.isFinite(Number(row.size_bytes))
+          ? `${Number(row.size_bytes).toLocaleString()} bytes`
+          : "size unavailable";
+        card.append(element("span", `${size} · ${row.content_hash || "hash unavailable"}`));
+        cards.append(card);
+      } catch (_error) {
+        cards.append(element("p", "A projected download URL is invalid.", "error-box"));
+      }
+    });
+    panel.append(cards);
+    return panel;
+  }
+
   async function renderRelease() {
     const [manifest, targets, drugs] = await Promise.all([
       getJson("manifest"), getJson("indexes/targets"), getJson("indexes/drugs"),
@@ -312,6 +347,9 @@ APP_JS = r"""(() => {
       metric("rank eligible", manifest.coverage.rank_eligible_count || 0),
     );
     root.append(metrics);
+    if (Array.isArray(manifest.downloads) && manifest.downloads.length) {
+      root.append(downloadPanel(manifest.downloads));
+    }
     const split = element("section", undefined, "split");
     const targetPanel = element("div", undefined, "panel");
     const drugPanel = element("div", undefined, "panel");
@@ -339,8 +377,23 @@ APP_JS = r"""(() => {
     app.replaceChildren(root);
   }
 
+  async function loadPair(routeId) {
+    if (config.pair_storage !== "coarse_shards") {
+      return getJson(`pairs/${routeId}`);
+    }
+    const shardId = new URLSearchParams(location.search).get("shard");
+    if (!shardId || !TOKEN.test(shardId)) {
+      throw new Error("coarse pair route is missing its shard identifier");
+    }
+    const shard = await getJson(`pair-shards/${shardId}`);
+    if (!Array.isArray(shard.records)) throw new Error("pair shard is invalid");
+    const payload = shard.records.find((row) => row.route_id === routeId);
+    if (!payload) throw new Error("pair is absent from its declared shard");
+    return payload;
+  }
+
   async function renderPair(routeId) {
-    const payload = await getJson(`pairs/${routeId}`);
+    const payload = await loadPair(routeId);
     const pair = payload.pair;
     const root = element("div");
     root.append(

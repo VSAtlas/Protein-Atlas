@@ -49,7 +49,7 @@ def build_release_image_plan(
     finally:
         connection.close()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "database_file": Path(database_path).name,
         "selection_policy": {
             "native_control": "explicit is_control pair with a valid pose result",
@@ -58,7 +58,7 @@ def build_release_image_plan(
             "artifact_preflight": (
                 "selected rows report a gap unless a pair-linked artifact is verified"
             ),
-            "invalid_poses": "retained as release cells but never selected for conference images",
+            "best_invalid": "highest final_score among non-control, non-decoy pose_valid=0 cells",
             "score_field": "final_score",
         },
         "contexts": plans,
@@ -121,9 +121,11 @@ def _context_plan(
     rows = connection.execute(
         """SELECT p.pair_cell_id, p.final_status, p.has_result, p.pose_valid,
                   (SELECT COUNT(*) FROM artifacts ar
-                   WHERE ar.pair_cell_id=p.pair_cell_id) AS artifact_count,
+                   WHERE ar.pair_cell_id=p.pair_cell_id
+                     AND ar.artifact_role='docking_pose') AS artifact_count,
                   (SELECT COUNT(*) FROM artifacts ar
-                   WHERE ar.pair_cell_id=p.pair_cell_id AND ar.verified=1)
+                   WHERE ar.pair_cell_id=p.pair_cell_id AND ar.verified=1
+                     AND ar.artifact_role='docking_pose')
                       AS verified_artifact_count,
                   p.is_control, p.is_decoy, p.final_score,
                   l.canonical_id, l.display_name
@@ -210,6 +212,36 @@ def _context_plan(
         )
         _record_artifact_gap(gaps, row)
 
+    invalid_scored = [
+        row
+        for row in rows
+        if int(row["is_control"] or 0) == 0
+        and int(row["is_decoy"] or 0) == 0
+        and int(row["has_result"] or 0) == 1
+        and row["pose_valid"] == 0
+        and row["final_score"] is not None
+    ]
+    invalid_scored.sort(
+        key=lambda row: (-float(row["final_score"]), _text(row["canonical_id"]))
+    )
+    if not invalid_scored:
+        gaps.append(
+            _gap(
+                "best_invalid_not_available",
+                "no scored non-control invalid pose is available",
+            )
+        )
+    else:
+        _select(
+            selections,
+            selected_ligands,
+            context,
+            invalid_scored[0],
+            "best_invalid",
+            image_output_root,
+        )
+        _record_artifact_gap(gaps, invalid_scored[0])
+
     known = _known_for_context(context, known_pairs)
     if not known:
         gaps.append(
@@ -250,8 +282,6 @@ def _context_plan(
                         f"known ligand {ligand} is absent from this receptor context",
                     )
                 )
-            elif ligand in selected_ligands:
-                pass
             elif not _renderable(match):
                 gaps.append(
                     _gap(
@@ -259,6 +289,8 @@ def _context_plan(
                         f"known ligand {ligand} lacks a successful valid pose",
                     )
                 )
+            elif ligand in selected_ligands:
+                pass
             else:
                 _select(
                     selections,
@@ -336,8 +368,8 @@ def _record_artifact_gap(gaps: list[dict[str, str]], row: sqlite3.Row) -> None:
     gaps.append(
         _gap(
             code,
-            f"{ligand} has no verified pair-linked artifact; preflight the "
-            "screenshot command before conference use",
+            f"{ligand} has no verified pair-linked docking_pose artifact; "
+            "preflight the screenshot command before conference use",
         )
     )
 
@@ -392,6 +424,8 @@ def _select(
             "ligand_id": ligand,
             "ligand_display_name": row["display_name"],
             "final_score": row["final_score"],
+            "final_status": row["final_status"],
+            "pose_valid": row["pose_valid"],
             "command_argv": pocket_argv,
             "pocket_three_view_command_argv": pocket_argv,
             "pocket_expected_views": ["front", "side", "top"],

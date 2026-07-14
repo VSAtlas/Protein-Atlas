@@ -5,20 +5,22 @@ The conference-sized static explorer remains the default output of
 pair HTML files with one dependency-free browser shell and immutable JSON objects
 in R2. It does not change, delete, or redeploy the static fallback.
 
-> **Bounded builder, not the publication-scale exporter.** The current command
-> reads `release_browser.json` into memory and materializes pair/entity summaries.
-> It refuses browser payloads above 128 MiB and releases above 50,000 pair cells.
-> The audited 760,878-cell publication candidate is intentionally rejected. It
-> needs a separate SQLite-streaming edge exporter that bypasses generation of the
-> monolithic browser payload and per-pair static HTML. Until that exporter exists,
-> this bundle validates the delivery architecture for conference/intermediate
-> snapshots only; `edge_bundle_summary.json` records
-> `publication_scale_supported: false`.
+Two build modes intentionally coexist:
 
-For a bounded conference site that has already been built, verify the ordinary
-release first. Do not run the per-pair static build solely to feed this edge command
-when the planned matrix exceeds the bounds above.
+- The existing `--site-dir` mode reads `release_browser.json` and preserves the
+  conference-sized browser-JSON path. It remains capped at a 128 MiB payload and
+  50,000 pair cells and records `publication_scale_supported: false`.
+- The `--database` mode reads the compact public SQLite snapshot directly. It
+  streams pair rows in bounded batches to a disposable on-disk work database,
+  computes rankings with SQLite window functions, and writes coarse pair-detail
+  shards instead of one object per cell. It records
+  `publication_scale_supported: true`.
 
+The audited 760,878-cell candidate has not yet been run through the streaming mode.
+The implementation removes the known memory and object-count blockers, but a full
+offline rehearsal, output-size measurement, and deployment preflight are still
+required before publication. Do not generate per-pair static HTML solely to feed
+the streaming edge path.
 
 ```bash
 atlas publish build --manifest <RELEASE.yaml> --out-dir outputs/data/<RELEASE_ID>
@@ -30,16 +32,45 @@ Then create the optional delivery bundle:
 ```bash
 atlas publish edge-bundle \
   --site-dir outputs/data/<RELEASE_ID>/site \
-  --out-dir outputs/data/<RELEASE_ID>/edge
+  --out-dir outputs/data/<RELEASE_ID>/edge \
+  --download-base-url https://downloads.example.org
 ```
 
-The command performs no network requests, creates no Cloudflare resources, and
-does not deploy. It reads only the path-redacted public
-`site/downloads/release_browser.json`. Use `--overwrite` only to replace a directory
-with a valid Atlas edge-bundle marker. Source and output must be disjoint: an
-output equal to, inside, or containing the static `site/` is rejected before any
-deletion. The release token includes the public payload SHA-256, so changed data
-receives a new object prefix and route.
+For a larger matrix, use the same canonical command against the path-redacted
+public SQLite snapshot:
+
+```bash
+atlas publish edge-bundle \
+  --database outputs/data/<RELEASE_ID>/site/downloads/docking_atlas.sqlite \
+  --source-site-dir outputs/data/<RELEASE_ID>/site \
+  --out-dir outputs/data/<RELEASE_ID>/edge-streamed \
+  --batch-rows 1000 \
+  --coarse-shard-rows 2000 \
+  --download-base-url https://downloads.example.org
+```
+
+`--batch-rows` and `--coarse-shard-rows` accept 100 through 10,000 rows. The
+default pair ceiling is 2,000,000 and can be lowered with `--max-pairs`. Source
+SQLite schema versions 2 through 5 are accepted; absent legacy validation or
+receptor-chemistry fields remain null and therefore cannot silently qualify a row
+for headline ranking. The existing browser-JSON command remains unchanged.
+
+`--download-base-url` is a provider-neutral HTTPS object origin. Atlas validates
+every download declared by `site_manifest.json`, checks its SHA-256 against the
+local bytes, and projects it to an immutable
+`releases/<RELEASE_TOKEN>/downloads/<FILE>` key. A Cloudflare R2 custom-domain URL
+must be origin-only (no path prefix); other providers may mount an object root below
+a path. No upload occurs.
+
+Both modes perform no network requests, create no hosting resources, and do not
+deploy. The bounded mode reads only the path-redacted
+`site/downloads/release_browser.json`; the streaming mode reads the path-redacted
+public SQLite snapshot with a read-only immutable connection and refuses live WAL
+or SHM sidecars. It verifies that the source file identity is unchanged before
+finalizing output and removes its disposable work database. Use `--overwrite` only
+to replace a directory with a valid Atlas edge-bundle marker. Source and output
+must be disjoint. The release token includes the public source SHA-256, so changed
+data receives a new object prefix and route.
 
 ## Bundle layout
 
@@ -47,7 +78,10 @@ receives a new object prefix and route.
 edge/
 ├── .atlas-edge-bundle.json
 ├── edge_bundle_summary.json
-├── object_manifest.json
+├── object_manifest.json             # normalized JSON-object upload contract
+├── download_projection.json         # provider-neutral download upload/URL contract
+├── deployment_preflight.json        # written by `atlas publish preflight`
+├── wrangler.preflight.toml          # written only after valid Cloudflare names
 ├── wrangler.toml                    # template; review bucket names
 ├── src/index.mjs                    # GET/HEAD-only Worker
 ├── public/
@@ -59,13 +93,21 @@ edge/
     └── releases/<RELEASE_TOKEN>/
         ├── manifest.json
         ├── indexes/{targets,drugs,pairs}.json
-        ├── indexes/pairs/<SHARD>.json
-        └── records/{targets,drugs,pairs}/<ROUTE_ID>.json
+        ├── indexes/pairs/<SHARD>.json        # bounded JSON mode
+        ├── records/{targets,drugs,pairs}/<ROUTE_ID>.json  # bounded JSON mode
+        └── records/pair-shards/<SHARD>.json  # streaming SQLite mode
 ```
 
-`object_manifest.json` is the upload contract. Every R2 key has a byte count,
-SHA-256, media type, and immutable cache policy. Pair-index shards are selected by
-a deterministic hash and listed in `indexes/pairs.json`. Route IDs are URL-safe,
+`object_manifest.json` is the normalized-record upload contract. Every R2 key has a
+byte count, SHA-256, media type, and immutable cache policy.
+`download_projection.json` is a separate provider-neutral contract for the frozen
+SQLite/CSV/Parquet/JSON downloads. It records only relative source paths, immutable
+object keys, HTTPS public URLs, sizes, media types, cache policy, and SHA-256 values;
+it contains no credentials or machine-local paths. In bounded JSON mode, pair-index
+shards are selected by a deterministic hash. In streaming mode,
+`indexes/pairs.json` lists ordinal coarse shards and every target/drug pair summary
+includes its `pair_shard_id`; pair details are never emitted as one object per cell.
+Route IDs are URL-safe,
 one-to-one encodings of release identifiers; the release segment makes all target,
 drug, and pair routes release-qualified:
 
@@ -75,6 +117,9 @@ drug, and pair routes release-qualified:
 /releases/<RELEASE_TOKEN>/drugs/<DRUG_ROUTE_ID>
 /releases/<RELEASE_TOKEN>/pairs/<PAIR_ROUTE_ID>
 ```
+
+Streaming pair links append `?shard=<PAIR_SHARD_ID>` so the browser fetches one
+coarse object and selects the requested route locally.
 
 The Worker exposes matching `/api/releases/...` reads. It accepts only `GET` and
 `HEAD`, validates every path segment against a narrow allowlist, maps only known
@@ -87,31 +132,60 @@ a restrictive permissions policy to direct static responses even though
 `run_worker_first` is limited to `/api/*`. The HTML meta policy is therefore not
 the sole security boundary.
 
-## Cloudflare handoff (manual, never automatic)
+## Credential-free deployment preflight
 
-1. Review `object_manifest.json` and compare its source hash with the public build.
-2. Review the generated `wrangler.toml`. Replace both example bucket names with
-   separately chosen production and preview bucket names.
-3. Create or select a Standard-storage R2 bucket. Do not use Infrequent Access for
-   this read-heavy interactive path without separately reviewing retrieval charges.
-4. Upload the contents beneath `edge/objects/` so their paths become the exact R2
-   keys listed in `object_manifest.json`. Wrangler v4 requires `--remote` for remote
-   object operations. Set `Content-Type: application/json` and
-   `Cache-Control: public, max-age=31536000, immutable`.
-5. Treat `releases/<RELEASE_TOKEN>/` as append-never/replace-never. Because the token
-   is content-qualified, a changed release must be rebuilt under a new token. Never
-   upload changed bytes to an existing key.
-6. Test locally or against a preview bucket, including one `HEAD`, one target, one
-   drug, one successful pair, and one failed/invalid pair.
-7. Only after explicit deployment approval, run Wrangler from the edge directory.
-   Atlas deliberately does not perform this step.
+Run the preflight after choosing names; this command performs no network request,
+credential lookup, bucket creation, upload, or deployment:
+
+```bash
+atlas publish preflight \
+  --edge-dir outputs/data/<RELEASE_ID>/edge \
+  --site-dir outputs/data/<RELEASE_ID>/site \
+  --provider cloudflare-workers-r2 \
+  --cloudflare-plan free \
+  --worker-name docking-atlas-edge \
+  --production-bucket atlas-docking-releases \
+  --preview-bucket atlas-docking-releases-preview
+```
+
+The report fails closed on changed object/download bytes, missing or duplicate keys,
+symlinks, invalid resource names, absent choices, non-HTTPS download URLs, or current
+Cloudflare static-asset count/size limits. A ready Cloudflare preflight writes
+`wrangler.preflight.toml` with only non-secret resource names. The report explicitly
+records `secret_values_inspected: false`, `network_checks_performed: false`,
+`upload_performed: false`, and `deployment_performed: false`. Generic providers use
+the same projection and integrity checks but must supply their own host limits.
+
+## Cloudflare account handoff (manual, never automatic)
+
+The preflight reports the exact remaining resources and credential environment names.
+For the current Worker + R2 adapter, choose or create:
+
+1. One production Standard-storage R2 bucket matching `--production-bucket`.
+2. One distinct preview Standard-storage R2 bucket matching `--preview-bucket`.
+3. One Worker service name matching `--worker-name`; the service is created only by
+   a future explicitly approved Wrangler deployment, not by Atlas preflight.
+4. One production custom domain attached to the download bucket. Use its origin-only
+   HTTPS URL as `--download-base-url`. Cloudflare documents `r2.dev` as a
+   non-production development URL, so it is not the frozen public-release choice.
+
+Wrangler uses `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. The preflight lists
+those names but never reads or prints their values. Do not place token values in the
+manifest, generated TOML, repository, or conference materials.
+
+After explicit upload/deployment approval in a later task, upload `edge/objects/`
+using the exact keys and metadata in `object_manifest.json`, and upload the source
+downloads using `download_projection.json`. Treat
+`releases/<RELEASE_TOKEN>/` as append-never/replace-never. Then test one `HEAD`, one
+target, one drug, one successful pair, one failed/invalid pair, and every projected
+download hash. Atlas deliberately does none of those remote operations in this patch.
 
 The existing `site/` directory remains a conference-safe local/static backup. Do
 not remove it after enabling edge delivery.
 
 ## Free plan and $5 Workers plan
 
-The design deliberately keeps only four shared files in Workers Static Assets and
+The design deliberately keeps only five shared files in Workers Static Assets and
 moves record cardinality to R2. As checked on 2026-07-13, Cloudflare documents a
 20,000-file limit for Pages Free and up to 100,000 files for paid Pages plans. The
 paid limit requires `PAGES_WRANGLER_MAJOR_VERSION=4`. Pages also limits each site
@@ -120,12 +194,12 @@ safely to a large receptor × FDA matrix, while the shared shell does not grow w
 pair count.
 
 The historical candidate's compact public SQLite projection is approximately
-439 MB and cannot be uploaded as a Pages asset. The current edge Worker serves the
-normalized JSON record tree only; it does not rewrite the static explorer's local
-SQLite/CSV/Parquet download links. A Pages deployment therefore needs an external
-download host plus a future supported link-projection build step. Alternatively,
-serve the complete verified site from a host that accepts the file. Copying the
-download to R2 alone does not make the verified Pages bundle deployable.
+439 MB and cannot be uploaded as a Pages or Workers Static Assets file. The edge
+Worker serves normalized JSON records, while `--download-base-url` projects verified
+SQLite/CSV/Parquet/JSON links to a separate HTTPS object origin. It does not rewrite
+the unchanged static fallback. Therefore deploy the shared edge shell for this
+architecture; copying downloads to R2 alone still does not make the original Pages
+bundle deployable.
 
 For a small public beta, the Workers Free plan can be viable when actual traffic and
 stored bytes remain within Cloudflare's current quotas. Cloudflare currently lists
@@ -133,15 +207,21 @@ an R2 Standard-storage free tier of 10 GB-month, one million Class A operations,
 ten million Class B operations per month, with no Internet egress charge. Initial
 object uploads are Class A operations; Worker `get`/`head` reads are Class B.
 
-The current one-object-per-record layout emits approximately
-`pairs + targets + drugs + nonempty_pair_shards + 4` R2 objects. The verified
-326-pair checkpoint produced 816 objects totaling 1.35 MB (326 pair records, 48
-targets, 249 drugs, 189 nonempty shards, and four manifest/index objects). A
-760,878-pair release would require at least 760,882 objects before target, drug, and
-shard records. One initial upload would therefore consume more than 76% of the
-current monthly one-million Class A free allocation, and rebuilding/re-uploading in
-the same month could exceed it. The future streaming exporter must report its exact
-object/byte plan before upload and may need a coarser pair-shard design.
+The bounded JSON layout still emits approximately
+`pairs + targets + drugs + nonempty_pair_shards + 4` R2 objects. Its verified
+326-pair checkpoint produced 816 objects totaling 1.35 MB. The streaming layout
+emits approximately
+`targets + drugs + ceil(pairs / coarse_shard_rows) + 4` objects and no per-cell
+pair objects. The same 326-pair public checkpoint produced 302 objects totaling
+1,312,013 bytes: 48 target records, 249 drug records, one coarse pair-detail shard,
+and four manifest/index objects.
+
+At the default 2,000 rows per coarse shard, the audited inventory of 90 targets,
+8,645 drugs, and 760,878 pairs projects to 9,120 JSON objects, including 381 pair
+shards. That is a count projection, not a completed full export. Pair summaries are
+intentionally present in both target and drug records for fast bidirectional
+navigation, so the full offline rehearsal must still measure bytes, largest object,
+rendering latency, and upload operations before deployment.
 
 The Workers Paid plan currently has a $5 USD monthly account minimum and larger
 included Worker usage. R2 storage and operations beyond its free allocation remain
@@ -152,11 +232,14 @@ promotion. Neither plan changes the Atlas scientific release contract.
 Current primary references:
 
 - [Cloudflare Pages limits](https://developers.cloudflare.com/pages/platform/limits/)
+- [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
 - [Cloudflare Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
 - [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/)
 - [Workers SPA static assets](https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/)
 - [R2 Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/)
+- [R2 public buckets](https://developers.cloudflare.com/r2/buckets/public-buckets/)
 - [Wrangler R2 commands](https://developers.cloudflare.com/workers/wrangler/commands/r2/)
+- [Wrangler environment variables](https://developers.cloudflare.com/workers/wrangler/system-environment-variables/)
 
 Cloudflare quotas and prices can change. Recheck those pages immediately before
 deployment; this document is an engineering handoff, not a cost guarantee.
@@ -164,18 +247,20 @@ deployment; this document is an engineering handoff, not a cost guarantee.
 ## Remaining engineering decisions
 
 
-- Implement and verify a bounded-memory SQLite-streaming edge exporter before using
-  this architecture for the 760,878-cell publication matrix. It must bypass the
-  monolithic browser payload and per-pair HTML generator, preserve ranking/failure
-  semantics, and emit incremental integrity metadata.
-- Choose production and preview bucket names and the release hostname.
-- Choose the upload tool and an independent post-upload checksum audit. The bundle
-  provides a manifest but intentionally does not infer credentials or mutate R2.
-- Decide whether large downloadable SQLite/CSV/Parquet artifacts remain on the
-  static fallback, are mirrored under a separate immutable R2 download prefix, or
-  are omitted from the edge hostname. The current Worker serves normalized JSON
-  records and indexes only, and Atlas does not yet generate cross-origin download
-  URLs for the static explorer.
+- Run the first full 760,878-cell export only after the public SQLite snapshot and
+  scientific release selection are frozen. Measure total bytes, largest target/drug
+  record, shard latency, object count, and preflight results before any upload.
+- Confirm whether 2,000 pair details per shard is the publication default or tune it
+  within the enforced 100-to-10,000 range from the offline measurements.
+- Choose production and preview bucket names, a Worker name, and the public download
+  custom domain; record them by running `atlas publish preflight`.
+- Choose the future upload tool and an independent post-upload checksum audit. The
+  bundle provides a manifest but intentionally does not infer credentials or mutate
+  R2.
+- Decide whether the static fallback retains its local SQLite/CSV/Parquet copies
+  after the edge release is deployed. The edge SPA now renders provider-neutral
+  projected HTTPS download links, while the current Worker continues to serve only
+  normalized JSON records and indexes.
 - Decide whether a future release catalog should expose multiple release tokens.
   This v0.1 shell is intentionally pinned to one immutable release.
 

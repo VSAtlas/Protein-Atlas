@@ -7,6 +7,9 @@ from pathlib import Path
 
 from analysis.atlas_database.exports import export_release_database
 from analysis.atlas_database.readiness import audit_release_readiness
+from analysis.atlas_database.pose_validation_contract import (
+    QUALIFYING_POSE_VALIDATION_SCOPE,
+)
 from analysis.atlas_database.schema import create_schema
 
 
@@ -27,12 +30,14 @@ def _insert_pair(
     connection.execute(
         """INSERT INTO pair_cells
         (receptor_context_id, ligand_id, final_status, has_result, pose_valid,
-         final_score, atlas_score, atlas_score_source, result_json)
-        VALUES (?, ?, 'valid', 1, ?, ?, ?, ?, ?)""",
+         pose_validation_scope, final_score, atlas_score, atlas_score_source,
+         result_json)
+        VALUES (?, ?, 'valid', 1, ?, ?, ?, ?, ?, ?)""",
         (
             context_id,
             ligand_id,
             pose_valid,
+            QUALIFYING_POSE_VALIDATION_SCOPE if pose_valid is not None else None,
             final_score,
             atlas_score,
             "decoy_standardized" if atlas_score is not None else None,
@@ -75,10 +80,10 @@ def test_export_ranks_only_pose_valid_final_scores_without_fallback(
         )
         connection.executemany(
             """INSERT INTO receptor_annotations
-            (receptor_context_id, qualification_status, native_redock_status,
-             source_path, source_sha256, source_record_index, source_record_json)
-            VALUES (?, 'qualification_passed', 'qualification_passed',
-                    'annotations.csv', 'source-hash', ?, '{}')""",
+            (receptor_context_id, receptor_classification, qualification_status,
+             native_redock_status, source_path, source_sha256, source_record_index,
+             source_record_json) VALUES (?, 'HOLO', 'qualification_passed',
+                    'qualification_passed', 'annotations.csv', 'source-hash', ?, '{}')""",
             [(1, 1), (2, 2)],
         )
         connection.executemany(
@@ -153,6 +158,87 @@ def test_export_ranks_only_pose_valid_final_scores_without_fallback(
     }
 
 
+def test_readiness_requires_selected_result_completion_lineage(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "attempt-lineage.sqlite"
+    with sqlite3.connect(database) as connection:
+        create_schema(connection)
+        connection.execute(
+            "INSERT INTO releases VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("lineage-release", "1", None, None, "hash", "{}", "now"),
+        )
+        connection.execute(
+            "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "run-lineage",
+                "lineage-release",
+                "completed",
+                "manifest.yaml",
+                "hash",
+                "{}",
+                "{}",
+                "{}",
+                "{}",
+                "{}",
+                "{}",
+            ),
+        )
+        connection.execute(
+            """INSERT INTO receptor_contexts
+            (receptor_context_id, run_id, pdb_id, variant, ph_label)
+            VALUES (1, 'run-lineage', 'P1', 'HOLO', '7.4')"""
+        )
+        connection.execute(
+            "INSERT INTO ligands(ligand_id, canonical_id) VALUES (1, 'drug-a')"
+        )
+        _insert_pair(connection, 1, 1, final_score=1.0, pose_valid=1)
+        pair_cell_id = int(
+            connection.execute("SELECT pair_cell_id FROM pair_cells").fetchone()[0]
+        )
+        connection.execute(
+            """INSERT INTO completion_records
+            (completion_record_id, run_id, receptor_context_id, completion_path,
+             completion_sha256, completion_json)
+            VALUES (1, 'run-lineage', 1, 'completion.json', ?, '{}')""",
+            ("a" * 64,),
+        )
+        connection.execute(
+            """INSERT INTO docking_attempts
+            (pair_cell_id, completion_record_id, status, selected_for_release)
+            VALUES (?, 1, 'completed', 1)""",
+            (pair_cell_id,),
+        )
+        connection.execute(
+            """INSERT INTO result_attempts
+            (pair_cell_id, input_csv_path, input_csv_sha256, source_row_number,
+             result_sha256, final_status, selected_for_release)
+            VALUES (?, 'scores.csv', ?, 2, ?, 'valid', 1)""",
+            (pair_cell_id, "b" * 64, "c" * 64),
+        )
+        connection.commit()
+
+    readiness = audit_release_readiness(database)
+    checks = {item["check"]: item for item in readiness["checklist"]}
+    assert checks["selected_result_completion_lineage"]["missing_count"] == 1
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """UPDATE result_attempts
+            SET completion_record_id=1,
+                completion_link_method='completion_manifest_pair_record',
+                completion_link_evidence_json=?
+            WHERE selected_for_release=1""",
+            (json.dumps({"record_key": "P1|HOLO|7.4|drug-a"}),),
+        )
+        connection.commit()
+
+    readiness = audit_release_readiness(database)
+    checks = {item["check"]: item for item in readiness["checklist"]}
+    assert checks["selected_result_completion_lineage"]["missing_count"] == 0
+    assert readiness["metrics"]["attempt_lineage"]["completion_linked_count"] == 1
+
+
 def test_headline_ranking_requires_quality_redock_and_non_apo_context(
     tmp_path: Path,
 ) -> None:
@@ -202,11 +288,11 @@ def test_headline_ranking_requires_quality_redock_and_non_apo_context(
              source_sha256, source_record_index, source_record_json)
             VALUES (?, ?, ?, ?, 'annotations.csv', 'hash', ?, '{}')""",
             [
-                (1, None, "qualification_passed", "qualified", 1),
-                (2, None, "qualification_passed", "qualified", 2),
-                (3, None, None, "qualified", 3),
-                (4, None, "qualified", None, 4),
-                (5, "non-apo", "qualified", "qualified", 5),
+                (1, "HOLO", "qualification_passed", "qualified", 1),
+                (2, "APO", "qualification_passed", "qualified", 2),
+                (3, "HOLO", None, "qualified", 3),
+                (4, "HOLO", "qualified", None, 4),
+                (5, None, "qualified", "qualified", 5),
             ],
         )
         for context_id in range(1, 6):
@@ -230,10 +316,7 @@ def test_headline_ranking_requires_quality_redock_and_non_apo_context(
     assert rows["P2"]["ranking_eligibility_reason"] == "apo_receptor"
     assert rows["P3"]["ranking_eligibility_reason"] == "receptor_quality_not_qualified"
     assert rows["P4"]["ranking_eligibility_reason"] == "native_redock_not_qualified"
-    assert (
-        rows["P5"]["ranking_eligibility_reason"]
-        == "receptor_classification_policy_pending"
-    )
+    assert rows["P5"]["ranking_eligibility_reason"] == "receptor_classification_missing"
     assert all(
         row["rank_within_receptor"] is None
         for row in rows.values()
@@ -245,10 +328,10 @@ def test_headline_ranking_requires_quality_redock_and_non_apo_context(
         "apo_receptor": 1,
         "eligible": 1,
         "native_redock_not_qualified": 1,
-        "receptor_classification_policy_pending": 1,
+        "receptor_classification_missing": 1,
         "receptor_quality_not_qualified": 1,
     }
     checks = {item["check"]: item for item in readiness["checklist"]}
-    assert checks["receptor_classification_policy_approval"]["missing_count"] == 1
+    assert checks["receptor_classification_controlled_coverage"]["missing_count"] == 1
     assert checks["receptor_quality_explicit_qualification"]["missing_count"] == 1
     assert checks["native_redock_explicit_qualification"]["missing_count"] == 1

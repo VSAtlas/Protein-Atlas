@@ -13,8 +13,11 @@ from analysis.atlas_database.exports import (
     ranking_eligibility,
     receptor_ranking_eligibility,
 )
+from analysis.atlas_database.pose_validation_contract import (
+    QUALIFYING_POSE_VALIDATION_SCOPE,
+)
 
-READINESS_SCHEMA_VERSION = 3
+READINESS_SCHEMA_VERSION = 5
 _FAILURE_STATUSES = {
     "expected",
     "failed",
@@ -31,6 +34,14 @@ def _fraction(numerator: int, denominator: int) -> float:
 def _status_counts(values: Iterable[Any]) -> dict[str, int]:
     counts = Counter(str(value or "missing") for value in values)
     return dict(sorted(counts.items()))
+
+
+def _has_structured_evidence(value: Any) -> bool:
+    try:
+        payload = json.loads(str(value or ""))
+    except (TypeError, ValueError):
+        return False
+    return isinstance(payload, dict) and bool(payload)
 
 
 def _final_score_source(
@@ -87,7 +98,8 @@ def audit_release_readiness(
             for row in connection.execute(
                 """SELECT p.pair_cell_id, p.final_status, p.failure_code,
                 p.failure_reason, p.expected, p.has_result, p.pose_valid,
-                p.is_control, p.is_decoy, p.final_score,
+                p.pose_validation_scope, p.is_control, p.is_decoy,
+                p.final_score,
                 p.final_score_source, p.result_json, r.variant,
                 a.receptor_classification,
                 a.qualification_status AS receptor_qualification_status,
@@ -105,6 +117,8 @@ def audit_release_readiness(
             for row in connection.execute(
                 """SELECT r.receptor_context_id, r.variant,
                 a.receptor_classification,
+                a.classification_method, a.chemistry_evidence_status,
+                a.requested_observed_conflict,
                 a.qualification_status AS receptor_qualification_status,
                 COALESCE(a.native_redock_status, r.native_redock_status)
                     AS native_redock_status,
@@ -120,6 +134,29 @@ def audit_release_readiness(
             for row in connection.execute(
                 """SELECT artifact_id, pair_cell_id, sha256, verified
                 FROM artifacts"""
+            )
+        ]
+        receptor_audits = [
+            dict(row)
+            for row in connection.execute(
+                """SELECT audit_kind, parse_status FROM receptor_audits
+                ORDER BY receptor_audit_id"""
+            )
+        ]
+        selected_result_attempts = [
+            dict(row)
+            for row in connection.execute(
+                """SELECT result_attempt_id, completion_record_id,
+                completion_link_method, completion_link_evidence_json,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM docking_attempts d
+                    WHERE d.pair_cell_id=result_attempts.pair_cell_id
+                      AND d.completion_record_id=
+                          result_attempts.completion_record_id
+                      AND d.selected_for_release=1
+                ) THEN 1 ELSE 0 END AS selected_completion_match
+                FROM result_attempts
+                WHERE selected_for_release=1"""
             )
         ]
     finally:
@@ -141,7 +178,9 @@ def audit_release_readiness(
     valid_drug_candidates = [
         row
         for row in pairs
-        if row["pose_valid"] == 1 and receptor_ranking_eligibility(row)[0] == 1
+        if row["pose_valid"] == 1
+        and row["pose_validation_scope"] == QUALIFYING_POSE_VALIDATION_SCOPE
+        and receptor_ranking_eligibility(row)[0] == 1
     ]
     scored_valid_drug_candidates = [
         row for row in valid_drug_candidates if row["final_score"] is not None
@@ -156,6 +195,16 @@ def audit_release_readiness(
     pose_valid = [row for row in pairs if row["pose_valid"] == 1]
     pose_invalid = [row for row in pairs if row["pose_valid"] == 0]
     pose_unvalidated = [row for row in pairs if row["pose_valid"] is None]
+    pose_selected_scope = [
+        row
+        for row in pose_valid
+        if row["pose_validation_scope"] == QUALIFYING_POSE_VALIDATION_SCOPE
+    ]
+    pose_scope_unqualified = [
+        row
+        for row in pose_valid
+        if row["pose_validation_scope"] != QUALIFYING_POSE_VALIDATION_SCOPE
+    ]
 
     quality_status_counts = _status_counts(
         row["receptor_qualification_status"] for row in receptors
@@ -163,13 +212,28 @@ def audit_release_readiness(
     redock_status_counts = _status_counts(
         row["native_redock_status"] for row in receptors
     )
-    classification_policy_pending = [
-        row for row in receptors if str(row["receptor_classification"] or "").strip()
+    controlled_classifications = [
+        row
+        for row in receptors
+        if str(row["receptor_classification"] or "").strip().upper() in {"APO", "HOLO"}
+    ]
+    classification_missing_or_uncontrolled = [
+        row for row in receptors if row not in controlled_classifications
+    ]
+    classification_counts = _status_counts(
+        str(row["receptor_classification"] or "").strip().upper() or "missing"
+        for row in receptors
+    )
+    chemistry_evidence_status_counts = _status_counts(
+        row["chemistry_evidence_status"] for row in receptors
+    )
+    chemistry_conflicts = [
+        row for row in receptors if row["requested_observed_conflict"] == 1
     ]
     headline_receptors = [
         row
         for row in receptors
-        if receptor_ranking_eligibility(row)[1] != "apo_receptor"
+        if str(row["receptor_classification"] or "").strip().upper() == "HOLO"
     ]
     explicitly_quality_qualified = [
         row
@@ -201,6 +265,14 @@ def audit_release_readiness(
         for source, count in source_counts.items()
         if source not in {"missing_final_score", "legacy_unclassified_final_score"}
     )
+    result_attempts_with_completion_lineage = [
+        row
+        for row in selected_result_attempts
+        if row["completion_record_id"] is not None
+        and str(row["completion_link_method"] or "").strip()
+        and _has_structured_evidence(row["completion_link_evidence_json"])
+        and row["selected_completion_match"] == 1
+    ]
 
     checklist = [
         _check(
@@ -232,11 +304,18 @@ def audit_release_readiness(
             missing=len(pose_unvalidated),
         ),
         _check(
-            "receptor_classification_policy_approval",
-            complete=not classification_policy_pending,
-            observed=len(receptors) - len(classification_policy_pending),
+            "pose_validation_selected_pose_alignment",
+            complete=not pose_scope_unqualified,
+            observed=len(pose_selected_scope),
+            total=len(pose_valid),
+            missing=len(pose_scope_unqualified),
+        ),
+        _check(
+            "receptor_classification_controlled_coverage",
+            complete=not classification_missing_or_uncontrolled,
+            observed=len(controlled_classifications),
             total=len(receptors),
-            missing=len(classification_policy_pending),
+            missing=len(classification_missing_or_uncontrolled),
         ),
         _check(
             "receptor_quality_explicit_qualification",
@@ -279,6 +358,19 @@ def audit_release_readiness(
             observed=classified_sources,
             total=len(scored),
             missing=len(scored) - classified_sources,
+        ),
+        _check(
+            "selected_result_completion_lineage",
+            complete=(
+                len(result_attempts_with_completion_lineage)
+                == len(selected_result_attempts)
+            ),
+            observed=len(result_attempts_with_completion_lineage),
+            total=len(selected_result_attempts),
+            missing=(
+                len(selected_result_attempts)
+                - len(result_attempts_with_completion_lineage)
+            ),
         ),
     ]
     blockers = [
@@ -331,12 +423,22 @@ def audit_release_readiness(
                 "valid_count": len(pose_valid),
                 "invalid_count": len(pose_invalid),
                 "unvalidated_count": len(pose_unvalidated),
+                "selected_pose_scope_count": len(pose_selected_scope),
+                "scope_unqualified_count": len(pose_scope_unqualified),
             },
             "receptor_quality": {
                 "receptor_classification": {
-                    "policy": "pending_user_approval",
-                    "recorded_but_unapproved_count": len(classification_policy_pending),
-                    "ranking_behavior": "excluded_without_free_text_inference",
+                    "vocabulary": ["APO", "HOLO"],
+                    "classification_counts": classification_counts,
+                    "controlled_count": len(controlled_classifications),
+                    "missing_or_uncontrolled_count": len(
+                        classification_missing_or_uncontrolled
+                    ),
+                    "chemistry_evidence_status_counts": (
+                        chemistry_evidence_status_counts
+                    ),
+                    "requested_observed_conflict_count": len(chemistry_conflicts),
+                    "ranking_behavior": "requires exact controlled HOLO annotation",
                 },
                 "receptor_count": len(receptors),
                 "headline_non_apo_receptor_count": len(headline_receptors),
@@ -354,6 +456,26 @@ def audit_release_readiness(
                     len(receptors) - len(explicitly_qualified)
                 ),
             },
+            "receptor_audits": {
+                "count": len(receptor_audits),
+                "kind_counts": _status_counts(
+                    row["audit_kind"] for row in receptor_audits
+                ),
+                "status_counts": _status_counts(
+                    row["parse_status"] for row in receptor_audits
+                ),
+                "accepted_count": sum(
+                    row["parse_status"] == "parsed" for row in receptor_audits
+                ),
+                "rejected_count": sum(
+                    str(row["parse_status"]).startswith("rejected:")
+                    for row in receptor_audits
+                ),
+                "qualification_behavior": (
+                    "descriptive evidence only; audit presence never qualifies "
+                    "receptor quality or native redocking"
+                ),
+            },
             "receptor_variants": variant_counts,
             "artifacts": {
                 "artifact_count": artifact_count,
@@ -368,6 +490,21 @@ def audit_release_readiness(
                 ),
                 "verified_coverage_fraction": _fraction(
                     len(artifacts_verified), artifact_count
+                ),
+            },
+            "attempt_lineage": {
+                "selected_result_attempt_count": len(selected_result_attempts),
+                "completion_linked_count": len(
+                    result_attempts_with_completion_lineage
+                ),
+                "completion_link_missing_count": (
+                    len(selected_result_attempts)
+                    - len(result_attempts_with_completion_lineage)
+                ),
+                "policy": (
+                    "a selected result must name its causal completion record, "
+                    "link method, structured evidence, and matching selected "
+                    "completion attempt"
                 ),
             },
         },

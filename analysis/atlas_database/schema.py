@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS pair_cells (
     expected INTEGER NOT NULL DEFAULT 0 CHECK (expected IN (0, 1)),
     has_result INTEGER NOT NULL DEFAULT 0 CHECK (has_result IN (0, 1)),
     pose_valid INTEGER CHECK (pose_valid IN (0, 1) OR pose_valid IS NULL),
+    pose_validation_method TEXT,
+    pose_validation_scope TEXT,
+    pose_validation_thresholds_json TEXT,
     is_control INTEGER NOT NULL DEFAULT 0 CHECK (is_control IN (0, 1)),
     is_decoy INTEGER NOT NULL DEFAULT 0 CHECK (is_decoy IN (0, 1)),
     atlas_score REAL,
@@ -117,9 +120,49 @@ CREATE TABLE IF NOT EXISTS docking_attempts (
     status TEXT NOT NULL,
     failure_code TEXT,
     failure_reason TEXT,
+    selected_for_release INTEGER NOT NULL DEFAULT 0
+        CHECK (selected_for_release IN (0, 1)),
+    selection_method TEXT,
+    selection_manifest_index INTEGER,
     UNIQUE (pair_cell_id, completion_record_id, engine, stage, chunk_id)
 );
 
+
+CREATE TABLE IF NOT EXISTS result_attempts (
+    result_attempt_id INTEGER PRIMARY KEY,
+    pair_cell_id INTEGER NOT NULL REFERENCES pair_cells(pair_cell_id) ON DELETE CASCADE,
+    completion_record_id INTEGER
+        REFERENCES completion_records(completion_record_id) ON DELETE SET NULL,
+    completion_link_method TEXT,
+    completion_link_evidence_json TEXT,
+    input_csv_path TEXT NOT NULL,
+    input_csv_sha256 TEXT NOT NULL,
+    source_row_number INTEGER NOT NULL,
+    result_sha256 TEXT NOT NULL,
+    final_status TEXT NOT NULL,
+    failure_code TEXT,
+    failure_reason TEXT,
+    pose_valid INTEGER CHECK (pose_valid IN (0, 1) OR pose_valid IS NULL),
+    pose_validation_method TEXT,
+    pose_validation_scope TEXT,
+    pose_validation_thresholds_json TEXT,
+    is_control INTEGER NOT NULL DEFAULT 0 CHECK (is_control IN (0, 1)),
+    is_decoy INTEGER NOT NULL DEFAULT 0 CHECK (is_decoy IN (0, 1)),
+    atlas_score REAL,
+    atlas_score_source TEXT,
+    selected_docking_score REAL,
+    consensus_score REAL,
+    final_score REAL,
+    final_score_source TEXT,
+    final_rank INTEGER,
+    source_csv TEXT,
+    result_json TEXT,
+    selected_for_release INTEGER NOT NULL DEFAULT 0
+        CHECK (selected_for_release IN (0, 1)),
+    selection_method TEXT,
+    selection_manifest_index INTEGER,
+    UNIQUE (pair_cell_id, input_csv_sha256, source_row_number)
+);
 CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id INTEGER PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
@@ -129,7 +172,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
     mode TEXT,
     original_path TEXT,
     archive_path TEXT,
+    ligand_id INTEGER REFERENCES ligands(ligand_id) ON DELETE SET NULL,
     member_name TEXT,
+    artifact_role TEXT NOT NULL,
+    artifact_scope TEXT NOT NULL
+        CHECK (artifact_scope IN ('run', 'receptor', 'ligand', 'pair')),
     sha256 TEXT,
     size_bytes INTEGER,
     file_type TEXT,
@@ -158,6 +205,20 @@ CREATE TABLE IF NOT EXISTS receptor_annotations (
     protein_identity_id INTEGER
         REFERENCES protein_identities(protein_identity_id),
     receptor_classification TEXT,
+    classification_method TEXT,
+    chemistry_evidence_status TEXT,
+    prepared_receptor_sha256 TEXT,
+    canonical_chemistry_policy_sha256 TEXT,
+    retained_metal_atom_count INTEGER
+        CHECK (retained_metal_atom_count >= 0 OR retained_metal_atom_count IS NULL),
+    retained_cofactor_residue_count INTEGER
+        CHECK (
+            retained_cofactor_residue_count >= 0
+            OR retained_cofactor_residue_count IS NULL
+        ),
+    requested_observed_conflict INTEGER
+        CHECK (requested_observed_conflict IN (0, 1)
+               OR requested_observed_conflict IS NULL),
     qualification_status TEXT,
     qualification_reason TEXT,
     native_redock_reason TEXT,
@@ -168,6 +229,18 @@ CREATE TABLE IF NOT EXISTS receptor_annotations (
     source_record_index INTEGER NOT NULL,
     source_record_json TEXT NOT NULL,
     provenance_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS receptor_audits (
+    receptor_audit_id INTEGER PRIMARY KEY,
+    receptor_context_id INTEGER NOT NULL
+        REFERENCES receptor_contexts(receptor_context_id) ON DELETE CASCADE,
+    audit_kind TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    parse_status TEXT NOT NULL,
+    audit_json TEXT NOT NULL,
+    UNIQUE (receptor_context_id, audit_kind, source_sha256)
 );
 
 CREATE TABLE IF NOT EXISTS known_pair_selections (
@@ -195,15 +268,25 @@ CREATE INDEX IF NOT EXISTS idx_context_pdb ON receptor_contexts(pdb_id, variant,
 CREATE INDEX IF NOT EXISTS idx_attempt_status ON docking_attempts(status);
 CREATE INDEX IF NOT EXISTS idx_attempt_completion
     ON docking_attempts(completion_record_id);
+CREATE INDEX IF NOT EXISTS idx_attempt_selected
+    ON docking_attempts(pair_cell_id, selected_for_release);
+CREATE INDEX IF NOT EXISTS idx_result_attempt_pair
+    ON result_attempts(pair_cell_id, selected_for_release);
+CREATE INDEX IF NOT EXISTS idx_result_attempt_completion
+    ON result_attempts(completion_record_id, selected_for_release);
 CREATE INDEX IF NOT EXISTS idx_completion_context
     ON completion_records(receptor_context_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_pair ON artifacts(pair_cell_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_ligand ON artifacts(ligand_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_role ON artifacts(artifact_role);
 CREATE INDEX IF NOT EXISTS idx_protein_identity_uniprot
     ON protein_identities(uniprot_id);
 CREATE INDEX IF NOT EXISTS idx_protein_identity_gene
     ON protein_identities(gene_symbol);
 CREATE INDEX IF NOT EXISTS idx_receptor_annotation_protein
     ON receptor_annotations(protein_identity_id);
+CREATE INDEX IF NOT EXISTS idx_receptor_audit_context
+    ON receptor_audits(receptor_context_id, audit_kind);
 CREATE INDEX IF NOT EXISTS idx_known_pair_ligand
     ON known_pair_selections(ligand_canonical_id);
 """

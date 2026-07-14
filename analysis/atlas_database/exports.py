@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from analysis.atlas_database.annotations import is_explicitly_qualified
+from analysis.atlas_database.artifact_contract import ARTIFACT_ROLES
+from analysis.atlas_database.pose_validation_contract import (
+    QUALIFYING_POSE_VALIDATION_SCOPE,
+    pose_validation_browser_contract,
+)
 
 
 PAIR_COLUMNS = (
@@ -22,6 +27,13 @@ PAIR_COLUMNS = (
     "target_id",
     "receptor_label",
     "receptor_classification",
+    "receptor_classification_method",
+    "chemistry_evidence_status",
+    "prepared_receptor_sha256",
+    "canonical_chemistry_policy_sha256",
+    "retained_metal_atom_count",
+    "retained_cofactor_residue_count",
+    "requested_observed_conflict",
     "receptor_qualification_status",
     "native_redock_status",
     "ligand_id",
@@ -34,6 +46,9 @@ PAIR_COLUMNS = (
     "expected",
     "has_result",
     "pose_valid",
+    "pose_validation_method",
+    "pose_validation_scope",
+    "pose_validation_thresholds_json",
     "is_control",
     "is_decoy",
     "final_score",
@@ -106,16 +121,13 @@ def receptor_ranking_eligibility(
         return 0, "native_control"
     if row.get("is_decoy") == 1:
         return 0, "decoy"
-    variant = str(row.get("variant") or "").strip().upper()
-    if variant == "APO":
+    classification = str(row.get("receptor_classification") or "").strip().upper()
+    if classification == "APO":
         return 0, "apo_receptor"
-    if variant != "HOLO":
-        return 0, "receptor_variant_not_holo"
-    # Classification vocabulary and run/source conflict handling are scientific
-    # policies awaiting user approval. Preserve the annotation for display and
-    # provenance, but never interpret its free text in a headline rank.
-    if str(row.get("receptor_classification") or "").strip():
-        return 0, "receptor_classification_policy_pending"
+    if not classification:
+        return 0, "receptor_classification_missing"
+    if classification != "HOLO":
+        return 0, "receptor_classification_uncontrolled"
     if not is_explicitly_qualified(row.get("receptor_qualification_status")):
         return 0, "receptor_quality_not_qualified"
     if not is_explicitly_qualified(row.get("native_redock_status")):
@@ -134,6 +146,8 @@ def ranking_eligibility(row: Mapping[str, Any]) -> tuple[int, str | None]:
         return 0, "pose_invalid"
     if row.get("pose_valid") is None:
         return 0, "pose_validation_missing"
+    if row.get("pose_validation_scope") != QUALIFYING_POSE_VALIDATION_SCOPE:
+        return 0, "pose_validation_scope_unqualified"
     return 1, None
 
 
@@ -164,13 +178,22 @@ def _pair_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     query = """
         SELECT p.pair_cell_id, r.run_id, r.pdb_id, r.variant, r.ph_label,
             ra.receptor_classification,
+            ra.classification_method AS receptor_classification_method,
+            ra.chemistry_evidence_status,
+            ra.prepared_receptor_sha256,
+            ra.canonical_chemistry_policy_sha256,
+            ra.retained_metal_atom_count,
+            ra.retained_cofactor_residue_count,
+            ra.requested_observed_conflict,
             ra.qualification_status AS receptor_qualification_status,
             COALESCE(ra.native_redock_status, r.native_redock_status)
                 AS native_redock_status,
             l.ligand_id, l.canonical_id AS ligand_canonical_id,
             COALESCE(l.display_name, l.canonical_id) AS ligand_display_name,
             p.final_status, p.failure_code, p.failure_reason, p.expected,
-            p.has_result, p.pose_valid, p.is_control, p.is_decoy, p.final_score,
+            p.has_result, p.pose_valid, p.pose_validation_method,
+            p.pose_validation_scope, p.pose_validation_thresholds_json,
+            p.is_control, p.is_decoy, p.final_score,
             p.final_score_source, p.final_rank, p.atlas_score, p.atlas_score_source,
             p.selected_docking_score, p.consensus_score, p.result_json,
             COUNT(a.artifact_id) AS artifact_count,
@@ -283,6 +306,10 @@ def _browser_payload(
             COALESCE(a.native_redock_reason, r.native_redock_reason)
                 AS native_redock_reason,
             a.receptor_classification, a.qualification_status,
+            a.classification_method, a.chemistry_evidence_status,
+            a.prepared_receptor_sha256, a.canonical_chemistry_policy_sha256,
+            a.retained_metal_atom_count, a.retained_cofactor_residue_count,
+            a.requested_observed_conflict,
             a.qualification_reason, a.native_redock_rmsd,
             p.protein_key, p.uniprot_id, p.gene_symbol,
             p.display_name
@@ -294,12 +321,43 @@ def _browser_payload(
             ORDER BY r.run_id, r.pdb_id, r.variant, r.ph_label"""
         )
     ]
+    receptor_audits = [
+        dict(row)
+        for row in connection.execute(
+            """SELECT receptor_audit_id, receptor_context_id, audit_kind,
+            source_sha256, parse_status
+            FROM receptor_audits
+            ORDER BY receptor_context_id, audit_kind, receptor_audit_id"""
+        )
+    ]
+    audits_by_context: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for audit in receptor_audits:
+        audits_by_context[int(audit["receptor_context_id"])].append(audit)
     targets: list[dict[str, Any]] = []
     for target in target_rows:
         target["receptor_label"] = _receptor_label(target)
         target["target_key"] = _target_key(target)
         target["id"] = target["target_key"]
         target["target_id"] = target["target_key"]
+        target_audits = audits_by_context[int(target["receptor_context_id"])]
+        target["receptor_audit_count"] = len(target_audits)
+        target["receptor_audit_kinds"] = sorted(
+            {str(audit["audit_kind"]) for audit in target_audits}
+        )
+        target["accepted_receptor_audit_kinds"] = sorted(
+            {
+                str(audit["audit_kind"])
+                for audit in target_audits
+                if audit["parse_status"] == "parsed"
+            }
+        )
+        target["receptor_audit_status_counts"] = _counts(
+            target_audits, "parse_status"
+        )
+        target["rejected_receptor_audit_count"] = sum(
+            str(audit["parse_status"]).startswith("rejected:")
+            for audit in target_audits
+        )
         for name in ("center_json", "box_json"):
             value = target.pop(name, None)
             target[name.removesuffix("_json")] = json.loads(value) if value else None
@@ -334,9 +392,12 @@ def _browser_payload(
     artifacts = [
         dict(row)
         for row in connection.execute(
-            """SELECT artifact_id, pair_cell_id, receptor_context_id, stage, mode,
-            member_name, sha256, size_bytes, file_type, verified
-            FROM artifacts ORDER BY artifact_id"""
+            """SELECT a.artifact_id, a.pair_cell_id, a.receptor_context_id,
+            a.ligand_id, l.canonical_id AS ligand_canonical_id,
+            a.artifact_role, a.artifact_scope, a.stage, a.mode,
+            a.member_name, a.sha256, a.size_bytes, a.file_type, a.verified
+            FROM artifacts a LEFT JOIN ligands l ON l.ligand_id=a.ligand_id
+            ORDER BY a.artifact_id"""
         )
     ]
     scored = [row for row in rows if row["primary_score_present"]]
@@ -346,11 +407,14 @@ def _browser_payload(
         "payload_schema_version": 1,
         "release": release,
         "scientific_policies": policies,
+        "pose_validation_contract": pose_validation_browser_contract(policies),
         "artifact_contract": {
             "embedding": "top_level_collection",
             "pair_join_field": "pair_cell_id",
             "public_urls_included": False,
             "absolute_paths_included": False,
+            "role_field": "artifact_role",
+            "controlled_roles": list(ARTIFACT_ROLES),
         },
         "score_contract": {
             "primary_field": "final_score",
@@ -374,11 +438,23 @@ def _browser_payload(
                 if source != "legacy_unclassified_final_score"
             ),
             "pair_status_counts": _counts(rows, "final_status"),
+            "receptor_classification_counts": _counts(
+                targets, "receptor_classification"
+            ),
+            "chemistry_evidence_status_counts": _counts(
+                targets, "chemistry_evidence_status"
+            ),
+            "receptor_audit_count": len(receptor_audits),
+            "receptor_audit_kind_counts": _counts(receptor_audits, "audit_kind"),
+            "receptor_audit_status_counts": _counts(
+                receptor_audits, "parse_status"
+            ),
         },
         "targets": targets,
         "ligands": ligands,
         "pairs": [{name: row.get(name) for name in PAIR_COLUMNS} for row in rows],
         "artifacts": artifacts,
+        "receptor_audits": receptor_audits,
     }
 
 

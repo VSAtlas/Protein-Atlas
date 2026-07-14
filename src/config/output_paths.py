@@ -56,6 +56,11 @@ def runtime_root(
 def run_dir_candidates(repo_root: Path, name: str, run_id: str) -> list[Path]:
     return [
         output_root(repo_root, name) / str(run_id),
+        outputs_root(repo_root)
+        / str(run_id)
+        / "outputs"
+        / _RUNTIME_NAMES.get(name, name)
+        / str(run_id),
         legacy_root(repo_root, name) / str(run_id),
     ]
 
