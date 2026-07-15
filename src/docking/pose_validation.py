@@ -81,31 +81,64 @@ def parse_pdb_coordinates(pdb_file):
     return _np().array(coords, dtype=float), elements
 
 
-def compute_redock_rmsd(crystal_lig_path: str, docked_pdbqt_path: str):
+def compute_redock_rmsd(
+    crystal_lig_path: str,
+    docked_pdbqt_path: str,
+    *,
+    prepared_ligand_graph_path: str | None = None,
+    prepared_ligand_pdbqt_path: str | None = None,
+    source_receptor_path: str | None = None,
+    prepared_receptor_path: str | None = None,
+    coordinate_frame_manifest_path: str | None = None,
+    coordinate_frame_manifest_sha256: str | None = None,
+    reference_extraction_manifest_path: str | None = None,
+    pose_selection_manifest_path: str | None = None,
+    pose_selection_manifest_sha256: str | None = None,
+) -> float | None:
+    """Compatibility wrapper for strict native-redock RMSD.
+
+    The former implementation silently truncated unequal atom sets and fitted a
+    ligand-only Kabsch transform. That result was not valid docking RMSD and is
+    no longer available. Callers must supply exact prepared-ligand topology,
+    Meeko's PDBQT mapping, hashed coordinate-frame/reference-extraction
+    manifests, and a hashed pose-selection manifest. Use
+    evaluate_native_redock_rmsd directly when the full provenance record or
+    best-generated-pose diagnostic is needed.
     """
-    Compute heavy-atom Kabsch RMSD between the extracted crystal ligand (PDB/MOL2/SDF-as-PDB formatted)
-    and the best-scoring docked pose (PDBQT). Assumes atom ordering is consistent; truncates to min length.
-    Returns float RMSD in Å, or None on failure.
-    """
+
+    if (
+        prepared_ligand_graph_path is None
+        or prepared_ligand_pdbqt_path is None
+        or source_receptor_path is None
+        or prepared_receptor_path is None
+        or coordinate_frame_manifest_path is None
+        or not coordinate_frame_manifest_sha256
+        or reference_extraction_manifest_path is None
+        or pose_selection_manifest_path is None
+        or not pose_selection_manifest_sha256
+    ):
+        return None
     try:
-        # Prefer PDB; if the extracted file is MOL2/SDF but written with PDB-like columns, parse still works.
-        if crystal_lig_path.lower().endswith(".pdb"):
-            ref_xyz, _ = parse_pdb_coordinates(crystal_lig_path)
-        else:
-            # best-effort parse using PDB columns (your extractor often writes PDB too)
-            ref_xyz, _ = parse_pdb_coordinates(crystal_lig_path)
+        from docking.native_redock_rmsd import evaluate_native_redock_rmsd
 
-        prd_xyz, _ = parse_pdbqt_coordinates(docked_pdbqt_path)
-        if ref_xyz.size == 0 or prd_xyz.size == 0:
-            return None
-
-        n = min(ref_xyz.shape[0], prd_xyz.shape[0])
-        if n < 5:
-            return None
-
-        return _kabsch(ref_xyz[:n], prd_xyz[:n])
+        result = evaluate_native_redock_rmsd(
+            crystal_lig_path,
+            prepared_ligand_graph_path,
+            prepared_ligand_pdbqt_path,
+            docked_pdbqt_path,
+            source_receptor_path=source_receptor_path,
+            prepared_receptor_path=prepared_receptor_path,
+            coordinate_frame_manifest_path=coordinate_frame_manifest_path,
+            coordinate_frame_manifest_sha256=coordinate_frame_manifest_sha256,
+            reference_extraction_manifest_path=reference_extraction_manifest_path,
+            pose_selection_manifest_path=pose_selection_manifest_path,
+            pose_selection_manifest_sha256=pose_selection_manifest_sha256,
+        )
     except Exception:
         return None
+    if result.status not in {"qualified", "not_qualified"}:
+        return None
+    return result.top_ranked_rmsd_a
 
 
 def compute_self_rmsd(pdbqt_path: str):
@@ -335,7 +368,8 @@ def validate_pose_pdbqt(
 
     if surface_atom_coords is not None and len(surface_atom_coords) > 0:
         dists = _np().linalg.norm(
-            ligand_coords[:, _np().newaxis, :] - surface_atom_coords[_np().newaxis, :, :],
+            ligand_coords[:, _np().newaxis, :]
+            - surface_atom_coords[_np().newaxis, :, :],
             axis=2,
         )
         min_dist = _np().min(dists)
@@ -356,7 +390,9 @@ def validate_pose_pdbqt(
         # Fallback: centroid-based distance
         used_fallback = True
         ligand_centroid = _np().mean(ligand_coords, axis=0)
-        distance_to_pocket = _np().linalg.norm(ligand_centroid - _np().array(pocket_center))
+        distance_to_pocket = _np().linalg.norm(
+            ligand_centroid - _np().array(pocket_center)
+        )
 
         if distance_to_pocket > DIST_THRESHOLD_CENTROID:
             return {

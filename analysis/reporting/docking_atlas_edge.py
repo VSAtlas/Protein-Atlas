@@ -121,10 +121,48 @@ def _write_object(
     return entry
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value or "").strip().casefold() in {"1", "true", "yes"}
+
+
+def _eligible_ranking_track(pair: Mapping[str, Any]) -> str | None:
+    track = str(pair.get("ranking_track") or "").strip()
+    if track == "qualified_holo" and _truthy(pair.get("rank_eligible")):
+        return track
+    if track == "exploratory_apo" and _truthy(
+        pair.get("apo_exploratory_rank_eligible")
+    ):
+        return track
+    return None
+
+
 def _rank_value(pair: Mapping[str, Any], entity_kind: str) -> Any:
-    if entity_kind == "targets":
+    track = _eligible_ranking_track(pair)
+    if track == "exploratory_apo":
+        if entity_kind == "targets":
+            return pair.get("apo_rank_within_receptor")
+        return pair.get("apo_rank_across_receptors")
+    if track == "qualified_holo" and entity_kind == "targets":
         return pair.get("rank_within_receptor", pair.get("protein_rank"))
-    return pair.get("rank_across_receptors", pair.get("drug_rank"))
+    if track == "qualified_holo":
+        return pair.get("rank_across_receptors", pair.get("drug_rank"))
+    return None
+
+
+def _rank_track_label(pair: Mapping[str, Any]) -> str:
+    eligible_track = _eligible_ranking_track(pair)
+    if eligible_track == "qualified_holo":
+        return "HOLO qualified"
+    if eligible_track == "exploratory_apo":
+        return "APO exploratory"
+    return {
+        "qualified_holo": "HOLO excluded",
+        "exploratory_apo": "APO exploratory excluded",
+    }.get(str(pair.get("ranking_track") or ""), "Unqualified")
 
 
 def _pair_summary(
@@ -153,14 +191,23 @@ def _pair_summary(
         "failure_reason": pair.get("failure_reason"),
         "final_score": pair.get("final_score"),
         "final_score_source": pair.get("final_score_source"),
+        "final_score_source_effective": pair.get("final_score_source_effective"),
+        "final_score_source_family": pair.get("final_score_source_family"),
         "rank_eligible": pair.get("rank_eligible"),
         "ranking_eligibility_reason": pair.get("ranking_eligibility_reason"),
+        "apo_exploratory_rank_eligible": pair.get("apo_exploratory_rank_eligible"),
+        "apo_exploratory_ranking_eligibility_reason": pair.get(
+            "apo_exploratory_ranking_eligibility_reason"
+        ),
+        "ranking_track": pair.get("ranking_track"),
         "rank_within_receptor": pair.get(
             "rank_within_receptor", pair.get("protein_rank")
         ),
         "rank_across_receptors": pair.get(
             "rank_across_receptors", pair.get("drug_rank")
         ),
+        "apo_rank_within_receptor": pair.get("apo_rank_within_receptor"),
+        "apo_rank_across_receptors": pair.get("apo_rank_across_receptors"),
         "pose_valid": pair.get("pose_valid"),
     }
 
@@ -186,6 +233,7 @@ def _counterpart_summary(
             }
         )
     result["rank"] = _rank_value(summary, entity_kind)
+    result["rank_track_label"] = _rank_track_label(summary)
     return result
 
 

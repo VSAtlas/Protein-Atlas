@@ -10,14 +10,20 @@ from typing import Any, Iterable
 
 from analysis.atlas_database.annotations import is_explicitly_qualified
 from analysis.atlas_database.exports import (
+    apo_exploratory_ranking_eligibility,
     ranking_eligibility,
+    receptor_chemistry_evidence_eligibility,
     receptor_ranking_eligibility,
 )
 from analysis.atlas_database.pose_validation_contract import (
     QUALIFYING_POSE_VALIDATION_SCOPE,
 )
+from analysis.atlas_database.score_source_contract import (
+    classify_materialized_source,
+    score_source_browser_contract,
+)
 
-READINESS_SCHEMA_VERSION = 5
+READINESS_SCHEMA_VERSION = 6
 _FAILURE_STATUSES = {
     "expected",
     "failed",
@@ -44,11 +50,11 @@ def _has_structured_evidence(value: Any) -> bool:
     return isinstance(payload, dict) and bool(payload)
 
 
-def _final_score_source(
+def _declared_final_score_source(
     result_json: Any, final_score: Any, stored_source: Any = None
-) -> str:
+) -> str | None:
     if final_score is None:
-        return "missing_final_score"
+        return None
     source = str(stored_source or "").strip()
     if source:
         return source
@@ -57,7 +63,7 @@ def _final_score_source(
     except (TypeError, ValueError):
         payload = {}
     source = str(payload.get("final_score_source") or "").strip()
-    return source or "legacy_unclassified_final_score"
+    return source or None
 
 
 def _check(
@@ -100,8 +106,19 @@ def audit_release_readiness(
                 p.failure_reason, p.expected, p.has_result, p.pose_valid,
                 p.pose_validation_scope, p.is_control, p.is_decoy,
                 p.final_score,
-                p.final_score_source, p.result_json, r.variant,
+                p.final_score_source, p.final_score_source_reconstructed,
+                p.final_score_source_classification,
+                p.final_score_source_evidence_json,
+                sra.input_csv_sha256 AS selected_result_input_csv_sha256,
+                sra.source_row_number AS selected_result_source_row_number,
+                sra.result_sha256 AS selected_result_sha256,
+                p.result_json, r.variant,
                 a.receptor_classification,
+                a.classification_method AS receptor_classification_method,
+                a.chemistry_evidence_status,
+                a.prepared_receptor_sha256,
+                a.canonical_chemistry_policy_sha256,
+                a.requested_observed_conflict,
                 a.qualification_status AS receptor_qualification_status,
                 COALESCE(a.native_redock_status, r.native_redock_status)
                     AS native_redock_status
@@ -109,7 +126,10 @@ def audit_release_readiness(
                 JOIN receptor_contexts r
                   ON r.receptor_context_id=p.receptor_context_id
                 LEFT JOIN receptor_annotations a
-                  ON a.receptor_context_id=r.receptor_context_id"""
+                  ON a.receptor_context_id=r.receptor_context_id
+                LEFT JOIN result_attempts sra
+                  ON sra.pair_cell_id=p.pair_cell_id
+                 AND sra.selected_for_release=1"""
             )
         ]
         receptors = [
@@ -117,7 +137,10 @@ def audit_release_readiness(
             for row in connection.execute(
                 """SELECT r.receptor_context_id, r.variant,
                 a.receptor_classification,
-                a.classification_method, a.chemistry_evidence_status,
+                a.chemistry_evidence_status,
+                a.classification_method AS receptor_classification_method,
+                a.prepared_receptor_sha256,
+                a.canonical_chemistry_policy_sha256,
                 a.requested_observed_conflict,
                 a.qualification_status AS receptor_qualification_status,
                 COALESCE(a.native_redock_status, r.native_redock_status)
@@ -163,6 +186,10 @@ def audit_release_readiness(
         connection.close()
 
     pair_count = len(pairs)
+    for row in pairs:
+        row["final_score_source"] = _declared_final_score_source(
+            row["result_json"], row["final_score"], row["final_score_source"]
+        )
     expected_pairs = [row for row in pairs if row["expected"] == 1]
     nonterminal_expected = [
         row for row in expected_pairs if row["final_status"] == "expected"
@@ -191,6 +218,13 @@ def audit_release_readiness(
     ]
     ranking_reason_counts = _status_counts(
         reason or "eligible" for _, reason in ranking_results
+    )
+    apo_ranking_results = [apo_exploratory_ranking_eligibility(row) for row in pairs]
+    apo_rank_eligible = [
+        row for row, (eligible, _) in zip(pairs, apo_ranking_results) if eligible == 1
+    ]
+    apo_ranking_reason_counts = _status_counts(
+        reason or "eligible" for _, reason in apo_ranking_results
     )
     pose_valid = [row for row in pairs if row["pose_valid"] == 1]
     pose_invalid = [row for row in pairs if row["pose_valid"] == 0]
@@ -230,6 +264,14 @@ def audit_release_readiness(
     chemistry_conflicts = [
         row for row in receptors if row["requested_observed_conflict"] == 1
     ]
+    chemistry_evidence_results = [
+        receptor_chemistry_evidence_eligibility(row) for row in receptors
+    ]
+    chemistry_evidence_qualified = [
+        row
+        for row, (eligible, _) in zip(receptors, chemistry_evidence_results)
+        if eligible == 1
+    ]
     headline_receptors = [
         row
         for row in receptors
@@ -254,16 +296,30 @@ def audit_release_readiness(
     pairs_with_artifacts = {
         int(row["pair_cell_id"]) for row in artifacts if row["pair_cell_id"] is not None
     }
-    source_counts = _status_counts(
-        _final_score_source(
-            row["result_json"], row["final_score"], row["final_score_source"]
-        )
-        for row in pairs
+    scored_source_classifications = [
+        classify_materialized_source(row) for row in scored
+    ]
+    source_counts = _status_counts(row["final_score_source"] for row in scored)
+    effective_source_counts = _status_counts(
+        item.effective_source for item in scored_source_classifications
     )
-    classified_sources = sum(
-        count
-        for source, count in source_counts.items()
-        if source not in {"missing_final_score", "legacy_unclassified_final_score"}
+    source_classification_counts = _status_counts(
+        item.classification for item in scored_source_classifications
+    )
+    classified_sources = sum(item.eligible for item in scored_source_classifications)
+    pose_linkage_requirement_counts = _status_counts(
+        item.pose_linkage_requirement for item in scored_source_classifications
+    )
+    score_pose_linkage_unresolved = sum(
+        item.eligible
+        and bool(item.pose_linkage_requirement)
+        and (
+            "no_unique" in str(item.pose_linkage_requirement)
+            or "no_immutable_pose" in str(item.pose_linkage_requirement)
+            or "requires_immutable_pose_identifier"
+            in str(item.pose_linkage_requirement)
+        )
+        for item in scored_source_classifications
     )
     result_attempts_with_completion_lineage = [
         row
@@ -318,6 +374,13 @@ def audit_release_readiness(
             missing=len(classification_missing_or_uncontrolled),
         ),
         _check(
+            "receptor_chemistry_exact_evidence",
+            complete=len(chemistry_evidence_qualified) == len(receptors),
+            observed=len(chemistry_evidence_qualified),
+            total=len(receptors),
+            missing=len(receptors) - len(chemistry_evidence_qualified),
+        ),
+        _check(
             "receptor_quality_explicit_qualification",
             complete=len(explicitly_quality_qualified) == len(headline_receptors),
             observed=len(explicitly_quality_qualified),
@@ -358,6 +421,13 @@ def audit_release_readiness(
             observed=classified_sources,
             total=len(scored),
             missing=len(scored) - classified_sources,
+        ),
+        _check(
+            "final_score_pose_linkage_resolution",
+            complete=score_pose_linkage_unresolved == 0,
+            observed=len(scored) - score_pose_linkage_unresolved,
+            total=len(scored),
+            missing=score_pose_linkage_unresolved,
         ),
         _check(
             "selected_result_completion_lineage",
@@ -408,8 +478,26 @@ def audit_release_readiness(
                 "rank_eligible_count": len(rank_eligible),
                 "rank_eligible_fraction": _fraction(len(rank_eligible), pair_count),
                 "ranking_eligibility_reason_counts": ranking_reason_counts,
+                "apo_exploratory_rank_eligible_count": len(apo_rank_eligible),
+                "apo_exploratory_rank_eligible_fraction": _fraction(
+                    len(apo_rank_eligible), pair_count
+                ),
+                "apo_exploratory_ranking_eligibility_reason_counts": (
+                    apo_ranking_reason_counts
+                ),
                 "final_score_source_counts": source_counts,
+                "effective_final_score_source_counts": effective_source_counts,
+                "final_score_source_classification_counts": (
+                    source_classification_counts
+                ),
                 "classified_final_score_source_count": classified_sources,
+                "final_score_pose_linkage_requirement_counts": (
+                    pose_linkage_requirement_counts
+                ),
+                "final_score_pose_linkage_unresolved_count": (
+                    score_pose_linkage_unresolved
+                ),
+                "final_score_source_contract": score_source_browser_contract(),
                 "valid_drug_candidate_count": len(valid_drug_candidates),
                 "valid_drug_candidate_with_final_score_count": len(
                     scored_valid_drug_candidates
@@ -438,7 +526,13 @@ def audit_release_readiness(
                         chemistry_evidence_status_counts
                     ),
                     "requested_observed_conflict_count": len(chemistry_conflicts),
-                    "ranking_behavior": "requires exact controlled HOLO annotation",
+                    "exact_evidence_qualified_count": len(
+                        chemistry_evidence_qualified
+                    ),
+                    "exact_evidence_missing_count": (
+                        len(receptors) - len(chemistry_evidence_qualified)
+                    ),
+                    "ranking_behavior": "separate exact-evidence HOLO and APO tracks",
                 },
                 "receptor_count": len(receptors),
                 "headline_non_apo_receptor_count": len(headline_receptors),
@@ -494,9 +588,7 @@ def audit_release_readiness(
             },
             "attempt_lineage": {
                 "selected_result_attempt_count": len(selected_result_attempts),
-                "completion_linked_count": len(
-                    result_attempts_with_completion_lineage
-                ),
+                "completion_linked_count": len(result_attempts_with_completion_lineage),
                 "completion_link_missing_count": (
                     len(selected_result_attempts)
                     - len(result_attempts_with_completion_lineage)

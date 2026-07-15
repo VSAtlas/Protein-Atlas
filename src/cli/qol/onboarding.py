@@ -51,6 +51,7 @@ def _cmd_help(argv: Sequence[str]) -> int:
                 "  atlas throughput bench --profile smoke --mode local",
                 "  atlas throughput bench --profile smoke --mode slurm-sim --array 0-2%3 --cpus-per-task 4",
                 "  atlas reproduce bundle RUN_ID",
+                "  atlas stages repeat --help plan one exact stage repeat (planner only)",
                 "  atlas slurm submit --run-id RUN_ID --array 0-31%4 --cpus-per-task 8 --dry-run",
                 "  atlas slurm submit --bench2-canary --run-id RUN_ID --dry-run",
                 "  atlas slurm progress RUN_ID",

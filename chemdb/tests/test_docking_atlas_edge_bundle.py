@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from analysis.reporting.docking_atlas_delivery import build_deployment_preflight
-from analysis.reporting.docking_atlas_edge import build_edge_bundle
+from analysis.reporting.docking_atlas_edge import (
+    _rank_track_label,
+    _rank_value,
+    build_edge_bundle,
+)
 from cli.qol.publish import _cmd_publish
 
 
@@ -43,7 +47,10 @@ def _write_public_site(site_dir: Path) -> bytes:
                 "drug_id": "Drug A",
                 "final_status": "valid",
                 "final_score": 4.5,
+                "final_score_source_effective": "declared:consensus_vs_decoy_z",
+                "final_score_source_family": "consensus_decoy_standardized",
                 "rank_eligible": 1,
+                "ranking_track": "qualified_holo",
                 "rank_within_receptor": 1,
                 "rank_across_receptors": 1,
             },
@@ -95,6 +102,36 @@ def _declare_download(site_dir: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_edge_rank_projection_requires_an_explicit_eligible_track() -> None:
+    holo = {
+        "ranking_track": "qualified_holo",
+        "rank_eligible": 1,
+        "rank_within_receptor": 2,
+        "rank_across_receptors": 3,
+    }
+    apo = {
+        "ranking_track": "exploratory_apo",
+        "apo_exploratory_rank_eligible": True,
+        "apo_rank_within_receptor": 4,
+        "apo_rank_across_receptors": 5,
+    }
+    untracked = {
+        "rank_eligible": 1,
+        "rank_within_receptor": 999,
+        "rank_across_receptors": 999,
+    }
+
+    assert _rank_value(holo, "targets") == 2
+    assert _rank_value(holo, "drugs") == 3
+    assert _rank_track_label(holo) == "HOLO qualified"
+    assert _rank_value(apo, "targets") == 4
+    assert _rank_value(apo, "drugs") == 5
+    assert _rank_track_label(apo) == "APO exploratory"
+    assert _rank_value(untracked, "targets") is None
+    assert _rank_value(untracked, "drugs") is None
+    assert _rank_track_label(untracked) == "Unqualified"
 
 
 def test_edge_bundle_decomposes_release_into_stable_r2_records(tmp_path: Path) -> None:
@@ -162,6 +199,16 @@ def test_edge_bundle_decomposes_release_into_stable_r2_records(tmp_path: Path) -
         "valid",
         "failed",
     ]
+    assert target_record["pairs"][0]["rank"] == 1
+    assert target_record["pairs"][0]["rank_track_label"] == "HOLO qualified"
+    assert target_record["pairs"][0]["final_score_source_effective"] == (
+        "declared:consensus_vs_decoy_z"
+    )
+    assert target_record["pairs"][0]["final_score_source_family"] == (
+        "consensus_decoy_standardized"
+    )
+    assert target_record["pairs"][1]["rank"] is None
+    assert target_record["pairs"][1]["rank_track_label"] == "Unqualified"
     failed_route = target_record["pairs"][1]["pair_route_id"]
     failed_record = json.loads(
         (
@@ -190,6 +237,10 @@ def test_edge_bundle_decomposes_release_into_stable_r2_records(tmp_path: Path) -
     assert (output_dir / "public" / "assets" / "app.js").is_file()
     assert (output_dir / "src" / "index.mjs").is_file()
     assert (output_dir / "wrangler.toml").is_file()
+    app_js = (output_dir / "public" / "assets" / "app.js").read_text(encoding="utf-8")
+    assert "Qualified HOLO rankings" in app_js
+    assert "Exploratory APO rankings" in app_js
+    assert "Effective score source / family" in app_js
 
 
 def test_edge_bundle_is_deterministic_and_only_overwrites_its_own_output(

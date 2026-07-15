@@ -4,17 +4,32 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from analysis.atlas_database.annotations import is_explicitly_qualified
-from analysis.atlas_database.artifact_contract import ARTIFACT_ROLES
+from analysis.atlas_database.artifact_contract import (
+    ARTIFACT_PUBLICATION_POLICIES,
+    ARTIFACT_ROLES,
+    artifact_public_record_allowed,
+    artifact_publication_policy,
+)
 from analysis.atlas_database.pose_validation_contract import (
     QUALIFYING_POSE_VALIDATION_SCOPE,
     pose_validation_browser_contract,
 )
+from analysis.atlas_database.receptor_evidence import (
+    CHEMISTRY_CLASSIFICATION_METHOD,
+)
+from analysis.atlas_database.score_source_contract import (
+    classify_materialized_source,
+    score_source_browser_contract,
+)
+
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 PAIR_COLUMNS = (
@@ -53,12 +68,25 @@ PAIR_COLUMNS = (
     "is_decoy",
     "final_score",
     "final_score_source",
+    "final_score_source_reconstructed",
+    "final_score_source_effective",
+    "final_score_source_canonical",
+    "final_score_source_family",
+    "final_score_pose_linkage_requirement",
+    "final_score_source_classification",
+    "final_score_source_evidence_json",
+    "final_score_source_eligible",
     "primary_score_present",
     "rank_eligible",
     "ranking_eligibility_reason",
+    "apo_exploratory_rank_eligible",
+    "apo_exploratory_ranking_eligibility_reason",
+    "ranking_track",
     "final_rank",
     "rank_within_receptor",
     "rank_across_receptors",
+    "apo_rank_within_receptor",
+    "apo_rank_across_receptors",
     "atlas_score",
     "atlas_score_source",
     "selected_docking_score",
@@ -97,7 +125,7 @@ def _component_coverage(row: Mapping[str, Any]) -> str:
     return ",".join(name for name in names if row.get(name) is not None)
 
 
-def _final_score_source(
+def _declared_final_score_source(
     result_json: Any, final_score: Any, stored_source: Any = None
 ) -> str | None:
     if final_score is None:
@@ -110,7 +138,35 @@ def _final_score_source(
     except (TypeError, ValueError):
         result = {}
     source = str(result.get("final_score_source") or "").strip()
-    return source or "legacy_unclassified_final_score"
+    return source or None
+
+
+def receptor_chemistry_evidence_eligibility(
+    row: Mapping[str, Any],
+) -> tuple[int, str | None]:
+    """Require exact, policy-bound prepared-receptor chemistry evidence."""
+    if str(row.get("receptor_classification_method") or "").strip() != (
+        CHEMISTRY_CLASSIFICATION_METHOD
+    ):
+        return 0, "receptor_chemistry_method_unqualified"
+    if str(row.get("chemistry_evidence_status") or "").strip().lower() != "observed":
+        return 0, "receptor_chemistry_evidence_unresolved"
+    if not _SHA256.fullmatch(str(row.get("prepared_receptor_sha256") or "").strip()):
+        return 0, "prepared_receptor_hash_missing"
+    if not _SHA256.fullmatch(
+        str(row.get("canonical_chemistry_policy_sha256") or "").strip()
+    ):
+        return 0, "receptor_chemistry_policy_hash_missing"
+    return 1, None
+
+
+def _score_pose_linkage_is_unresolved(requirement: Any) -> bool:
+    token = str(requirement or "").strip().lower()
+    return bool(token) and (
+        "no_unique" in token
+        or "no_immutable_pose" in token
+        or "requires_immutable_pose_identifier" in token
+    )
 
 
 def receptor_ranking_eligibility(
@@ -128,6 +184,9 @@ def receptor_ranking_eligibility(
         return 0, "receptor_classification_missing"
     if classification != "HOLO":
         return 0, "receptor_classification_uncontrolled"
+    chemistry_eligible, reason = receptor_chemistry_evidence_eligibility(row)
+    if not chemistry_eligible:
+        return chemistry_eligible, reason
     if not is_explicitly_qualified(row.get("receptor_qualification_status")):
         return 0, "receptor_quality_not_qualified"
     if not is_explicitly_qualified(row.get("native_redock_status")):
@@ -135,11 +194,33 @@ def receptor_ranking_eligibility(
     return 1, None
 
 
-def ranking_eligibility(row: Mapping[str, Any]) -> tuple[int, str | None]:
-    """Apply receptor qualification and pair-level primary ranking gates."""
-    receptor_eligible, reason = receptor_ranking_eligibility(row)
-    if not receptor_eligible:
-        return receptor_eligible, reason
+def apo_receptor_ranking_eligibility(
+    row: Mapping[str, Any],
+) -> tuple[int, str | None]:
+    """Apply receptor gates for the separate exploratory APO ranking track."""
+    if row.get("is_control") == 1:
+        return 0, "native_control"
+    if row.get("is_decoy") == 1:
+        return 0, "decoy"
+    classification = str(row.get("receptor_classification") or "").strip().upper()
+    if not classification:
+        return 0, "receptor_classification_missing"
+    if classification == "HOLO":
+        return 0, "holo_receptor"
+    if classification != "APO":
+        return 0, "receptor_classification_uncontrolled"
+    chemistry_eligible, reason = receptor_chemistry_evidence_eligibility(row)
+    if not chemistry_eligible:
+        return chemistry_eligible, reason
+    if not is_explicitly_qualified(row.get("receptor_qualification_status")):
+        return 0, "receptor_quality_not_qualified"
+    if not is_explicitly_qualified(row.get("native_redock_status")):
+        return 0, "native_redock_not_qualified"
+    return 1, None
+
+
+def _pair_ranking_eligibility(row: Mapping[str, Any]) -> tuple[int, str | None]:
+    """Apply pair gates shared by HOLO and separate APO ranking tracks."""
     if row.get("final_score") is None:
         return 0, "missing_final_score"
     if row.get("pose_valid") == 0:
@@ -148,15 +229,44 @@ def ranking_eligibility(row: Mapping[str, Any]) -> tuple[int, str | None]:
         return 0, "pose_validation_missing"
     if row.get("pose_validation_scope") != QUALIFYING_POSE_VALIDATION_SCOPE:
         return 0, "pose_validation_scope_unqualified"
+    source = classify_materialized_source(row)
+    if not source.eligible:
+        return 0, "final_score_source_unclassified"
+    if _score_pose_linkage_is_unresolved(source.pose_linkage_requirement):
+        return 0, "final_score_pose_linkage_unresolved"
     return 1, None
 
 
-def _rank(rows: list[dict[str, Any]], group_name: str, output_name: str) -> None:
+def ranking_eligibility(row: Mapping[str, Any]) -> tuple[int, str | None]:
+    """Apply receptor qualification and pair-level HOLO headline gates."""
+    receptor_eligible, reason = receptor_ranking_eligibility(row)
+    if not receptor_eligible:
+        return receptor_eligible, reason
+    return _pair_ranking_eligibility(row)
+
+
+def apo_exploratory_ranking_eligibility(
+    row: Mapping[str, Any],
+) -> tuple[int, str | None]:
+    """Apply the same pair gates to APO without pooling APO with HOLO ranks."""
+    receptor_eligible, reason = apo_receptor_ranking_eligibility(row)
+    if not receptor_eligible:
+        return receptor_eligible, reason
+    return _pair_ranking_eligibility(row)
+
+
+def _rank(
+    rows: list[dict[str, Any]],
+    group_name: str,
+    output_name: str,
+    *,
+    eligibility_name: str,
+) -> None:
     groups: dict[Any, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         groups[row[group_name]].append(row)
     for values in groups.values():
-        scored = [row for row in values if row["rank_eligible"]]
+        scored = [row for row in values if row[eligibility_name]]
         scored.sort(
             key=lambda row: (
                 -float(row["final_score"]),
@@ -175,6 +285,24 @@ def _rank(rows: list[dict[str, Any]], group_name: str, output_name: str) -> None
 
 def _pair_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     connection.row_factory = sqlite3.Row
+    public_artifact_counts: dict[int, int] = defaultdict(int)
+    for artifact in connection.execute(
+        """SELECT pair_cell_id, artifact_role, artifact_json, verified, sha256
+        FROM artifacts
+        WHERE pair_cell_id IS NOT NULL
+        ORDER BY artifact_id"""
+    ):
+        try:
+            artifact_entry = json.loads(str(artifact["artifact_json"] or "{}"))
+        except (TypeError, ValueError):
+            artifact_entry = {}
+        if artifact_public_record_allowed(
+            str(artifact["artifact_role"]),
+            artifact_entry,
+            verified=artifact["verified"],
+            sha256=artifact["sha256"],
+        ):
+            public_artifact_counts[int(artifact["pair_cell_id"])] += 1
     query = """
         SELECT p.pair_cell_id, r.run_id, r.pdb_id, r.variant, r.ph_label,
             ra.receptor_classification,
@@ -194,18 +322,23 @@ def _pair_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
             p.has_result, p.pose_valid, p.pose_validation_method,
             p.pose_validation_scope, p.pose_validation_thresholds_json,
             p.is_control, p.is_decoy, p.final_score,
-            p.final_score_source, p.final_rank, p.atlas_score, p.atlas_score_source,
-            p.selected_docking_score, p.consensus_score, p.result_json,
-            COUNT(a.artifact_id) AS artifact_count,
-            COALESCE(SUM(CASE WHEN a.verified = 1 THEN 1 ELSE 0 END), 0)
-                AS verified_artifact_count
+            p.final_score_source, p.final_score_source_reconstructed,
+            p.final_score_source_classification,
+            p.final_score_source_evidence_json,
+            sra.input_csv_sha256 AS selected_result_input_csv_sha256,
+            sra.source_row_number AS selected_result_source_row_number,
+            sra.result_sha256 AS selected_result_sha256,
+            p.final_rank, p.atlas_score, p.atlas_score_source,
+            p.selected_docking_score, p.consensus_score, p.result_json
         FROM pair_cells p
         JOIN receptor_contexts r
           ON r.receptor_context_id = p.receptor_context_id
         JOIN ligands l ON l.ligand_id = p.ligand_id
         LEFT JOIN receptor_annotations ra
           ON ra.receptor_context_id = r.receptor_context_id
-        LEFT JOIN artifacts a ON a.pair_cell_id = p.pair_cell_id
+        LEFT JOIN result_attempts sra
+          ON sra.pair_cell_id = p.pair_cell_id
+         AND sra.selected_for_release = 1
         GROUP BY p.pair_cell_id
         ORDER BY r.run_id, r.pdb_id, r.variant, r.ph_label, l.canonical_id
     """
@@ -216,22 +349,71 @@ def _pair_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         row["target_key"] = _target_key(row)
         row["target_id"] = row["target_key"]
         row["drug_id"] = row["ligand_canonical_id"]
-        row["final_score_source"] = _final_score_source(
+        row["final_score_source"] = _declared_final_score_source(
             row.pop("result_json", None),
             row["final_score"],
             row.get("final_score_source"),
         )
+        source = classify_materialized_source(row)
+        row["final_score_source_reconstructed"] = source.reconstructed_source
+        row["final_score_source_effective"] = source.effective_source
+        row["final_score_source_canonical"] = source.canonical_source
+        row["final_score_source_family"] = source.family
+        row["final_score_pose_linkage_requirement"] = source.pose_linkage_requirement
+        row["final_score_source_classification"] = source.classification
+        row["final_score_source_eligible"] = int(source.eligible)
         row["primary_score_present"] = int(row["final_score"] is not None)
         (
             row["rank_eligible"],
             row["ranking_eligibility_reason"],
         ) = ranking_eligibility(row)
+        (
+            row["apo_exploratory_rank_eligible"],
+            row["apo_exploratory_ranking_eligibility_reason"],
+        ) = apo_exploratory_ranking_eligibility(row)
+        row["ranking_track"] = (
+            "qualified_holo"
+            if row["rank_eligible"]
+            else "exploratory_apo"
+            if row["apo_exploratory_rank_eligible"]
+            else None
+        )
         row["score_component_coverage"] = _component_coverage(row)
+        artifact_count = public_artifact_counts.get(int(row["pair_cell_id"]), 0)
+        row["artifact_count"] = artifact_count
+        row["verified_artifact_count"] = artifact_count
         row["rank_within_receptor"] = None
         row["rank_across_receptors"] = None
+        row["apo_rank_within_receptor"] = None
+        row["apo_rank_across_receptors"] = None
+        row.pop("selected_result_input_csv_sha256", None)
+        row.pop("selected_result_source_row_number", None)
+        row.pop("selected_result_sha256", None)
         rows.append(row)
-    _rank(rows, "target_key", "rank_within_receptor")
-    _rank(rows, "ligand_id", "rank_across_receptors")
+    _rank(
+        rows,
+        "target_key",
+        "rank_within_receptor",
+        eligibility_name="rank_eligible",
+    )
+    _rank(
+        rows,
+        "ligand_id",
+        "rank_across_receptors",
+        eligibility_name="rank_eligible",
+    )
+    _rank(
+        rows,
+        "target_key",
+        "apo_rank_within_receptor",
+        eligibility_name="apo_exploratory_rank_eligible",
+    )
+    _rank(
+        rows,
+        "ligand_id",
+        "apo_rank_across_receptors",
+        eligibility_name="apo_exploratory_rank_eligible",
+    )
     return rows
 
 
@@ -351,9 +533,7 @@ def _browser_payload(
                 if audit["parse_status"] == "parsed"
             }
         )
-        target["receptor_audit_status_counts"] = _counts(
-            target_audits, "parse_status"
-        )
+        target["receptor_audit_status_counts"] = _counts(target_audits, "parse_status")
         target["rejected_receptor_audit_count"] = sum(
             str(audit["parse_status"]).startswith("rejected:")
             for audit in target_audits
@@ -389,25 +569,61 @@ def _browser_payload(
         ligand["status_counts"] = _counts(ligand_pairs, "final_status")
         ligands.append(ligand)
 
-    artifacts = [
-        dict(row)
-        for row in connection.execute(
-            """SELECT a.artifact_id, a.pair_cell_id, a.receptor_context_id,
+    artifacts = []
+    for row in connection.execute(
+        """SELECT a.artifact_id, a.pair_cell_id, a.receptor_context_id,
             a.ligand_id, l.canonical_id AS ligand_canonical_id,
             a.artifact_role, a.artifact_scope, a.stage, a.mode,
-            a.member_name, a.sha256, a.size_bytes, a.file_type, a.verified
+            a.member_name, a.sha256, a.size_bytes, a.file_type, a.verified,
+            a.artifact_json
             FROM artifacts a LEFT JOIN ligands l ON l.ligand_id=a.ligand_id
             ORDER BY a.artifact_id"""
-        )
-    ]
+    ):
+        artifact = dict(row)
+        try:
+            artifact_entry = json.loads(str(artifact.pop("artifact_json") or "{}"))
+        except (TypeError, ValueError):
+            artifact_entry = {}
+        role = str(artifact["artifact_role"])
+        if not artifact_public_record_allowed(
+            role,
+            artifact_entry,
+            verified=artifact.get("verified"),
+            sha256=artifact.get("sha256"),
+        ):
+            continue
+        artifact["publication_policy"] = artifact_publication_policy(role)
+        artifacts.append(artifact)
     scored = [row for row in rows if row["primary_score_present"]]
     rank_eligible = [row for row in rows if row["rank_eligible"]]
+    apo_rank_eligible = [row for row in rows if row["apo_exploratory_rank_eligible"]]
     source_counts = _counts(scored, "final_score_source")
+    effective_source_counts = _counts(scored, "final_score_source_effective")
+    source_classification_counts = _counts(scored, "final_score_source_classification")
     return {
         "payload_schema_version": 1,
         "release": release,
         "scientific_policies": policies,
         "pose_validation_contract": pose_validation_browser_contract(policies),
+        "ranking_contract": {
+            "headline_track": {
+                "name": "qualified_holo",
+                "receptor_classification": "HOLO",
+                "eligible_field": "rank_eligible",
+                "within_receptor_rank_field": "rank_within_receptor",
+                "across_receptors_rank_field": "rank_across_receptors",
+            },
+            "exploratory_track": {
+                "name": "exploratory_apo",
+                "receptor_classification": "APO",
+                "eligible_field": "apo_exploratory_rank_eligible",
+                "within_receptor_rank_field": "apo_rank_within_receptor",
+                "across_receptors_rank_field": "apo_rank_across_receptors",
+                "label": "APO exploratory",
+            },
+            "apo_holo_pooling": "forbidden",
+            "score_direction": "higher_is_better",
+        },
         "artifact_contract": {
             "embedding": "top_level_collection",
             "pair_join_field": "pair_cell_id",
@@ -415,12 +631,24 @@ def _browser_payload(
             "absolute_paths_included": False,
             "role_field": "artifact_role",
             "controlled_roles": list(ARTIFACT_ROLES),
+            "publication_policies": dict(sorted(ARTIFACT_PUBLICATION_POLICIES.items())),
+            "private_roles_are_never_projected": True,
+            "private_role_metadata_included": False,
+            "conditional_pose_rule": (
+                "docking_pose is public only when its exact artifact is selected "
+                "for the frozen release"
+            ),
+            "sanitization_required_before_publication": True,
         },
         "score_contract": {
             "primary_field": "final_score",
-            "source_field": "final_score_source",
+            "declared_source_field": "final_score_source",
+            "reconstructed_source_field": "final_score_source_reconstructed",
+            "effective_source_field": "final_score_source_effective",
+            "source_classification_field": "final_score_source_classification",
             "direction": "higher_is_better",
             "no_fallback": True,
+            "source_classification": score_source_browser_contract(),
             "normalized_comparison_field": "atlas_score",
             "normalized_comparison_source_field": "atlas_score_source",
         },
@@ -431,11 +659,15 @@ def _browser_payload(
             "primary_score_fraction": (len(scored) / len(rows)) if rows else 0.0,
             "rank_eligible_count": len(rank_eligible),
             "rank_eligible_fraction": (len(rank_eligible) / len(rows) if rows else 0.0),
+            "apo_exploratory_rank_eligible_count": len(apo_rank_eligible),
+            "apo_exploratory_rank_eligible_fraction": (
+                len(apo_rank_eligible) / len(rows) if rows else 0.0
+            ),
             "final_score_source_counts": source_counts,
+            "effective_final_score_source_counts": effective_source_counts,
+            "final_score_source_classification_counts": (source_classification_counts),
             "classified_final_score_source_count": sum(
-                count
-                for source, count in source_counts.items()
-                if source != "legacy_unclassified_final_score"
+                int(row["final_score_source_eligible"]) for row in scored
             ),
             "pair_status_counts": _counts(rows, "final_status"),
             "receptor_classification_counts": _counts(
@@ -446,9 +678,7 @@ def _browser_payload(
             ),
             "receptor_audit_count": len(receptor_audits),
             "receptor_audit_kind_counts": _counts(receptor_audits, "audit_kind"),
-            "receptor_audit_status_counts": _counts(
-                receptor_audits, "parse_status"
-            ),
+            "receptor_audit_status_counts": _counts(receptor_audits, "parse_status"),
         },
         "targets": targets,
         "ligands": ligands,
@@ -502,7 +732,22 @@ def export_release_database(
         "primary_score_fraction": coverage["primary_score_fraction"],
         "rank_eligible_count": coverage["rank_eligible_count"],
         "rank_eligible_fraction": coverage["rank_eligible_fraction"],
+        "apo_exploratory_rank_eligible_count": coverage[
+            "apo_exploratory_rank_eligible_count"
+        ],
+        "apo_exploratory_rank_eligible_fraction": coverage[
+            "apo_exploratory_rank_eligible_fraction"
+        ],
         "final_score_source_counts": coverage["final_score_source_counts"],
+        "effective_final_score_source_counts": coverage[
+            "effective_final_score_source_counts"
+        ],
+        "final_score_source_classification_counts": coverage[
+            "final_score_source_classification_counts"
+        ],
+        "classified_final_score_source_count": coverage[
+            "classified_final_score_source_count"
+        ],
     }
     summary_path = output_dir / "export_summary.json"
     summary_path.write_text(

@@ -371,6 +371,12 @@ def _analysis_payload(
         "native_redock_status",
         "rank_eligible",
         "ranking_eligibility_reason",
+        "apo_exploratory_rank_eligible",
+        "apo_exploratory_ranking_eligibility_reason",
+        "ranking_track",
+        "final_score_source",
+        "final_score_source_effective",
+        "final_score_source_family",
     ]
     base_measures = [
         "final_score",
@@ -498,12 +504,20 @@ def _protein_body(
     meta = _definition_list(
         protein, exclude={"id", "name", "display_name", "description", "images"}
     )
-    rows = _pair_rows(pairs, pair_id_by_object, pair_slugs, drugs, drug_slugs, "drug")
+    rankings = _ranking_sections(
+        pairs,
+        pair_id_by_object,
+        pair_slugs,
+        drugs,
+        drug_slugs,
+        "drug",
+        "Drug",
+        "Protein-normalized rank",
+    )
     return f"""{_breadcrumbs(("Proteins", None), (heading, None))}<section class="hero compact"><p class="eyebrow">Protein</p><h1>{_h(heading)}</h1>
 <p>{_h(_text(protein.get("description")) or protein_id)}</p></section>{_qualification(protein)}
 <section class="split"><div><h2>Receptor record</h2>{meta}</div>{_image_gallery(protein.get("images"))}</section>
-<section><div class="section-head"><h2>Ranked drugs</h2><label class="show-all"><input data-show-all-pairs="pair-table" type="checkbox"> Show invalid, failed, and unranked cells</label><input data-table-filter="pair-table" type="search" placeholder="Filter drugs or status…"></div>
-{_pair_table(rows, "Drug", "Protein-normalized rank")}</section>"""
+{rankings}"""
 
 
 def _drug_body(
@@ -519,36 +533,72 @@ def _drug_body(
     meta = _definition_list(
         drug, exclude={"id", "name", "display_name", "description", "images"}
     )
-    rows = _pair_rows(
-        pairs, pair_id_by_object, pair_slugs, proteins, protein_slugs, "protein"
+    rankings = _ranking_sections(
+        pairs,
+        pair_id_by_object,
+        pair_slugs,
+        proteins,
+        protein_slugs,
+        "protein",
+        "Protein",
+        "Receptor-normalized rank",
     )
     return f"""{_breadcrumbs(("Drugs", None), (heading, None))}<section class="hero compact"><p class="eyebrow">Drug</p><h1>{_h(heading)}</h1>
 <p>{_h(_text(drug.get("description")) or drug_id)}</p></section>
 <section class="split"><div><h2>Ligand record</h2>{meta}</div>{_image_gallery(drug.get("images"))}</section>
-<section><div class="section-head"><h2>Ranked proteins</h2><label class="show-all"><input data-show-all-pairs="pair-table" type="checkbox"> Show invalid, failed, and unranked cells</label><input data-table-filter="pair-table" type="search" placeholder="Filter proteins or status…"></div>
-{_pair_table(rows, "Protein", "Receptor-normalized rank")}</section>"""
+{rankings}"""
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return _text(value).casefold() in {"1", "true", "yes"}
+
+
+def _eligible_ranking_track(pair: Mapping[str, Any]) -> str | None:
+    track = _text(pair.get("ranking_track"))
+    if track == "qualified_holo" and _truthy(pair.get("rank_eligible")):
+        return track
+    if track == "exploratory_apo" and _truthy(
+        pair.get("apo_exploratory_rank_eligible")
+    ):
+        return track
+    return None
+
+
+def _rank_keys(pair: Mapping[str, Any], perspective: str) -> tuple[str, ...]:
+    track = _eligible_ranking_track(pair)
+    if track == "exploratory_apo":
+        return (
+            ("apo_rank_within_receptor",)
+            if perspective == "protein"
+            else ("apo_rank_across_receptors",)
+        )
+    if track == "qualified_holo":
+        return (
+            ("rank_within_receptor", "protein_rank", "rank_for_protein", "rank")
+            if perspective == "protein"
+            else (
+                "rank_across_receptors",
+                "drug_rank",
+                "rank_for_drug",
+                "cross_protein_rank",
+                "rank",
+            )
+        )
+    return ()
 
 
 def _display_pairs(
     pairs: list[Mapping[str, Any]], perspective: str
 ) -> list[Mapping[str, Any]]:
-    rank_keys = (
-        ("rank_within_receptor", "protein_rank", "rank_for_protein", "rank")
-        if perspective == "protein"
-        else (
-            "rank_across_receptors",
-            "drug_rank",
-            "rank_for_drug",
-            "cross_protein_rank",
-            "rank",
-        )
-    )
-
     def key(pair: Mapping[str, Any]) -> tuple[Any, ...]:
         rank = next(
             (
                 _number(pair.get(name))
-                for name in rank_keys
+                for name in _rank_keys(pair, perspective)
                 if _number(pair.get(name)) is not None
             ),
             None,
@@ -569,6 +619,8 @@ def _pair_rows(
     entities: Mapping[str, Mapping[str, Any]],
     entity_slugs: Mapping[str, str],
     entity_kind: str,
+    *,
+    mark_ineligible: bool = True,
 ) -> list[str]:
     rows = []
     for pair in pairs:
@@ -577,38 +629,80 @@ def _pair_rows(
         entity = entities.get(entity_id, {})
         name = _entity_name(entity, entity_id or "Unresolved entity")
         entity_href = f"../{'drugs' if entity_kind == 'drug' else 'proteins'}/{entity_slugs.get(entity_id, '')}.html"
-        rank_keys = (
-            ("rank_within_receptor", "protein_rank", "rank_for_protein", "rank")
-            if entity_kind == "drug"
-            else (
-                "rank_across_receptors",
-                "drug_rank",
-                "rank_for_drug",
-                "cross_protein_rank",
-                "rank",
-            )
-        )
-        rank = _first(pair, *rank_keys)
+        perspective = "protein" if entity_kind == "drug" else "drug"
+        rank = _first(pair, *_rank_keys(pair, perspective))
         score = _score_summary(pair)
         status = _status(pair)
-        eligible_value = pair.get("rank_eligible")
-        rank_ineligible = eligible_value is not None and str(
-            eligible_value
-        ).lower() in {
-            "0",
-            "false",
-            "no",
-        }
-        visibility = ' data-rank-eligible="false"' if rank_ineligible else ""
+        track = _eligible_ranking_track(pair)
+        raw_track = _text(pair.get("ranking_track"))
+        rank_ineligible = track is None
+        if track == "qualified_holo":
+            track_label = "HOLO qualified"
+        elif track == "exploratory_apo":
+            track_label = "APO exploratory"
+        elif raw_track == "qualified_holo":
+            track_label = "HOLO excluded"
+        elif raw_track == "exploratory_apo":
+            track_label = "APO exploratory excluded"
+        else:
+            track_label = "Unqualified"
+        visibility = (
+            ' data-rank-eligible="false"' if rank_ineligible and mark_ineligible else ""
+        )
         rows.append(
             f'<tr data-search="{_h((name + " " + entity_id + " " + status).lower())}"{visibility}><td><a href="{_h(entity_href)}">{_h(name)}</a><small>{_h(entity_id)}</small></td>'
-            f"<td>{_h(_display(rank))}</td><td>{score}</td><td>{_badge(status)}</td>"
+            f"<td>{_h(_display(rank))}<small>{_h(track_label)}</small></td>"
+            f"<td>{score}</td><td>{_badge(status)}</td>"
             f'<td><a class="button small" href="../pairs/{_h(pair_slugs[pair_id])}.html">Inspect</a></td></tr>'
         )
     return rows
 
 
-def _pair_table(rows: list[str], entity_label: str, rank_label: str) -> str:
+def _ranking_sections(
+    pairs: list[Mapping[str, Any]],
+    pair_id_by_object: Mapping[int, str],
+    pair_slugs: Mapping[str, str],
+    entities: Mapping[str, Mapping[str, Any]],
+    entity_slugs: Mapping[str, str],
+    entity_kind: str,
+    entity_label: str,
+    rank_label: str,
+) -> str:
+    perspective = "protein" if entity_kind == "drug" else "drug"
+    ordered = _display_pairs(pairs, perspective)
+    holo = [
+        pair for pair in ordered if _eligible_ranking_track(pair) == "qualified_holo"
+    ]
+    apo = [
+        pair for pair in ordered if _eligible_ranking_track(pair) == "exploratory_apo"
+    ]
+    excluded = [pair for pair in ordered if _eligible_ranking_track(pair) is None]
+
+    def rows_for(
+        selected: list[Mapping[str, Any]], *, mark_ineligible: bool = True
+    ) -> list[str]:
+        return _pair_rows(
+            selected,
+            pair_id_by_object,
+            pair_slugs,
+            entities,
+            entity_slugs,
+            entity_kind,
+            mark_ineligible=mark_ineligible,
+        )
+
+    return f"""
+<section><div class="section-head"><div><h2>Qualified HOLO rankings</h2><p class="muted">Receptor-qualified HOLO results only; APO contexts are never pooled into these ranks.</p></div><input data-table-filter="qualified-holo-table" type="search" placeholder="Filter {_h(entity_label.lower())} or status…"></div>
+{_pair_table(rows_for(holo), entity_label, rank_label, "qualified-holo-table")}</section>
+<section><div class="section-head"><div><h2>Exploratory APO rankings</h2><p class="muted">Separate APO-only exploratory results; these ranks are not interchangeable with qualified HOLO rankings.</p></div><input data-table-filter="exploratory-apo-table" type="search" placeholder="Filter {_h(entity_label.lower())} or status…"></div>
+{_pair_table(rows_for(apo), entity_label, rank_label, "exploratory-apo-table")}</section>
+<section><div class="section-head"><div><h2>Unranked and excluded pair cells</h2><p class="muted">Failure-complete cells that satisfy neither ranking contract remain visible without a rank.</p></div><input data-table-filter="unranked-pair-table" type="search" placeholder="Filter {_h(entity_label.lower())} or status…"></div>
+{_pair_table(rows_for(excluded, mark_ineligible=False), entity_label, "Rank (not assigned)", "unranked-pair-table")}</section>"""
+
+
+def _pair_table(
+    rows: list[str], entity_label: str, rank_label: str, table_id: str
+) -> str:
     if not rows:
         return _empty("No pair records are available for this entity.")
     data = [
@@ -629,10 +723,10 @@ def _pair_table(rows: list[str], entity_label: str, rank_label: str) -> str:
             "failed, and unranked cells” to inspect excluded cells.</td></tr>"
         )
     payload = _json_script(data)
-    return f"""<div class="table-wrap"><table id="pair-table"><thead><tr><th>{_h(entity_label)}</th><th>{_h(rank_label)}</th>
+    return f"""<div class="table-wrap"><table id="{_h(table_id)}"><thead><tr><th>{_h(entity_label)}</th><th>{_h(rank_label)}</th>
 <th>Final score</th><th>Status</th><th></th></tr></thead><tbody>{initial}</tbody></table></div>
-<div class="pager" data-pair-pager="pair-table"><button type="button" data-page-prev>Previous</button><span data-page-status></span><button type="button" data-page-next>Next</button></div>
-<script type="application/json" data-pair-source="pair-table">{payload}</script>"""
+<div class="pager" data-pair-pager="{_h(table_id)}"><button type="button" data-page-prev>Previous</button><span data-page-status></span><button type="button" data-page-next>Next</button></div>
+<script type="application/json" data-pair-source="{_h(table_id)}">{payload}</script>"""
 
 
 def _html_data_value(markup: str, name: str) -> str:
@@ -678,6 +772,9 @@ def _pair_body(
     score_data = dict(scores)
     for key in (
         "final_score",
+        "final_score_source",
+        "final_score_source_effective",
+        "final_score_source_family",
         "atlas_score",
         "normalized_score",
         "z_score",
@@ -738,7 +835,12 @@ def _score_summary(pair: Mapping[str, Any]) -> str:
     value = pair.get("final_score")
     if value in (None, ""):
         value = scores.get("final_score")
-    return _h(_display(value))
+    source = _text(
+        pair.get("final_score_source_effective") or pair.get("final_score_source")
+    )
+    family = _text(pair.get("final_score_source_family"))
+    details = "".join(f"<small>{_h(item)}</small>" for item in (source, family) if item)
+    return f"{_h(_display(value))}{details}"
 
 
 def _status(pair: Mapping[str, Any]) -> str:

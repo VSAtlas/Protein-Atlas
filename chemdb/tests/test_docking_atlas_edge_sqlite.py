@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from analysis.atlas_database.receptor_evidence import CHEMISTRY_CLASSIFICATION_METHOD
 from analysis.atlas_database.schema import create_schema
 from analysis.reporting.docking_atlas_delivery import build_deployment_preflight
 from analysis.reporting.docking_atlas_edge import main as edge_main
@@ -19,6 +20,7 @@ def _release_database(
     target_count: int = 60,
     drug_count: int = 100,
     legacy_score_source: bool = False,
+    apo_target_count: int = 0,
 ) -> Path:
     downloads = site_dir / "downloads"
     downloads.mkdir(parents=True)
@@ -72,16 +74,22 @@ def _release_database(
         connection.executemany(
             """INSERT INTO receptor_annotations(
             receptor_annotation_id, receptor_context_id, receptor_classification,
-            qualification_status, native_redock_status, source_path, source_sha256,
+            qualification_status, native_redock_status, classification_method,
+            chemistry_evidence_status, prepared_receptor_sha256,
+            canonical_chemistry_policy_sha256, source_path, source_sha256,
             source_record_index, source_record_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     index + 1,
                     index + 1,
-                    "HOLO",
+                    "APO" if index < apo_target_count else "HOLO",
                     "qualified",
                     "qualified",
+                    CHEMISTRY_CLASSIFICATION_METHOD,
+                    "observed",
+                    "d" * 64,
+                    "e" * 64,
                     "annotations/receptors.csv",
                     "c" * 64,
                     index,
@@ -126,27 +134,89 @@ def _release_database(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             pairs,
         )
-        connection.execute(
+        connection.executemany(
             """INSERT INTO artifacts(
             artifact_id, run_id, receptor_context_id, pair_cell_id, ligand_id,
             artifact_role, artifact_scope, member_name, sha256, size_bytes,
             file_type, verified, artifact_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                1,
-                "stream-run",
-                1,
-                1,
-                1,
-                "docked_pose",
-                "pair",
-                "pose-1.sdf",
-                "d" * 64,
-                123,
-                "chemical/x-mdl-sdfile",
-                1,
-                "{}",
-            ),
+            [
+                (
+                    1,
+                    "stream-run",
+                    1,
+                    1,
+                    1,
+                    "docking_pose",
+                    "pair",
+                    "pose-1.sdf",
+                    "d" * 64,
+                    123,
+                    "chemical/x-mdl-sdfile",
+                    1,
+                    '{"selected_for_release":true}',
+                ),
+                (
+                    2,
+                    "stream-run",
+                    1,
+                    1,
+                    1,
+                    "docking_pose",
+                    "pair",
+                    "unselected-pose.sdf",
+                    "e" * 64,
+                    122,
+                    "chemical/x-mdl-sdfile",
+                    1,
+                    '{"selected_for_release":false}',
+                ),
+                (
+                    3,
+                    "stream-run",
+                    1,
+                    1,
+                    1,
+                    "raw_stdout",
+                    "pair",
+                    "stdout.txt",
+                    "f" * 64,
+                    121,
+                    "text/plain",
+                    1,
+                    '{"selected_for_release":true}',
+                ),
+                (
+                    4,
+                    "stream-run",
+                    1,
+                    1,
+                    1,
+                    "pose_image",
+                    "pair",
+                    "unverified.png",
+                    "a" * 64,
+                    120,
+                    "image/png",
+                    0,
+                    "{}",
+                ),
+                (
+                    5,
+                    "stream-run",
+                    1,
+                    1,
+                    1,
+                    "pose_validation_report",
+                    "pair",
+                    "invalid-hash.json",
+                    "invalid-sha256",
+                    119,
+                    "application/json",
+                    1,
+                    "{}",
+                ),
+            ],
         )
         if legacy_score_source:
             connection.executescript(
@@ -253,7 +323,8 @@ def test_sqlite_streaming_export_uses_coarse_shards_not_pair_objects(
         f"releases/{release_token}/records/targets/{first_target['route_id']}.json",
     )
     assert len(target_record["pairs"]) == 100
-    assert target_record["pairs"][0]["rank"] == 1
+    assert target_record["pairs"][0]["rank"] is None
+    assert target_record["pairs"][0]["rank_track_label"] == "Unqualified"
     assert target_record["pairs"][0]["pair_shard_id"]
 
     pair_index = _read_object(
@@ -262,13 +333,73 @@ def test_sqlite_streaming_export_uses_coarse_shards_not_pair_objects(
     assert pair_index["kind"] == "coarse_pair_shards"
     assert sum(int(row["count"]) for row in pair_index["shards"]) == 6_000
     first_shard = _read_object(output_dir, shard_keys[0])
-    assert first_shard["records"][0]["artifacts"][0]["artifact_role"] == "docked_pose"
+    first_pair_record = first_shard["records"][0]
+    public_artifacts = first_pair_record["artifacts"]
+    assert first_pair_record["pair"]["artifact_count"] == 1
+    assert first_pair_record["pair"]["verified_artifact_count"] == 1
+    assert len(public_artifacts) == 1
+    selected_artifact = public_artifacts[0]
+    assert selected_artifact["artifact_role"] == "docking_pose"
+    assert selected_artifact["publication_policy"] == "public_if_selected_for_release"
 
     report = build_deployment_preflight(
         output_dir, site_dir=site_dir, provider="generic"
     )
     assert report["status"] == "ready"
     assert report["edge_objects"]["count"] == summary["r2_object_count"]
+
+
+def test_sqlite_streaming_export_never_invents_ranks_from_unbound_scores(
+    tmp_path: Path,
+) -> None:
+    site_dir = tmp_path / "mixed-site"
+    database = _release_database(
+        site_dir,
+        target_count=2,
+        drug_count=3,
+        apo_target_count=1,
+    )
+    output_dir = tmp_path / "mixed-edge"
+
+    summary = build_streaming_edge_bundle(
+        database,
+        output_dir,
+        batch_rows=100,
+        coarse_shard_rows=100,
+    )
+
+    assert summary["coverage"]["rank_eligible_count"] == 0
+    assert summary["coverage"]["apo_exploratory_rank_eligible_count"] == 0
+    release_token = summary["release_token"]
+    target_index = _read_object(
+        output_dir, f"releases/{release_token}/indexes/targets.json"
+    )
+    target = _read_object(
+        output_dir,
+        f"releases/{release_token}/records/targets/"
+        f"{target_index['records'][0]['route_id']}.json",
+    )
+    assert target["entity"]["receptor_classification"] == "APO"
+    assert target["pairs"][0]["rank"] is None
+    assert target["pairs"][0]["rank_track_label"] == "Unqualified"
+    assert target["pairs"][0]["ranking_track"] is None
+    assert target["pairs"][0]["ranking_eligibility_reason"] == "apo_receptor"
+    assert target["pairs"][0]["rank_within_receptor"] is None
+    assert target["pairs"][0]["apo_rank_within_receptor"] is None
+
+    drug_index = _read_object(
+        output_dir, f"releases/{release_token}/indexes/drugs.json"
+    )
+    drug = _read_object(
+        output_dir,
+        f"releases/{release_token}/records/drugs/"
+        f"{drug_index['records'][0]['route_id']}.json",
+    )
+    assert {row["rank_track_label"] for row in drug["pairs"]} == {"Unqualified"}
+    assert {row["rank"] for row in drug["pairs"]} == {None}
+    assert {row["ranking_track"] for row in drug["pairs"]} == {None}
+    assert all(row["rank_across_receptors"] is None for row in drug["pairs"])
+    assert all(row["apo_rank_across_receptors"] is None for row in drug["pairs"])
 
 
 def test_sqlite_streaming_export_supports_legacy_schema_and_score_source(
@@ -305,7 +436,7 @@ def test_sqlite_streaming_export_supports_legacy_schema_and_score_source(
     assert {row["pair"]["pose_validation_scope"] for row in shard["records"]} == {None}
     assert {row["pair"]["rank_eligible"] for row in shard["records"]} == {0}
     assert {row["pair"]["ranking_eligibility_reason"] for row in shard["records"]} == {
-        "pose_validation_scope_unqualified"
+        "receptor_chemistry_method_unqualified"
     }
     target_index = _read_object(
         output_dir, f"releases/{release_token}/indexes/targets.json"

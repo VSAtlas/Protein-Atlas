@@ -15,17 +15,43 @@ ARTIFACT_ROLE_SCOPES: dict[str, str] = {
     "source_ligand": "ligand",
     "prepared_ligand": "ligand",
     "docking_pose": "pair",
+    "all_docking_poses": "pair",
+    "all_pose_scores": "pair",
+    "native_ligand": "receptor",
+    "native_redock_pose": "receptor",
     "pose_image": "pair",
     "receptor_validation_report": "receptor",
     "native_redock_validation_report": "receptor",
     "pose_validation_report": "pair",
     "search_box_definition": "receptor",
     "run_configuration": "run",
+    "release_manifest": "run",
     "raw_stdout": "pair",
     "raw_stderr": "pair",
     "software_environment": "run",
 }
 ARTIFACT_ROLES = tuple(sorted(ARTIFACT_ROLE_SCOPES))
+ARTIFACT_PUBLICATION_POLICIES: dict[str, str] = {
+    "source_receptor": "private",
+    "prepared_receptor": "public_approved",
+    "source_ligand": "private",
+    "prepared_ligand": "public_approved",
+    "docking_pose": "public_if_selected_for_release",
+    "all_docking_poses": "private",
+    "all_pose_scores": "private",
+    "native_ligand": "public_approved",
+    "native_redock_pose": "public_approved",
+    "pose_image": "public_approved",
+    "receptor_validation_report": "public_after_sanitization",
+    "native_redock_validation_report": "public_after_sanitization",
+    "pose_validation_report": "public_after_sanitization",
+    "search_box_definition": "public_approved",
+    "run_configuration": "public_after_sanitization",
+    "release_manifest": "public_after_sanitization",
+    "raw_stdout": "private",
+    "raw_stderr": "private",
+    "software_environment": "public_after_sanitization",
+}
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
@@ -39,6 +65,37 @@ def artifact_scope(role: str) -> str:
         return ARTIFACT_ROLE_SCOPES[role]
     except KeyError as exc:
         raise ArtifactContractError(f"unknown artifact_role: {role!r}") from exc
+
+
+def artifact_publication_policy(role: str) -> str:
+    """Return the approved public-release policy for one controlled role."""
+    try:
+        return ARTIFACT_PUBLICATION_POLICIES[role]
+    except KeyError as exc:
+        raise ArtifactContractError(f"unknown artifact_role: {role!r}") from exc
+
+
+def artifact_public_metadata_allowed(role: str, entry: Mapping[str, Any]) -> bool:
+    """Return whether one artifact may appear in a sanitized public projection."""
+    policy = artifact_publication_policy(role)
+    if policy == "private":
+        return False
+    if policy == "public_if_selected_for_release":
+        return entry.get("selected_for_release") is True
+    return True
+
+
+def artifact_public_record_allowed(
+    role: str,
+    entry: Mapping[str, Any],
+    *,
+    verified: Any,
+    sha256: Any,
+) -> bool:
+    """Require public policy plus verified, content-addressed artifact identity."""
+    if verified != 1 or not _SHA256.fullmatch(str(sha256 or "").strip()):
+        return False
+    return artifact_public_metadata_allowed(role, entry)
 
 
 def validate_artifact_index(index: Any) -> list[str]:
@@ -83,6 +140,10 @@ def validate_artifact_index(index: Any) -> list[str]:
                 scope = ""
             else:
                 scope = ARTIFACT_ROLE_SCOPES[role]
+            if "selected_for_release" in entry and not isinstance(
+                entry.get("selected_for_release"), bool
+            ):
+                errors.append(f"{entry_prefix}.selected_for_release must be a boolean")
             ligand = str(entry.get("ligand_canonical_id") or "").strip()
             if scope in {"ligand", "pair"} and not ligand:
                 errors.append(

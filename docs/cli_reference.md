@@ -153,6 +153,8 @@ Key behavior:
 - `atlas run-panel <panel> --ligands <library>` installs panel targets, installs/preps the ligand library, and runs Atlas with those selected PDBs.
 - `atlas ligands install <library> --dry-run` prints the planned cache and prepared-library paths without fetching or preparing files.
 - `atlas doctor --pdb <ID> --ligands <library>` validates the prepared receptor/ligand PDBQT inputs, detects multi-model or empty ligand files, and reports the prep command to rerun when conversion failed.
+- `atlas stages repeat --run-id <RUN_ID> --stage pose-validation --all-receptors --all-ligands --all-contexts --fraction 1 --database <release.sqlite>` writes an auditable planner-only ledger for one stage. Supported stages are `vina`, `gnina`, `scorch`, `mmgbsa`, and `pose-validation`; no workload launches in this release. Pose-consuming plans reject unknown score-to-pose semantics, and aggregate scores require the complete declared set of verified contributing-pose hashes.
+- Partial `--fraction` or `--count` plans require `--selection-strategy hash|top-score`. Deterministic `hash` is implemented. `top-score` fails closed until a score source, direction, provenance, and tie policy are approved. SQLite sources above 25,000 pair cells also fail closed pending the streaming planner and exact-pair executors.
 - `atlas dev verify --full --fix --smoke` runs the canonical repo gate: full ruff, vulture, tach, architecture gate, full mypy, and smoke.
 - `--pdb` is the preferred repeatable input selector.
 - `--run-id` names the run and overrides `ATLAS_RUN_ID`.

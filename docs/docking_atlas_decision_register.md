@@ -18,24 +18,30 @@ freezing a public release.
   must remain provenance-pending.
 - Invalid and unsuccessful cells remain present, but are excluded from headline
   rankings by default.
-- APO contexts remain visible but are excluded from the current fail-closed
-  qualified headline ranking. Ranking uses the controlled observed
-  `receptor_classification`, not the requested variant/folder token. Whether a
-  separately labelled APO ranking should also be public remains a scientific
-  decision.
+- APO contexts remain visible but are excluded from the qualified HOLO headline
+  ranking. Ranking uses the controlled observed `receptor_classification`, not the
+  requested variant/folder token. A separate, explicitly exploratory APO ranking
+  is approved; APO and HOLO values must never be silently pooled into one list.
 - Receptor annotations accept only controlled `APO`/`HOLO` classifications or
-  an unresolved blank. Readiness schema 5 reports missing/uncontrolled
+  an unresolved blank. Readiness schema 6 reports missing/uncontrolled
   classification and exact prepared-receptor evidence gaps rather than treating a
   historical run label as chemistry truth.
 - A receptor must pass an explicit receptor-quality outcome and an explicit native
   redock qualification before its drug rows can enter headline rankings.
-- The native-redock RMSD threshold is provisionally 2.5 angstrom. The current RMSD
-  implementation must be verified against the approved method before any receptor
-  is qualified.
+- The native-redock qualification threshold is 2.5 angstrom on an independently
+  score-verified top-ranked generated pose. The current evaluator verifies ranking
+  only from exact per-model Vina `REMARK VINA RESULT` records; missing competitor
+  scores or unsupported score sources remain evidence-pending and cannot qualify.
+  RMSD uses exact heavy-atom molecular-graph identity, symmetry-equivalent atom
+  mappings, and a receptor transform independently checked against exact common
+  receptor atom keys; it must not truncate atom lists, assume file order, include
+  hydrogens, or independently superpose the docked ligand. Best-of-generated-pose
+  RMSD is diagnostic and cannot substitute for top-ranked qualification.
 - The conference image set contains the native control, up to five top valid
   ligands, the best-scoring invalid result when present, and a representative
-  known-pair slot when it is not already selected. The slot is approved;
-  its scientific definition and tie handling are not.
+  known-pair slot when it is not already selected. The slot is a navigation-only,
+  directly curated drug-target annotation with an explicit evidence citation; it
+  never changes ranking or validates a docking result.
 - For frozen public releases, protein identities, receptor outcomes, and known pairs
   come from explicit annotation rows backed by hashed external sources. Older inline
   known-pair values may remain covered by a manifest hash, but `atlas publish build`
@@ -49,8 +55,19 @@ The engineering-only matrix audit of
 contexts, 760,878 terminal expected cells, 440,183 calculated-but-unvalidated
 cells, 320,695 structured missing-result cells, and 31,950 non-null
 `final_score` values. It has zero explicit pair pose validations, zero explicit
-native-redock qualifications, no imported artifact index, and no classified
-legacy `final_score` source. It is not approved as a scientific release.
+native-redock qualifications, and no imported artifact index. The source rows had
+no explicit controlled `final_score` source; v0.0.12 now reconstructs all 31,950
+finite values from exact row-bound evidence, without resolving their immutable
+pose identity. It is not approved as a scientific release.
+
+A non-overwriting full-build rehearsal on 2026-07-13 failed closed during input
+audit because the historical run contains duplicate successful completion
+attempts without explicit manifest attempt selections. No retry was selected
+implicitly. The direct production-equivalent source classifier independently
+verified all 31,950 finite scores against input CSV SHA-256
+`0dbe4ca37b21d5b61ea5dc4c640a4ea81b60284d676a9d8d4cf5422f365cc742`.
+Publication still requires an approved, evidence-bound attempt selection for
+every duplicate before rebuilding the frozen release.
 
 The v2 prepared-receptor evidence pass pins those exact 90 context keys with
 inventory SHA-256
@@ -81,8 +98,12 @@ do not convert those observations into pass/fail outcomes automatically.
 - Metal-retention and metal-site interaction audits are included as receptor
   evidence and must be bound to the exact receptor context. Their presence does not
   by itself qualify receptor quality.
-- The provisional native-redock cutoff is 2.5 angstrom. No pass may be recorded
-  until the RMSD calculation method and the current implementation are verified.
+- The approved native-redock cutoff is 2.5 angstrom. The implemented strict v2
+  symmetry-aware heavy-atom evaluator can qualify only when every receptor, ligand,
+  coordinate-frame, extraction, all-model score, and selected-pose input verifies.
+  Unspecified potential stereochemistry is explicitly policy-pending, not invalid;
+  it cannot qualify until the user approves a policy. Unprovenanced legacy calls
+  remain evidence-pending and cannot qualify.
 - Pose-validity thresholds come from the existing validation script. The public
   database must show the validator version/configuration and thresholds rather than
   silently reinterpreting them.
@@ -92,8 +113,37 @@ do not convert those observations into pass/fail outcomes automatically.
   ligands, the best-scoring invalid result when present, and a representative known
   pair when it is not already among those selections.
 - The approved public-artifact baseline is the prepared receptor, prepared ligand,
-  and docked-ligand images. This is not approval to publish every pose, validation
-  output, log, or raw intermediate.
+  and docked-ligand images. The selected docking pose, native ligand and redock pose,
+  validation reports, search-box definition, sanitized run configuration, release
+  manifest, and content hashes are also approved. Raw stdout/stderr, unselected
+  poses, all-pose archives, and unsanitized intermediates remain private by default.
+- Pose validity must be recomputed or verified for the exact pose that supplies the
+  displayed `final_score`. An any-stage or any-pose pass is retained as legacy
+  evidence but cannot qualify a ranked pair. A backfill must record the exact
+  validator version, configuration, thresholds, selected-pose hash, and output hash.
+- Exact final prepared receptor content is authoritative for what entered docking.
+  A cleaned-versus-final chemistry disagreement remains unresolved for release
+  qualification until audited. Site-bound canonical cofactors and nucleotides may
+  establish HOLO chemistry; free halides and nonspecific ions alone may not.
+
+## Native-redock method basis
+
+The v2 implementation uses the fixed-receptor-frame docking RMSD definition and
+graph-isomorphism symmetry rationale described by Bell and Zhang's
+[DockRMSD](https://doi.org/10.1186/s13321-019-0362-7); it does not claim to
+implement DockRMSD itself. It uses RDKit's documented in-place
+[`CalcRMS`](https://www.rdkit.org/docs/source/rdkit.Chem.rdMolAlign.html) with
+explicit graph maps and reconstructs pose coordinates from Meeko's documented
+[SMILES and index mapping](https://meeko.readthedocs.io/en/develop/export_usage.html).
+
+Before RMSD, every exactly keyed common receptor `ATOM` coordinate must agree
+with the declared rigid transform within 0.002 angstrom. That tolerance records
+three-decimal PDB/PDBQT coordinate-serialization evidence only; it is not a
+receptor-quality criterion or scientific cutoff. Top rank is independently
+verified only from exact all-model Vina `REMARK VINA RESULT` records. Unsupported
+score sources, missing competitor scores, and unresolved transforms remain
+evidence-pending. Policies for unspecified potential stereochemistry and
+resonance-equivalent terminal conjugated groups remain pending user approval.
 
 ## Fail-closed evidence behavior
 
@@ -118,12 +168,12 @@ native-redock qualification:
 |---|---|---|
 | Exact 90-context inventory | Historical 90-context key set is frozen at inventory SHA-256 `f42acf852c878e092cffd6b93f802e405db6f44637478a0a97810811f48c9579`. | No further choice for v0.1 unless the manifest changes; any change requires an explicit new inventory approval. |
 | Experimental receptor-quality policy | Evidence must remain separate from qualification. | Accepted experimental methods; required source fields; metric definitions and cutoffs for resolution/quality, mutations, missing residues, ligand/chain selection, and pocket completeness; policy identifier; per-context outcome and reason. |
-| APO/HOLO conflict rules and ranking use | Classification uses exact prepared chemistry rather than folder/run labels; disagreement remains unresolved. | Controlled treatment of cofactors, nucleotide/native-ligand cases, free ions/salts, and halides; whether labelled APO contexts receive a separate public ranking or remain outside headline ranks; then explicit review of the 15 unresolved contexts. |
-| Native-redock RMSD method | Provisional cutoff is 2.5 angstrom. | Atom mapping, symmetry treatment, alignment frame, hydrogen treatment, generated-pose selection, named method/version, verification of the present implementation, and per-context outcome. |
-| Pair pose-validity scope | Existing script thresholds must be shown. | Exact pass predicates and combination rule, whether validation applies to the selected `final_score` pose or any stage/pose, engine-specific exceptions, validator version, and per-pair output mapping. |
-| Legacy `final_score` provenance | Comparison requires an explicit displayed source family. | Reconstruct and freeze the source field/family/version for every historical non-null primary score; never infer it from the numeric value alone. |
-| Representative known pair and ties | A known pair is a navigation/presentation annotation intended to give each receptor page one recognizable drug-target relationship when it is absent from the top-five valid results. It does not, by itself, validate a docking result or change ranking. | Evidence-source definition, eligibility rules, canonical ligand selection, tie handling, and approval of ambiguous candidates. |
-| Additional public artifact roles | Prepared receptor, prepared ligand, and docked-ligand images are approved as the baseline. | Whether downloadable poses, receptor-ligand complexes, validation reports, stdout/stderr, raw logs, all poses/scores, and other intermediates are public or remain only in the private evidence ledger. |
+| APO/HOLO conflict rules and ranking use | Exact final prepared content is authoritative; cleaned/final disagreement remains unresolved; canonical site-bound cofactors/nucleotides can establish HOLO; free halides or nonspecific ions alone cannot; APO receives a separate exploratory ranking. | Explicit review of the 15 unresolved contexts and evidence-bound per-context approval. |
+| Native-redock RMSD method | The approved cutoff is an inclusive 2.5 angstrom. The strict v2 implementation uses Meeko SMILES-IDX mapping, exact graph/bond identity, heavy atoms, symmetry mappings, in-place RDKit CalcRMS, exact-common-atom receptor-transform verification, and exact all-model Vina score-order verification. Best-of-generated remains diagnostic. Unverified transforms, unsupported score sources, missing competitor scores, and unprovenanced calls remain evidence-pending and cannot qualify. | Approve how unspecified potential stereochemistry should be handled and whether resonance-equivalent terminal conjugated groups should be interchangeable. Generate the required manifests and per-context outcomes only after those choices; no receptor is qualified by the new method yet. |
+| Pair pose-validity scope | The exact selected `final_score` pose must pass the existing script predicates with visible validator configuration and thresholds; legacy any-stage evidence cannot qualify. | Backfill exact selected-pose validation for the frozen run. The 31,950 classified historical scores identify SCORCH-stage lineage but no immutable pose, so the contributing-pose/display-pose policy must be approved before this backfill can qualify rows. |
+| Legacy `final_score` provenance | All 31,950 finite frozen-run scores are immutably reconstructed as `legacy_scorch_percentile_neutral_cnn_placeholder_vs_decoy_z`: population Z of `0.65 * SCORCH percentile + 0.35 * 0.5`, with CNN absent. The intentional `t_vs_decoys_blend` alias co-matches the same source. | No further source classification decision for scored rows in the frozen v0.1 run. Keep aggregate-score pose linkage separate; do not invent an immutable pose from this classification. |
+| Representative known pair and ties | A directly curated, citation-backed drug-target pair is navigation-only and cannot change ranking or validity. | Freeze the accepted evidence-source priority and deterministic tie ordering, then review ambiguous candidates. |
+| Public artifact roles | Prepared receptor/ligand, selected docking pose, native ligand/redock pose, images, validation reports, search box, sanitized configuration, release manifest, and hashes are approved; logs and unselected/all-pose artifacts are private. Public projection additionally requires `verified=1` and a valid SHA-256. | Populate and verify the selected artifacts for the frozen release; any later role expansion requires new approval. |
 
 ## Engineering approval still required
 
@@ -153,7 +203,17 @@ The following engineering contracts are now implemented:
   emits one object per receptor-ligand cell; and
 - provider-neutral HTTPS download projection and generic/Cloudflare
   credential-free deployment preflight are implemented without uploading or
-  deploying.
+  deploying;
+- public projections omit raw logs, all-pose artifacts, and unselected docking
+  poses even from metadata; selected poses require an explicit boolean release
+  marker, and every retained public artifact requires `verified=1` plus a valid
+  SHA-256; the same filter is applied before the downloadable SQLite is vacuumed;
+  and
+- HOLO headline ranks and APO exploratory ranks use separate eligibility fields,
+  within-receptor ranks, and across-receptor ranks. The browser labels the track
+  and the release contract forbids pooling. Exact receptor chemistry, bound score
+  evidence, and resolvable score-to-pose lineage are mandatory; the historical
+  aggregate scores therefore remain visible but unranked.
 
 Additional engineering choices remain open:
 
@@ -161,7 +221,15 @@ Additional engineering choices remain open:
   named bucket resources, and authorize a later deployment separately;
 - run the full 760,878-cell streaming export only after the frozen public SQLite
   and scientific selection are ready; and
-- populate causal completion linkage for selected result rows. Readiness schema 5
+- populate causal completion linkage for selected result rows. Readiness schema 6
   blocks publication when a selected result does not identify its producing
   completion record, link method, structured evidence, and matching selected
-  completion attempt.
+  completion attempt;
+- extend `atlas stages repeat` from its current planner-only, 25,000-pair-bounded
+  checkpoint implementation to a streaming work database and exact-pair
+  allowlists/executors for Vina, GNINA, SCORCH, MM/GBSA, and pose validation; and
+- keep unknown score-to-pose semantics blocked in every pose-consuming stage plan;
+  controlled aggregate sources require complete contributing-pose hashes; and
+- choose the partial-stage selection policy. Deterministic hash sampling is
+  implemented; top-score sampling remains fail-closed until the exact score
+  source, direction, provenance, and tie rule are approved.

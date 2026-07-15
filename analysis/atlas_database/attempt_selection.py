@@ -163,7 +163,10 @@ def _materialize_result_attempt(
            pose_validation_scope=?, pose_validation_thresholds_json=?,
            is_control=?, is_decoy=?, atlas_score=?,
            atlas_score_source=?, selected_docking_score=?, consensus_score=?,
-           final_score=?, final_score_source=?, final_rank=?, source_csv=?,
+           final_score=?, final_score_source=?,
+           final_score_source_reconstructed=?,
+           final_score_source_classification=?,
+           final_score_source_evidence_json=?, final_rank=?, source_csv=?,
            result_json=? WHERE pair_cell_id=?""",
         (
             candidate["final_status"],
@@ -181,6 +184,9 @@ def _materialize_result_attempt(
             candidate["consensus_score"],
             candidate["final_score"],
             candidate["final_score_source"],
+            candidate["final_score_source_reconstructed"],
+            candidate["final_score_source_classification"],
+            candidate["final_score_source_evidence_json"],
             candidate["final_rank"],
             candidate["source_csv"],
             candidate["result_json"],
@@ -205,6 +211,9 @@ def _select_result_attempts(
                   a.is_control, a.is_decoy, a.atlas_score,
                   a.atlas_score_source, a.selected_docking_score,
                   a.consensus_score, a.final_score, a.final_score_source,
+                  a.final_score_source_reconstructed,
+                  a.final_score_source_classification,
+                  a.final_score_source_evidence_json,
                   a.final_rank, a.source_csv, a.result_json
            FROM result_attempts a
            JOIN pair_cells p ON p.pair_cell_id=a.pair_cell_id
@@ -238,6 +247,9 @@ def _select_result_attempts(
         "consensus_score",
         "final_score",
         "final_score_source",
+        "final_score_source_reconstructed",
+        "final_score_source_classification",
+        "final_score_source_evidence_json",
         "final_rank",
         "source_csv",
         "result_json",

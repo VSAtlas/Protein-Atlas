@@ -25,6 +25,10 @@ def test_static_explorer_links_protein_drug_and_pair_pages(tmp_path: Path) -> No
                 "drug_id": "Drug X",
                 "final_status": "valid",
                 "final_score": 2.75,
+                "final_score_source_effective": "declared:consensus_vs_decoy_z",
+                "final_score_source_family": "consensus_decoy_standardized",
+                "rank_eligible": 1,
+                "ranking_track": "qualified_holo",
                 "protein_rank": 1,
                 "drug_rank": 1,
             },
@@ -89,6 +93,11 @@ def test_static_explorer_links_protein_drug_and_pair_pages(tmp_path: Path) -> No
     assert pair_two_path.is_file()
     assert "2.75" in protein_html
     assert "1.25" in protein_html
+    assert "Qualified HOLO rankings" in protein_html
+    assert "Exploratory APO rankings" in protein_html
+    assert "Unranked and excluded pair cells" in protein_html
+    assert "declared:consensus_vs_decoy_z" in protein_html
+    assert "consensus_decoy_standardized" in protein_html
 
     for relative_path in (
         "analysis.html",
@@ -118,6 +127,7 @@ def test_static_explorer_progressively_renders_more_than_one_page(
                 "final_status": "valid",
                 "final_score": float(pair_count - index),
                 "rank_eligible": 1,
+                "ranking_track": "qualified_holo",
                 "rank_within_receptor": index,
                 "rank_across_receptors": 1,
             }
@@ -154,7 +164,7 @@ def test_static_explorer_progressively_renders_more_than_one_page(
     assert active_pair_rows is not None
     assert active_pair_rows.group(1).count("<tr ") == 100
     pair_source = re.search(
-        r'<script type="application/json" data-pair-source="pair-table">(.*?)</script>',
+        r'<script type="application/json" data-pair-source="qualified-holo-table">(.*?)</script>',
         protein_html,
         re.DOTALL,
     )
@@ -163,4 +173,79 @@ def test_static_explorer_progressively_renders_more_than_one_page(
     assert len(pair_rows) == pair_count
     assert all(row["eligible"] is True for row in pair_rows)
     assert "drug 101 drug-101 valid" in pair_rows[-1]["search"]
-    assert 'data-pair-pager="pair-table"' in protein_html
+    assert 'data-pair-pager="qualified-holo-table"' in protein_html
+
+
+def test_static_explorer_separates_holo_apo_and_unqualified_rank_tracks(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "release": {"id": "atlas-tracks", "title": "Rank tracks"},
+        "proteins": [{"id": "target-a", "display_name": "Target A"}],
+        "drugs": [
+            {"id": "holo", "display_name": "Drug Holo"},
+            {"id": "apo", "display_name": "Drug APO"},
+            {"id": "untracked", "display_name": "Drug Untracked"},
+        ],
+        "pairs": [
+            {
+                "pair_cell_id": 1,
+                "protein_id": "target-a",
+                "drug_id": "holo",
+                "final_status": "valid",
+                "final_score": 3.0,
+                "final_score_source_effective": "declared:consensus_vs_decoy_z",
+                "final_score_source_family": "consensus_decoy_standardized",
+                "ranking_track": "qualified_holo",
+                "rank_eligible": 1,
+                "rank_within_receptor": 1,
+            },
+            {
+                "pair_cell_id": 2,
+                "protein_id": "target-a",
+                "drug_id": "apo",
+                "final_status": "valid",
+                "final_score": 2.0,
+                "final_score_source_effective": "reconstructed:scorch_vs_decoy_z",
+                "final_score_source_family": "scorch_decoy_standardized",
+                "ranking_track": "exploratory_apo",
+                "apo_exploratory_rank_eligible": 1,
+                "apo_rank_within_receptor": 1,
+            },
+            {
+                "pair_cell_id": 3,
+                "protein_id": "target-a",
+                "drug_id": "untracked",
+                "final_status": "valid",
+                "final_score": 1.0,
+                "rank_eligible": 1,
+                "rank_within_receptor": 777,
+            },
+        ],
+    }
+
+    generate_static_explorer(payload, tmp_path)
+    protein_html = (tmp_path / "proteins" / "target-a.html").read_text(encoding="utf-8")
+
+    def rows(table_id: str) -> list[dict[str, object]]:
+        match = re.search(
+            rf'<script type="application/json" data-pair-source="{table_id}">(.*?)</script>',
+            protein_html,
+            re.DOTALL,
+        )
+        assert match is not None
+        return json.loads(match.group(1))
+
+    holo, apo, excluded = (
+        rows("qualified-holo-table"),
+        rows("exploratory-apo-table"),
+        rows("unranked-pair-table"),
+    )
+    assert len(holo) == len(apo) == len(excluded) == 1
+    assert "Drug Holo" in str(holo[0]["html"])
+    assert "declared:consensus_vs_decoy_z" in str(holo[0]["html"])
+    assert "consensus_decoy_standardized" in str(holo[0]["html"])
+    assert "Drug APO" in str(apo[0]["html"])
+    assert "reconstructed:scorch_vs_decoy_z" in str(apo[0]["html"])
+    assert "Drug Untracked" in str(excluded[0]["html"])
+    assert ">777<" not in str(excluded[0]["html"])

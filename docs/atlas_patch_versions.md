@@ -76,3 +76,17 @@ download projection and deployment preflight, typed pair-level artifact roles,
 fail-closed retry selection and causal-lineage readiness, exact prepared-receptor
 APO/HOLO evidence with metal-audit acceptance/rejection provenance, selected-pose
 validation gates, and the conference top-valid/best-invalid image plan.
+
+## Atlasv0.0.12 - Classify and modularize the docking atlas
+
+Classifies all frozen-run primary scores with exact row-bound legacy-decoy-Z
+provenance, separates APO exploratory ranks from HOLO headline ranks, and keeps
+both tracks unranked when exact chemistry or score-to-pose evidence is missing.
+Public projections now omit private, unselected, unverified, and unhashed
+artifacts. A symmetry-aware native-redock RMSD evaluator replaces the unsafe
+ligand-fitted fallback but qualifies only with independently verified common-atom
+receptor-frame evidence and exact all-model Vina score ordering; unsupported
+evidence and unspecified potential stereochemistry remain pending. Fail-closed
+single-stage repeat planning covers Vina, GNINA, SCORCH, MM/GBSA, and pose
+validation. Full-matrix execution plus the stereo, resonance-group, aggregate-pose,
+known-pair, and partial-sampling policies stay explicit publication gaps.

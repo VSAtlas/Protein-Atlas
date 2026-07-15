@@ -12,10 +12,19 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from analysis.atlas_database.artifact_contract import (
+    artifact_public_record_allowed,
+    artifact_publication_policy,
+)
 from analysis.atlas_database.exports import (
     PAIR_COLUMNS,
     _component_coverage,
+    apo_exploratory_ranking_eligibility,
     ranking_eligibility,
+)
+from analysis.atlas_database.score_source_contract import (
+    classify_materialized_source,
+    score_source_browser_contract,
 )
 from analysis.reporting.docking_atlas_delivery import (
     DOWNLOAD_MANIFEST_NAME,
@@ -48,7 +57,7 @@ DEFAULT_COARSE_SHARD_ROWS = 2_000
 DEFAULT_MAX_PAIRS = 2_000_000
 MAX_ENTITY_COUNT = 100_000
 _PRIVATE_PATH_MARKERS = ("/stor/", "/home/", "/tmp/")
-_SUPPORTED_SCHEMA_VERSIONS = {2, 3, 4, 5}
+_SUPPORTED_SCHEMA_VERSIONS = {2, 3, 4, 5, 6}
 _WORK_NAME = ".atlas-edge-stream-work.sqlite"
 
 _INTEGER_COLUMNS = {
@@ -60,10 +69,14 @@ _INTEGER_COLUMNS = {
     "is_control",
     "is_decoy",
     "primary_score_present",
+    "final_score_source_eligible",
     "rank_eligible",
+    "apo_exploratory_rank_eligible",
     "final_rank",
     "rank_within_receptor",
     "rank_across_receptors",
+    "apo_rank_within_receptor",
+    "apo_rank_across_receptors",
     "artifact_count",
     "verified_artifact_count",
 }
@@ -251,7 +264,7 @@ def _target_key(row: Mapping[str, Any]) -> str:
     )
 
 
-def _final_score_source(
+def _declared_final_score_source(
     result_json: Any, final_score: Any, stored_source: Any
 ) -> str | None:
     if final_score is None:
@@ -264,7 +277,7 @@ def _final_score_source(
     except (TypeError, ValueError):
         result = {}
     source = str(result.get("final_score_source") or "").strip()
-    return source or "legacy_unclassified_final_score"
+    return source or None
 
 
 def _release_payload(
@@ -450,6 +463,22 @@ def _work_schema(connection: sqlite3.Connection) -> None:
 def _source_pair_query(connection: sqlite3.Connection) -> str:
     pair_columns = _table_columns(connection, "pair_cells")
     annotation_columns = _table_columns(connection, "receptor_annotations")
+    attempt_columns = _table_columns(connection, "result_attempts")
+    if attempt_columns:
+        attempt_projection = """
+            sra.input_csv_sha256 AS selected_result_input_csv_sha256,
+            sra.source_row_number AS selected_result_source_row_number,
+            sra.result_sha256 AS selected_result_sha256,"""
+        attempt_join = """
+        LEFT JOIN result_attempts sra
+          ON sra.pair_cell_id=p.pair_cell_id
+         AND sra.selected_for_release=1"""
+    else:
+        attempt_projection = """
+            NULL AS selected_result_input_csv_sha256,
+            NULL AS selected_result_source_row_number,
+            NULL AS selected_result_sha256,"""
+        attempt_join = ""
     return f"""
         SELECT p.pair_cell_id, r.run_id, r.pdb_id, r.variant, r.ph_label,
             {_sql_column("a", annotation_columns, "receptor_classification")}
@@ -487,22 +516,24 @@ def _source_pair_query(connection: sqlite3.Connection) -> str:
             p.is_control, p.is_decoy, p.final_score,
             {_sql_column("p", pair_columns, "final_score_source")}
                 AS final_score_source,
+            {_sql_column("p", pair_columns, "final_score_source_reconstructed")}
+                AS final_score_source_reconstructed,
+            {_sql_column("p", pair_columns, "final_score_source_classification")}
+                AS final_score_source_classification,
+            {_sql_column("p", pair_columns, "final_score_source_evidence_json")}
+                AS final_score_source_evidence_json,
+            {attempt_projection}
             p.final_rank, p.atlas_score, p.atlas_score_source,
             p.selected_docking_score, p.consensus_score, p.result_json,
-            COALESCE(ac.artifact_count, 0) AS artifact_count,
-            COALESCE(ac.verified_artifact_count, 0) AS verified_artifact_count
+            0 AS artifact_count,
+            0 AS verified_artifact_count
         FROM pair_cells p
         JOIN receptor_contexts r
           ON r.receptor_context_id = p.receptor_context_id
         JOIN ligands l ON l.ligand_id = p.ligand_id
         LEFT JOIN receptor_annotations a
           ON a.receptor_context_id = r.receptor_context_id
-        LEFT JOIN (
-            SELECT pair_cell_id, COUNT(*) AS artifact_count,
-            SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END)
-                AS verified_artifact_count
-            FROM artifacts WHERE pair_cell_id IS NOT NULL GROUP BY pair_cell_id
-        ) ac ON ac.pair_cell_id=p.pair_cell_id
+        {attempt_join}
         ORDER BY p.pair_cell_id
     """
 
@@ -528,16 +559,37 @@ def _normalize_pair(
     row["target_key"] = target_id
     row["target_id"] = target_id
     row["drug_id"] = drug_id
-    row["final_score_source"] = _final_score_source(
+    row["final_score_source"] = _declared_final_score_source(
         row.pop("result_json", None),
         row.get("final_score"),
         row.get("final_score_source"),
     )
+    source = classify_materialized_source(row)
+    row["final_score_source_reconstructed"] = source.reconstructed_source
+    row["final_score_source_effective"] = source.effective_source
+    row["final_score_source_canonical"] = source.canonical_source
+    row["final_score_source_family"] = source.family
+    row["final_score_pose_linkage_requirement"] = source.pose_linkage_requirement
+    row["final_score_source_classification"] = source.classification
+    row["final_score_source_eligible"] = int(source.eligible)
     row["primary_score_present"] = int(row.get("final_score") is not None)
     row["rank_eligible"], row["ranking_eligibility_reason"] = ranking_eligibility(row)
+    (
+        row["apo_exploratory_rank_eligible"],
+        row["apo_exploratory_ranking_eligibility_reason"],
+    ) = apo_exploratory_ranking_eligibility(row)
+    row["ranking_track"] = (
+        "qualified_holo"
+        if row["rank_eligible"]
+        else "exploratory_apo"
+        if row["apo_exploratory_rank_eligible"]
+        else None
+    )
     row["score_component_coverage"] = _component_coverage(row)
     row["rank_within_receptor"] = None
     row["rank_across_receptors"] = None
+    row["apo_rank_within_receptor"] = None
+    row["apo_rank_across_receptors"] = None
     pair_id = str(row["pair_cell_id"])
     normalized = {name: row.get(name) for name in PAIR_COLUMNS}
     normalized.update(
@@ -574,8 +626,12 @@ def _populate_work_database(
     )
     status_counts: dict[str, int] = defaultdict(int)
     score_source_counts: dict[str, int] = defaultdict(int)
+    effective_score_source_counts: dict[str, int] = defaultdict(int)
+    score_source_classification_counts: dict[str, int] = defaultdict(int)
     primary_score_count = 0
+    classified_score_source_count = 0
     rank_eligible_count = 0
+    apo_rank_eligible_count = 0
     source_cursor = source.execute(_source_pair_query(source))
     ordinal = 0
     while True:
@@ -601,7 +657,17 @@ def _populate_work_database(
                 score_source_counts[
                     str(pair.get("final_score_source") or "unknown")
                 ] += 1
+                effective_score_source_counts[
+                    str(pair.get("final_score_source_effective") or "unknown")
+                ] += 1
+                score_source_classification_counts[
+                    str(pair.get("final_score_source_classification") or "unknown")
+                ] += 1
+                classified_score_source_count += int(
+                    pair.get("final_score_source_eligible") or 0
+                )
             rank_eligible_count += int(pair["rank_eligible"] or 0)
+            apo_rank_eligible_count += int(pair["apo_exploratory_rank_eligible"] or 0)
         work.executemany(insert_sql, values)
         work.commit()
     if ordinal != pair_count:
@@ -610,8 +676,18 @@ def _populate_work_database(
         )
     work.executescript(
         """
-        CREATE INDEX idx_stream_target ON stream_pairs(target_id, rank_eligible, final_score);
-        CREATE INDEX idx_stream_drug ON stream_pairs(drug_id, rank_eligible, final_score);
+        CREATE INDEX idx_stream_target
+          ON stream_pairs(target_id, rank_eligible, final_score);
+        CREATE INDEX idx_stream_drug
+          ON stream_pairs(drug_id, rank_eligible, final_score);
+        CREATE INDEX idx_stream_apo_target
+          ON stream_pairs(
+            target_id, apo_exploratory_rank_eligible, final_score
+          );
+        CREATE INDEX idx_stream_apo_drug
+          ON stream_pairs(
+            drug_id, apo_exploratory_rank_eligible, final_score
+          );
         CREATE INDEX idx_stream_shard ON stream_pairs(pair_shard_id, ordinal);
         CREATE TABLE target_ranks AS
           SELECT pair_cell_id,
@@ -623,6 +699,18 @@ def _populate_work_database(
           RANK() OVER (PARTITION BY ligand_id ORDER BY final_score DESC) AS rank_value
           FROM stream_pairs WHERE rank_eligible=1;
         CREATE UNIQUE INDEX idx_drug_rank_pair ON drug_ranks(pair_cell_id);
+        CREATE TABLE apo_target_ranks AS
+          SELECT pair_cell_id,
+          RANK() OVER (PARTITION BY target_id ORDER BY final_score DESC) AS rank_value
+          FROM stream_pairs WHERE apo_exploratory_rank_eligible=1;
+        CREATE UNIQUE INDEX idx_apo_target_rank_pair
+          ON apo_target_ranks(pair_cell_id);
+        CREATE TABLE apo_drug_ranks AS
+          SELECT pair_cell_id,
+          RANK() OVER (PARTITION BY ligand_id ORDER BY final_score DESC) AS rank_value
+          FROM stream_pairs WHERE apo_exploratory_rank_eligible=1;
+        CREATE UNIQUE INDEX idx_apo_drug_rank_pair
+          ON apo_drug_ranks(pair_cell_id);
         UPDATE stream_pairs SET rank_within_receptor=(
           SELECT rank_value FROM target_ranks
           WHERE target_ranks.pair_cell_id=stream_pairs.pair_cell_id
@@ -631,8 +719,18 @@ def _populate_work_database(
           SELECT rank_value FROM drug_ranks
           WHERE drug_ranks.pair_cell_id=stream_pairs.pair_cell_id
         );
+        UPDATE stream_pairs SET apo_rank_within_receptor=(
+          SELECT rank_value FROM apo_target_ranks
+          WHERE apo_target_ranks.pair_cell_id=stream_pairs.pair_cell_id
+        );
+        UPDATE stream_pairs SET apo_rank_across_receptors=(
+          SELECT rank_value FROM apo_drug_ranks
+          WHERE apo_drug_ranks.pair_cell_id=stream_pairs.pair_cell_id
+        );
         DROP TABLE target_ranks;
         DROP TABLE drug_ranks;
+        DROP TABLE apo_target_ranks;
+        DROP TABLE apo_drug_ranks;
         """
     )
     work.commit()
@@ -647,10 +745,16 @@ def _populate_work_database(
         "rank_eligible_fraction": rank_eligible_count / pair_count
         if pair_count
         else 0.0,
-        "classified_final_score_source_count": sum(
-            count
-            for source_name, count in score_source_counts.items()
-            if source_name != "legacy_unclassified_final_score"
+        "apo_exploratory_rank_eligible_count": apo_rank_eligible_count,
+        "apo_exploratory_rank_eligible_fraction": (
+            apo_rank_eligible_count / pair_count if pair_count else 0.0
+        ),
+        "classified_final_score_source_count": classified_score_source_count,
+        "effective_final_score_source_counts": dict(
+            sorted(effective_score_source_counts.items())
+        ),
+        "final_score_source_classification_counts": dict(
+            sorted(score_source_classification_counts.items())
         ),
         "final_score_source_counts": dict(sorted(score_source_counts.items())),
         "pair_status_counts": dict(sorted(status_counts.items())),
@@ -728,6 +832,7 @@ def _artifact_select(connection: sqlite3.Connection) -> list[str]:
         "size_bytes",
         "file_type",
         "verified",
+        "artifact_json",
     )
     return [name for name in allowed if name in columns]
 
@@ -749,6 +854,21 @@ def _artifacts_for_pairs(
         for raw in source.execute(query, tuple(chunk)):
             artifact = dict(raw)
             pair_id = int(artifact["pair_cell_id"])
+            try:
+                artifact_entry = json.loads(
+                    str(artifact.pop("artifact_json", None) or "{}")
+                )
+            except (TypeError, ValueError):
+                artifact_entry = {}
+            role = str(artifact["artifact_role"])
+            if not artifact_public_record_allowed(
+                role,
+                artifact_entry,
+                verified=artifact.get("verified"),
+                sha256=artifact.get("sha256"),
+            ):
+                continue
+            artifact["publication_policy"] = artifact_publication_policy(role)
             _safe_value(artifact, f"artifact {artifact.get('artifact_id')}")
             by_pair[pair_id].append(artifact)
     return by_pair
@@ -762,6 +882,10 @@ def _pair_record(
     artifacts: Mapping[int, list[dict[str, Any]]],
 ) -> dict[str, Any]:
     pair_id = int(row["pair_cell_id"])
+    public_artifacts = artifacts.get(pair_id, [])
+    pair = {name: row.get(name) for name in PAIR_COLUMNS}
+    pair["artifact_count"] = len(public_artifacts)
+    pair["verified_artifact_count"] = len(public_artifacts)
     return {
         "schema_version": 2,
         "release_id": release_id,
@@ -779,8 +903,8 @@ def _pair_record(
             "route_id": row["drug_route_id"],
             "label": row["drug_label"],
         },
-        "pair": {name: row.get(name) for name in PAIR_COLUMNS},
-        "artifacts": artifacts.get(pair_id, []),
+        "pair": pair,
+        "artifacts": public_artifacts,
     }
 
 
@@ -802,6 +926,9 @@ def _write_entity_objects(
     entity_kind = "targets" if kind == "targets" else "drugs"
     work_id = "target_id" if kind == "targets" else "drug_id"
     rank_name = "rank_within_receptor" if kind == "targets" else "rank_across_receptors"
+    apo_rank_name = (
+        "apo_rank_within_receptor" if kind == "targets" else "apo_rank_across_receptors"
+    )
     label_name = "drug_label" if kind == "targets" else "target_label"
     for entity in entities:
         entity_id = str(entity[id_field])
@@ -810,7 +937,12 @@ def _write_entity_objects(
             work,
             f"{work_id}=?",
             (entity_id,),
-            f"{rank_name} IS NULL, {rank_name}, lower({label_name}), pair_cell_id",
+            (
+                f"ranking_track IS NULL, "
+                f"COALESCE({rank_name}, {apo_rank_name}), "
+                f"final_score IS NULL, final_score DESC, "
+                f"lower({label_name}), pair_cell_id"
+            ),
             batch_rows=batch_rows,
         )
         summaries = (_summary(row, entity_kind) for row in rows)
@@ -1125,11 +1257,36 @@ def build_streaming_edge_bundle(
                     "pair_detail_shards": len(pair_shards),
                 },
                 "coverage": coverage,
+                "ranking_contract": {
+                    "headline_track": {
+                        "name": "qualified_holo",
+                        "receptor_classification": "HOLO",
+                        "eligible_field": "rank_eligible",
+                        "within_receptor_rank_field": "rank_within_receptor",
+                        "across_receptors_rank_field": "rank_across_receptors",
+                    },
+                    "exploratory_track": {
+                        "name": "exploratory_apo",
+                        "receptor_classification": "APO",
+                        "eligible_field": "apo_exploratory_rank_eligible",
+                        "within_receptor_rank_field": "apo_rank_within_receptor",
+                        "across_receptors_rank_field": "apo_rank_across_receptors",
+                        "label": "APO exploratory",
+                    },
+                    "apo_holo_pooling": "forbidden",
+                    "score_direction": "higher_is_better",
+                },
                 "score_contract": {
                     "primary_field": "final_score",
-                    "source_field": "final_score_source",
+                    "declared_source_field": "final_score_source",
+                    "reconstructed_source_field": ("final_score_source_reconstructed"),
+                    "effective_source_field": "final_score_source_effective",
+                    "source_classification_field": (
+                        "final_score_source_classification"
+                    ),
                     "direction": "higher_is_better",
                     "no_fallback": True,
+                    "source_classification": score_source_browser_contract(),
                     "normalized_comparison_field": "atlas_score",
                     "normalized_comparison_source_field": "atlas_score_source",
                 },
@@ -1223,6 +1380,7 @@ def build_streaming_edge_bundle(
                 "static_fallback_modified": False,
                 "deploy_performed": False,
                 "counts": release_manifest["counts"],
+                "coverage": coverage,
                 "r2_object_count": len(object_entries),
                 "r2_bytes": sum(int(row["size_bytes"]) for row in object_entries),
                 "entrypoint": f"/releases/{release_token}",

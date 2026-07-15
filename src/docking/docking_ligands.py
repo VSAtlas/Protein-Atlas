@@ -23,6 +23,7 @@ from docking.library_mode import (
     compute_allowed_library_roots,
     parse_test_libraries,
 )
+from docking.native_redock_rmsd import NATIVE_REDOCK_RMSD_THRESHOLD_A
 from docking.pose_validation import compute_redock_rmsd
 from docking.ligand_metrics import _is_readable_ref, _read_any_lig, compute_rmsd
 from prep_ligands.prep_ligands_crystal import prep_ligands_from_pdb
@@ -801,7 +802,7 @@ def validate_ligand(
     ligand_name: str,
     docked_path: str,
     crystal_path: Optional[str] = None,
-    rmsd_thresh: float = 2.0,
+    rmsd_thresh: float = NATIVE_REDOCK_RMSD_THRESHOLD_A,
     self_rmsd: Optional[float] = None,
     logger=None,
 ) -> bool:
@@ -811,9 +812,8 @@ def validate_ligand(
       * Otherwise (non-controls) ? self-RMSD is *log-only* (never reject).
     """
     if crystal_path and Path(crystal_path).exists():
-        # Prefer coordinate-based Kabsch RMSD for control redock when a crystal ligand is available.
-        # This uses pose_validation.compute_redock_rmsd, which operates directly on coordinates,
-        # and falls back to the RDKit/MCS-based compute_rmsd if needed.
+        # Native controls require content-bound, receptor-frame, symmetry-aware
+        # heavy-atom RMSD. A provenance failure is a hard failure.
         redock_rmsd = None
         try:
             redock_rmsd = compute_redock_rmsd(crystal_path, docked_path)
@@ -822,13 +822,15 @@ def validate_ligand(
                 logger.warning(
                     f"[validate] {ligand_name}: compute_redock_rmsd failed for "
                     f"crystal='{crystal_path}' docked='{docked_path}'; "
-                    f"falling back to RDKit/MCS RMSD; err={e!r}"
+                    f"strict validation rejected this control; err={e!r}"
                 )
 
-        # If the coordinate-based RMSD could not be computed (None), fall back to the
-        # original RDKit/MCS RMSD implementation to preserve behavior.
         if redock_rmsd is None:
-            redock_rmsd = compute_rmsd(crystal_path, docked_path)
+            if logger:
+                logger.warning(
+                    f"[validate] {ligand_name}: native-redock provenance unavailable"
+                )
+            return False
         if logger:
             sr = f"{self_rmsd:.2f}" if isinstance(self_rmsd, (int, float)) else "n/a"
             logger.info(

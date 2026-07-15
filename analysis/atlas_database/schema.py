@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS pair_cells (
     consensus_score REAL,
     final_score REAL,
     final_score_source TEXT,
+    final_score_source_reconstructed TEXT,
+    final_score_source_classification TEXT,
+    final_score_source_evidence_json TEXT,
     final_rank INTEGER,
     source_csv TEXT,
     result_json TEXT,
@@ -154,6 +157,9 @@ CREATE TABLE IF NOT EXISTS result_attempts (
     consensus_score REAL,
     final_score REAL,
     final_score_source TEXT,
+    final_score_source_reconstructed TEXT,
+    final_score_source_classification TEXT,
+    final_score_source_evidence_json TEXT,
     final_rank INTEGER,
     source_csv TEXT,
     result_json TEXT,

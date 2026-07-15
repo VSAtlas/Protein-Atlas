@@ -227,6 +227,39 @@ APP_JS = r"""(() => {
     return list;
   }
 
+  function trueFlag(value) {
+    return value === true || value === 1 || ["1", "true", "yes"].includes(String(value || "").toLowerCase());
+  }
+
+  function eligibleRankingTrack(row) {
+    if (row.ranking_track === "qualified_holo" && trueFlag(row.rank_eligible)) return "qualified_holo";
+    if (row.ranking_track === "exploratory_apo" && trueFlag(row.apo_exploratory_rank_eligible)) return "exploratory_apo";
+    return null;
+  }
+
+  function rankTrackLabel(row) {
+    const track = eligibleRankingTrack(row);
+    if (track === "qualified_holo") return "HOLO qualified";
+    if (track === "exploratory_apo") return "APO exploratory";
+    if (row.ranking_track === "qualified_holo") return "HOLO excluded";
+    if (row.ranking_track === "exploratory_apo") return "APO exploratory excluded";
+    return "Unqualified";
+  }
+
+  function scoreSourceCell(row) {
+    const cell = element("td");
+    cell.append(document.createTextNode(row.final_score_source_effective || row.final_score_source || "—"));
+    if (row.final_score_source_family) cell.append(element("span", row.final_score_source_family, "muted"));
+    return cell;
+  }
+
+  function rankingReason(row) {
+    if (row.failure_code) return row.failure_code;
+    return row.ranking_track === "exploratory_apo"
+      ? row.apo_exploratory_ranking_eligibility_reason || "—"
+      : row.ranking_eligibility_reason || row.apo_exploratory_ranking_eligibility_reason || "—";
+  }
+
   function searchableCards(container, records, kind) {
     const input = element("input");
     input.type = "search";
@@ -259,7 +292,7 @@ APP_JS = r"""(() => {
       const tableWrap = element("div", undefined, "table-wrap");
       const table = element("table");
       const head = element("tr");
-      ["Counterpart", "Status", "Final score", "Rank", "Reason", "Record"].forEach((name) => head.append(element("th", name)));
+      ["Counterpart", "Status", "Final score", "Effective score source / family", "Rank", "Track", "Reason", "Record"].forEach((name) => head.append(element("th", name)));
       const thead = element("thead");
       thead.append(head);
       const body = element("tbody");
@@ -273,8 +306,10 @@ APP_JS = r"""(() => {
           counterpart,
           status,
           element("td", row.final_score ?? "—"),
+          scoreSourceCell(row),
           element("td", row.rank ?? "—"),
-          element("td", row.failure_code || row.ranking_eligibility_reason || "—"),
+          element("td", rankTrackLabel(row)),
+          element("td", rankingReason(row)),
         );
         const record = element("td");
         let pairHref = route("pairs", row.pair_route_id);
@@ -300,6 +335,12 @@ APP_JS = r"""(() => {
     if (!rows.length) return element("p", "No pair cells are available.", "empty");
     draw();
     return host;
+  }
+
+  function rankingPanel(title, note, rows) {
+    const panel = element("section", undefined, "panel");
+    panel.append(element("h2", title), element("p", note, "muted"), pairTable(rows));
+    return panel;
   }
 
   function downloadPanel(rows) {
@@ -344,7 +385,11 @@ APP_JS = r"""(() => {
       metric("receptor contexts", manifest.counts.targets),
       metric("drugs", manifest.counts.drugs),
       metric("pair cells", manifest.counts.pairs),
-      metric("rank eligible", manifest.coverage.rank_eligible_count || 0),
+      metric("HOLO rank eligible", manifest.coverage.rank_eligible_count || 0),
+      metric(
+        "APO exploratory ranked",
+        manifest.coverage.apo_exploratory_rank_eligible_count || 0,
+      ),
     );
     root.append(metrics);
     if (Array.isArray(manifest.downloads) && manifest.downloads.length) {
@@ -373,7 +418,27 @@ APP_JS = r"""(() => {
     );
     const panel = element("section", undefined, "panel");
     panel.append(element("h2", "Record"), recordList(entity));
-    root.append(panel, element("h2", "Pair cells"), pairTable(payload.pairs));
+    const holo = payload.pairs.filter((row) => eligibleRankingTrack(row) === "qualified_holo");
+    const apo = payload.pairs.filter((row) => eligibleRankingTrack(row) === "exploratory_apo");
+    const excluded = payload.pairs.filter((row) => eligibleRankingTrack(row) === null);
+    root.append(
+      panel,
+      rankingPanel(
+        "Qualified HOLO rankings",
+        "Receptor-qualified HOLO results only. These ranks never pool APO contexts.",
+        holo,
+      ),
+      rankingPanel(
+        "Exploratory APO rankings",
+        "Separate APO-only exploratory track; not interchangeable with qualified HOLO rankings.",
+        apo,
+      ),
+      rankingPanel(
+        "Unranked and excluded pair cells",
+        "Failure-complete cells that did not satisfy either ranking contract remain visible without a rank.",
+        excluded,
+      ),
+    );
     app.replaceChildren(root);
   }
 

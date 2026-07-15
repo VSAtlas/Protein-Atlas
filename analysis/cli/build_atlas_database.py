@@ -17,6 +17,11 @@ from analysis.atlas_database import (
     build_release_database,
     load_release_manifest,
 )
+from analysis.atlas_database.artifact_contract import (
+    ArtifactContractError,
+    artifact_public_record_allowed,
+    artifact_publication_policy,
+)
 from config.output_paths import output_root
 
 
@@ -46,10 +51,16 @@ _PUBLIC_JSON_COLUMNS = {
     ),
     "receptor_contexts": ("manifest_entry_json",),
     "ligands": ("prepared_state_json",),
-    "pair_cells": ("result_json", "pose_validation_thresholds_json"),
+    "pair_cells": (
+        "result_json",
+        "pose_validation_thresholds_json",
+        "final_score_source_evidence_json",
+    ),
     "completion_records": ("completion_json",),
     "result_attempts": (
-        "result_json", "pose_validation_thresholds_json",
+        "result_json",
+        "pose_validation_thresholds_json",
+        "final_score_source_evidence_json",
         "completion_link_evidence_json",
     ),
     "artifacts": ("artifact_json",),
@@ -81,6 +92,7 @@ _OMITTED_COMPLETION_JSON = json.dumps(
     sort_keys=True,
     separators=(",", ":"),
 )
+_PUBLIC_ARTIFACT_BATCH_SIZE = 1_000
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -130,6 +142,72 @@ def _sanitize_json_value(value: Any, repo_root: Path, counts: dict[str, int]) ->
     return value
 
 
+def _omit_disallowed_artifact_rows(
+    connection: sqlite3.Connection,
+    counts: dict[str, int],
+    *,
+    batch_size: int = _PUBLIC_ARTIFACT_BATCH_SIZE,
+) -> None:
+    """Remove artifact metadata that is not approved for public projection."""
+    last_rowid = 0
+    while True:
+        rows = connection.execute(
+            """SELECT rowid, artifact_role, artifact_json, verified, sha256
+            FROM artifacts
+            WHERE rowid > ?
+            ORDER BY rowid
+            LIMIT ?""",
+            (last_rowid, batch_size),
+        ).fetchall()
+        if not rows:
+            break
+        last_rowid = int(rows[-1][0])
+        omitted_rowids: list[tuple[int]] = []
+        for rowid, artifact_role, artifact_json, verified, sha256 in rows:
+            counts["artifact_rows_examined"] += 1
+            role = str(artifact_role or "").strip()
+            try:
+                decoded = json.loads(str(artifact_json or "{}"))
+            except (TypeError, ValueError):
+                decoded = {}
+            entry = decoded if isinstance(decoded, dict) else {}
+            try:
+                policy = artifact_publication_policy(role)
+            except ArtifactContractError:
+                policy = None
+                public_allowed = False
+            else:
+                public_allowed = artifact_public_record_allowed(
+                    role,
+                    entry,
+                    verified=verified,
+                    sha256=sha256,
+                )
+            if public_allowed:
+                counts["artifact_rows_retained"] += 1
+                continue
+            omitted_rowids.append((int(rowid),))
+            counts["artifact_rows_omitted"] += 1
+            if policy is None:
+                counts["artifact_unknown_role_rows_omitted"] += 1
+            elif policy == "private":
+                counts["artifact_private_rows_omitted"] += 1
+            elif (
+                policy == "public_if_selected_for_release"
+                and entry.get("selected_for_release") is not True
+            ):
+                counts["artifact_conditional_rows_omitted"] += 1
+            elif verified != 1:
+                counts["artifact_unverified_rows_omitted"] += 1
+            else:
+                counts["artifact_invalid_sha256_rows_omitted"] += 1
+        if omitted_rowids:
+            connection.executemany(
+                "DELETE FROM artifacts WHERE rowid=?",
+                omitted_rowids,
+            )
+
+
 def _sanitize_public_database(database_path: Path, repo_root: Path) -> dict[str, int]:
     """Create a compact public projection while retaining the private ledger."""
     counts = {
@@ -139,8 +217,17 @@ def _sanitize_public_database(database_path: Path, repo_root: Path) -> dict[str,
         "pair_result_json_omitted": 0,
         "result_attempt_json_omitted": 0,
         "completion_json_omitted": 0,
+        "artifact_rows_examined": 0,
+        "artifact_rows_retained": 0,
+        "artifact_rows_omitted": 0,
+        "artifact_private_rows_omitted": 0,
+        "artifact_conditional_rows_omitted": 0,
+        "artifact_unknown_role_rows_omitted": 0,
+        "artifact_unverified_rows_omitted": 0,
+        "artifact_invalid_sha256_rows_omitted": 0,
     }
     with sqlite3.connect(database_path) as connection:
+        _omit_disallowed_artifact_rows(connection, counts)
         rows = connection.execute(
             """SELECT pair_cell_id, result_json FROM pair_cells
             WHERE final_score IS NOT NULL

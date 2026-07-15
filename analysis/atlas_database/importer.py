@@ -34,6 +34,9 @@ from analysis.atlas_database.pose_validation_contract import (
     legacy_pose_validation_thresholds_json,
 )
 from analysis.atlas_database.schema import SCHEMA_VERSION, create_schema
+from analysis.atlas_database.score_source_contract import (
+    build_score_source_materialization,
+)
 from config.output_paths import output_root
 
 _LIGAND_SUFFIXES = (
@@ -415,14 +418,9 @@ def _result_attempt_audit(
     choice_keys = {
         key
         for key in duplicate_keys
-        if not (
-            selectors.get(key)
-            and _result_selector_present(selectors[key][1])
-        )
+        if not (selectors.get(key) and _result_selector_present(selectors[key][1]))
     }
-    choices: dict[AttemptKey, list[tuple[int, str]]] = {
-        key: [] for key in choice_keys
-    }
+    choices: dict[AttemptKey, list[tuple[int, str]]] = {key: [] for key in choice_keys}
     if choice_keys and not errors:
         try:
             with path.open("r", encoding="utf-8", newline="") as handle:
@@ -905,6 +903,18 @@ def _master_rows(connection: sqlite3.Connection, run_id: str, path: Path) -> Non
                 1 if valid_token == "1" else (0 if valid_token == "0" else None)
             )
             score = _float(row.get("z_selected"))
+            final_score = _float(row.get("final_score"))
+            result_sha256 = _record_sha256(row)
+            (
+                final_score_source_reconstructed,
+                final_score_source_classification,
+                final_score_source_evidence_json,
+            ) = build_score_source_materialization(
+                row,
+                input_csv_sha256=input_csv_sha256,
+                source_row_number=row_number,
+                result_sha256=result_sha256,
+            )
             has_numeric = score is not None or any(
                 _float(row.get(name)) is not None
                 for name in ("selected_docking_score", "consensus_score", "final_score")
@@ -930,14 +940,17 @@ def _master_rows(connection: sqlite3.Connection, run_id: str, path: Path) -> Non
                  pose_validation_thresholds_json, is_control, is_decoy,
                  atlas_score, atlas_score_source,
                  selected_docking_score, consensus_score, final_score,
-                 final_score_source, final_rank, source_csv, result_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 final_score_source, final_score_source_reconstructed,
+                 final_score_source_classification,
+                 final_score_source_evidence_json,
+                 final_rank, source_csv, result_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     pair_id,
                     str(path),
                     input_csv_sha256,
                     row_number,
-                    _record_sha256(row),
+                    result_sha256,
                     status,
                     "pose_invalid"
                     if pose_valid == 0
@@ -957,8 +970,11 @@ def _master_rows(connection: sqlite3.Connection, run_id: str, path: Path) -> Non
                     _text(row.get("z_selected_source")) or None,
                     _float(row.get("selected_docking_score")),
                     _float(row.get("consensus_score")),
-                    _float(row.get("final_score")),
+                    final_score,
                     _text(row.get("final_score_source")) or None,
+                    final_score_source_reconstructed,
+                    final_score_source_classification,
+                    final_score_source_evidence_json,
                     _int(row.get("final_rank")),
                     _text(row.get("source_csv")) or None,
                     _json(row),
