@@ -216,7 +216,12 @@ def _detect_backfill_columns(
     columns = []
     for column in backfill.columns:
         normalized = column.casefold()
-        if normalized.startswith("pk_context_") or normalized in DIRECT_PK_COLUMNS:
+        if (
+            normalized.startswith(
+                ("pk_context_", "pk_clearance_", "pk_bioavailability_")
+            )
+            or normalized in DIRECT_PK_COLUMNS
+        ):
             columns.append(column)
     if not columns:
         raise ValueError(
@@ -262,7 +267,11 @@ def _primary_nonmissing_hash(primary: pd.DataFrame, candidate: pd.DataFrame) -> 
             if _is_missing_value(original):
                 continue
             payload = json.dumps(
-                [row_number, column, _canonical_value(candidate.at[row_number, column])],
+                [
+                    row_number,
+                    column,
+                    _canonical_value(candidate.at[row_number, column]),
+                ],
                 ensure_ascii=True,
                 separators=(",", ":"),
             )
@@ -301,9 +310,7 @@ def _unmatched_primary_rows(
     for row_number, source_row in enumerate(matched_source):
         if source_row is not None:
             continue
-        key_type, key_value = _strongest_key_for_row(
-            row_number, specs, primary_keys
-        )
+        key_type, key_value = _strongest_key_for_row(row_number, specs, primary_keys)
         rows.append(
             {
                 "primary_row_number": row_number,
@@ -339,9 +346,7 @@ def _unmatched_backfill_rows(
     for row_number in range(len(backfill)):
         if row_number in selected:
             continue
-        key_type, key_value = _strongest_key_for_row(
-            row_number, specs, backfill_keys
-        )
+        key_type, key_value = _strongest_key_for_row(row_number, specs, backfill_keys)
         overlaps_primary = any(
             backfill_keys[spec.name][row_number] in primary_key_sets[spec.name]
             for spec in specs
@@ -421,21 +426,15 @@ def merge_pk_context(
 
     primary_keys = {spec.name: _frame_keys(primary, spec) for spec in specs}
     backfill_keys = {spec.name: _frame_keys(backfill, spec) for spec in specs}
-    primary_counts = {
-        spec.name: _counter(primary_keys[spec.name]) for spec in specs
-    }
-    backfill_lookups: dict[
-        str, dict[tuple[str, ...], list[int]]
-    ] = {}
+    primary_counts = {spec.name: _counter(primary_keys[spec.name]) for spec in specs}
+    backfill_lookups: dict[str, dict[tuple[str, ...], list[int]]] = {}
     for spec in specs:
         lookup: dict[tuple[str, ...], list[int]] = {}
         for row_number, key in enumerate(backfill_keys[spec.name]):
             if key is not None:
                 lookup.setdefault(key, []).append(row_number)
         backfill_lookups[spec.name] = lookup
-    key_audit_rows = _key_cardinality_rows(
-        specs, primary_keys, backfill_keys
-    )
+    key_audit_rows = _key_cardinality_rows(specs, primary_keys, backfill_keys)
 
     matched_source: list[int | None] = []
     match_key_types: list[str] = []
@@ -462,9 +461,7 @@ def merge_pk_context(
                         "primary_rows_for_key": primary_cardinality,
                         "backfill_rows_for_key": len(candidates),
                         "cardinality": (
-                            "many_to_many"
-                            if primary_cardinality > 1
-                            else "one_to_many"
+                            "many_to_many" if primary_cardinality > 1 else "one_to_many"
                         ),
                         "backfill_row_numbers": candidates,
                     }
@@ -614,12 +611,8 @@ def merge_pk_context(
     key_audit.to_csv(artifact_paths["key_cardinality_audit"], index=False)
     missingness.to_csv(artifact_paths["column_missingness_audit"], index=False)
     conflict_table.to_csv(artifact_paths["conflicts"], index=False)
-    unmatched_primary.to_csv(
-        artifact_paths["unmatched_primary_summary"], index=False
-    )
-    unmatched_backfill.to_csv(
-        artifact_paths["unmatched_backfill_summary"], index=False
-    )
+    unmatched_primary.to_csv(artifact_paths["unmatched_primary_summary"], index=False)
+    unmatched_backfill.to_csv(artifact_paths["unmatched_backfill_summary"], index=False)
 
     matched_rows = sum(source_row is not None for source_row in matched_source)
     artifacts = {
@@ -678,9 +671,7 @@ def merge_pk_context(
                 missingness["overwritten_conflicting_cells"].sum()
             ),
             "matches_by_key": {
-                key: int(value)
-                for key, value in selected_counts.items()
-                if key
+                key: int(value) for key, value in selected_counts.items() if key
             },
         },
         "invariants": {

@@ -90,3 +90,29 @@ evidence and unspecified potential stereochemistry remain pending. Fail-closed
 single-stage repeat planning covers Vina, GNINA, SCORCH, MM/GBSA, and pose
 validation. Full-matrix execution plus the stereo, resonance-group, aggregate-pose,
 known-pair, and partial-sampling policies stay explicit publication gaps.
+
+## Atlasv0.0.14 - Recover and gate contextual PK evidence
+
+Adds fail-closed PK-DB recovery from cached study metadata and source TSVs when
+the normalized output service is empty, while requiring explicit original-source
+ML rights before any recovered row can train. DailyMed/SPL clearance, absolute
+bioavailability, and maximum-dose extraction now preserves every candidate,
+requires same-clause endpoint semantics and explicit review decisions, partitions
+clearance endpoints, and keeps maximum recommended adult dose sensitivity-only.
+Primary dose remains bound to the selected Cmax study; highest-studied and
+maximum-tolerated doses are excluded.
+
+## Atlasv0.0.15 - Recover reviewed bioavailability and harden PK context
+
+Adds structured human-review invariants for machine-ambiguous SPL absolute
+bioavailability, requiring confirmed value, qualifier, analyte, route, endpoint,
+and absolute-reference basis before training use. Percent extraction no longer
+binds nearby dose numbers, decimal values no longer split semantic clauses, and
+PK-DB access exclusions are reported separately from source-rights exclusions.
+The regenerated Phase 1 context admits 51 reviewed bioavailability contexts
+covering 39 model-table drugs and 1,568 drug-target rows, plus seven explicitly
+reviewed maximum-dose sensitivity contexts for six drugs. PK-DB recovery is
+bound to 1,327 validated Phase 1 ligand identities, inventories 838 exact-match
+endpoint observations, and keeps all 46 recovered context rows quarantined
+without original-source training rights. The SPD exposure label is unchanged,
+and primary dose remains tied to the selected Cmax study.

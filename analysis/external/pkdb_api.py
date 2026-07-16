@@ -27,6 +27,7 @@ def _response_count(response: requests.Response) -> int:
     except (TypeError, ValueError):
         return 0
 
+
 def _response_rows(response: requests.Response) -> list[dict[str, Any]]:
     try:
         payload = response.json()
@@ -65,8 +66,7 @@ def probe_pkdb_api(
         "documented_example": PKDB_DOCUMENTED_EXAMPLE,
         "documentation_url": "https://pk-db.com/api/v1/swagger/",
         "example_notebook_url": (
-            "https://github.com/matthiaskoenig/pkdb/blob/develop/docs/"
-            "pkdb_api.ipynb"
+            "https://github.com/matthiaskoenig/pkdb/blob/develop/docs/pkdb_api.ipynb"
         ),
         "status": "unavailable",
     }
@@ -104,9 +104,7 @@ def probe_pkdb_api(
             outputset.get("outputs") if isinstance(outputset, dict) else []
         ) or []
         payload["study_endpoint_count"] = _response_count(study_response)
-        payload["study_reported_output_count"] = int(
-            study_row.get("output_count") or 0
-        )
+        payload["study_reported_output_count"] = int(study_row.get("output_count") or 0)
         payload["study_embedded_output_id_count"] = len(study_output_ids)
 
         alpha_response = client.get(
@@ -151,8 +149,8 @@ def probe_pkdb_api(
             payload["reason"] = (
                 "the PostgreSQL-backed study endpoint exposes output counts and "
                 "IDs, but Elasticsearch-backed /outputs/ and generated "
-                "outputs.csv are empty on both production and alpha; numeric "
-                "PK values are not publicly recoverable until the source index is rebuilt"
+                "outputs.csv are empty on both production and alpha; use open-license "
+                "study source TSVs for targeted contextual recovery"
             )
         elif outputs_retrievable:
             payload["status"] = "available"

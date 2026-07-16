@@ -183,24 +183,52 @@ Refresh structured exposure context and join it to the frozen Phase 1 table:
 
 ```bash
 python -m analysis.cli.refresh_phase1_pk_context \
-  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_09 \
-  --reviewed-openfda-context <openfda_spl_cmax_accepted_contexts.csv>
+  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_15
 ```
 
 The command writes `pk_context_long.csv`, `pk_context_representative.csv`,
-`AtlasSPD_phase1_pk_enriched.csv`, source coverage, API-health manifests, and
-`openfda_source_text_review/`. The NCATS FRDB adapter preserves dose, route,
-regimen, formulation, Cmax, and fraction-unbound context. Existing
-`spd_exposure_label` values are never recomputed from external PK. Unreviewed
-SPL numeric values remain quarantined; pass `--openfda never` with
-`--reviewed-openfda-context` to reuse adjudicated contexts without network
-queries.
+`AtlasSPD_phase1_pk_enriched.csv`, endpoint-specific clearance and absolute-
+bioavailability views, source coverage, and a fail-closed
+`pk_context_validation.json`. Primary dose fields are populated only when the
+dose is bound to the selected Cmax scenario. Maximum labeled recommended adult
+dose is a separately named sensitivity artifact; highest-studied and
+maximum-tolerated doses never enter the primary context. Existing
+`spd_exposure_label` values are never recomputed from external PK.
 
-Rerun only the cached SPL source-text review with:
+DailyMed/openFDA numeric extraction is cached. Cmax rows enter training only
+through the source-text-curated context registry. Clearance, absolute
+bioavailability, and maximum-dose candidates require same-clause semantic gates
+and an explicit canonical-candidate decision file:
 
 ```bash
-python -m analysis.cli.audit_openfda_pk_source_text \
-  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_02/openfda_source_text_review
+python -m analysis.cli.adjudicate_spl_pk_candidates \
+  --candidates <spl_pk_candidate_review.csv> \
+  --out-dir <spl_adjudication_dir> \
+  --review-decisions <spl_pk_review_decisions.csv>
 ```
 
-Use `--drugbank-cmax` and `--drugbank-protein-binding` only with licensed local exports. Apply for academic DrugBank access at https://go.drugbank.com/academic_research and verify current download availability at https://go.drugbank.com/releases/latest.
+Machine acceptance alone is not training approval. Apparent oral clearance,
+plasma/systemic clearance, renal clearance, and other endpoint types remain
+separate columns and are never pooled. Machine-ambiguous absolute
+bioavailability can enter only through a structured review that confirms the
+value, qualifier, analyte, extravascular route, endpoint, and absolute-reference
+basis. Relative-only evidence stays excluded; the review decision and source
+hashes remain attached to every admitted row.
+
+When PK-DB's normalized output endpoint is unavailable, recover contextual rows
+from its documented study endpoint and public study source TSVs:
+
+```bash
+python -m analysis.cli.recover_pkdb_context \
+  --dataset <model_ready.csv> \
+  --out-dir data/external/pkdb/recovered_phase1
+```
+
+Public PK-DB access does not grant original-source ML rights. Recovered rows stay
+quarantined unless `--source-rights-manifest` supplies an affirmative per-study
+`training_allowed` decision and a rights reference; the same manifest can be
+passed to the one-command refresh as `--pkdb-source-rights-manifest`. Use
+`--drugbank-cmax` and `--drugbank-protein-binding` only with licensed local
+exports. Apply for academic DrugBank access at
+https://go.drugbank.com/academic_research and verify current release availability
+at https://go.drugbank.com/releases/latest.

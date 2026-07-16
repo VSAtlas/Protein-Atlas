@@ -18,7 +18,7 @@ from analysis.external.openfda_pk import (
 
 
 SOURCE_NAME = "DailyMed_openFDA_SPL_cache"
-SCHEMA_VERSION = "atlas_spl_pk_candidate_review_v1"
+SCHEMA_VERSION = "atlas_spl_pk_candidate_review_v2"
 DEFAULT_EXCERPT_CHARS = 480
 MIN_EXCERPT_CHARS = 160
 MAX_EXCERPT_CHARS = 800
@@ -105,8 +105,10 @@ _DOSE_VALUE_RE = re.compile(
 )
 
 _CLEARANCE_VOLUME = r"(?:milliliters?|liters?|mL|L)"
-_CLEARANCE_TIME = r"(?:seconds?|secs?|sec|minutes?|mins?|min|hours?|hrs?|hr|h|days?|day)"
-_CLEARANCE_SCALE = r"(?:kg|kilograms?|m(?:2|\u00b2)|square\s+meters?)"
+_CLEARANCE_TIME = (
+    r"(?:seconds?|secs?|sec|minutes?|mins?|min|hours?|hrs?|hr|h|days?|day)"
+)
+_CLEARANCE_SCALE = r"(?:kg|kilograms?|m\s*(?:2|\u00b2)|square\s+meters?)"
 _CLEARANCE_UNIT = (
     rf"{_CLEARANCE_VOLUME}\s*(?:/|per)\s*(?:"
     rf"{_CLEARANCE_TIME}(?:\s*(?:/|per)\s*{_CLEARANCE_SCALE})?"
@@ -118,7 +120,7 @@ _CLEARANCE_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 _BIOAVAILABILITY_VALUE_RE = re.compile(
-    rf"{_VALUE_EXPRESSION}\s*(?P<unit>%|percent(?:age)?)?",
+    rf"{_VALUE_EXPRESSION}\s*(?P<unit>%|percent(?:age)?)",
     re.IGNORECASE,
 )
 
@@ -184,13 +186,22 @@ _ROUTE_PATTERNS = (
 _FORMULATION_PATTERNS = (
     ("oral solution", re.compile(r"\boral\s+solution\b", re.IGNORECASE)),
     ("oral suspension", re.compile(r"\boral\s+suspension\b", re.IGNORECASE)),
-    ("extended-release tablet", re.compile(r"\bextended[- ]release\s+tablets?\b", re.IGNORECASE)),
-    ("extended-release capsule", re.compile(r"\bextended[- ]release\s+capsules?\b", re.IGNORECASE)),
+    (
+        "extended-release tablet",
+        re.compile(r"\bextended[- ]release\s+tablets?\b", re.IGNORECASE),
+    ),
+    (
+        "extended-release capsule",
+        re.compile(r"\bextended[- ]release\s+capsules?\b", re.IGNORECASE),
+    ),
     ("tablet", re.compile(r"\btablets?\b", re.IGNORECASE)),
     ("capsule", re.compile(r"\bcapsules?\b", re.IGNORECASE)),
     ("injection", re.compile(r"\binjections?\b", re.IGNORECASE)),
     ("infusion", re.compile(r"\binfusions?\b", re.IGNORECASE)),
-    ("transdermal patch", re.compile(r"\b(?:transdermal\s+)?patch(?:es)?\b", re.IGNORECASE)),
+    (
+        "transdermal patch",
+        re.compile(r"\b(?:transdermal\s+)?patch(?:es)?\b", re.IGNORECASE),
+    ),
     ("inhalation powder", re.compile(r"\binhalation\s+powder\b", re.IGNORECASE)),
     ("inhalation aerosol", re.compile(r"\binhalation\s+aerosol\b", re.IGNORECASE)),
     ("spray", re.compile(r"\bsprays?\b", re.IGNORECASE)),
@@ -214,7 +225,9 @@ _POPULATION_PATTERNS = (
     re.compile(r"\b(?:subjects?|patients?)\s+with\s+[^.;]{1,100}", re.IGNORECASE),
     re.compile(r"\bchildren(?:\s+(?:aged|ages?)\s+[^.;]{1,60})?", re.IGNORECASE),
     re.compile(r"\bpostmenopausal\s+women\b", re.IGNORECASE),
-    re.compile(r"\b\d+\s+(?:subjects?|patients?|volunteers?|participants?)\b", re.IGNORECASE),
+    re.compile(
+        r"\b\d+\s+(?:subjects?|patients?|volunteers?|participants?)\b", re.IGNORECASE
+    ),
 )
 
 
@@ -360,14 +373,29 @@ def _normalize_clearance(
         parsed_scale = _canonical_denominator(part)
         if parsed_time is not None:
             if time_part is not None:
-                return None, "", "withheld_unsupported_unit", ["multiple_time_denominators"]
+                return (
+                    None,
+                    "",
+                    "withheld_unsupported_unit",
+                    ["multiple_time_denominators"],
+                )
             time_part = parsed_time
         elif parsed_scale in {"kg", "m2"}:
             if scale:
-                return None, "", "withheld_unsupported_unit", ["multiple_scale_denominators"]
+                return (
+                    None,
+                    "",
+                    "withheld_unsupported_unit",
+                    ["multiple_scale_denominators"],
+                )
             scale = str(parsed_scale)
         else:
-            return None, "", "withheld_unsupported_unit", ["clearance_unit_not_unambiguous"]
+            return (
+                None,
+                "",
+                "withheld_unsupported_unit",
+                ["clearance_unit_not_unambiguous"],
+            )
     if time_part is None:
         return None, "", "withheld_unsupported_unit", ["clearance_time_unit_missing"]
 
@@ -395,7 +423,12 @@ def _normalize_bioavailability(
         return None, "", "withheld_missing_unit", ["bioavailability_unit_missing"]
     value = _as_number(match.group("value"))
     if not 0 <= value <= 100:
-        return None, "", "withheld_out_of_range", ["bioavailability_percent_out_of_range"]
+        return (
+            None,
+            "",
+            "withheld_out_of_range",
+            ["bioavailability_percent_out_of_range"],
+        )
     return _rounded(value), "%", "normalized_unambiguous", []
 
 
@@ -494,18 +527,26 @@ def _detect_route(context: str, record: dict[str, Any]) -> tuple[str, str]:
     if detected:
         return _join(detected), "section_context"
     label_routes = [*_values(record.get("route")), *_openfda_values(record, "route")]
-    return (_join(label_routes), "label_metadata") if label_routes else ("", "not_detected")
+    return (
+        (_join(label_routes), "label_metadata")
+        if label_routes
+        else ("", "not_detected")
+    )
 
 
 def _detect_formulation(context: str, record: dict[str, Any]) -> tuple[str, str]:
-    detected = [name for name, pattern in _FORMULATION_PATTERNS if pattern.search(context)]
+    detected = [
+        name for name, pattern in _FORMULATION_PATTERNS if pattern.search(context)
+    ]
     if detected:
         return _join(detected), "section_context"
     label_forms = [
         *_values(record.get("dosage_form")),
         *_openfda_values(record, "dosage_form"),
     ]
-    return (_join(label_forms), "label_metadata") if label_forms else ("", "not_detected")
+    return (
+        (_join(label_forms), "label_metadata") if label_forms else ("", "not_detected")
+    )
 
 
 def _detect_population(context: str) -> str:
@@ -519,7 +560,9 @@ def _detect_population(context: str) -> str:
 
 def _regimen_context(context: str) -> tuple[str, str]:
     _, _, regimen, steady_state = _dose_context(context)
-    if not regimen and re.search(r"\b(?:multiple|repeated)\s+doses?\b", context, re.IGNORECASE):
+    if not regimen and re.search(
+        r"\b(?:multiple|repeated)\s+doses?\b", context, re.IGNORECASE
+    ):
         regimen = "multiple dose"
     if re.search(r"\bsteady[ -]state\b", context, re.IGNORECASE):
         steady_state = "yes"
@@ -606,10 +649,7 @@ def _bioavailability_directly_linked(
             bridge,
             re.IGNORECASE,
         )
-        or (
-            keyword_match.group(0).casefold() == "absbio"
-            and len(bridge.split()) <= 3
-        )
+        or (keyword_match.group(0).casefold() == "absbio" and len(bridge.split()) <= 3)
     )
 
 
@@ -655,7 +695,9 @@ def _candidate_row(
     spl_version = _clean_text(record.get("version"))
     excerpt = _short_excerpt(section_text, anchor_start, anchor_end, excerpt_chars)
     anchor_fingerprint = _clean_text(
-        section_text[max(0, anchor_start - 100) : min(len(section_text), anchor_end + 100)]
+        section_text[
+            max(0, anchor_start - 100) : min(len(section_text), anchor_end + 100)
+        ]
     ).casefold()
     identity = "|".join(
         (
@@ -857,7 +899,9 @@ def _extract_observed_doses(
         )
         if keyword_match is None:
             continue
-        strong_context = _local_context(text, value_match.start(), value_match.end(), 140)
+        strong_context = _local_context(
+            text, value_match.start(), value_match.end(), 140
+        )
         extra_reasons = (
             []
             if _STRONG_OBSERVED_DOSE_RE.search(strong_context)
@@ -1013,7 +1057,9 @@ def _records(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
 
 def _write_candidates(path: Path, rows: Collection[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CANDIDATE_COLUMNS, extrasaction="ignore")
+        writer = csv.DictWriter(
+            handle, fieldnames=CANDIDATE_COLUMNS, extrasaction="ignore"
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -1034,7 +1080,9 @@ def review_spl_pk_candidates(
     output = Path(out_dir)
     output.mkdir(parents=True, exist_ok=True)
     cache_files = sorted(cache.glob("*.json")) if cache.is_dir() else []
-    requested_drugs = {str(value).strip().casefold() for value in drug_ids or [] if str(value).strip()}
+    requested_drugs = {
+        str(value).strip().casefold() for value in drug_ids or [] if str(value).strip()
+    }
 
     rows: list[dict[str, Any]] = []
     parse_failure_files: list[str] = []
@@ -1128,7 +1176,9 @@ def review_spl_pk_candidates(
         "rows_with_additional_exclusions": sum(
             str(row["exclusion_reason"]) != BASE_EXCLUSION for row in rows
         ),
-        "additional_exclusion_counts": dict(sorted(additional_exclusion_counts.items())),
+        "additional_exclusion_counts": dict(
+            sorted(additional_exclusion_counts.items())
+        ),
         "policy": {
             "candidate_use": "manual_review_queue_only",
             "automatic_truth_promotion": "prohibited",

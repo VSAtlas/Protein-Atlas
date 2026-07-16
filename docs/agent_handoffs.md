@@ -2754,3 +2754,21 @@ Change: Ran a non-overwriting full-build rehearsal and the production input audi
 Why: Retry selection changes which scientific result becomes canonical and cannot be inferred from row order, timestamp, or success alone.
 Impact: Conference checkpoint builds remain usable, but no full frozen public release was emitted and no duplicate attempt was silently preferred.
 Next: Review duplicate attempts and approve explicit evidence-bound selectors in the release manifest, then rerun the full streaming build and readiness gate.
+
+Date: 2026-07-14 | Task: Atlasv0.0.14 contextual PK recovery and review gates | Owner: Codex
+Change: Recovered 223 PK-DB source-TSV context rows behind per-study rights gates; added explicit SPL review decisions, endpoint-partitioned clearance outputs, strict absolute-bioavailability requirements, Cmax-matched primary dose handling, and fail-closed PK validation.
+Why: PK-DB advertises outputs while its normalized export is empty, and cached label text contained many clearance, bioavailability, and dose-like numbers whose endpoint, route, analyte, rights, or study context did not support direct training use.
+Impact: The regenerated Phase 1 table has Cmax for 444/593 drugs, free Cmax for 329/593, Cmax-study-matched dose for 89/593, reviewed clearance for two drugs, and no defensible absolute-bioavailability rows. Four SPL clearance contexts are explicitly reviewed; all 223 PK-DB rows remain contextual because original-source ML rights are not documented. Maximum recommended dose remains sensitivity-only and has no admitted rows.
+Next: Obtain audited per-study PK-DB rights or licensed structured PK, author-review the local SPL decisions before publication, and merge replacement `postFDAfixSPDrun` scores only after the run completes and passes throughput, holo-integrity, identity, and frozen-manifest checks.
+
+Date: 2026-07-15 | Task: Atlasv0.0.15 reviewed SPL bioavailability and PK context hardening | Owner: Codex
+Change: Added structured review fields and fail-closed invariants for ambiguous SPL absolute bioavailability, corrected percent candidate binding and decimal clause boundaries, exposed PK-DB access exclusions, and regenerated the cached Phase 1 PK context.
+Why: The prior review path could approve an ambiguous value using only free-text notes, nearby dose numbers could be mistaken for bioavailability, and PK-DB access versus original-source training-rights blockers were conflated.
+Impact: Fifty-one reviewed absolute-bioavailability contexts now map to 36 Phase 1 drugs and 1,568 model rows with zero PK validation violations. Primary dose remains Cmax-study-matched; maximum labeled dose remains sensitivity-only; PK-DB rows remain quarantined without source-level rights. postFDAfixSPDrun is still active and no replacement score merge was performed.
+Next: Obtain author sign-off/DVC preservation for the structured SPL decision file, verify source rights before training on PK-DB recovery, finish the active replacement run, then run identity, throughput, holo-integrity, and frozen-manifest gates before merging replacement scores.
+
+Date: 2026-07-15 | Task: Atlasv0.0.15 final PK recovery and dose sensitivity review | Owner: Codex
+Change: Canonicalized PK-DB recovery against the validated Phase 1 FDA mapping, added an aggregate endpoint inventory, completed structured SPL bioavailability review, and admitted only explicitly reviewed recommended-adult maximum doses to a separate sensitivity artifact.
+Why: Evidence-table names carried conflicting structures, PK-DB's normalized output remained broken, and maximum labeled dose must not replace the dose matched to the selected Cmax study.
+Impact: The final Phase 1 context contains 51 reviewed absolute-bioavailability contexts covering 39 model-table drugs and 1,568 rows. PK-DB inventories 838 exact-match observations and recovers 46 contextual rows, all quarantined without original-source ML rights. Seven maximum-dose contexts cover six drugs and remain sensitivity-only; primary dose remains Cmax-study matched for 89 drugs and 3,178 model rows.
+Next: Preserve the structured review decisions under DVC, resolve source-level PK-DB training rights, and merge replacement FDA scores only after postFDAfixSPDrun passes completion, throughput, holo-integrity, mapping-hash, and exact PDBQT-identity gates.
