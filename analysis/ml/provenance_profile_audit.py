@@ -16,6 +16,7 @@ from analysis.ml.data_gap_report import run_data_gap_report
 from analysis.ml.dataset_eda import OptionalDependencyMissing, run_dataset_eda
 from analysis.ml.feature_sets import FORBIDDEN_FEATURES, get_feature_set
 from analysis.ml.labels import binary_label_series
+from analysis.ml.score_scale_audit import write_score_scale_audit
 from analysis.ml.splits import make_split
 from analysis.ml.train_classifier_core import (
     _fit_design_matrix,
@@ -102,7 +103,25 @@ PROVENANCE_COLUMNS: Mapping[str, list[str]] = {
         "banana_score_feature_source",
         "banana_binding_probability_feature_source",
         "SCORCH_score_used_feature_source",
+        "atlas_score",
+        "atlas_score_source_for_ml",
+        "final_score",
+        "final_score_source",
+        "z_selected",
+        "z_selected_source",
         "z_selected_feature_source",
+        "z_stage1",
+        "z_stage2",
+        "consensus_z_score",
+        "consensus_z_score_source",
+        "z_vs_decoys_consensus",
+        "z_vs_compare_run_consensus",
+        "z_vs_decoys_blend",
+        "consensus_z_decoy_n",
+        "consensus_z_decoy_unique",
+        "consensus_z_decoy_zero_fraction",
+        "consensus_z_decoy_mu",
+        "consensus_z_decoy_sigma",
     ],
     "external_evidence": [
         "external_four_state_label_status",
@@ -192,6 +211,19 @@ def run_provenance_profile_audit(
 
     outputs["provenance_columns_present"] = _write_provenance_column_summary(df, out / "provenance_columns_present.csv")
     outputs["provenance_feature_summary"] = _write_provenance_feature_summary(df, out / "provenance_feature_summary.csv")
+    selected_audit_features: list[str] = []
+    for label in active_labels:
+        feature_set = DEFAULT_LABEL_FEATURE_SETS.get(label)
+        if feature_set:
+            selected_audit_features.extend(get_feature_set(feature_set))
+    score_scale = write_score_scale_audit(
+        df,
+        out / "score_scale",
+        feature_names=selected_audit_features,
+    )
+    outputs.update(
+        {f"score_scale_{name}": path for name, path in score_scale["outputs"].items()}
+    )
     outputs["all_label_summary"] = _write_all_label_summaries(df, active_labels, out / "label_summary_by_label.csv")
     outputs["label_group_positive_rates"] = _write_group_positive_rates(
         df,
@@ -333,6 +365,7 @@ def run_provenance_profile_audit(
             "clean_models_should_continue_to_use_feature_sets_from_analysis_ml_feature_sets": True,
         },
         "high_risk_audit_column_tokens": HIGH_RISK_AUDIT_COLUMN_TOKENS,
+        "score_scale": score_scale,
         "outputs": outputs,
         "skipped": skipped,
         "errors": errors,
@@ -586,6 +619,7 @@ def _select_mi_features(
             *DEFAULT_EXTENDED_GROUP_COLS,
             "atlas_score",
             "consensus_score",
+            "consensus_z_score",
             "banana_score_normalized",
             "binding_expert_score",
             "structure_quality",
@@ -804,7 +838,15 @@ def _run_pandera_validation(df: pd.DataFrame, labels: Sequence[str], out: Path) 
                 required=True,
                 coerce=True,
             )
-    for col in ["consensus_score", "banana_score_normalized", "structure_quality", "rdkit_mol_wt", "rdkit_mol_logp"]:
+    for col in [
+        "consensus_score",
+        "consensus_z_score",
+        "z_selected",
+        "banana_score_normalized",
+        "structure_quality",
+        "rdkit_mol_wt",
+        "rdkit_mol_logp",
+    ]:
         if col in df.columns:
             columns[col] = Column(float, nullable=True, coerce=True)
     for col in ["target_family", "protein_class", "scaffold_key", "ligand_chemotype", "source_family", "endpoint_type"]:
@@ -903,6 +945,7 @@ def _evidently_numeric_columns(df: pd.DataFrame, labels: Sequence[str]) -> list[
     preferred = [
         "atlas_score",
         "consensus_score",
+        "consensus_z_score",
         "banana_score_normalized",
         "binding_expert_score",
         "structure_quality",

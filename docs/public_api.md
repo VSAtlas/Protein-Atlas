@@ -66,6 +66,7 @@ Maintained reporting and analysis code lives under `analysis/` and is normally i
 - `atlas analysis report <RUN_ID> --status-html` for master export, report generation, and optional status HTML.
 - `atlas analysis export-master <RUN_ID>` for canonical table export when report generation is not needed.
 - `atlas analysis dud-eval <RUN_ID>` for DUD/benchmark evaluation.
+- `atlas analysis holo-integrity <RUN_ID> --strict` for post-prep receptor-state certification; it writes `holo_integrity.csv`/`.json`, expects 76 strict holo plus 17 apo fallbacks for the frozen SPD-93 panel, and never promotes an apo fallback to experimentally holo.
 - `atlas analysis interactions export <RUN_ID>` for interaction export conversion.
 - `atlas analysis throughput integrity <RUN_ID>` and `atlas analysis throughput acceptance <BASELINE_RUN_ID> <CANDIDATE_RUN_ID>` for throughput checks.
 - `atlas debug <RUN_ID> [--deep]` for summarized run debugging.

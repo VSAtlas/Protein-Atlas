@@ -131,16 +131,23 @@ def _collect_master_rows(
 
             # Z-scores and selection
             z_stage2 = ""
+            z_stage2_source = ""
             # prefer z_vs_decoys_blend, else z_vs_decoys_consensus
             z_blend = as_float(row.get("z_vs_decoys_blend"))
             z_cons = as_float(row.get("z_vs_decoys_consensus"))
             if z_blend is not None and math.isfinite(z_blend):
                 z_stage2 = str(z_blend)
+                z_stage2_source = "z_vs_decoys_blend"
             elif z_cons is not None and math.isfinite(z_cons):
                 z_stage2 = str(z_cons)
+                z_stage2_source = "z_vs_decoys_consensus"
 
-            z_stage1 = row.get("z_vs_decoys_consensus_pre", "") or row.get(
-                "z_vs_decoys_consensus", ""
+            z_stage1_pre = row.get("z_vs_decoys_consensus_pre", "")
+            z_stage1 = z_stage1_pre or row.get("z_vs_decoys_consensus", "")
+            z_stage1_source = (
+                "z_vs_decoys_consensus_pre"
+                if z_stage1_pre
+                else "z_vs_decoys_consensus"
             )
 
             z_selected = ""
@@ -148,15 +155,14 @@ def _collect_master_rows(
 
             if z_stage2:
                 z_selected = z_stage2
-                z_source = "stage2"
+                z_source = z_stage2_source
             elif z_stage1:
                 z_selected = z_stage1
-                z_source = "stage1"
+                z_source = z_stage1_source
             else:
-                consensus_fallback = as_float(row.get("consensus_score"))
-                if consensus_fallback is not None and math.isfinite(consensus_fallback):
-                    z_selected = str(consensus_fallback)
-                    z_source = "consensus_score_fallback"
+                raw_consensus = as_float(row.get("consensus_score"))
+                if raw_consensus is not None and math.isfinite(raw_consensus):
+                    z_source = "missing_consensus_decoy_null"
 
             if pb_valid == "0":
                 z_source = f"{z_source}_pose_invalid"

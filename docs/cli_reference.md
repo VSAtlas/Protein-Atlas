@@ -113,6 +113,7 @@ Key behavior:
 - `atlas report RUN_ID` exports `outputs/data/<RUN_ID>/master_rows.csv` if needed, then runs the maintained report generator for a completed run.
 - `atlas analysis report RUN_ID --status-html` is the discoverable report workflow: master export, report HTML/YAML, and optional status HTML.
 - `atlas analysis dud-eval RUN_ID` runs the maintained DUD/decoy benchmark evaluator using run-scoped output roots.
+- `atlas analysis holo-integrity RUN_ID --strict` certifies the post-prep receptor-state partition and writes `outputs/data/<RUN_ID>/holo_integrity/holo_integrity.csv` plus `holo_integrity.json`. For the frozen 93-target SPD panel, the expected evidence partition is 76 strict holo targets and 17 apo fallbacks; an apo fallback remains apo and is never relabeled as experimentally holo.
 - `atlas analysis throughput integrity RUN_ID` writes throughput integrity JSON/CSV under `outputs/data/<RUN_ID>/`.
 - `atlas analysis throughput acceptance BASELINE_RUN_ID CANDIDATE_RUN_ID` compares throughput KPIs for two runs.
 - `atlas analysis interactions export RUN_ID` converts run reporting rows to the maintained partitioned interaction dataset.

@@ -147,7 +147,7 @@ def audit_source_transfer(
     context_cols = [col for col in ["label_source", "assay_type", "endpoint_type", "activity_type", "standard_type"] if col in data.columns]
     if context_cols:
         _balance(data, label_col, context_cols).to_csv(out / "assay_context_label_balance.csv", index=False)
-    _feature_shift(train, test, feature_cols or ["atlas_score", "consensus_score", "free_cmax_um", "cmax_um", "fraction_unbound_plasma"]).to_csv(
+    _feature_shift(train, test, feature_cols or ["consensus_z_score", "atlas_score", "free_cmax_um", "cmax_um", "fraction_unbound_plasma"]).to_csv(
         out / "feature_shift_train_vs_test.csv",
         index=False,
     )

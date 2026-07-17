@@ -58,6 +58,20 @@ def add_analysis_subcommands(subparsers: argparse._SubParsersAction[Any]) -> Non
     export.add_argument("--overwrite", action="store_true")
     export.add_argument("--verbose", action="store_true")
 
+    holo = subparsers.add_parser(
+        "holo-integrity",
+        help=(
+            "Audit frozen-SPD integrity from one manifest-bound artifact lineage."
+        ),
+    )
+    holo.add_argument("run_id")
+    holo.add_argument("--repo-root")
+    holo.add_argument("--selection")
+    holo.add_argument("--strict-manifest")
+    holo.add_argument("--out-dir")
+    holo.add_argument("--strict", dest="strict", action="store_true", default=True)
+    holo.add_argument("--no-strict", dest="strict", action="store_false")
+
     dataset_eda = subparsers.add_parser(
         "dataset-eda", help="Run read-only EDA reports for an Atlas ML/tabular dataset."
     )
@@ -91,6 +105,8 @@ def run_analysis_subcommand(args: argparse.Namespace, repo_root: Path) -> int | 
         return _run_throughput(args, repo_root)
     if command == "interactions":
         return _run_interactions(args, repo_root)
+    if command == "holo-integrity":
+        return _run_holo_integrity(args, repo_root)
     if command == "dataset-eda":
         return _run_dataset_eda(args, repo_root)
     return None
@@ -182,6 +198,26 @@ def _run_interactions(args: argparse.Namespace, repo_root: Path) -> int:
     if args.verbose:
         forwarded.append("--verbose")
     return int(convert_interactions_to_parquet.main(forwarded))
+
+
+def _run_holo_integrity(args: argparse.Namespace, repo_root: Path) -> int:
+    from analysis.cli import spd_holo_integrity
+
+    effective_root = Path(args.repo_root).expanduser() if args.repo_root else repo_root
+    forwarded = [
+        "--run-id",
+        str(args.run_id),
+        "--repo-root",
+        str(effective_root),
+        "--strict" if args.strict else "--no-strict",
+    ]
+    if args.selection:
+        forwarded.extend(["--selection", str(args.selection)])
+    if args.strict_manifest:
+        forwarded.extend(["--strict-manifest", str(args.strict_manifest)])
+    if args.out_dir:
+        forwarded.extend(["--out-dir", str(args.out_dir)])
+    return int(spd_holo_integrity.main(forwarded))
 
 
 def _run_dataset_eda(args: argparse.Namespace, repo_root: Path) -> int:

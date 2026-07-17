@@ -177,19 +177,25 @@ def _atlas_process_commands() -> tuple[str, ...]:
         if not path.name.isdigit() or int(path.name) in current_pids:
             continue
         try:
-            command = (path / "cmdline").read_bytes().replace(b"\0", b" ").decode(
-                "utf-8", errors="replace"
+            command = (
+                (path / "cmdline")
+                .read_bytes()
+                .replace(b"\0", b" ")
+                .decode("utf-8", errors="replace")
             )
         except OSError:
             continue
+        command_folded = command.casefold()
         if any(
-            token in command
+            token in command_folded
             for token in (
                 "atlas_main_cli",
                 "main.py",
                 "vina",
                 "gnina",
                 "score_reference_run_vina",
+                "rescoring_scorch",
+                "scorch.py",
             )
         ):
             commands.append(command)
@@ -219,7 +225,7 @@ def _timestamp_iso(timestamp: float) -> str | None:
 
 
 def require_idle_atlas(repo_root: str | Path) -> None:
-    """Fail when another Atlas run has current execution/activity evidence."""
+    """Fail closed when any Atlas run has current execution evidence."""
 
     active = active_atlas_runs(repo_root)
     if not active:

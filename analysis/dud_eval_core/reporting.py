@@ -87,6 +87,8 @@ def _compute_metrics_and_plots(
     has_run_id_col: bool,
     run_ids_present: Set[str],
     hist_xlabel: str,
+    score_column: str,
+    score_transform: str = "identity",
     title_suffix: str = "",
     mode_label: str = "docking",
     status_reason: str = "ok",
@@ -261,6 +263,9 @@ def _compute_metrics_and_plots(
     row = {
         "run_id": str(run_id) if run_id else "(none)",
         "pdb_id": pdb_id,
+        "score_column": score_column,
+        "score_transform": score_transform,
+        "score_high_is_better_after_transform": bool(score_high_is_better),
         "N": N,
         "n_actives": n_act,
         "actives_fraction": base,

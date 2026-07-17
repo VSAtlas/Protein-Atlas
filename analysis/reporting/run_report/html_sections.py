@@ -312,7 +312,7 @@ def _render_statistical_analysis_section(repo_root: Path, data_dir: Path) -> str
     <section class="section" id="statistics">
       <h2>Statistical Analysis</h2>
       <div class="stats-explainer">
-        <p><strong>Atlas score source:</strong> source files may contain several score columns. The report displays the canonical master-export score as Atlas score: Stage-2/post-SCORCH z-score when available, then Stage-1 consensus z-score, then <code>consensus_score</code> only as a non-z fallback. The companion Atlas score source column records which source was used.</p>
+        <p><strong>Atlas score source:</strong> source files may contain several score columns. The report displays the canonical master-export score as Atlas score: Stage-2/post-SCORCH z-score when available, then Stage-1 consensus z-score. If no decoy-standardized score exists, Atlas score remains missing and raw <code>consensus_score</code> is retained only as a separately named rank percentile. The companion Atlas score source column records which source was used.</p>
         <p><strong>Sawada/PBAS context:</strong> PBAS-style profiles are drug-level vectors of predicted binding affinities across proteins. Atlas uses that framing as a baseline and adds pair-level significance, Vina/SCORCH consensus, MM/GBSA, exposure, tissue, target-ADR, pathway, and mechanism-graph evidence.</p>
       </div>
       {render_statistical_formula_block()}

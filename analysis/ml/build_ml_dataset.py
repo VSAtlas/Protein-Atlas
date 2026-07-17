@@ -12,13 +12,52 @@ from analysis.ml.feature_sets import (
 )
 from analysis.ml.labels import binary_label_series, truthy_series
 from analysis.ml.leakage_checks import assert_no_leakage
+from analysis.ml.materialize_final_score import (
+    canonical_atlas_score_source,
+    canonical_final_score_source,
+)
 
 
 def _score_sort_col(df: pd.DataFrame) -> str | None:
-    for col in ("atlas_score", "z_selected", "priority_score", "consensus_score", "final_score"):
+    for col in (
+        "consensus_z_score",
+        "atlas_score",
+        "z_selected",
+        "priority_score",
+        "final_score",
+        "consensus_score",
+    ):
         if col in df.columns:
             return col
     return None
+
+
+def _score_source(
+    frame: pd.DataFrame, column: str, *, default: str = ""
+) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(default, index=frame.index, dtype="object")
+    return frame[column].fillna("").astype(str).str.strip()
+
+
+def _derive_atlas_score(
+    frame: pd.DataFrame,
+    *,
+    value_column: str,
+    source_column: str,
+    default_source: str = "",
+    final_score: bool = False,
+) -> None:
+    values = pd.to_numeric(frame[value_column], errors="coerce")
+    sources = _score_source(frame, source_column, default=default_source)
+    canonicalizer = (
+        canonical_final_score_source
+        if final_score
+        else canonical_atlas_score_source
+    )
+    accepted = sources.map(canonicalizer).ne("")
+    frame["atlas_score"] = values.where(accepted)
+    frame["atlas_score_source_for_ml"] = sources
 
 
 def add_standard_ml_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -34,11 +73,26 @@ def add_standard_ml_columns(df: pd.DataFrame) -> pd.DataFrame:
                 out["target_id"] = out[source]
                 break
     if "atlas_score" not in out.columns:
-        for source in ("z_selected", "final_score", "consensus_score", "consensus_score_pre"):
-            if source in out.columns:
-                out["atlas_score"] = pd.to_numeric(out[source], errors="coerce")
-                out["atlas_score_source_for_ml"] = source
-                break
+        if "consensus_z_score" in out.columns:
+            _derive_atlas_score(
+                out,
+                value_column="consensus_z_score",
+                source_column="consensus_z_score_source",
+                default_source="consensus_z_score",
+            )
+        elif "z_selected" in out.columns:
+            _derive_atlas_score(
+                out,
+                value_column="z_selected",
+                source_column="z_selected_source",
+            )
+        elif "final_score" in out.columns:
+            _derive_atlas_score(
+                out,
+                value_column="final_score",
+                source_column="final_score_source",
+                final_score=True,
+            )
     if "free_cmax_um" not in out.columns and "free_cmax_uM" in out.columns:
         out["free_cmax_um"] = pd.to_numeric(out["free_cmax_uM"], errors="coerce")
     if "free_cmax" not in out.columns and "free_cmax_um" in out.columns:

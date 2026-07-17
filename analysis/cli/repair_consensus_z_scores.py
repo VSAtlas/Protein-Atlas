@@ -18,7 +18,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dataset", required=True, type=Path)
     reference = parser.add_mutually_exclusive_group(required=True)
-    reference.add_argument("--reference-run-root", type=Path)
+    reference.add_argument(
+        "--reference-run-root",
+        type=Path,
+        help=(
+            "Reference docked run root. Flat and nested variant/pH layouts are "
+            "accepted; multiple strata for one PDB fail as ambiguous."
+        ),
+    )
     reference.add_argument(
         "--compare-runid",
         help=(

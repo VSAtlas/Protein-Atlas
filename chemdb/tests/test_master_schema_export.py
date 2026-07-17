@@ -173,7 +173,7 @@ def test_master_export(mock_run_env):
     assert ctrl["is_decoy"] == "0"
     assert ctrl["pose_valid_any"] == "1"
     assert ctrl["z_selected"] == "1.5"  # Stage 2 because valid
-    assert ctrl["z_selected_source"] == "stage2"
+    assert ctrl["z_selected_source"] == "z_vs_decoys_blend"
     assert ctrl["pocket_method"] == "configured_center"
     assert ctrl["center_x"] == "10.0"
     assert ctrl["ef1"] == "5.0"
@@ -185,7 +185,7 @@ def test_master_export(mock_run_env):
     assert fda["pose_valid_any"] == "0"
     assert fda["pose_invalid_reason_top"] == "Clash"
     assert fda["z_selected"] == "2.5"  # Stage 2 preferred even if invalid
-    assert fda["z_selected_source"] == "stage2_pose_invalid"
+    assert fda["z_selected_source"] == "z_vs_decoys_blend_pose_invalid"
 
     # Check Decoy
     decoy = next(

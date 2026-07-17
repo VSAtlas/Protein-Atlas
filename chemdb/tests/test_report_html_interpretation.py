@@ -30,7 +30,8 @@ def test_report_html_includes_scientist_interpretation_guide(tmp_path, monkeypat
 
     html_text = out_path.read_text(encoding="utf-8")
     assert "How to interpret this report" in html_text
-    assert "Atlas score / z_selected" in html_text
+    assert "<dt>Atlas score</dt>" in html_text
+    assert "Atlas score source" in html_text
     assert "Percentile rank" in html_text
     assert "Coverage" in html_text
     assert "Breadth 1%" in html_text

@@ -148,3 +148,11 @@ with SHA-256 `4697ca38ed842cbc5d673b3e97c7c5fe91479eb3997091400a2a5d4d626ff483`.
 Resolved identities suppress stale legacy names and auxiliary identifiers, mapping
 consumers prefer authorized DrugCentral IDs, and exported mapping provenance is
 source-safe and content-hashed.
+
+## Atlasv0.0.19 - Harden score provenance and analysis integrity
+
+Separates same-run decoy-standardized scores from cross-run comparison values,
+fails closed on active-run evidence and untrusted score sources, hashes every
+reference-null input, repairs only unambiguous output layouts, certifies one
+coherent holo artifact lineage, and corrects threshold-error and effective-Top-K
+diagnostic exports.

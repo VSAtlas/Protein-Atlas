@@ -66,15 +66,22 @@ def _cmd_ml(argv: Sequence[str]) -> int:
     score_addons.add_argument("--run-id", required=True)
     score_addons.add_argument(
         "--pairs",
+        "--selected-pairs",
         "--pair-manifest",
         "--library-manifest",
         dest="selected_pairs",
         required=True,
     )
-    score_addons.add_argument("--compare-run", required=True)
+    score_addons.add_argument(
+        "--compare-run",
+        "--compare-runid",
+        dest="compare_run",
+        required=True,
+    )
     score_addons.add_argument("--out-dir")
     score_addons.add_argument("--workers", type=int, default=8)
-    score_addons.add_argument("--minimum-exhaustiveness", type=int, default=2)
+    score_addons.add_argument("--scorch", action="store_true")
+    score_addons.add_argument("--require-full-scorch-null", action="store_true")
     score_addons.add_argument("--dry-run", action="store_true")
 
     hpo = sub.add_parser("hpo", help="Run an optional Optuna-backed hyperparameter sweep.")
@@ -172,6 +179,30 @@ def _cmd_ml(argv: Sequence[str]) -> int:
     external_eval.add_argument("--name", required=True)
     external_eval.add_argument("--out-dir")
 
+
+    figures = sub.add_parser("figures", help="Render figures, SHAP summaries, and failure analysis for a trained model.")
+    figures.add_argument("--run-id", default="pilotstudy")
+    figures.add_argument("--model-dir")
+    figures.add_argument("--predictions")
+    figures.add_argument("--dataset")
+    figures.add_argument("--label")
+    figures.add_argument("--score-col", default="ml_prediction_score")
+    figures.add_argument("--out-dir")
+    figures.add_argument("--group-cols", nargs="*")
+    figures.add_argument("--target-cols", nargs="*")
+    figures.add_argument("--top-ks", nargs="*", type=int)
+    figures.add_argument("--max-groups", type=int, default=20)
+    figures.add_argument("--min-group-size", type=int, default=5)
+    figures.add_argument("--threshold", type=float, default=0.5)
+    figures.add_argument("--top-n-errors", type=int, default=50)
+    figures.add_argument("--shap-sample-rows", type=int, default=250)
+    figures.add_argument("--shap-background-rows", type=int, default=100)
+    figures.add_argument("--random-state", type=int, default=42)
+    figures.add_argument("--skip-shap", action="store_true")
+    figures.add_argument("--force-generic-shap", action="store_true")
+    figures.add_argument("--max-generic-shap-features", type=int, default=200)
+    figures.add_argument("--title-prefix")
+
     status = sub.add_parser("status", help="Summarize run-scoped ML artifacts.")
     status.add_argument("--run-id", default="pilotstudy")
     status.add_argument("--out-dir")
@@ -207,6 +238,8 @@ def _cmd_ml(argv: Sequence[str]) -> int:
         return _cmd_ml_external_eval(args, extra, repo_root)
     if args.ml_cmd == "doctor":
         return _cmd_ml_doctor(args, repo_root)
+    if args.ml_cmd == "figures":
+        return _cmd_ml_figures(args, extra, repo_root)
     if args.ml_cmd == "status":
         return _cmd_ml_status(args, repo_root)
     return 1
@@ -284,6 +317,8 @@ def _cmd_ml_score_addons(
 ) -> int:
     run_id = str(args.run_id)
     forwarded = [
+        "--run-id",
+        run_id,
         "--selected-pairs",
         str(args.selected_pairs),
         "--compare-run",
@@ -298,11 +333,13 @@ def _cmd_ml_score_addons(
         str(repo_root),
         "--workers",
         str(args.workers),
-        "--minimum-exhaustiveness",
-        str(args.minimum_exhaustiveness),
     ]
     if args.dry_run:
         forwarded.append("--dry-run")
+    if args.scorch:
+        forwarded.append("--scorch")
+    if args.require_full_scorch_null:
+        forwarded.append("--require-full-scorch-null")
     forwarded.extend(extra)
     return _run_module_main("analysis.cli.score_reference_run_vina", forwarded)
 
@@ -484,6 +521,71 @@ def _print_doctor_report(report: dict[str, Any]) -> None:
         print(f"WARNING: {warning}")
     if not report.get("blockers") and not report.get("warnings"):
         print("No ML preflight blockers or warnings detected.")
+
+
+def _flag_value_args(*pairs: tuple[str, object | None]) -> list[str]:
+    forwarded: list[str] = []
+    for flag, value in pairs:
+        if value is None or value == "":
+            continue
+        forwarded.extend([flag, str(value)])
+    return forwarded
+
+
+def _flag_sequence_args(flag: str, values: Sequence[object] | None) -> list[str]:
+    if not values:
+        return []
+    return [flag, *(str(value) for value in values)]
+
+
+def _enabled_flags(*pairs: tuple[str, bool]) -> list[str]:
+    return [flag for flag, enabled in pairs if enabled]
+
+
+def _ml_figure_model_args(
+    args: argparse.Namespace,
+    repo_root: Path,
+) -> list[str]:
+    model_dir = args.model_dir
+    if not model_dir and not args.predictions:
+        model_dir = (
+            _default_ml_out_dir(repo_root, str(args.run_id), "training_pass")
+            / "binding"
+            / "model"
+        )
+    return _flag_value_args(("--model-dir", model_dir))
+
+
+def _cmd_ml_figures(args: argparse.Namespace, extra: list[str], repo_root: Path) -> int:
+    forwarded = [
+        *_ml_figure_model_args(args, repo_root),
+        *_flag_value_args(
+            ("--predictions", args.predictions),
+            ("--dataset", args.dataset),
+            ("--label", args.label),
+            ("--score-col", args.score_col),
+            ("--out-dir", args.out_dir),
+            ("--max-groups", args.max_groups),
+            ("--min-group-size", args.min_group_size),
+            ("--threshold", args.threshold),
+            ("--top-n-errors", args.top_n_errors),
+            ("--shap-sample-rows", args.shap_sample_rows),
+            ("--shap-background-rows", args.shap_background_rows),
+            ("--random-state", args.random_state),
+            ("--max-generic-shap-features", args.max_generic_shap_features),
+            ("--title-prefix", args.title_prefix),
+        ),
+        *_flag_sequence_args("--group-cols", args.group_cols),
+        *_flag_sequence_args("--target-cols", args.target_cols),
+        *_flag_sequence_args("--top-ks", args.top_ks),
+        *_enabled_flags(
+            ("--skip-shap", bool(args.skip_shap)),
+            ("--force-generic-shap", bool(args.force_generic_shap)),
+        ),
+        *extra,
+    ]
+    return _run_module_main("analysis.cli.render_ml_figures", forwarded)
+
 
 def _cmd_ml_status(args: argparse.Namespace, repo_root: Path) -> int:
     run_id = str(args.run_id)

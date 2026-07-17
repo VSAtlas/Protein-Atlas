@@ -2790,3 +2790,9 @@ Change: Added non-destructive FDA audit/repair, named-parent and delta materiali
 Why: The legacy 4,730-row mapping mixed stale names and auxiliary identifiers with corrected structures and allowed a superficially passing verifier report to authorize promotion.
 Impact: The canonical terminal-v3 mapping is pinned to SHA-256 `4697ca38ed842cbc5d673b3e97c7c5fe91479eb3997091400a2a5d4d626ff483`; resolved identities suppress stale aliases/RxCUI/UNII data, authoritative DrugCentral IDs reach ML consumers, and exported paths no longer expose host roots. No docking run was launched.
 Next: Recompute cohort-dependent scores against the canonical identity map, preserve the independent 12-check verifier report with any promotion, and keep ambiguous/unsafe parent rows fail-closed.
+
+Date: 2026-07-17 | Task: Atlasv0.0.19 score provenance and analysis integrity | Owner: Codex
+Change: Separated same-run and cross-run standardized scores, removed stale-run bypasses, bound reference inputs and final manifests by hash, repaired only unambiguous consensus layouts, certified one manifest-selected holo lineage, and corrected diagnostic threshold-error and Top-K exports.
+Why: Rescoring and analysis paths could conflate score scales, accept incomplete provenance, borrow artifacts across layouts, or report non-errors and duplicate effective cutoffs.
+Impact: Active-run checks and score-source admission now fail closed; every reference-null input is recorded; raw consensus percentiles remain audit-only; ambiguous repair or holo layouts are rejected. No production or docking run was launched.
+Next: Run the final integration gate, publish only the integration branch as one draft GitHub PR, and require PR review before any explicit main-branch merge.

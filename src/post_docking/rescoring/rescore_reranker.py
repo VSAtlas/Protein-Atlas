@@ -810,9 +810,9 @@ def rerank_consensus_with_scorch(
     def group_key(row: Dict[str, Any]) -> Tuple[str, str, str, str]:
         return (
             str(row.get("run_id", "")).strip(),
-            str(row.get("pdb_id", "")).strip(),
-            str(row.get("variant", "")).strip(),
-            str(row.get("ph_label", "")).strip(),
+            _normalize_scope_pdb(row.get("pdb_id", "")),
+            _normalize_scope_variant(row.get("variant", "")),
+            _normalize_scope_ph(row.get("ph_label", "")),
         )
 
     groups: Dict[Tuple[str, str, str, str], List[int]] = {}
@@ -1187,6 +1187,26 @@ def rerank_consensus_with_scorch(
     return True
 
 
+def _combo_scope_from_relative(relative: Path) -> Tuple[str, str, str]:
+    parts = relative.parts
+    if not 1 <= len(parts) <= 3:
+        raise ValueError(
+            "SCORCH score directory must use PDB[/variant][/pH] layout: "
+            f"{relative}"
+        )
+    scope = _scorch_prefix_mod._collect_combo_from_stage_rel(
+        (*parts, "_score_artifact")
+    )
+    if scope is None:
+        raise ValueError(f"unable to resolve SCORCH score scope: {relative}")
+    pdb_id, variant, ph = scope
+    return (
+        _normalize_scope_pdb(pdb_id),
+        _normalize_scope_variant(variant),
+        _normalize_scope_ph(ph),
+    )
+
+
 def rerank_run(
     run_id: str,
     repo_root: Path,
@@ -1196,6 +1216,7 @@ def rerank_run(
     scorch_weight: float = SCORCH_WEIGHT_DEFAULT,
     cnn_weight: float = CNN_WEIGHT_DEFAULT,
     decoy_prefix: str = DECOY_PREFIX_DEFAULT,
+    output_root: Optional[Path] = None,
 ) -> int:
     prefix = _scorch_prefix_mod.normalize_decoy_prefix(
         decoy_prefix,
@@ -1239,11 +1260,9 @@ def rerank_run(
     fail = 0
     for combo_dir in sorted(combo_dirs):
         try:
-            ph = combo_dir.name
-            variant = combo_dir.parent.name
-            pdb_id = combo_dir.parent.parent.name
-
-            dock_combo_dir = dock_root / pdb_id / variant / ph
+            relative_combo = combo_dir.relative_to(post_root)
+            pdb_id, variant, ph = _combo_scope_from_relative(relative_combo)
+            dock_combo_dir = dock_root / relative_combo
             consensus_csv = find_consensus_csv(dock_combo_dir)
             if not consensus_csv:
                 logger.warning(
@@ -1257,17 +1276,39 @@ def rerank_run(
                 fail += 1
                 continue
 
-            out_csv = combo_dir / "consensus_reranked_scorch.csv"
+            output_combo_dir = (
+                output_root / relative_combo
+                if output_root is not None
+                else combo_dir
+            )
+            out_csv = output_combo_dir / "consensus_reranked_scorch.csv"
             scorch_inputs: List[Path] = []
             fda_csv = combo_dir / "scorch_scores_all.csv"
-            decoy_csv = combo_dir / f"{prefix}_scorch_scores_all.csv"
-            legacy_dud_csv = combo_dir / "dud_scorch_scores_all.csv"
+            decoy_candidates = tuple(
+                dict.fromkeys(
+                    combo_dir / f"{candidate}_scorch_scores_all.csv"
+                    for candidate in (prefix, "dud", "decoy", "decoys")
+                )
+            )
+            decoy_csv = next(
+                (candidate for candidate in decoy_candidates if candidate.exists()),
+                None,
+            )
             if fda_csv.exists():
                 scorch_inputs.append(fda_csv)
-            if decoy_csv.exists():
+            if decoy_csv is not None:
                 scorch_inputs.append(decoy_csv)
-            elif prefix.lower() != "dud" and legacy_dud_csv.exists():
-                scorch_inputs.append(legacy_dud_csv)
+            elif fda_csv.exists():
+                logger.warning(
+                    "%s action=skip reason=missing_decoy_scorch pdb=%s variant=%s ph=%s candidates=%s",
+                    COMPONENT,
+                    pdb_id,
+                    variant,
+                    ph,
+                    ",".join(str(candidate) for candidate in decoy_candidates),
+                )
+                fail += 1
+                continue
             if not scorch_inputs:
                 logger.warning(
                     "%s action=skip reason=missing_scorch pdb=%s variant=%s ph=%s dir=%s",
@@ -1320,6 +1361,14 @@ def main() -> int:
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--repo-root", required=True)
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument(
+        "--out-root",
+        type=Path,
+        help=(
+            "Optional isolated output root for rebuilt reranked artifacts; "
+            "the historical post_docked tree remains unchanged."
+        ),
+    )
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -1334,6 +1383,7 @@ def main() -> int:
         scorch_weight=scorch_weight,
         cnn_weight=cnn_weight,
         decoy_prefix=decoy_prefix,
+        output_root=args.out_root.expanduser().resolve() if args.out_root else None,
     )
 
 

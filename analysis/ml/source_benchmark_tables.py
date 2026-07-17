@@ -36,8 +36,12 @@ FEATURE_COLS = [
     "cmax_um",
     "fraction_unbound_plasma",
 ]
-MODEL_READY_FEATURE_COLS = ["atlas_score", "consensus_score"]
+MODEL_READY_FEATURE_COLS = ["consensus_z_score", "atlas_score", "consensus_score"]
 MODEL_READY_PROVENANCE_COLS = [
+    "atlas_score_source_for_ml",
+    "consensus_z_score_source",
+    "final_score_source",
+    "z_selected_source",
     "label_source",
     "source_family",
     "upstream_source",
@@ -353,7 +357,14 @@ def _spd_table(source: pd.DataFrame) -> pd.DataFrame:
             *FEATURE_COLS,
             "z_selected",
             "z_selected_source",
+            "consensus_z_score",
+            "consensus_z_score_source",
             "final_score",
+            "final_score_source",
+            "atlas_score_source_for_ml",
+            "z_vs_decoys_consensus",
+            "z_vs_compare_run_consensus",
+            "z_vs_decoys_blend",
             "SCORCH_score_used",
             "exposure_margin",
             "spd_exposure_relevant",
@@ -375,10 +386,6 @@ def _spd_table(source: pd.DataFrame) -> pd.DataFrame:
         out["drug_id"] = out["dedup_drug_key"]
     if "target_id" not in out.columns and "dedup_target_key" in out.columns:
         out["target_id"] = out["dedup_target_key"]
-    if "atlas_score" not in out.columns and "z_selected" in out.columns:
-        out["atlas_score"] = pd.to_numeric(out["z_selected"], errors="coerce")
-    if "consensus_score" not in out.columns and "final_score" in out.columns:
-        out["consensus_score"] = pd.to_numeric(out["final_score"], errors="coerce")
     out["spd_exposure_label"] = binary_label_series(source[label_col])
     out["source_objective"] = "spd_exposure_relevance"
     out["label_source"] = out["source_objective"]

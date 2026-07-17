@@ -73,6 +73,52 @@ def _consensus_sort_key(row: Dict[str, Any]) -> float:
     return score if math.isfinite(score) else float("-inf")
 
 
+def _external_decoy_consensus_scores(
+    variant_root: Path,
+    *,
+    current_prefix: str,
+    expected_run_id: str,
+    logger: logging.Logger,
+) -> tuple[List[float], str]:
+    current_path = variant_root / f"{current_prefix}consensus_docking_scores.csv"
+    preferred = [
+        variant_root / "dud_consensus_docking_scores.csv",
+        variant_root / "decoy_consensus_docking_scores.csv",
+        variant_root / "decoys_consensus_docking_scores.csv",
+    ]
+    candidates = [*preferred, *sorted(variant_root.glob("*_consensus_docking_scores.csv"))]
+    seen: set[Path] = set()
+    for path in candidates:
+        if path == current_path or path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        scores: List[float] = []
+        try:
+            with path.open("r", newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    row_run_id = str(row.get("run_id", "")).strip()
+                    if expected_run_id and row_run_id and row_run_id != expected_run_id:
+                        continue
+                    if not _to_bool_flag(row.get("is_decoy")):
+                        continue
+                    try:
+                        value = float(row.get("consensus_score", ""))
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(value):
+                        scores.append(value)
+        except (OSError, csv.Error) as exc:
+            logger.warning(
+                "[z-score.consensus.external.warn] path=%s reason=%s",
+                path,
+                exc,
+            )
+            continue
+        if scores:
+            return scores, str(path)
+    return [], ""
+
+
 FDA_PREFIX_DEFAULTS = ["fda_"]
 DECOY_PREFIX_DEFAULTS = ["dud_", "decoy_", "decoys"]
 
@@ -563,6 +609,10 @@ def compute_consensus_for_variant_ph(
                 "z_vs_decoys_consensus": "",
                 # Legacy compatibility alias.
                 "t_vs_decoys_consensus": "",
+                "consensus_mu_decoy": "",
+                "consensus_sigma_decoy": "",
+                "consensus_n_decoys": "",
+                "consensus_z_null_source": "",
             }
         )
 
@@ -576,12 +626,24 @@ def compute_consensus_for_variant_ph(
         if not math.isfinite(row_consensus_score):
             continue
         decoy_scores.append(float(row_consensus_score))
+    decoy_source = "current_consensus_rows" if decoy_scores else ""
+    if not decoy_scores and not _is_decoy_run_mode(effective_run_mode):
+        decoy_scores, decoy_source = _external_decoy_consensus_scores(
+            variant_root,
+            current_prefix=csv_prefix,
+            expected_run_id=str(run_id),
+            logger=log,
+        )
     if decoy_scores:
         mu_decoy = sum(decoy_scores) / len(decoy_scores)
         variance = sum((v - mu_decoy) ** 2 for v in decoy_scores) / len(decoy_scores)
         sigma_decoy = math.sqrt(variance)
         if sigma_decoy > 0 and math.isfinite(mu_decoy) and math.isfinite(sigma_decoy):
             for row in out_rows:
+                row["consensus_mu_decoy"] = f"{mu_decoy:.6g}"
+                row["consensus_sigma_decoy"] = f"{sigma_decoy:.6g}"
+                row["consensus_n_decoys"] = str(len(decoy_scores))
+                row["consensus_z_null_source"] = decoy_source
                 val = row.get("consensus_score")
                 if not isinstance(val, (int, float)) or not math.isfinite(val):
                     row["z_vs_decoys_consensus"] = ""
@@ -592,13 +654,14 @@ def compute_consensus_for_variant_ph(
                 row["z_vs_decoys_consensus"] = z_val
                 row["t_vs_decoys_consensus"] = z_val
             log.info(
-                "[z-score.consensus] pdb=%s variant=%s ph=%s n_decoys=%d mu=%.6g sigma=%.6g",
+                "[z-score.consensus] pdb=%s variant=%s ph=%s n_decoys=%d mu=%.6g sigma=%.6g source=%s",
                 paths.pdb_id,
                 variant_label,
                 ph_label or "",
                 len(decoy_scores),
                 mu_decoy,
                 sigma_decoy,
+                decoy_source,
             )
         else:
             log.warning(
