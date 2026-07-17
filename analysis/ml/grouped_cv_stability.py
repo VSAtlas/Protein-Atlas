@@ -9,7 +9,6 @@ from typing import Any
 
 import pandas as pd
 
-from analysis.calibration.metrics import calibration_metrics
 from analysis.ml.feature_sets import effective_exclude_features, get_feature_set
 from analysis.ml.labels import binary_label_series
 from analysis.ml.leakage_checks import assert_no_leakage
@@ -32,7 +31,10 @@ def _present_features(
     exclude_features: Iterable[str] | None = None,
     strict_feature_set: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
-    excluded = effective_exclude_features(label_col, exclude_features)
+    excluded = effective_exclude_features(
+        label_col,
+        list(exclude_features) if exclude_features is not None else None,
+    )
     requested = [feature for feature in get_feature_set(feature_set) if feature not in excluded]
     missing = [feature for feature in requested if feature not in df.columns]
     present = [feature for feature in requested if feature in df.columns]
@@ -47,6 +49,37 @@ def _present_features(
     features = [feature for feature in present if feature not in all_missing]
     assert_no_leakage(features)
     return features, missing, all_missing
+
+
+def _binary_metrics(labels: pd.Series, scores: pd.Series) -> dict[str, float]:
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    y = pd.to_numeric(labels, errors="coerce").astype(int)
+    probability = pd.to_numeric(scores, errors="coerce").astype(float)
+    calibration = pd.DataFrame({"label": y, "score": probability.clip(0.0, 1.0)})
+    calibration["bin"] = pd.cut(
+        calibration["score"],
+        bins=[idx / 10 for idx in range(11)],
+        include_lowest=True,
+    )
+    ece = 0.0
+    for _, group in calibration.groupby("bin", observed=False):
+        if group.empty:
+            continue
+        ece += (len(group) / len(calibration)) * abs(float(group["score"].mean() - group["label"].mean()))
+    brier = float(((probability - y) ** 2).mean())
+    prevalence = float(y.mean())
+    brier_baseline = prevalence * (1.0 - prevalence)
+    return {
+        "AUROC": float(roc_auc_score(y, probability)),
+        "AUPRC": float(average_precision_score(y, probability)),
+        "Brier": brier,
+        "Brier_prevalence_baseline": brier_baseline,
+        "Brier_skill_score": (
+            1.0 - brier / brier_baseline if brier_baseline > 0 else float("nan")
+        ),
+        "ECE": float(ece),
+    }
 
 
 def _topk_metrics(labels: pd.Series, scores: pd.Series, *, k: int) -> dict[str, float | int]:
@@ -83,10 +116,12 @@ def _metric_row(
             "AUROC": math.nan,
             "AUPRC": math.nan,
             "Brier": math.nan,
+            "Brier_prevalence_baseline": math.nan,
+            "Brier_skill_score": math.nan,
             "ECE": math.nan,
             **_topk_metrics(valid[label_col], valid[score_col], k=top_k),
         }
-    metrics = calibration_metrics(valid[score_col].astype(float).tolist(), valid[label_col].astype(int).tolist())
+    metrics = _binary_metrics(valid[label_col], valid[score_col])
     return {
         "n_test": int(len(valid)),
         "n_test_positive": int(valid[label_col].eq(1).sum()),
@@ -94,6 +129,8 @@ def _metric_row(
         "AUROC": metrics.get("AUROC"),
         "AUPRC": metrics.get("AUPRC"),
         "Brier": metrics.get("Brier"),
+        "Brier_prevalence_baseline": metrics.get("Brier_prevalence_baseline"),
+        "Brier_skill_score": metrics.get("Brier_skill_score"),
         "ECE": metrics.get("ECE"),
         **_topk_metrics(valid[label_col], valid[score_col], k=top_k),
     }
@@ -107,15 +144,31 @@ def _bootstrap_ci(
     n_bootstraps: int = 200,
     seed: int = 42,
     top_k: int = 20,
+    cluster_col: str | None = None,
 ) -> pd.DataFrame:
     if n_bootstraps <= 0 or pred.empty:
         return pd.DataFrame(columns=["metric", "ci_low", "ci_high", "n_bootstraps"])
     rng = random.Random(seed)
     values: dict[str, list[float]] = {}
+    cluster_frames: dict[str, pd.DataFrame] = {}
+    if cluster_col and cluster_col in pred.columns:
+        cluster_values = pred[cluster_col].fillna("missing").astype(str)
+        cluster_frames = {
+            str(value): pred.loc[index].copy()
+            for value, index in cluster_values.groupby(cluster_values).groups.items()
+        }
+    clusters = list(cluster_frames)
     n = len(pred)
     for _idx in range(n_bootstraps):
-        idx = [rng.randrange(n) for _ in range(n)]
-        sample = pred.iloc[idx]
+        if clusters:
+            sampled_clusters = [clusters[rng.randrange(len(clusters))] for _ in clusters]
+            sample = pd.concat(
+                [cluster_frames[value] for value in sampled_clusters],
+                ignore_index=True,
+            )
+        else:
+            idx = [rng.randrange(n) for _ in range(n)]
+            sample = pred.iloc[idx]
         row = _metric_row(sample, label_col=label_col, score_col=score_col, top_k=top_k)
         if row.get("n_test_positive", 0) <= 0 or row.get("n_test_negative", 0) <= 0:
             continue
@@ -184,6 +237,7 @@ def _fit_predict_fold(
     class_weight: str | None,
     pu_mode: str,
     model_params: Mapping[str, object] | None = None,
+    compute_applicability_domain: bool = False,
 ) -> pd.DataFrame:
     train = data.loc[train_idx].copy()
     test = data.loc[test_idx].copy()
@@ -202,8 +256,13 @@ def _fit_predict_fold(
         "label_source",
         "source_family",
         "upstream_source",
+        "source_objective",
+        "assay_type",
+        "endpoint_type",
+        "spd_activity_relation",
         "scaffold_key",
         "chemical_cluster",
+        "butina_cluster",
         "ligand_chemotype",
         "mechanism_panel",
         "mechanism_panel_match_basis",
@@ -213,6 +272,29 @@ def _fit_predict_fold(
     pred = test[[col for col in meta_cols if col in test.columns]].copy()
     pred["ml_prediction_score"] = [float(value) for value in probs]
     pred["_source_index"] = test.index.astype(str)
+    if compute_applicability_domain and not x_train.empty and not x_test.empty:
+        from sklearn.neighbors import NearestNeighbors
+
+        means = x_train.mean(axis=0)
+        stds = x_train.std(axis=0).replace(0, 1.0).fillna(1.0)
+        train_scaled = ((x_train - means) / stds).fillna(0.0)
+        test_scaled = ((x_test - means) / stds).fillna(0.0)
+        train_neighbors = 2 if len(train_scaled) > 1 else 1
+        train_nn = NearestNeighbors(n_neighbors=train_neighbors)
+        train_nn.fit(train_scaled)
+        train_distance = train_nn.kneighbors(train_scaled, return_distance=True)[0][:, -1]
+        threshold = float(pd.Series(train_distance).quantile(0.95))
+        test_nn = NearestNeighbors(n_neighbors=1)
+        test_nn.fit(train_scaled)
+        test_distance = test_nn.kneighbors(test_scaled, return_distance=True)[0][:, 0]
+        denominator = threshold if threshold > 0 else 1.0
+        pred["applicability_distance"] = test_distance
+        pred["applicability_threshold_train_q95"] = threshold
+        pred["applicability_distance_ratio"] = test_distance / denominator
+        pred["applicability_domain"] = [
+            "in_domain" if float(distance) <= threshold else "out_of_domain"
+            for distance in test_distance
+        ]
     return pred
 
 
@@ -329,7 +411,16 @@ def _stratified_target_holdout_by_family_folds(
 def _summarize_fold_metrics(fold_metrics: pd.DataFrame) -> pd.DataFrame:
     if fold_metrics.empty:
         return pd.DataFrame()
-    metrics = ["AUROC", "AUPRC", "Brier", "ECE", "precision_at_K", "enrichment_at_K"]
+    metrics = [
+        "AUROC",
+        "AUPRC",
+        "Brier",
+        "Brier_prevalence_baseline",
+        "Brier_skill_score",
+        "ECE",
+        "precision_at_K",
+        "enrichment_at_K",
+    ]
     rows = []
     group_cols = ["model_type", "evaluation", "group_col"]
     for key, group in fold_metrics.groupby(group_cols, dropna=False):
@@ -368,9 +459,18 @@ def _mean_oof_predictions(predictions: pd.DataFrame, *, label_col: str) -> pd.Da
         }
     ]
     agg: dict[str, Any] = {"ml_prediction_score": "mean"}
+    mean_cols = {
+        "applicability_distance",
+        "applicability_threshold_train_q95",
+        "applicability_distance_ratio",
+    }
     for col in meta_cols:
-        agg[col] = "first"
+        agg[col] = "mean" if col in mean_cols else "first"
     out = predictions.groupby("_source_index", dropna=False).agg(agg).reset_index(drop=True)
+    if "applicability_distance_ratio" in out.columns:
+        out["applicability_domain"] = out["applicability_distance_ratio"].map(
+            lambda value: "in_domain" if float(value) <= 1.0 else "out_of_domain"
+        )
     if label_col in out.columns:
         out[label_col] = pd.to_numeric(out[label_col], errors="coerce")
     return out
@@ -426,6 +526,7 @@ def run_grouped_cv_stability(
     exclude_features: list[str] | None = None,
     strict_feature_set: bool = False,
     model_params: Mapping[str, object] | None = None,
+    compute_applicability_domain: bool = False,
     run_stratified_target_holdout_by_family: bool = False,
     stratified_target_holdout_repeats: int | None = None,
     stratified_target_holdout_fraction: float = 0.2,
@@ -454,6 +555,7 @@ def run_grouped_cv_stability(
     pooled_rows: list[dict[str, Any]] = []
     bootstrap_frames: list[pd.DataFrame] = []
     permutation_rows: list[dict[str, Any]] = []
+    applicability_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
 
     def run_fold(
         *,
@@ -488,6 +590,8 @@ def run_grouped_cv_stability(
                 }
             )
             return
+        applicability_key = (evaluation, group_col, int(repeat), int(fold))
+        cached_applicability = applicability_cache.get(applicability_key)
         pred = _fit_predict_fold(
             data,
             train_idx=train_idx,
@@ -499,7 +603,23 @@ def run_grouped_cv_stability(
             class_weight=class_weight,
             pu_mode=pu_mode,
             model_params=model_params,
+            compute_applicability_domain=(
+                compute_applicability_domain and cached_applicability is None
+            ),
         )
+        applicability_cols = [
+            "_source_index",
+            "applicability_distance",
+            "applicability_threshold_train_q95",
+            "applicability_distance_ratio",
+            "applicability_domain",
+        ]
+        if compute_applicability_domain:
+            if cached_applicability is None:
+                present = [col for col in applicability_cols if col in pred.columns]
+                applicability_cache[applicability_key] = pred[present].copy()
+            else:
+                pred = pred.merge(cached_applicability, on="_source_index", how="left")
         pred["model_type"] = model_type
         pred["evaluation"] = evaluation
         pred["group_col"] = group_col
@@ -577,7 +697,7 @@ def run_grouped_cv_stability(
                 )
 
         if run_stratified_target_holdout_by_family:
-            folds = _stratified_target_holdout_by_family_folds(
+            family_folds = _stratified_target_holdout_by_family_folds(
                 data,
                 target_col="target_id",
                 family_col="target_family",
@@ -585,7 +705,7 @@ def run_grouped_cv_stability(
                 repeats=stratified_target_holdout_repeats if stratified_target_holdout_repeats is not None else repeats,
                 seed=seed,
             )
-            if not folds:
+            if not family_folds:
                 skipped_rows.append(
                     {
                         "model_type": model_type,
@@ -594,7 +714,7 @@ def run_grouped_cv_stability(
                         "reason": "missing target_id/target_family columns or no families with multiple targets",
                     }
                 )
-            for fold, (heldout, repeat_idx, train_idx, test_idx) in enumerate(folds):
+            for fold, (heldout, repeat_idx, train_idx, test_idx) in enumerate(family_folds):
                 run_fold(
                     model_type=model_type,
                     evaluation="stratified_target_holdout_by_family",
@@ -636,8 +756,10 @@ def run_grouped_cv_stability(
                 n_bootstraps=n_bootstraps,
                 seed=seed,
                 top_k=top_k,
+                cluster_col=str(group_col) if str(group_col) in mean_pred.columns else None,
             )
             if not boot.empty:
+                boot["bootstrap_unit"] = str(group_col) if str(group_col) in mean_pred.columns else "row"
                 boot["model_type"] = model_type
                 boot["evaluation"] = evaluation
                 boot["group_col"] = group_col
@@ -676,6 +798,7 @@ def run_grouped_cv_stability(
         "n_negative": int(data[label_col].eq(0).sum()),
         "n_folds_run": int(len(fold_metrics)),
         "n_folds_skipped": int(len(skipped_rows)),
+        "compute_applicability_domain": bool(compute_applicability_domain),
         "policy": (
             "Grouped CV holds out all rows for a target/group together. Metrics are reported from held-out "
             "predictions only; pooled OOF metrics average repeated predictions per row before scoring."

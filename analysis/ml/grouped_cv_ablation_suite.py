@@ -385,17 +385,21 @@ def _write_label_source_profiles(
 
 
 def _architecture_rows() -> pd.DataFrame:
-    rdkit = ", ".join(get_feature_set("ligand_physchem_descriptors"))
-    pair = ", ".join(get_feature_set("spd_binding_consensus_z_banana_scores_only"))
-    full = ", ".join(get_feature_set("spd_binding_nonleaky_consensus_z"))
+    rdkit = ", ".join(get_feature_set("ligand_physchem_descriptors_no_qed"))
+    pair = ", ".join(get_feature_set("spd_binding_pair_final_scores_only"))
+    full = ", ".join(get_feature_set("spd_binding_pair_final_full_no_qed"))
+    shortcut_reduced = ", ".join(
+        get_feature_set("ligand_physchem_shortcut_reduced")
+    )
     rows: list[dict[str, str]] = [
         {
-            "Expert / Model": "Decoy-standardized docking-consensus feature",
-            "What it predicts": "Relative within-PDB multi-engine docking rank; not AC50 or probability",
+            "Expert / Model": "Atlas final-score feature",
+            "What it predicts": "Relative within-PDB docking/rescoring priority; not AC50 or probability",
             "Label used": "None (physics/rank-based docking)",
             "Inputs used": (
-                "consensus_score_raw, pdb_id, comparison/reference run ID, "
-                "explicitly marked DUD-E consensus_score values -> consensus_z_score"
+                "pdb_id, FDA ligand final_score candidate, same-PDB DUD reference rows; "
+                "SCORCH-only z_vs_decoys_blend when rescored, otherwise "
+                "comparison_run_consensus_fallback"
             ),
         },
         {
@@ -409,6 +413,7 @@ def _architecture_rows() -> pd.DataFrame:
         "RDKit-only": rdkit,
         "pair-score-only": pair,
         "full": full,
+        "shortcut-reduced ligand-only": shortcut_reduced,
     }
     for model_type in ("logistic regression", "LightGBM"):
         for ablation, inputs in ablations.items():

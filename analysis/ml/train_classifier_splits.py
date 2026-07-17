@@ -100,6 +100,7 @@ def _fixed_validation_split(
     validation_fold_value: str | None,
     seed: int,
     validation_fraction: float,
+    validation_group_col: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Index]:
     if validation_fold_col:
         if validation_fold_col not in train.columns:
@@ -114,6 +115,30 @@ def _fixed_validation_split(
         return train.loc[~mask].copy(), train.loc[mask].copy(), train.index[mask]
     if validation_fraction <= 0 or len(train) < 5:
         return train, train.iloc[0:0].copy(), pd.Index([])
+    if validation_group_col:
+        if validation_group_col not in train.columns:
+            raise ValueError(
+                f"validation group column {validation_group_col!r} not found"
+            )
+        groups = train[validation_group_col].fillna("missing").astype(str)
+        unique_groups = pd.Series(groups.unique())
+        if len(unique_groups) < 2:
+            raise ValueError(
+                f"validation group column {validation_group_col!r} has fewer than two groups"
+            )
+        n_validation_groups = min(
+            len(unique_groups) - 1,
+            max(1, int(round(len(unique_groups) * validation_fraction))),
+        )
+        selected_groups = set(
+            unique_groups.sample(
+                n=n_validation_groups,
+                random_state=seed,
+            ).astype(str)
+        )
+        validation_mask = groups.isin(selected_groups)
+        val_idx = train.index[validation_mask]
+        return train.loc[~validation_mask].copy(), train.loc[validation_mask].copy(), val_idx
     val_idx = train.sample(frac=validation_fraction, random_state=seed).index
     return train.drop(index=val_idx).copy(), train.loc[val_idx].copy(), val_idx
 

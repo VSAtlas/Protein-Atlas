@@ -17,12 +17,13 @@ def _first_col(df: pd.DataFrame, names: list[str]) -> str | None:
 def _fingerprint(smiles: str):
     try:
         from rdkit import Chem, DataStructs
-        from rdkit.Chem import AllChem
+        from rdkit.Chem import rdFingerprintGenerator
 
         mol = Chem.MolFromSmiles(str(smiles or "").strip())
         if mol is None:
             return None, DataStructs
-        return AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048), DataStructs  # type: ignore[attr-defined]
+        generator = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+        return generator.GetFingerprint(mol), DataStructs
     except Exception:
         return None, None
 

@@ -3,10 +3,35 @@ from __future__ import annotations
 import argparse
 import json
 
+from analysis.ml.feature_sets import get_feature_set
 from analysis.ml.pair_residual_binding import (
     SUPPORTED_VARIANTS,
     run_pair_residual_binding,
 )
+
+
+def _resolve_features(
+    feature_set: str | None,
+    explicit_features: list[str] | None,
+) -> list[str]:
+    features = get_feature_set(feature_set) if feature_set else []
+    features.extend(explicit_features or [])
+    return list(dict.fromkeys(features))
+
+
+def _parse_permutation_block(value: str) -> tuple[str, tuple[str, ...]]:
+    name, separator, raw_features = value.partition("=")
+    name = name.strip()
+    features = tuple(
+        dict.fromkeys(
+            feature.strip() for feature in raw_features.split(",") if feature.strip()
+        )
+    )
+    if not separator or not name or not features:
+        raise argparse.ArgumentTypeError(
+            "permutation blocks must use NAME=feature1,..."
+        )
+    return name, features
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,14 +46,52 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ligand-feature",
         action="append",
-        required=True,
-        help="Drug-level ligand descriptor column; repeat for each descriptor.",
+        help="Additional drug-level descriptor; repeat for each variable.",
+    )
+    parser.add_argument(
+        "--ligand-feature-set",
+        help="Registered analysis.ml.feature_sets name for ligand inputs.",
     )
     parser.add_argument(
         "--pair-feature",
         action="append",
-        required=True,
-        help="Pair-level residual feature column; repeat for each feature.",
+        help="Additional pair-level residual feature; repeat for each variable.",
+    )
+    parser.add_argument(
+        "--pair-feature-set",
+        help="Registered analysis.ml.feature_sets name for pair inputs.",
+    )
+    parser.add_argument(
+        "--protein-feature",
+        action="append",
+        default=[],
+        help="Target/pocket feature column; repeat for each feature.",
+    )
+    parser.add_argument(
+        "--permutation-repeats",
+        type=int,
+        default=0,
+        help="Grouped pocket permutation repeats. Default: 0 (disabled).",
+    )
+    parser.add_argument(
+        "--permutation-group",
+        help="Whole-profile permutation group. Default: the selected target column.",
+    )
+    parser.add_argument(
+        "--permutation-block",
+        action="append",
+        type=_parse_permutation_block,
+        default=[],
+        metavar="NAME=FEATURE1,...",
+        help=(
+            "Named pocket feature block; repeat for additional blocks. Features must "
+            "also be supplied with --protein-feature."
+        ),
+    )
+    parser.add_argument(
+        "--permutation-all-pairs",
+        action="store_true",
+        help="Evaluate every pair of supplied protein features in addition to singles.",
     )
     parser.add_argument(
         "--outer-group",
@@ -86,12 +149,35 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    permutation_blocks: dict[str, tuple[str, ...]] = {}
+    for name, features in args.permutation_block:
+        if name in permutation_blocks:
+            parser.error(f"duplicate --permutation-block name: {name}")
+        permutation_blocks[name] = features
+    try:
+        ligand_features = _resolve_features(
+            args.ligand_feature_set,
+            args.ligand_feature,
+        )
+        pair_features = _resolve_features(args.pair_feature_set, args.pair_feature)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if not ligand_features:
+        parser.error("provide --ligand-feature-set and/or --ligand-feature")
+    if not pair_features:
+        parser.error("provide --pair-feature-set and/or --pair-feature")
     manifest = run_pair_residual_binding(
         args.dataset,
         args.out_dir,
-        ligand_features=args.ligand_feature,
-        pair_features=args.pair_feature,
+        ligand_features=ligand_features,
+        pair_features=pair_features,
+        protein_features=args.protein_feature,
+        permutation_repeats=args.permutation_repeats,
+        permutation_group=args.permutation_group,
+        permutation_blocks=permutation_blocks,
+        permutation_all_pairs=args.permutation_all_pairs,
         outer_group_specs=args.outer_group or ["drug_id"],
         variants=args.variant or ["pair_only", "ligand_only", "combined"],
         shortcut_features=args.shortcut_feature,

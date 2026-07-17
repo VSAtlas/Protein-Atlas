@@ -41,6 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pu-mode", default="standard_binary")
     parser.add_argument("--exclude-features", nargs="*", default=None)
     parser.add_argument("--strict-feature-set", action="store_true")
+    parser.add_argument(
+        "--applicability-domain",
+        action="store_true",
+        help="Compute fold-specific nearest-neighbor applicability distances for held-out rows.",
+    )
     parser.add_argument("--stratified-target-holdout-by-family", action="store_true")
     parser.add_argument("--stratified-target-holdout-repeats", type=int, default=None)
     parser.add_argument("--stratified-target-holdout-fraction", type=float, default=0.2)
@@ -65,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         pu_mode=args.pu_mode,
         exclude_features=args.exclude_features,
         strict_feature_set=args.strict_feature_set,
+        compute_applicability_domain=args.applicability_domain,
         run_stratified_target_holdout_by_family=args.stratified_target_holdout_by_family,
         stratified_target_holdout_repeats=args.stratified_target_holdout_repeats,
         stratified_target_holdout_fraction=args.stratified_target_holdout_fraction,

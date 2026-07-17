@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from itertools import combinations, combinations_with_replacement
 import json
 import math
 from pathlib import Path
@@ -28,8 +29,21 @@ SUPPORTED_VARIANTS = (
     "ligand_only",
     "combined",
     "shortcut_reduced",
+    "protein_only",
+    "pair_protein",
+    "combined_all",
+    "shortcut_reduced_all",
 )
 CONFIG_COLUMNS = ["outer_group", "architecture_variant", "residual_model"]
+
+_PROTEIN_VARIANTS = {
+    "protein_only",
+    "pair_protein",
+    "combined_all",
+    "shortcut_reduced_all",
+}
+_NO_PROPENSITY_VARIANTS = {"pair_only", "protein_only", "pair_protein"}
+_SHORTCUT_VARIANTS = {"shortcut_reduced", "shortcut_reduced_all"}
 
 
 @dataclass(frozen=True)
@@ -56,6 +70,33 @@ class _PropensityModel:
             return np.full(len(frame), self.constant_logit, dtype=float)
         design = self.matrix.transform(frame)
         return _linear_predictor(design, self.coefficients)
+
+
+@dataclass(frozen=True)
+class _ResidualModel:
+    matrix: _MatrixTransform
+    model_type: str
+    fitted_model: Any
+    n_parameters_or_trees: int
+
+    def predict_logit(self, frame: pd.DataFrame) -> np.ndarray:
+        design = self.matrix.transform(frame)
+        if self.model_type == "logistic":
+            coefficients = np.asarray(self.fitted_model, dtype=float)
+            return _linear_predictor(design, coefficients)
+        if self.model_type == "lightgbm":
+            return np.asarray(
+                self.fitted_model.booster_.predict(design, raw_score=True),
+                dtype=float,
+            )
+        raise ValueError(f"unsupported fitted residual model: {self.model_type}")
+
+
+@dataclass(frozen=True)
+class _PermutationBlock:
+    name: str
+    block_type: str
+    features: tuple[str, ...]
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -97,6 +138,63 @@ def _normalize_group_specs(
     return normalized
 
 
+def _normalize_permutation_blocks(
+    blocks: Mapping[str, Sequence[str]] | None,
+    *,
+    protein_features: Sequence[str],
+) -> dict[str, tuple[str, ...]]:
+    normalized: dict[str, tuple[str, ...]] = {}
+    allowed = set(protein_features)
+    for raw_name, raw_features in (blocks or {}).items():
+        name = str(raw_name).strip()
+        if not name:
+            raise ValueError("permutation block names must not be empty")
+        values: Iterable[str]
+        if isinstance(raw_features, str):
+            values = raw_features.split(",")
+        else:
+            values = raw_features
+        features = tuple(_unique(values))
+        if not features:
+            raise ValueError(f"permutation block {name!r} has no features")
+        unknown = sorted(set(features) - allowed)
+        if unknown:
+            raise ValueError(
+                f"permutation block {name!r} contains features not supplied with "
+                f"--protein-feature: {', '.join(unknown)}"
+            )
+        normalized[name] = features
+    return normalized
+
+
+def _permutation_candidates(
+    protein_features: Sequence[str],
+    *,
+    named_blocks: Mapping[str, Sequence[str]],
+    all_pairs: bool,
+) -> list[_PermutationBlock]:
+    candidates = [
+        _PermutationBlock(feature, "single", (feature,)) for feature in protein_features
+    ]
+    if all_pairs:
+        candidates.extend(
+            _PermutationBlock(f"{left}+{right}", "pair", (left, right))
+            for left, right in combinations(protein_features, 2)
+        )
+    candidates.extend(
+        _PermutationBlock(name, "named", tuple(features))
+        for name, features in named_blocks.items()
+    )
+    candidates.append(
+        _PermutationBlock(
+            "all_protein_features",
+            "all_protein_features",
+            tuple(protein_features),
+        )
+    )
+    return candidates
+
+
 def _group_key(frame: pd.DataFrame, columns: Sequence[str]) -> pd.Series:
     values = frame[list(columns)].astype("string").fillna(MISSING_GROUP)
     if len(columns) == 1:
@@ -105,6 +203,72 @@ def _group_key(frame: pd.DataFrame, columns: Sequence[str]) -> pd.Series:
         lambda row: json.dumps(row.tolist(), ensure_ascii=True, separators=(",", ":")),
         axis=1,
     )
+
+
+def _permutation_group_profiles(
+    frame: pd.DataFrame,
+    *,
+    group_col: str,
+    features: Sequence[str],
+) -> tuple[pd.Series, pd.DataFrame]:
+    groups = _group_key(frame, [group_col])
+    values = frame[list(features)].copy()
+    values.insert(0, "_permutation_group", groups.to_numpy())
+    unique_counts = values.groupby("_permutation_group", dropna=False)[
+        list(features)
+    ].nunique(dropna=False)
+    conflict_counts = unique_counts.gt(1).sum(axis=0)
+    conflicts = {
+        feature: int(count)
+        for feature, count in conflict_counts.items()
+        if int(count) > 0
+    }
+    if conflicts:
+        detail = ", ".join(
+            f"{feature} ({count} groups)"
+            for feature, count in sorted(conflicts.items())
+        )
+        raise ValueError(
+            f"protein features must be constant within permutation group "
+            f"{group_col!r}; conflicting profiles: {detail}"
+        )
+    profiles = values.groupby("_permutation_group", dropna=False, sort=True)[
+        list(features)
+    ].first()
+    profiles.index = profiles.index.astype(str)
+    return groups.astype(str), profiles
+
+
+def _permutation_donor_map(
+    groups: pd.Series,
+    rng: np.random.Generator,
+) -> dict[str, str]:
+    unique = np.asarray(sorted(groups.astype(str).unique()), dtype=object)
+    if len(unique) < 2:
+        return {str(value): str(value) for value in unique}
+    donors = rng.permutation(unique)
+    return {
+        str(recipient): str(donor)
+        for recipient, donor in zip(unique, donors, strict=True)
+    }
+
+
+def _permute_group_profile(
+    frame: pd.DataFrame,
+    *,
+    block: Sequence[str],
+    groups: pd.Series,
+    profiles: pd.DataFrame,
+    donor_map: Mapping[str, str],
+) -> pd.DataFrame:
+    permuted = frame.copy()
+    donor_groups = groups.map(donor_map)
+    if donor_groups.isna().any():
+        raise AssertionError("permutation donor map did not cover every held-out group")
+    donor_values = profiles.loc[donor_groups.astype(str), list(block)].copy()
+    donor_values.index = permuted.index
+    permuted.loc[:, list(block)] = donor_values.to_numpy()
+    return permuted
 
 
 def _fit_matrix(
@@ -489,9 +653,8 @@ def _fit_residual(
     seed: int,
     model_n_jobs: int,
     lightgbm_params: Mapping[str, Any] | None,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int, _ResidualModel]:
     design_train, transform = _fit_matrix(train, features)
-    design_test = transform.transform(test)
     if model_type == "logistic":
         coefficients = _fit_offset_coefficients(
             design_train,
@@ -499,7 +662,17 @@ def _fit_residual(
             train_offsets,
             l2=l2,
         )
-        return _linear_predictor(design_test, coefficients), int(len(coefficients))
+        fitted = _ResidualModel(
+            matrix=transform,
+            model_type=model_type,
+            fitted_model=coefficients,
+            n_parameters_or_trees=int(len(coefficients)),
+        )
+        return (
+            fitted.predict_logit(test),
+            fitted.n_parameters_or_trees,
+            fitted,
+        )
     if model_type != "lightgbm":
         raise ValueError(f"unsupported residual model: {model_type}")
     try:
@@ -523,10 +696,13 @@ def _fit_residual(
     params.update(dict(lightgbm_params or {}))
     model = LGBMClassifier(**params)
     model.fit(design_train, labels, init_score=train_offsets)
-    residual = np.asarray(
-        model.booster_.predict(design_test, raw_score=True), dtype=float
+    fitted = _ResidualModel(
+        matrix=transform,
+        model_type=model_type,
+        fitted_model=model,
+        n_parameters_or_trees=int(model.booster_.num_trees()),
     )
-    return residual, int(model.booster_.num_trees())
+    return fitted.predict_logit(test), fitted.n_parameters_or_trees, fitted
 
 
 def _ece(labels: np.ndarray, probabilities: np.ndarray, *, n_bins: int = 10) -> float:
@@ -544,6 +720,59 @@ def _ece(labels: np.ndarray, probabilities: np.ndarray, *, n_bins: int = 10) -> 
     return value
 
 
+def _adaptive_ece(
+    labels: np.ndarray, probabilities: np.ndarray, *, n_bins: int = 10
+) -> float:
+    if len(labels) == 0:
+        return math.nan
+    quantiles = np.linspace(0.0, 1.0, min(n_bins, len(labels)) + 1)
+    edges = np.unique(np.quantile(probabilities, quantiles))
+    if len(edges) < 2:
+        return abs(float(probabilities.mean()) - float(labels.mean()))
+    bins = np.digitize(probabilities, edges[1:-1], right=True)
+    value = 0.0
+    for bin_index in range(len(edges) - 1):
+        mask = bins == bin_index
+        if not mask.any():
+            continue
+        value += float(mask.mean()) * abs(
+            float(probabilities[mask].mean()) - float(labels[mask].mean())
+        )
+    return value
+
+
+def _calibration_intercept_slope(
+    labels: np.ndarray, probabilities: np.ndarray
+) -> tuple[float, float]:
+    from scipy.optimize import minimize
+    from scipy.special import expit
+
+    if len(labels) == 0 or len(np.unique(labels)) < 2:
+        return math.nan, math.nan
+    clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
+    logits = np.log(clipped / (1.0 - clipped))
+
+    def objective(coefficients: np.ndarray) -> tuple[float, np.ndarray]:
+        calibrated = coefficients[0] + coefficients[1] * logits
+        residual = expit(calibrated) - labels
+        loss = float(np.mean(np.logaddexp(0.0, calibrated) - labels * calibrated))
+        gradient = np.asarray(
+            [float(residual.mean()), float(np.mean(residual * logits))],
+            dtype=float,
+        )
+        return loss, gradient
+
+    result = minimize(
+        objective,
+        np.asarray([0.0, 1.0], dtype=float),
+        method="L-BFGS-B",
+        jac=True,
+    )
+    if not result.success or not np.isfinite(result.x).all():
+        return math.nan, math.nan
+    return float(result.x[0]), float(result.x[1])
+
+
 def _metrics(labels: pd.Series, probabilities: pd.Series) -> dict[str, Any]:
     from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -551,16 +780,342 @@ def _metrics(labels: pd.Series, probabilities: pd.Series) -> dict[str, Any]:
     p = probabilities.to_numpy(dtype=float)
     has_both = len(np.unique(y)) == 2
     has_positive = bool((y == 1).any())
+    prevalence = float(y.mean()) if len(y) else math.nan
+    brier = float(np.mean((p - y) ** 2)) if len(y) else math.nan
+    brier_null = prevalence * (1.0 - prevalence) if len(y) else math.nan
+    calibration_intercept, calibration_slope = _calibration_intercept_slope(y, p)
     return {
         "n": int(len(y)),
         "n_positive": int((y == 1).sum()),
         "n_negative": int((y == 0).sum()),
-        "prevalence": float(y.mean()) if len(y) else math.nan,
+        "prevalence": prevalence,
         "PR_AUC": float(average_precision_score(y, p)) if has_positive else math.nan,
         "AUROC": float(roc_auc_score(y, p)) if has_both else math.nan,
-        "Brier": float(np.mean((p - y) ** 2)) if len(y) else math.nan,
+        "Brier": brier,
+        "Brier_null": brier_null,
+        "Brier_skill": (1.0 - brier / brier_null if brier_null > 0 else math.nan),
         "ECE": _ece(y, p) if len(y) else math.nan,
+        "Adaptive_ECE": _adaptive_ece(y, p) if len(y) else math.nan,
+        "calibration_intercept": calibration_intercept,
+        "calibration_slope": calibration_slope,
+        "score_min": float(np.min(p)) if len(p) else math.nan,
+        "score_median": float(np.median(p)) if len(p) else math.nan,
+        "score_p90": float(np.quantile(p, 0.90)) if len(p) else math.nan,
+        "score_p99": float(np.quantile(p, 0.99)) if len(p) else math.nan,
+        "score_max": float(np.max(p)) if len(p) else math.nan,
     }
+
+
+_PERMUTATION_FOLD_COLUMNS = [
+    "outer_group",
+    "split_semantics",
+    "test_cell",
+    "outer_fold",
+    "architecture_variant",
+    "residual_model",
+    "repeat",
+    "permutation_group",
+    "block_name",
+    "block_type",
+    "feature_1",
+    "feature_2",
+    "features",
+    "n_features",
+    "n_test",
+    "n_permutation_groups",
+    "n_self_mapped_groups",
+    "donor_map_sha256",
+    "baseline_AUPRC",
+    "permuted_AUPRC",
+    "AUPRC_drop",
+    "baseline_AUROC",
+    "permuted_AUROC",
+    "AUROC_drop",
+]
+
+_CORRELATION_COLUMNS = [
+    "permutation_group",
+    "feature_1",
+    "feature_2",
+    "n_group_profiles",
+    "n_complete_groups",
+    "pearson_correlation",
+    "spearman_correlation",
+]
+
+
+def _donor_map_sha256(donor_map: Mapping[str, str]) -> str:
+    payload = json.dumps(
+        sorted(donor_map.items()),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _permutation_ranking_metrics(
+    labels: pd.Series,
+    probabilities: np.ndarray,
+) -> dict[str, float]:
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    y = labels.to_numpy(dtype=int)
+    p = np.asarray(probabilities, dtype=float)
+    return {
+        "PR_AUC": (
+            float(average_precision_score(y, p)) if bool((y == 1).any()) else math.nan
+        ),
+        "AUROC": (float(roc_auc_score(y, p)) if len(np.unique(y)) == 2 else math.nan),
+    }
+
+
+def _pocket_grouped_permutation_rows(
+    *,
+    fitted: _ResidualModel,
+    test: pd.DataFrame,
+    test_offsets: np.ndarray,
+    baseline_probability: np.ndarray,
+    label_col: str,
+    permutation_group: str,
+    candidates: Sequence[_PermutationBlock],
+    repeats: int,
+    seed: int,
+    outer_group: str,
+    split_semantics: str,
+    test_cell: str,
+    outer_fold: int,
+    architecture_variant: str,
+    residual_model: str,
+) -> list[dict[str, Any]]:
+    groups, profiles = _permutation_group_profiles(
+        test,
+        group_col=permutation_group,
+        features=tuple(
+            dict.fromkeys(
+                feature for candidate in candidates for feature in candidate.features
+            )
+        ),
+    )
+    baseline = _permutation_ranking_metrics(
+        test[label_col],
+        baseline_probability,
+    )
+    rows: list[dict[str, Any]] = []
+    for repeat in range(repeats):
+        rng = np.random.default_rng(seed + repeat * 10007)
+        donor_map = _permutation_donor_map(groups, rng)
+        donor_checksum = _donor_map_sha256(donor_map)
+        n_self_mapped = sum(
+            recipient == donor for recipient, donor in donor_map.items()
+        )
+        for candidate in candidates:
+            permuted = _permute_group_profile(
+                test,
+                block=candidate.features,
+                groups=groups,
+                profiles=profiles,
+                donor_map=donor_map,
+            )
+            residual = fitted.predict_logit(permuted)
+            probability = _expit(test_offsets + residual)
+            metrics = _permutation_ranking_metrics(
+                test[label_col],
+                probability,
+            )
+            rows.append(
+                {
+                    "outer_group": outer_group,
+                    "split_semantics": split_semantics,
+                    "test_cell": test_cell,
+                    "outer_fold": int(outer_fold),
+                    "architecture_variant": architecture_variant,
+                    "residual_model": residual_model,
+                    "repeat": int(repeat),
+                    "permutation_group": permutation_group,
+                    "block_name": candidate.name,
+                    "block_type": candidate.block_type,
+                    "feature_1": candidate.features[0],
+                    "feature_2": (
+                        candidate.features[1] if len(candidate.features) == 2 else pd.NA
+                    ),
+                    "features": ";".join(candidate.features),
+                    "n_features": int(len(candidate.features)),
+                    "n_test": int(len(test)),
+                    "n_permutation_groups": int(len(donor_map)),
+                    "n_self_mapped_groups": int(n_self_mapped),
+                    "donor_map_sha256": donor_checksum,
+                    "baseline_AUPRC": baseline["PR_AUC"],
+                    "permuted_AUPRC": metrics["PR_AUC"],
+                    "AUPRC_drop": baseline["PR_AUC"] - metrics["PR_AUC"],
+                    "baseline_AUROC": baseline["AUROC"],
+                    "permuted_AUROC": metrics["AUROC"],
+                    "AUROC_drop": baseline["AUROC"] - metrics["AUROC"],
+                }
+            )
+    return rows
+
+
+def _summarize_pocket_permutations(rows: pd.DataFrame) -> pd.DataFrame:
+    context = [
+        "outer_group",
+        "architecture_variant",
+        "residual_model",
+        "permutation_group",
+    ]
+    keys = [
+        *context,
+        "block_name",
+        "block_type",
+        "feature_1",
+        "feature_2",
+        "features",
+        "n_features",
+    ]
+    if rows.empty:
+        return pd.DataFrame(
+            columns=[
+                *keys,
+                "n_fold_repeats",
+                "n_folds",
+                "mean_baseline_AUPRC",
+                "mean_permuted_AUPRC",
+                "mean_AUPRC_drop",
+                "median_AUPRC_drop",
+                "std_AUPRC_drop",
+                "positive_AUPRC_drop_fraction",
+                "mean_baseline_AUROC",
+                "mean_permuted_AUROC",
+                "mean_AUROC_drop",
+                "median_AUROC_drop",
+                "std_AUROC_drop",
+                "positive_AUROC_drop_fraction",
+                "single_1_mean_AUPRC_drop",
+                "single_2_mean_AUPRC_drop",
+                "single_1_mean_AUROC_drop",
+                "single_2_mean_AUROC_drop",
+                "AUPRC_interaction_above_max_single",
+                "AUROC_interaction_above_max_single",
+                "AUPRC_pair_interaction_excess",
+                "AUROC_pair_interaction_excess",
+            ]
+        )
+    summary = (
+        rows.groupby(keys, dropna=False)
+        .agg(
+            n_fold_repeats=("AUPRC_drop", "size"),
+            n_folds=("outer_fold", "nunique"),
+            mean_baseline_AUPRC=("baseline_AUPRC", "mean"),
+            mean_permuted_AUPRC=("permuted_AUPRC", "mean"),
+            mean_AUPRC_drop=("AUPRC_drop", "mean"),
+            median_AUPRC_drop=("AUPRC_drop", "median"),
+            std_AUPRC_drop=("AUPRC_drop", "std"),
+            positive_AUPRC_drop_fraction=(
+                "AUPRC_drop",
+                lambda values: float((values > 0).mean()),
+            ),
+            mean_baseline_AUROC=("baseline_AUROC", "mean"),
+            mean_permuted_AUROC=("permuted_AUROC", "mean"),
+            mean_AUROC_drop=("AUROC_drop", "mean"),
+            median_AUROC_drop=("AUROC_drop", "median"),
+            std_AUROC_drop=("AUROC_drop", "std"),
+            positive_AUROC_drop_fraction=(
+                "AUROC_drop",
+                lambda values: float((values > 0).mean()),
+            ),
+        )
+        .reset_index()
+    )
+    single_columns = [
+        *context,
+        "feature_1",
+        "mean_AUPRC_drop",
+        "mean_AUROC_drop",
+    ]
+    singles = summary.loc[summary["block_type"].eq("single"), single_columns].copy()
+    single_1 = singles.rename(
+        columns={
+            "mean_AUPRC_drop": "single_1_mean_AUPRC_drop",
+            "mean_AUROC_drop": "single_1_mean_AUROC_drop",
+        }
+    )
+    single_2 = singles.rename(
+        columns={
+            "feature_1": "feature_2",
+            "mean_AUPRC_drop": "single_2_mean_AUPRC_drop",
+            "mean_AUROC_drop": "single_2_mean_AUROC_drop",
+        }
+    )
+    summary = summary.merge(single_1, on=[*context, "feature_1"], how="left")
+    summary = summary.merge(single_2, on=[*context, "feature_2"], how="left")
+    two_feature = summary["n_features"].eq(2)
+    summary.loc[two_feature, "AUPRC_interaction_above_max_single"] = summary.loc[
+        two_feature, "mean_AUPRC_drop"
+    ] - summary.loc[
+        two_feature,
+        ["single_1_mean_AUPRC_drop", "single_2_mean_AUPRC_drop"],
+    ].max(axis=1)
+    summary.loc[two_feature, "AUROC_interaction_above_max_single"] = summary.loc[
+        two_feature, "mean_AUROC_drop"
+    ] - summary.loc[
+        two_feature,
+        ["single_1_mean_AUROC_drop", "single_2_mean_AUROC_drop"],
+    ].max(axis=1)
+    summary.loc[two_feature, "AUPRC_pair_interaction_excess"] = summary.loc[
+        two_feature, "mean_AUPRC_drop"
+    ] - summary.loc[
+        two_feature,
+        ["single_1_mean_AUPRC_drop", "single_2_mean_AUPRC_drop"],
+    ].sum(axis=1, min_count=2)
+    summary.loc[two_feature, "AUROC_pair_interaction_excess"] = summary.loc[
+        two_feature, "mean_AUROC_drop"
+    ] - summary.loc[
+        two_feature,
+        ["single_1_mean_AUROC_drop", "single_2_mean_AUROC_drop"],
+    ].sum(axis=1, min_count=2)
+    return summary.sort_values(
+        [*context, "mean_AUPRC_drop"],
+        ascending=[True] * len(context) + [False],
+        kind="mergesort",
+    )
+
+
+def _pocket_descriptor_correlations(
+    frame: pd.DataFrame,
+    *,
+    permutation_group: str,
+    protein_features: Sequence[str],
+) -> pd.DataFrame:
+    _, profiles = _permutation_group_profiles(
+        frame,
+        group_col=permutation_group,
+        features=protein_features,
+    )
+    rows: list[dict[str, Any]] = []
+    for feature_1, feature_2 in combinations_with_replacement(protein_features, 2):
+        left = pd.to_numeric(profiles[feature_1], errors="coerce")
+        right = pd.to_numeric(profiles[feature_2], errors="coerce")
+        complete = left.notna() & right.notna()
+        left = left.loc[complete]
+        right = right.loc[complete]
+        can_correlate = len(left) >= 2 and left.nunique() > 1 and right.nunique() > 1
+        pearson = (
+            float(left.corr(right, method="pearson")) if can_correlate else math.nan
+        )
+        spearman = (
+            float(left.corr(right, method="spearman")) if can_correlate else math.nan
+        )
+        rows.append(
+            {
+                "permutation_group": permutation_group,
+                "feature_1": feature_1,
+                "feature_2": feature_2,
+                "n_group_profiles": int(len(profiles)),
+                "n_complete_groups": int(complete.sum()),
+                "pearson_correlation": pearson,
+                "spearman_correlation": spearman,
+            }
+        )
+    return pd.DataFrame(rows, columns=_CORRELATION_COLUMNS)
 
 
 def _global_topk(
@@ -713,6 +1268,7 @@ def _ledger_rows(
     run_id: str,
     label_col: str,
     pair_features: Sequence[str],
+    protein_features: Sequence[str],
     shortcut_features: Sequence[str],
     n_rows: int,
     n_positive: int,
@@ -733,12 +1289,14 @@ def _ledger_rows(
                 "dataset_version": dataset_version,
                 "dataset_path": str(dataset),
                 "label_used": label_col,
+                "label": label_col,
                 "feature_set": metric.architecture_variant,
                 "excluded_columns": ";".join(shortcut_features)
-                if metric.architecture_variant == "shortcut_reduced"
+                if metric.architecture_variant in _SHORTCUT_VARIANTS
                 else "",
                 "split_method": f"grouped_oof:{metric.outer_group}",
                 "PU_strategy": "standard_binary",
+                "pu_strategy": "standard_binary",
                 "model_type": (
                     "drug_binomial_logistic"
                     if metric.architecture_variant == "ligand_only"
@@ -748,6 +1306,7 @@ def _ledger_rows(
                 "hyperparameters": json.dumps(
                     {
                         "pair_features": list(pair_features),
+                        "protein_features": list(protein_features),
                         "propensity_l2": propensity_l2,
                         "residual_l2": residual_l2,
                         "seed": seed,
@@ -756,7 +1315,9 @@ def _ledger_rows(
                 ),
                 "calibration_method": "none_diagnostic_sigmoid_only",
                 "number_of_rows": n_rows,
+                "row_count": n_rows,
                 "number_of_positives": n_positive,
+                "positive_count": n_positive,
                 "n_test": metric.n,
                 "AUROC": metric.AUROC,
                 "PR_AUC": metric.PR_AUC,
@@ -765,18 +1326,41 @@ def _ledger_rows(
                 "enrichment_at_K": metric.enrichment_at_K,
                 "enrichment_K": metric.enrichment_K,
                 "Brier_score": metric.Brier,
+                "Brier": metric.Brier,
                 "notes": (
                     "Exploratory grouped OOF binding-architecture diagnostic only; "
                     "sigmoid outputs are not calibrated probability or publication claims."
                 ),
                 "model_dir": str(out_dir),
+                "output_path": str(out_dir),
                 "ECE": metric.ECE,
+                "Adaptive_ECE": metric.Adaptive_ECE,
+                "Brier_null": metric.Brier_null,
+                "Brier_skill": metric.Brier_skill,
+                "calibration_intercept": metric.calibration_intercept,
+                "calibration_slope": metric.calibration_slope,
                 "outer_group": metric.outer_group,
                 "architecture_variant": metric.architecture_variant,
             }
         )
         rows.append(record)
-    columns = [*LEDGER_COLUMNS, "ECE", "outer_group", "architecture_variant"]
+    columns = [
+        *LEDGER_COLUMNS,
+        "label",
+        "pu_strategy",
+        "row_count",
+        "positive_count",
+        "Brier",
+        "output_path",
+        "ECE",
+        "Adaptive_ECE",
+        "Brier_null",
+        "Brier_skill",
+        "calibration_intercept",
+        "calibration_slope",
+        "outer_group",
+        "architecture_variant",
+    ]
     return pd.DataFrame(rows).reindex(columns=columns)
 
 
@@ -789,6 +1373,11 @@ def run_pair_residual_binding(
     outer_group_specs: Sequence[str | Sequence[str]] = ("drug_id",),
     variants: Sequence[str] = ("pair_only", "ligand_only", "combined"),
     shortcut_features: Sequence[str] = (),
+    protein_features: Sequence[str] = (),
+    permutation_repeats: int = 0,
+    permutation_group: str | None = None,
+    permutation_blocks: Mapping[str, Sequence[str]] | None = None,
+    permutation_all_pairs: bool = False,
     residual_models: Sequence[str] = ("logistic",),
     label_col: str = "spd_binding_label",
     drug_col: str = "drug_id",
@@ -810,9 +1399,16 @@ def run_pair_residual_binding(
     output.mkdir(parents=True, exist_ok=True)
     ligand_features = _unique(ligand_features)
     pair_features = _unique(pair_features)
+    protein_features = _unique(protein_features)
     shortcut_features = _unique(shortcut_features)
     normalized_variants = _normalize_variants(variants)
     group_specs = _normalize_group_specs(outer_group_specs)
+    resolved_permutation_group = str(permutation_group or target_col).strip()
+    named_permutation_blocks = _normalize_permutation_blocks(
+        permutation_blocks,
+        protein_features=protein_features,
+    )
+    permutation_enabled = int(permutation_repeats) > 0
     residual_models = _unique(model.lower() for model in residual_models)
     unknown_models = sorted(set(residual_models) - {"logistic", "lightgbm"})
     if unknown_models:
@@ -821,6 +1417,18 @@ def run_pair_residual_binding(
         raise ValueError("at least one ligand descriptor feature is required")
     if not pair_features:
         raise ValueError("at least one pair feature is required")
+    if set(normalized_variants) & _PROTEIN_VARIANTS and not protein_features:
+        raise ValueError("protein-aware variants require at least one protein feature")
+    if permutation_repeats < 0:
+        raise ValueError("permutation_repeats must be non-negative")
+    if permutation_enabled and not resolved_permutation_group:
+        raise ValueError("permutation_group must not be empty")
+    if permutation_enabled and not protein_features:
+        raise ValueError("grouped pocket permutation requires protein features")
+    if permutation_enabled and not set(normalized_variants) & _PROTEIN_VARIANTS:
+        raise ValueError(
+            "grouped pocket permutation requires a protein-aware architecture variant"
+        )
     if not residual_models and any(
         variant != "ligand_only" for variant in normalized_variants
     ):
@@ -833,14 +1441,14 @@ def run_pair_residual_binding(
             "shortcut-reduced features must be selected ligand features: "
             + ", ".join(invalid_shortcuts)
         )
-    if "shortcut_reduced" in normalized_variants and not shortcut_features:
+    if set(normalized_variants) & _SHORTCUT_VARIANTS and not shortcut_features:
         raise ValueError(
             "shortcut-reduced variant requires at least one --shortcut-feature"
         )
     reduced_ligand_features = [
         feature for feature in ligand_features if feature not in set(shortcut_features)
     ]
-    if "shortcut_reduced" in normalized_variants and not reduced_ligand_features:
+    if set(normalized_variants) & _SHORTCUT_VARIANTS and not reduced_ligand_features:
         raise ValueError("shortcut-reduced variant removed every ligand feature")
     if outer_splits < 2 or inner_splits < 2:
         raise ValueError("outer_splits and inner_splits must both be at least two")
@@ -858,8 +1466,11 @@ def run_pair_residual_binding(
         target_col,
         *ligand_features,
         *pair_features,
+        *protein_features,
         *group_columns,
     }
+    if permutation_enabled:
+        required.add(resolved_permutation_group)
     missing = sorted(required - set(raw.columns))
     missing_pair = sorted(set(pair_features) - set(raw.columns))
     if missing_pair:
@@ -880,12 +1491,32 @@ def run_pair_residual_binding(
         raise ValueError(
             f"all-missing required ligand features: {', '.join(all_missing_ligand)}"
         )
-    assert_no_leakage([*ligand_features, *pair_features])
+    all_missing_protein = [
+        feature for feature in protein_features if raw[feature].notna().sum() == 0
+    ]
+    if all_missing_protein:
+        raise ValueError(
+            "all-missing required protein features: " + ", ".join(all_missing_protein)
+        )
+    assert_no_leakage([*ligand_features, *pair_features, *protein_features])
     raw[label_col] = binary_label_series(raw[label_col])
     excluded_unlabeled_missing_drug_rows = int(
         (raw[label_col].isna() & raw[drug_col].isna()).sum()
     )
-    frame = raw.loc[raw[label_col].notna()].copy().reset_index(names="_source_index")
+    labeled_mask = raw[label_col].notna()
+    missing_protein_mask = (
+        raw[protein_features].isna().any(axis=1)
+        if protein_features
+        else pd.Series(False, index=raw.index, dtype=bool)
+    )
+    excluded_labeled_missing_protein_rows = int(
+        (labeled_mask & missing_protein_mask).sum()
+    )
+    frame = (
+        raw.loc[labeled_mask & ~missing_protein_mask]
+        .copy()
+        .reset_index(names="_source_index")
+    )
     if frame[drug_col].isna().any():
         raise ValueError(
             f"missing {drug_col} values in labeled rows prevent leak-safe drug cross-fitting"
@@ -897,8 +1528,27 @@ def run_pair_residual_binding(
         )
     frame[drug_col] = frame[drug_col].astype(str)
 
+    permutation_candidates = (
+        _permutation_candidates(
+            protein_features,
+            named_blocks=named_permutation_blocks,
+            all_pairs=permutation_all_pairs,
+        )
+        if permutation_enabled
+        else []
+    )
+    descriptor_correlations = (
+        _pocket_descriptor_correlations(
+            frame,
+            permutation_group=resolved_permutation_group,
+            protein_features=protein_features,
+        )
+        if permutation_enabled
+        else pd.DataFrame(columns=_CORRELATION_COLUMNS)
+    )
     prediction_frames: list[pd.DataFrame] = []
     fold_rows: list[dict[str, Any]] = []
+    permutation_rows: list[dict[str, Any]] = []
     fold_integrity_rows: list[dict[str, Any]] = []
     skipped_fold_rows: list[dict[str, Any]] = []
     leakage_audits: list[dict[str, Any]] = []
@@ -909,6 +1559,7 @@ def run_pair_residual_binding(
             target_col,
             family_col,
             source_col,
+            resolved_permutation_group if permutation_enabled else "",
             *group_columns,
         ]
     )
@@ -1045,7 +1696,7 @@ def run_pair_residual_binding(
             shortcut_train_propensity = train_propensity
             shortcut_test_propensity = test_propensity
             shortcut_fit_n = test_fit_n
-            if "shortcut_reduced" in normalized_variants:
+            if set(normalized_variants) & _SHORTCUT_VARIANTS:
                 reduced_audit_context = {
                     **audit_context,
                     "propensity_variant": "reduced_ligand",
@@ -1091,11 +1742,22 @@ def run_pair_residual_binding(
             for variant in normalized_variants:
                 if variant == "ligand_only":
                     model_names = ["none"]
-                    selected_pair_features: list[str] = []
+                    selected_residual_features: list[str] = []
                 else:
                     model_names = residual_models
-                    selected_pair_features = pair_features
-                if variant == "shortcut_reduced":
+                    if variant == "protein_only":
+                        selected_residual_features = protein_features
+                    elif variant in {
+                        "pair_protein",
+                        "combined_all",
+                        "shortcut_reduced_all",
+                    }:
+                        selected_residual_features = _unique(
+                            [*pair_features, *protein_features]
+                        )
+                    else:
+                        selected_residual_features = pair_features
+                if variant in _SHORTCUT_VARIANTS:
                     variant_train_propensity = shortcut_train_propensity
                     variant_test_propensity = shortcut_test_propensity
                     variant_fit_n = shortcut_fit_n
@@ -1106,20 +1768,21 @@ def run_pair_residual_binding(
                     variant_fit_n = test_fit_n
                     propensity_feature_variant = "full_ligand"
                 for residual_model in model_names:
-                    if variant == "pair_only":
+                    if variant in _NO_PROPENSITY_VARIANTS:
                         train_offsets = np.zeros(len(train), dtype=float)
                         test_offsets = np.zeros(len(test), dtype=float)
                     else:
                         train_offsets = variant_train_propensity
                         test_offsets = variant_test_propensity
+                    fitted_residual: _ResidualModel | None = None
                     if variant == "ligand_only":
                         residual = np.zeros(len(test), dtype=float)
                         n_parameters = 0
                     else:
-                        residual, n_parameters = _fit_residual(
+                        residual, n_parameters, fitted_residual = _fit_residual(
                             train,
                             test,
-                            features=selected_pair_features,
+                            features=selected_residual_features,
                             labels=train[label_col].to_numpy(dtype=int),
                             train_offsets=train_offsets,
                             test_offsets=test_offsets,
@@ -1131,6 +1794,30 @@ def run_pair_residual_binding(
                         )
                     final_logit = test_offsets + residual
                     probability = _expit(final_logit)
+                    if permutation_enabled and variant in _PROTEIN_VARIANTS:
+                        if fitted_residual is None:
+                            raise AssertionError(
+                                "protein-aware fit did not retain residual model state"
+                            )
+                        permutation_rows.extend(
+                            _pocket_grouped_permutation_rows(
+                                fitted=fitted_residual,
+                                test=test,
+                                test_offsets=test_offsets,
+                                baseline_probability=probability,
+                                label_col=label_col,
+                                permutation_group=resolved_permutation_group,
+                                candidates=permutation_candidates,
+                                repeats=permutation_repeats,
+                                seed=(seed + group_offset * 1009 + fold * 101),
+                                outer_group=group_name,
+                                split_semantics=str(fold_info["split_semantics"]),
+                                test_cell=str(fold_info["test_cell"]),
+                                outer_fold=fold,
+                                architecture_variant=variant,
+                                residual_model=residual_model,
+                            )
+                        )
                     pred = test[metadata_columns + [label_col]].copy()
                     pred["outer_group"] = group_name
                     pred["outer_group_key"] = group_keys.iloc[test_pos].to_numpy()
@@ -1189,6 +1876,11 @@ def run_pair_residual_binding(
     if not predictions.empty and predictions.duplicated(duplicate_keys).any():
         raise AssertionError("pooled OOF rows are duplicated within an architecture")
     fold_metrics = pd.DataFrame(fold_rows)
+    permutation_fold_results = pd.DataFrame(
+        permutation_rows,
+        columns=_PERMUTATION_FOLD_COLUMNS,
+    )
+    permutation_summary = _summarize_pocket_permutations(permutation_fold_results)
     fold_integrity = pd.DataFrame(fold_integrity_rows)
     skipped_folds = pd.DataFrame(
         skipped_fold_rows,
@@ -1226,6 +1918,7 @@ def run_pair_residual_binding(
         run_id=resolved_run_id,
         label_col=label_col,
         pair_features=pair_features,
+        protein_features=protein_features,
         shortcut_features=shortcut_features,
         n_rows=len(frame),
         n_positive=int(frame[label_col].eq(1).sum()),
@@ -1245,6 +1938,20 @@ def run_pair_residual_binding(
         "ledger": output / "ml_model_run_ledger.csv",
         **{name: output / f"{name}.csv" for name in error_outputs},
     }
+    if permutation_enabled:
+        output_paths.update(
+            {
+                "pocket_grouped_permutation_fold_results": (
+                    output / "pocket_grouped_permutation_fold_results.csv"
+                ),
+                "pocket_grouped_permutation_summary": (
+                    output / "pocket_grouped_permutation_summary.csv"
+                ),
+                "pocket_descriptor_correlations": (
+                    output / "pocket_descriptor_correlations.csv"
+                ),
+            }
+        )
     predictions.to_csv(output_paths["predictions"], index=False)
     fold_metrics.to_csv(output_paths["fold_metrics"], index=False)
     pooled.to_csv(output_paths["pooled_metrics"], index=False)
@@ -1257,6 +1964,19 @@ def run_pair_residual_binding(
     ledger.to_csv(output_paths["ledger"], index=False)
     for name, errors in error_outputs.items():
         errors.to_csv(output_paths[name], index=False)
+    if permutation_enabled:
+        permutation_fold_results.to_csv(
+            output_paths["pocket_grouped_permutation_fold_results"],
+            index=False,
+        )
+        permutation_summary.to_csv(
+            output_paths["pocket_grouped_permutation_summary"],
+            index=False,
+        )
+        descriptor_correlations.to_csv(
+            output_paths["pocket_descriptor_correlations"],
+            index=False,
+        )
 
     readiness = {
         "status": "exploratory_blocked",
@@ -1271,6 +1991,17 @@ def run_pair_residual_binding(
     readiness_path.write_text(
         json.dumps(readiness, indent=2, sort_keys=True), encoding="utf-8"
     )
+    output_checksums = {
+        name: {
+            "path": str(path),
+            "sha256": _file_sha256(path),
+        }
+        for name, path in output_paths.items()
+    }
+    output_checksums["claim_readiness"] = {
+        "path": str(readiness_path),
+        "sha256": _file_sha256(readiness_path),
+    }
     descriptor_conflicts = {
         feature: int(
             frame.groupby(drug_col, dropna=False)[feature]
@@ -1291,12 +2022,48 @@ def run_pair_residual_binding(
         "n_labeled_rows": int(len(frame)),
         "n_positive": int(frame[label_col].eq(1).sum()),
         "excluded_unlabeled_missing_drug_rows": excluded_unlabeled_missing_drug_rows,
+        "excluded_labeled_missing_protein_rows": excluded_labeled_missing_protein_rows,
         "drug_col": drug_col,
         "target_col": target_col,
         "family_col": family_col,
         "source_col": source_col,
         "ligand_features": ligand_features,
         "pair_features": pair_features,
+        "protein_features": protein_features,
+        "protein_feature_nonmissing_counts": {
+            feature: int(frame[feature].notna().sum()) for feature in protein_features
+        },
+        "rows_with_any_protein_feature": (
+            int(frame[protein_features].notna().any(axis=1).sum())
+            if protein_features
+            else 0
+        ),
+        "permutation_repeats": int(permutation_repeats),
+        "permutation_group": resolved_permutation_group,
+        "permutation_all_pairs": bool(permutation_all_pairs),
+        "permutation_blocks": {
+            name: list(features) for name, features in named_permutation_blocks.items()
+        },
+        "pocket_grouped_permutation": {
+            "enabled": permutation_enabled,
+            "candidate_features": protein_features,
+            "evaluated_blocks": [
+                {
+                    "name": candidate.name,
+                    "type": candidate.block_type,
+                    "features": list(candidate.features),
+                }
+                for candidate in permutation_candidates
+            ],
+            "donor_mapping": (
+                "one shuffled donor permutation-group profile per held-out "
+                "recipient group and repeat"
+            ),
+            "model_refit": False,
+            "pair_interaction_excess_definition": (
+                "two-feature block drop minus the sum of its two single-feature drops"
+            ),
+        },
         "shortcut_features_removed": shortcut_features,
         "shortcut_ligand_features_removed": shortcut_features,
         "shortcut_reduced_ligand_features": reduced_ligand_features,
@@ -1344,6 +2111,7 @@ def run_pair_residual_binding(
         },
         "diagnostic_probability_warning": readiness["reason"],
         "outputs": {name: str(path) for name, path in output_paths.items()},
+        "output_checksums": output_checksums,
         "claim_readiness": str(readiness_path),
     }
     manifest_path = output / "architecture_manifest.json"

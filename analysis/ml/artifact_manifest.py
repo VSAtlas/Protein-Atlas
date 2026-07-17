@@ -29,6 +29,8 @@ KNOWN_MODEL_ARTIFACTS = [
     "model_applicability_domain_summary.csv",
     "chemical_fingerprint_applicability_domain_summary.csv",
     "target_family_applicability_domain_summary.csv",
+    "chemical_fingerprint_ad_summary.csv",
+    "target_similarity_ad_summary.csv",
     "pu_training_manifest.json",
     "bagging_pu_members.csv",
     "pu_propensity_weights.csv",

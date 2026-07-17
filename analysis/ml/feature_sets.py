@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from analysis.ml.ligand_functional_topology import (
+    BRANCH_COUNT_COLUMNS,
+    FUNCTIONAL_COUNT_COLUMNS,
+    TOPOLOGICAL_SHAPE_COLUMNS,
+)
+
 
 PHYSICHEM_DESCRIPTOR_FEATURES = [
     "rdkit_mol_wt",
@@ -18,6 +24,24 @@ PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED = [
     feature for feature in PHYSICHEM_DESCRIPTOR_FEATURES if feature != "rdkit_qed"
 ]
 
+FUNCTIONAL_COUNT_FEATURES = list(FUNCTIONAL_COUNT_COLUMNS)
+BRANCH_COUNT_FEATURES = list(BRANCH_COUNT_COLUMNS)
+TOPOLOGICAL_SHAPE_FEATURES = list(TOPOLOGICAL_SHAPE_COLUMNS)
+FUNCTIONAL_TOPOLOGY_FEATURES = [
+    *FUNCTIONAL_COUNT_FEATURES,
+    *BRANCH_COUNT_FEATURES,
+    *TOPOLOGICAL_SHAPE_FEATURES,
+]
+INTERPRETABLE_LIGAND_FEATURES_NO_QED = [
+    *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
+    *FUNCTIONAL_TOPOLOGY_FEATURES,
+]
+PRIMARY_LIGAND_FUNCTIONAL_BRANCH_FEATURES_NO_QED = [
+    *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
+    *FUNCTIONAL_COUNT_FEATURES,
+    *BRANCH_COUNT_FEATURES,
+]
+
 SHORTCUT_REDUCED_DESCRIPTOR_FEATURES = [
     feature
     for feature in PHYSICHEM_DESCRIPTOR_FEATURES
@@ -32,6 +56,15 @@ PAIR_FINAL_SCORE_FEATURES = [
 PAIR_FINAL_FULL_NO_QED_FEATURES = [
     *PAIR_FINAL_SCORE_FEATURES,
     *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
+]
+
+PAIR_FINAL_FULL_STRUCTURE_NO_QED_FEATURES = [
+    *PAIR_FINAL_SCORE_FEATURES,
+    *INTERPRETABLE_LIGAND_FEATURES_NO_QED,
+]
+PAIR_FINAL_PRIMARY_FUNCTIONAL_BRANCH_NO_QED_FEATURES = [
+    *PAIR_FINAL_SCORE_FEATURES,
+    *PRIMARY_LIGAND_FUNCTIONAL_BRANCH_FEATURES_NO_QED,
 ]
 
 # Default clean feature sets quarantine high-memorization context columns.
@@ -142,12 +175,12 @@ DIRECT_SPD_EXPOSURE_WITH_CONTEXT_FEATURES = [
     "structure_quality",
     "protein_class",
     "target_family",
-    *PHYSICHEM_DESCRIPTOR_FEATURES,
+    *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
 ]
 
 DIRECT_SPD_EXPOSURE_FEATURES = [
     "binding_expert_score",
-    *PHYSICHEM_DESCRIPTOR_FEATURES,
+    *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
 ]
 
 TISSUE_EXPRESSION_FEATURES = [
@@ -415,15 +448,56 @@ FEATURE_SETS = {
     "ligand_physchem_shortcut_reduced": [
         *SHORTCUT_REDUCED_DESCRIPTOR_FEATURES,
     ],
+    "ligand_functional_counts": [
+        *FUNCTIONAL_COUNT_FEATURES,
+    ],
+    "ligand_branch_counts": [
+        *BRANCH_COUNT_FEATURES,
+    ],
+    "ligand_topological_shape": [
+        *TOPOLOGICAL_SHAPE_FEATURES,
+    ],
+    "ligand_functional_topology": [
+        *FUNCTIONAL_TOPOLOGY_FEATURES,
+    ],
+    "ligand_full_interpretable_no_qed": [
+        *INTERPRETABLE_LIGAND_FEATURES_NO_QED,
+    ],
+    "ligand_primary_functional_branch_no_qed": [
+        *PRIMARY_LIGAND_FUNCTIONAL_BRANCH_FEATURES_NO_QED,
+    ],
     "spd_binding_pair_final_scores_only": [
         *PAIR_FINAL_SCORE_FEATURES,
     ],
     "spd_binding_pair_final_full_no_qed": [
         *PAIR_FINAL_FULL_NO_QED_FEATURES,
     ],
+    "spd_binding_pair_final_plus_functional_counts": [
+        *PAIR_FINAL_SCORE_FEATURES,
+        *FUNCTIONAL_COUNT_FEATURES,
+    ],
+    "spd_binding_pair_final_plus_branch_counts": [
+        *PAIR_FINAL_SCORE_FEATURES,
+        *BRANCH_COUNT_FEATURES,
+    ],
+    "spd_binding_pair_final_plus_topological_shape": [
+        *PAIR_FINAL_SCORE_FEATURES,
+        *TOPOLOGICAL_SHAPE_FEATURES,
+    ],
+    "spd_binding_pair_final_full_structure_no_qed": [
+        *PAIR_FINAL_FULL_STRUCTURE_NO_QED_FEATURES,
+    ],
+    "spd_binding_pair_final_primary_functional_branch_no_qed": [
+        *PAIR_FINAL_PRIMARY_FUNCTIONAL_BRANCH_NO_QED_FEATURES,
+    ],
     "spd_exposure_descriptor_only": [
-        *PHYSICHEM_DESCRIPTOR_FEATURES,
-            "scaffold_key",
+        *PHYSICHEM_DESCRIPTOR_FEATURES_NO_QED,
+    ],
+    "spd_exposure_descriptor_functional_topology": [
+        *INTERPRETABLE_LIGAND_FEATURES_NO_QED,
+    ],
+    "spd_exposure_descriptor_functional_branch_no_qed": [
+        *PRIMARY_LIGAND_FUNCTIONAL_BRANCH_FEATURES_NO_QED,
     ],
     "spd_potency_physchem": [
         *CLEAN_BINDING_EXPERT_FEATURES,
@@ -594,6 +668,11 @@ SPD_EXPOSURE_DEFINITION_FEATURES = {
     "spd_ac50_uM",
     "spd_exposure_relevant",
     "spd_exposure_weak",
+    "pk_context_cmax_value_raw",
+    "pk_context_cmax_um",
+    "pk_context_free_cmax_um",
+    "pk_context_protein_binding_percent",
+    "pk_context_fraction_unbound_plasma",
     "spd_exposure_unlikely",
     "ml_binary_label",
 }

@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from analysis.ml.feature_metadata import refresh_tables
+
 
 DEFAULT_DATASET = Path(
     "data/spd90_fda_fda_dud_spr10_40h_patchdist_20260525_161503/"
@@ -103,7 +105,7 @@ def _combine_summaries(paths: list[tuple[str, Path]], out_path: Path) -> int:
 
 def _write_label_status(dataset: Path, out_dir: Path) -> dict[str, Any]:
     frame = pd.read_csv(dataset, low_memory=False)
-    rows = []
+    rows: list[dict[str, Any]] = []
     for label in [
         "spd_binding_label",
         "spd_exposure_relevant",
@@ -456,25 +458,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-binding-ablation", action="store_true")
     parser.add_argument("--skip-binding-model-family", action="store_true")
     parser.add_argument("--skip-exposure-splits", action="store_true")
-    parser.add_argument("--skip-grouped-cv", action="store_true")
+    parser.add_argument(
+        "--run-grouped-cv",
+        action="store_true",
+        help="Run expensive grouped/repeated CV with bootstrap and permutation CIs. Intended for final/offline validation only.",
+    )
+    parser.add_argument("--skip-grouped-cv", action="store_true", help="Deprecated compatibility flag; grouped CV is skipped unless --run-grouped-cv is set.")
     parser.add_argument("--skip-existing-models", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--grouped-cv-stratified-target-holdout-by-family", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--grouped-cv-stratified-target-holdout-repeats", type=int, default=None)
     parser.add_argument("--grouped-cv-stratified-target-holdout-fraction", type=float, default=0.2)
     parser.add_argument("--metrics-only-binding", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--refresh-feature-metadata", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--chemical-cluster", choices=["auto", "scaffold", "smiles", "chemotype", "butina", "ecfp", "none"], default="auto")
     args = parser.parse_args(argv)
+    if not args.run_grouped_cv:
+        args.skip_grouped_cv = True
 
     out = args.out_dir
     out.mkdir(parents=True, exist_ok=True)
+    dataset = args.dataset
+    feature_metadata_manifest: dict[str, Any] | None = None
+    if args.refresh_feature_metadata:
+        feature_metadata_manifest = refresh_tables(
+            [args.dataset],
+            out_dir=out / "_feature_metadata",
+            run_dir=None,
+            chemical_cluster=args.chemical_cluster,
+            target_family="auto",
+            source_lineage="auto",
+        )
+        if feature_metadata_manifest.get("outputs"):
+            dataset = Path(feature_metadata_manifest["outputs"][0])
     commands: list[dict[str, Any]] = []
     outputs: dict[str, Any] = {
         "evaluation_ready": {},
         "exploratory": {},
     }
 
-    label_status = _write_label_status(args.dataset, out)
+    label_status = _write_label_status(dataset, out)
     outputs["evaluation_ready"]["label_status"] = label_status["path"]
-    exposure_prior = _write_exposure_prior_baseline(args.dataset, out, args.splits, seed=args.seed, top_k=args.top_k)
+    exposure_prior = _write_exposure_prior_baseline(dataset, out, args.splits, seed=args.seed, top_k=args.top_k)
     if exposure_prior:
         outputs["evaluation_ready"]["exposure_binding_prior_baseline"] = exposure_prior
 
@@ -485,7 +509,7 @@ def main(argv: list[str] | None = None) -> int:
             "-m",
             "analysis.cli.run_binding_ablation_comparison",
             "--dataset",
-            str(args.dataset),
+            str(dataset),
             "--label",
             "spd_binding_label",
             "--out-dir",
@@ -527,7 +551,7 @@ def main(argv: list[str] | None = None) -> int:
                 "-m",
                 "analysis.cli.run_ml_model_family_sweep",
                 "--binding-dataset",
-                str(args.dataset),
+                str(dataset),
                 "--experts",
                 "binding",
                 "--models",
@@ -570,7 +594,7 @@ def main(argv: list[str] | None = None) -> int:
                 "-m",
                 "analysis.cli.run_ml_model_family_sweep",
                 "--exposure-dataset",
-                str(args.dataset),
+                str(dataset),
                 "--experts",
                 "exposure",
                 "--models",
@@ -616,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
                 "-m",
                 "analysis.cli.run_grouped_cv_stability",
                 "--dataset",
-                str(args.dataset),
+                str(dataset),
                 "--label",
                 label,
                 "--feature-set",
@@ -689,14 +713,17 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "dataset": str(args.dataset),
+        "dataset": str(dataset),
         "out_dir": str(out),
         "models": args.models,
         "splits": args.splits,
         "top_k": int(args.top_k),
+        "feature_metadata_manifest": feature_metadata_manifest,
+        "chemical_cluster_mode": args.chemical_cluster,
         "evaluation_ready_definition": [
             "Binding/exposure outputs use measured SPD labels and leakage-controlled splits.",
             "Files prefixed evaluation_ready_ are intended for validation tables/figures after manual review of caveats.",
+            "Grouped/repeated CV with bootstrap/permutation CIs is offline final-validation mode and runs only when --run-grouped-cv is set.",
             "Tissue and mechanism outputs are explicitly exploratory/diagnostic unless independent negatives or panel controls are added.",
         ],
         "outputs": outputs,

@@ -143,8 +143,15 @@ def make_split(df: pd.DataFrame, split_mode: str = "random", seed: int = 42, tes
                         f"temporal_holdout year coverage too low for {field}: "
                         f"missing_fraction={missing_fraction:.3f} > 0.500"
                     )
-                cutoff = years.quantile(0.8)
-                return df.index[years <= cutoff], df.index[years > cutoff]
+                cutoff = years[observed].quantile(0.8)
+                train_idx = df.index[observed & years.le(cutoff)]
+                test_idx = df.index[observed & years.gt(cutoff)]
+                if len(train_idx) == 0 or len(test_idx) == 0:
+                    raise ValueError(
+                        f"temporal_holdout requires at least two separable years in {field}; "
+                        f"cutoff={cutoff} n_train={len(train_idx)} n_test={len(test_idx)}"
+                    )
+                return train_idx, test_idx
         raise ValueError("temporal_holdout requires an evidence/date year column")
     raise ValueError(f"unsupported split_mode: {split_mode}")
 

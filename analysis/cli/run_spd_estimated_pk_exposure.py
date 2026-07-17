@@ -15,11 +15,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--label", default="spd_exposure_label")
-    parser.add_argument("--potency-feature-set", default="spd_potency_physchem")
-    parser.add_argument("--pk-feature-set", default="ligand_physchem_descriptors")
+    parser.add_argument(
+        "--potency-feature-set",
+        default="spd_binding_pair_final_full_no_qed",
+    )
+    parser.add_argument(
+        "--pk-feature-set",
+        default="ligand_physchem_descriptors_no_qed",
+    )
     parser.add_argument("--split", default="drug_holdout")
-    parser.add_argument("--model", choices=["ridge", "random_forest"], default="ridge")
+    parser.add_argument("--model", choices=["ridge", "random_forest", "lightgbm"], default="ridge")
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--censored-policy",
+        choices=["exclude", "bound"],
+        default="exclude",
+        help="Exclude right-censored AC50 bounds from potency fitting, or treat bounds as exact for sensitivity only.",
+    )
     parser.add_argument("--config", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -34,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         split_mode=args.split,
         model_type=args.model,
         seed=seed,
+        censored_policy=args.censored_policy,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0

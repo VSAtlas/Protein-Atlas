@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
+from analysis.ml.ligand_functional_topology import (
+    LIGAND_STRUCTURE_DESCRIPTOR_GROUPS,
+)
 
-DESCRIPTOR_COLUMNS = [
+
+PHYSICHEM_DESCRIPTOR_COLUMNS = [
     "rdkit_mol_wt",
     "rdkit_mol_logp",
     "rdkit_tpsa",
@@ -20,11 +25,17 @@ DESCRIPTOR_COLUMNS = [
 ]
 DESCRIPTOR_SOURCE_COL = "rdkit_descriptor_source"
 DESCRIPTOR_STATUS_COL = "rdkit_descriptor_status"
-SMILES_FIELDS = ["smiles", "canonical_smiles", "ligand_smiles", "smiles_neutral", "isomeric_smiles"]
+SMILES_FIELDS = [
+    "smiles",
+    "canonical_smiles",
+    "ligand_smiles",
+    "smiles_neutral",
+    "isomeric_smiles",
+]
 FDA_MAPPING_PATH = Path("chemdb/data/fda_mapping_from_pdbqt.csv")
+IDENTITY_FIELDS = ["rdk_id", "_join_rdk", "ligand_rdk_id", "rdk", "ligand_base"]
 NAME_FIELDS = [
     "drug_id",
-    "ligand_base",
     "display_name",
     "generic_name",
     "pubchem_name",
@@ -62,6 +73,7 @@ def _load_mapping_smiles(root: Path | None = None) -> dict[str, tuple[str, str]]
         return {}
     wanted = {
         "path",
+        "rdk_id",
         "generic_name",
         "display_name",
         "pubchem_name",
@@ -71,51 +83,77 @@ def _load_mapping_smiles(root: Path | None = None) -> dict[str, tuple[str, str]]
         "canonical_smiles",
     }
     try:
-        mapping = pd.read_csv(path, low_memory=False, usecols=lambda col: col in wanted)
+        mapping = pd.read_csv(
+            path,
+            low_memory=False,
+            usecols=lambda col: col in wanted,
+        )
     except Exception:
         return {}
     lookup: dict[str, tuple[str, str]] = {}
     for row in mapping.to_dict("records"):
-        smiles = _clean(row.get("smiles_neutral") or row.get("canonical_smiles") or row.get("smiles"))
+        smiles = _clean(
+            row.get("smiles_neutral")
+            or row.get("canonical_smiles")
+            or row.get("smiles")
+        )
         if not smiles:
             continue
         source = str(path)
+        rdk_id = _norm(row.get("rdk_id"))
+        if rdk_id:
+            lookup[f"base:{rdk_id}"] = (smiles, source)
         pdbqt_path = _clean(row.get("path"))
         if pdbqt_path:
             lookup[f"base:{Path(pdbqt_path).stem.lower()}"] = (smiles, source)
-        for field in ("generic_name", "display_name", "pubchem_name", "drugcentral_generic_name"):
+        for field in (
+            "generic_name",
+            "display_name",
+            "pubchem_name",
+            "drugcentral_generic_name",
+        ):
             key = _norm(row.get(field))
             if key:
                 lookup[f"name:{key}"] = (smiles, source)
     return lookup
 
 
-def _mapping_smiles(row: pd.Series, lookup: dict[str, tuple[str, str]]) -> tuple[str, str]:
+def _mapping_smiles(
+    row: pd.Series,
+    lookup: dict[str, tuple[str, str]],
+) -> tuple[str, str]:
+    for field in IDENTITY_FIELDS:
+        if field not in row.index:
+            continue
+        value = _norm(row.get(field))
+        if value and (found := lookup.get(f"base:{value}")):
+            return found
     for field in NAME_FIELDS:
         if field not in row.index:
             continue
-        value = _clean(row.get(field))
+        value = _norm(row.get(field))
         if not value:
             continue
-        key_type = "base" if field == "ligand_base" else "name"
-        found = lookup.get(f"{key_type}:{value.lower()}")
+        found = lookup.get(f"name:{value}")
         if found:
             return found
     return "", ""
 
 
-def _descriptor_record(smiles: str) -> dict[str, float] | None:
-    try:
-        from rdkit import Chem
-        from rdkit.Chem import Crippen, Descriptors, Lipinski, QED, rdMolDescriptors
-    except Exception:
-        return None
-    try:
-        mol = Chem.MolFromSmiles(str(smiles).strip())
-    except Exception:
-        mol = None
-    if mol is None:
-        return None
+DescriptorRecord = dict[str, float | int]
+DescriptorCalculator = Callable[[Any], DescriptorRecord]
+
+
+@dataclass(frozen=True)
+class DescriptorBlock:
+    name: str
+    columns: tuple[str, ...]
+    calculate: DescriptorCalculator
+
+
+def _physchem_descriptor_record(mol: Any) -> DescriptorRecord:
+    from rdkit.Chem import Crippen, Descriptors, Lipinski, QED, rdMolDescriptors
+
     mol_wt = getattr(Descriptors, "MolWt")
     mol_logp = getattr(Crippen, "MolLogP")
     hbd = getattr(Lipinski, "NumHDonors")
@@ -129,11 +167,59 @@ def _descriptor_record(smiles: str) -> dict[str, float] | None:
         "rdkit_hbd": float(hbd(mol)),
         "rdkit_hba": float(hba(mol)),
         "rdkit_rotatable_bonds": float(rotatable(mol)),
-        "rdkit_formal_charge": float(sum(atom.GetFormalCharge() for atom in mol.GetAtoms())),
+        "rdkit_formal_charge": float(
+            sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
+        ),
         "rdkit_aromatic_rings": float(aromatic(mol)),
         "rdkit_fraction_csp3": float(rdMolDescriptors.CalcFractionCSP3(mol)),
         "rdkit_qed": float(QED.qed(mol)),
     }
+
+
+DESCRIPTOR_BLOCKS = (
+    DescriptorBlock(
+        name="physchem",
+        columns=tuple(PHYSICHEM_DESCRIPTOR_COLUMNS),
+        calculate=_physchem_descriptor_record,
+    ),
+) + tuple(
+    DescriptorBlock(
+        name=group.name,
+        columns=group.columns,
+        calculate=group.calculate,
+    )
+    for group in LIGAND_STRUCTURE_DESCRIPTOR_GROUPS
+)
+DESCRIPTOR_GROUP_COLUMNS = {block.name: block.columns for block in DESCRIPTOR_BLOCKS}
+DESCRIPTOR_COLUMNS = [column for block in DESCRIPTOR_BLOCKS for column in block.columns]
+if len(DESCRIPTOR_COLUMNS) != len(set(DESCRIPTOR_COLUMNS)):
+    raise RuntimeError("registered ligand descriptor columns must be unique")
+
+
+def _calculate_registered_descriptors(mol: Any) -> DescriptorRecord:
+    record: DescriptorRecord = {}
+    for block in DESCRIPTOR_BLOCKS:
+        values = block.calculate(mol)
+        if set(values) != set(block.columns):
+            raise RuntimeError(
+                f"descriptor block {block.name!r} violated its column contract"
+            )
+        record.update(values)
+    return record
+
+
+def _descriptor_record(smiles: str) -> DescriptorRecord | None:
+    try:
+        from rdkit import Chem
+    except Exception:
+        return None
+    try:
+        mol = Chem.MolFromSmiles(str(smiles).strip())
+    except Exception:
+        mol = None
+    if mol is None:
+        return None
+    return _calculate_registered_descriptors(mol)
 
 
 def add_ligand_physchem_descriptors(
@@ -142,7 +228,7 @@ def add_ligand_physchem_descriptors(
     repo_root: Path | None = None,
     overwrite: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Add RDKit ligand descriptors from row SMILES or the FDA PDBQT mapping.
+    """Add registered RDKit descriptors from row SMILES or the FDA mapping.
 
     Missing descriptors remain NaN. The function never treats an unmapped ligand as
     chemically negative evidence; it records a status/source instead.
@@ -157,7 +243,7 @@ def add_ligand_physchem_descriptors(
         out[DESCRIPTOR_STATUS_COL] = ""
 
     lookup = _load_mapping_smiles(repo_root)
-    cache: dict[str, dict[str, float] | None] = {}
+    cache: dict[str, DescriptorRecord | None] = {}
     filled = 0
     mapped = 0
     row_smiles = 0
@@ -166,7 +252,9 @@ def add_ligand_physchem_descriptors(
     skipped_existing = 0
 
     for idx, row in out.iterrows():
-        if not overwrite and all(pd.notna(out.at[idx, col]) for col in DESCRIPTOR_COLUMNS):
+        if not overwrite and all(
+            pd.notna(out.at[idx, col]) for col in DESCRIPTOR_COLUMNS
+        ):
             skipped_existing += 1
             continue
         smiles, source = _row_first(row, SMILES_FIELDS)
@@ -190,7 +278,8 @@ def add_ligand_physchem_descriptors(
             parse_failed += 1
             continue
         for col, value in desc.items():
-            out.at[idx, col] = value
+            if overwrite or pd.isna(out.at[idx, col]):
+                out.at[idx, col] = value
         out.at[idx, DESCRIPTOR_SOURCE_COL] = source
         out.at[idx, DESCRIPTOR_STATUS_COL] = "ok"
         filled += 1
@@ -204,5 +293,8 @@ def add_ligand_physchem_descriptors(
         "ligand_descriptor_parse_failed_rows": int(parse_failed),
         "ligand_descriptor_skipped_existing_rows": int(skipped_existing),
         "ligand_descriptor_columns": DESCRIPTOR_COLUMNS,
+        "ligand_descriptor_groups": {
+            name: list(columns) for name, columns in DESCRIPTOR_GROUP_COLUMNS.items()
+        },
     }
     return out, summary

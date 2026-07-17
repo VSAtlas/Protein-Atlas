@@ -235,3 +235,32 @@ passed to the one-command refresh as `--pkdb-source-rights-manifest`. Use
 exports. Apply for academic DrugBank access at
 https://go.drugbank.com/academic_research and verify current release availability
 at https://go.drugbank.com/releases/latest.
+
+### Pair-residual binding validation
+
+Use grouped OOF validation to separate ligand propensity from pair-specific evidence and optionally test model-ready pocket descriptors:
+
+```bash
+python -m analysis.cli.run_pair_residual_binding \
+  --dataset data/<run_id>/model_ready.csv \
+  --out-dir data/<run_id>/pair_residual_grouped_oof \
+  --ligand-feature-set ligand_primary_functional_branch_no_qed \
+  --pair-feature final_score \
+  --pair-feature banana_score_normalized \
+  --protein-feature pocket_atom_count \
+  --protein-feature pocket_residue_count \
+  --shortcut-feature rdkit_mol_wt \
+  --variant pair-only \
+  --variant ligand-only \
+  --variant combined \
+  --variant protein-only \
+  --variant pair-protein \
+  --variant combined-all \
+  --variant shortcut-reduced-all \
+  --outer-group drug_id \
+  --outer-group target_id \
+  --outer-group drug_id+target_id \
+  --outer-group drug_id+scaffold_key
+```
+
+With the explicit `--variant` options shown, the output compares `protein_only`, `pair_protein`, `combined_all`, and `shortcut_reduced_all` with pair-only, ligand-only, and combined variants on one complete-case cohort. `pair_residual_pooled_metrics.csv` includes PR-AUC, AUROC, Brier skill against the prevalence-only predictor, adaptive ECE, and calibration intercept/slope. These sigmoid-transformed OOF logits remain diagnostic scores until an independent grouped calibration and final holdout are used.

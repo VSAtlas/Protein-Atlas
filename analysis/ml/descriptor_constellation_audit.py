@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from itertools import combinations
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
 from analysis.ml.feature_sets import PHYSICHEM_DESCRIPTOR_FEATURES
+from analysis.ml.ligand_descriptors import (
+    DESCRIPTOR_COLUMNS,
+    _descriptor_record,
+    _load_mapping_smiles,
+    _mapping_smiles,
+)
 from analysis.ml.labels import binary_label_series
 
 
@@ -29,16 +36,30 @@ DESCRIPTOR_RESOLUTIONS = {
 }
 
 
+def _default_resolution(descriptor: str) -> float:
+    if descriptor in DESCRIPTOR_RESOLUTIONS:
+        return DESCRIPTOR_RESOLUTIONS[descriptor]
+    if descriptor.endswith("_count"):
+        return 1.0
+    if descriptor == "rdkit_bertz_ct":
+        return 1.0
+    return 0.01
+
+
 def _stable_signature(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     text = frame[columns].astype("string").fillna("<NA>").agg("|".join, axis=1)
     return text.map(lambda value: hashlib.sha256(value.encode("utf-8")).hexdigest()[:16])
 
 
-def _rounded_descriptors(frame: pd.DataFrame, descriptors: list[str]) -> pd.DataFrame:
+def _rounded_descriptors(
+    frame: pd.DataFrame,
+    descriptors: list[str],
+    resolutions: Mapping[str, float],
+) -> pd.DataFrame:
     rounded = pd.DataFrame(index=frame.index)
     for descriptor in descriptors:
         values = pd.to_numeric(frame[descriptor], errors="coerce")
-        resolution = DESCRIPTOR_RESOLUTIONS[descriptor]
+        resolution = resolutions[descriptor]
         rounded[descriptor] = (values / resolution).round().astype("Int64")
     return rounded
 
@@ -71,13 +92,14 @@ def _drug_level_table(
     *,
     label_col: str,
     descriptors: list[str],
+    resolutions: Mapping[str, float],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     work = frame.copy()
     work[label_col] = binary_label_series(work[label_col])
     work = work.loc[work[label_col].notna()].copy()
     for descriptor in descriptors:
         work[descriptor] = pd.to_numeric(work[descriptor], errors="coerce")
-    rounded = _rounded_descriptors(work, descriptors)
+    rounded = _rounded_descriptors(work, descriptors, resolutions)
     work["_practical_signature"] = _stable_signature(rounded, descriptors)
 
     identity_cols = [
@@ -257,17 +279,150 @@ def _nearest_neighbors(
     return pd.DataFrame(rows)
 
 
+CANONICAL_IDENTITY_FIELDS = (
+    "rdk_id",
+    "_join_rdk",
+    "ligand_rdk_id",
+    "rdk",
+    "ligand_base",
+)
+
+
+def _canonical_descriptor_contract(
+    frame: pd.DataFrame,
+    *,
+    label_col: str,
+    descriptors: list[str],
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    identity_columns = [
+        column for column in CANONICAL_IDENTITY_FIELDS if column in frame.columns
+    ]
+    output_columns = [
+        *identity_columns,
+        "drug_id",
+        "reason",
+        "mismatch_columns",
+        "mapping_source",
+    ]
+    if not identity_columns:
+        return (
+            {
+                "status": "skipped",
+                "reason": "no_exact_rdk_identity_column",
+                "n_checked": 0,
+                "n_violations": 0,
+            },
+            pd.DataFrame(columns=output_columns),
+        )
+
+    labels = binary_label_series(frame[label_col])
+    selected = [*identity_columns, "drug_id", *descriptors]
+    work = frame.loc[labels.notna(), selected].drop_duplicates()
+    lookup = _load_mapping_smiles()
+    violations: list[dict[str, Any]] = []
+    checked = 0
+    mapping_sources: set[str] = set()
+    for record in work.to_dict(orient="records"):
+        row = pd.Series(record)
+        smiles, source = _mapping_smiles(row, lookup)
+        if source:
+            mapping_sources.add(source)
+        if not smiles:
+            reason = "missing_canonical_mapping"
+            mismatch_columns = ""
+        else:
+            expected = _descriptor_record(smiles)
+            if expected is None:
+                reason = "canonical_smiles_parse_failed"
+                mismatch_columns = ""
+            else:
+                checked += 1
+                mismatches = []
+                for descriptor in descriptors:
+                    actual = pd.to_numeric(
+                        pd.Series([record.get(descriptor)]), errors="coerce"
+                    ).iloc[0]
+                    if pd.isna(actual) or not np.isclose(
+                        float(actual),
+                        float(expected[descriptor]),
+                        rtol=1e-9,
+                        atol=1e-9,
+                    ):
+                        mismatches.append(descriptor)
+                if not mismatches:
+                    continue
+                reason = "descriptor_mismatch"
+                mismatch_columns = "|".join(mismatches)
+        violations.append(
+            {
+                **{column: record.get(column, "") for column in identity_columns},
+                "drug_id": record.get("drug_id", ""),
+                "reason": reason,
+                "mismatch_columns": mismatch_columns,
+                "mapping_source": source,
+            }
+        )
+
+    mapping_hashes = {
+        str(Path(source).resolve()): hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        for source in sorted(mapping_sources)
+        if Path(source).is_file()
+    }
+    result = {
+        "status": "failed" if violations else "passed",
+        "n_checked": checked,
+        "n_violations": len(violations),
+        "identity_columns": identity_columns,
+        "mapping_sha256": mapping_hashes,
+    }
+    return result, pd.DataFrame(violations, columns=output_columns)
+
+
 def run_descriptor_constellation_audit(
     dataset_path: str | Path,
     out_dir: str | Path,
     *,
     label_col: str = "spd_binding_label",
+    descriptors: Sequence[str] | None = None,
+    resolutions: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     dataset = Path(dataset_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     header = pd.read_csv(dataset, nrows=0)
-    descriptors = list(PHYSICHEM_DESCRIPTOR_FEATURES)
+    selected = list(dict.fromkeys(descriptors or PHYSICHEM_DESCRIPTOR_FEATURES))
+    if not selected:
+        raise ValueError("at least one descriptor is required")
+    unsupported = sorted(set(selected) - set(DESCRIPTOR_COLUMNS))
+    if unsupported:
+        raise ValueError(
+            "constellation audit supports registered ligand descriptors only: "
+            + ", ".join(unsupported)
+        )
+    supplied_resolutions = dict(resolutions or {})
+    unknown_resolutions = sorted(set(supplied_resolutions) - set(selected))
+    if unknown_resolutions:
+        raise ValueError(
+            "resolutions were supplied for unselected descriptors: "
+            + ", ".join(unknown_resolutions)
+        )
+    resolved_resolutions = {
+        descriptor: float(
+            supplied_resolutions.get(descriptor, _default_resolution(descriptor))
+        )
+        for descriptor in selected
+    }
+    invalid_resolutions = sorted(
+        descriptor
+        for descriptor, resolution in resolved_resolutions.items()
+        if not math.isfinite(resolution) or resolution <= 0
+    )
+    if invalid_resolutions:
+        raise ValueError(
+            "descriptor resolutions must be positive and finite: "
+            + ", ".join(invalid_resolutions)
+        )
+    descriptors = selected
     required = {"drug_id", label_col, *descriptors}
     missing = sorted(required - set(header.columns))
     if missing:
@@ -275,6 +430,7 @@ def run_descriptor_constellation_audit(
     optional = [
         col
         for col in (
+            *CANONICAL_IDENTITY_FIELDS,
             "display_name",
             "generic_name",
             "canonical_smiles",
@@ -294,8 +450,9 @@ def run_descriptor_constellation_audit(
         frame,
         label_col=label_col,
         descriptors=descriptors,
+        resolutions=resolved_resolutions,
     )
-    rounded = _rounded_descriptors(drug, descriptors)
+    rounded = _rounded_descriptors(drug, descriptors, resolved_resolutions)
     exact = drug[descriptors].apply(pd.to_numeric, errors="coerce").round(12)
 
     capacities: list[dict[str, Any]] = []
@@ -328,6 +485,11 @@ def run_descriptor_constellation_audit(
     )
     collisions = profile.loc[profile["practical_signature_drug_count"].gt(1)].copy()
     neighbors = _nearest_neighbors(drug, descriptors=descriptors)
+    mapping_contract, mapping_violations = _canonical_descriptor_contract(
+        frame,
+        label_col=label_col,
+        descriptors=descriptors,
+    )
 
     capacity = pd.DataFrame(capacities).sort_values(
         ["n_descriptors", "singleton_drug_fraction", "unique_signature_fraction"],
@@ -341,6 +503,9 @@ def run_descriptor_constellation_audit(
     capacity.to_csv(out / "descriptor_identity_capacity.csv", index=False)
     collisions.to_csv(out / "descriptor_constellation_collisions.csv", index=False)
     neighbors.to_csv(out / "descriptor_nearest_neighbors.csv", index=False)
+    mapping_violations.to_csv(
+        out / "canonical_descriptor_contract_violations.csv", index=False
+    )
 
     full_practical = capacity.loc[
         capacity["signature_type"].eq("practical_resolution")
@@ -361,9 +526,14 @@ def run_descriptor_constellation_audit(
         "max_practical_signatures_per_drug": (
             int(conflict_counts.max()) if len(conflict_counts) else 1
         ),
-        "status": "failed" if len(conflict_counts) else "passed",
+        "status": (
+            "failed"
+            if len(conflict_counts) or mapping_contract["status"] == "failed"
+            else "passed"
+        ),
+        "canonical_descriptor_contract": mapping_contract,
         "descriptors": descriptors,
-        "resolutions": DESCRIPTOR_RESOLUTIONS,
+        "resolutions": resolved_resolutions,
         "practical_full_signature_unique_fraction": float(
             full_practical["unique_signature_fraction"]
         ),
@@ -391,6 +561,9 @@ def run_descriptor_constellation_audit(
             ),
             "identity_capacity": str(out / "descriptor_identity_capacity.csv"),
             "collisions": str(out / "descriptor_constellation_collisions.csv"),
+            "canonical_descriptor_contract_violations": str(
+                out / "canonical_descriptor_contract_violations.csv"
+            ),
             "nearest_neighbors": str(out / "descriptor_nearest_neighbors.csv"),
         },
     }

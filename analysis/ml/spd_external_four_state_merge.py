@@ -20,6 +20,27 @@ def _key(value: Any) -> str:
     return _clean(value).lower()
 
 
+def _source_family_from_evidence(value: Any) -> str:
+    text = _key(value)
+    families = [
+        label
+        for token, label in (
+            ("spd", "SPD"),
+            ("toxcast", "ToxCast"),
+            ("chembl", "ChEMBL"),
+            ("bindingdb", "BindingDB"),
+            ("iuphar", "IUPHAR"),
+            ("guide to pharmacology", "IUPHAR"),
+            ("ttd", "TTD"),
+            ("pubchem", "PubChem"),
+            ("papyrus", "Papyrus"),
+            ("drugcentral", "DrugCentral"),
+        )
+        if token in text
+    ]
+    return ";".join(dict.fromkeys(families)) or "external_unspecified"
+
+
 def _first_nonempty(df: pd.DataFrame, cols: list[str]) -> pd.Series:
     out = pd.Series("", index=df.index, dtype="object")
     for col in cols:
@@ -144,25 +165,58 @@ def _join_external(spd: pd.DataFrame, external: pd.DataFrame) -> tuple[pd.DataFr
         out["external_four_state_ml_label"] = pd.NA
         return out, {"status": "no_external_rows"}
     key_priority = [
+        "_key_rdk_uniprot",
+        "_key_rdk_gene",
         "_key_inchikey_uniprot",
         "_key_inchikey_gene",
         "_key_smiles_uniprot",
         "_key_smiles_gene",
         "_key_name_uniprot",
         "_key_name_gene",
-        "_key_rdk_uniprot",
-        "_key_rdk_gene",
     ]
-    filled = pd.Series(False, index=out.index)
-    join_counts: dict[str, int] = {}
     ext_cols = [col for col in external.columns if col not in {"_merge_key", "external_join_key_type"}]
+    explicit_addon = out.get(
+        "external_addon_training_allowed",
+        pd.Series(False, index=out.index),
+    ).fillna(False).astype(str).str.lower().isin({"1", "true", "yes"})
+    earlier_addon_label = pd.to_numeric(
+        out.get("scenario_a_tier1_label", pd.Series(pd.NA, index=out.index)), errors="coerce"
+    )
+    addon_mask = explicit_addon | earlier_addon_label.isin([0, 1])
+    for col in ext_cols:
+        if col not in out.columns:
+            out[col] = pd.NA
+        else:
+            out.loc[~addon_mask, col] = pd.NA
+    for col in ("external_join_key_type", "external_join_key_value", "external_join_confidence"):
+        if col not in out.columns:
+            out[col] = pd.NA
+        else:
+            out.loc[~addon_mask, col] = pd.NA
+    existing_label = pd.to_numeric(out.get("external_four_state_ml_label"), errors="coerce")
+    filled = addon_mask & existing_label.isin([0, 1])
+    preserved_addon_rows = int(filled.sum())
+    join_counts: dict[str, int] = {}
+    confidence = {
+        "rdk_uniprot": "exact_identifier_target",
+        "rdk_gene": "exact_identifier_target",
+        "inchikey_uniprot": "exact_structure_target",
+        "inchikey_gene": "exact_structure_target",
+        "smiles_uniprot": "exact_structure_target",
+        "smiles_gene": "exact_structure_target",
+        "name_uniprot": "name_target_fallback",
+        "name_gene": "name_target_fallback",
+    }
     for key_col in key_priority:
         if key_col not in out.columns:
             continue
         subset = out.loc[~filled & _valid_key(out[key_col]), [key_col]].copy()
         if subset.empty:
             continue
-        ext_subset = external[external["external_join_key_type"].eq(key_col.removeprefix("_key_"))].copy()
+        key_type = key_col.removeprefix("_key_")
+        ext_subset = external[external["external_join_key_type"].eq(key_type)].copy()
+        ext_label = pd.to_numeric(ext_subset.get("external_four_state_ml_label"), errors="coerce")
+        ext_subset = ext_subset.loc[ext_label.isin([0, 1])].copy()
         if ext_subset.empty:
             continue
         merged = subset.reset_index(names="_row_index").merge(
@@ -180,12 +234,15 @@ def _join_external(spd: pd.DataFrame, external: pd.DataFrame) -> tuple[pd.DataFr
                 out[col] = pd.NA
             values = merged.loc[matched, col]
             out.loc[row_index.to_numpy(), col] = values.to_numpy()
-        out.loc[row_index.to_numpy(), "external_join_key_type"] = key_col.removeprefix("_key_")
+        out.loc[row_index.to_numpy(), "external_join_key_type"] = key_type
         out.loc[row_index.to_numpy(), "external_join_key_value"] = merged.loc[matched, key_col].to_numpy()
+        out.loc[row_index.to_numpy(), "external_join_confidence"] = confidence[key_type]
         filled.loc[row_index.to_numpy()] = True
-        join_counts[key_col.removeprefix("_key_")] = int(matched.sum())
+        join_counts[key_type] = int(matched.sum())
     return out, {
         "matched_rows": int(filled.sum()),
+        "joined_external_rows": int(sum(join_counts.values())),
+        "preserved_addon_rows": preserved_addon_rows,
         "unmatched_rows": int((~filled).sum()),
         "join_counts": join_counts,
     }
@@ -195,6 +252,15 @@ def _combine_activity_labels(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     spd = pd.to_numeric(out.get("spd_binding_label"), errors="coerce")
     ext = pd.to_numeric(out.get("external_four_state_ml_label"), errors="coerce")
+    external_source_text = _first_nonempty(
+        out,
+        [
+            "external_evidence_sources",
+            "scenario_a_tier1_sources",
+            "external_parent_sources",
+        ],
+    )
+    external_family = external_source_text.map(_source_family_from_evidence)
     combined = pd.Series(pd.NA, index=out.index, dtype="Float64")
     status = pd.Series("unknown_no_label", index=out.index, dtype="object")
     spd_only = spd.notna() & ext.isna()
@@ -216,6 +282,19 @@ def _combine_activity_labels(df: pd.DataFrame) -> pd.DataFrame:
         "SPD binding labels and external four-state measured activity labels are combined only when non-conflicting; "
         "comparable SPD/external disagreements become -1 and are excluded from combined_activity_ml_label."
     )
+    combined_source_family = pd.Series("unknown", index=out.index, dtype="object")
+    combined_label_source = pd.Series("", index=out.index, dtype="object")
+    combined_source_family.loc[spd_only] = "SPD"
+    combined_label_source.loc[spd_only] = "SPD"
+    combined_source_family.loc[ext_only] = external_family.loc[ext_only]
+    combined_label_source.loc[ext_only] = external_source_text.loc[ext_only]
+    combined_source_family.loc[concordant] = "SPD;" + external_family.loc[concordant]
+    combined_label_source.loc[concordant] = "SPD;" + external_source_text.loc[concordant]
+    combined_source_family.loc[conflict] = "conflict;" + external_family.loc[conflict]
+    combined_label_source.loc[conflict] = "conflict;SPD;" + external_source_text.loc[conflict]
+    out["external_activity_source_family"] = external_family.where(ext.isin([0, 1]), "")
+    out["combined_activity_source_family"] = combined_source_family
+    out["combined_activity_label_source"] = combined_label_source
     return out
 
 

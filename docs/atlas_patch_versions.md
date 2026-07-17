@@ -126,3 +126,15 @@ fails closed on ambiguous duplicates or stale verified artifacts, accepts genera
 CSV or JSONL annotations, and exposes selected evidence on drug pages while keeping
 raw source rows private by default. Potential-but-unassigned observations remain scientific
 evidence only; the command never invents stereochemistry or changes qualification.
+
+## Atlasv0.0.17 - Add interpretable chemistry and mechanistic OOF audits
+
+Adds provenance-defined RDKit functional-group, branch/side-chain, and topology
+descriptors; named no-QED feature sets for binding and exposure; and cold-drug and
+double-cold pooled OOF comparisons with model-run ledgers. Adds copy-only,
+endpoint-aligned mechanistic PK materialization, a settings and grouped-permutation
+audit for the two-stage potency/free-Cmax architecture, and a hash-bound modular
+pose-interaction provider whose Stage-1/model-1 mode is explicitly sensitivity-only.
+The recommended binding ligand branch excludes topology, while exposure retains
+topology and fraction unbound as separately identified sensitivities. Exact RDK identifiers
+are resolved before potentially colliding medication names.
