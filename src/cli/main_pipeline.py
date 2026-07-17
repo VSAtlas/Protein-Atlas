@@ -440,6 +440,7 @@ from cli.run_lifecycle import (
     finalize_post_run,
     finalize_scheduler_and_retention,
 )
+from cli.process_lifecycle import process_lifecycle
 from cli.run_context import (
     ConfigDict,
     _apply_resume_config_from_snapshot,
@@ -984,15 +985,16 @@ def main() -> None:
         return
     _run_tool_verification._verify_tools_if_requested(cfg, argv_for_parsing)
 
-    _run_main_pipeline_core(
-        cfg=cfg,
-        run_id=str(run_id),
-        argv_for_parsing=argv_for_parsing,
-        flags=flags,
-        log_path=log_path,
-        resume_protein_ids=resume_protein_ids,
-        completed_combo_lookup=completed_combo_lookup,
-    )
+    with process_lifecycle(run_id=str(run_id), is_resume=bool(flags.is_resume)):
+        _run_main_pipeline_core(
+            cfg=cfg,
+            run_id=str(run_id),
+            argv_for_parsing=argv_for_parsing,
+            flags=flags,
+            log_path=log_path,
+            resume_protein_ids=resume_protein_ids,
+            completed_combo_lookup=completed_combo_lookup,
+        )
 
 
 def _run_with_email_notification() -> None:

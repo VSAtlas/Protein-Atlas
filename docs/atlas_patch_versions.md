@@ -77,6 +77,14 @@ fail-closed retry selection and causal-lineage readiness, exact prepared-recepto
 APO/HOLO evidence with metal-audit acceptance/rejection provenance, selected-pose
 validation gates, and the conference top-valid/best-invalid image plan.
 
+## Atlasv0.0.11 - Diagnose and serialize production recovery
+
+Adds an explicit repository-wide one-production-run rule and structured Atlas
+process lifecycle diagnostics for process start, clean exit, and unhandled
+exceptions. Same-run recovery requires confirming that prior local and Slurm
+workers are gone before resume, preventing stale manifests from being mistaken
+for permission to overlap production work.
+
 ## Atlasv0.0.12 - Classify and modularize the docking atlas
 
 Classifies all frozen-run primary scores with exact row-bound legacy-decoy-Z
@@ -90,6 +98,15 @@ evidence and unspecified potential stereochemistry remain pending. Fail-closed
 single-stage repeat planning covers Vina, GNINA, SCORCH, MM/GBSA, and pose
 validation. Full-matrix execution plus the stereo, resonance-group, aggregate-pose,
 known-pair, and partial-sampling policies stay explicit publication gaps.
+
+## Atlasv0.0.13 - Guard SCORCH comparison and add grouped exposure OOF
+
+Adds pooled drug-grouped OOF evaluation for the two-stage SPD potency/free-Cmax
+architecture, stage-level grouped permutation importance, complete model-run
+records, and no-QED primary exposure defaults. Adds explicit all-candidate
+SCORCH routing through both `atlas ml score-addons` and `atlas run`, with
+read-only comparison-run guards, live-process detection, isolated workspaces,
+and fail-closed detection of selection-truncated DUD SCORCH nulls.
 
 ## Atlasv0.0.14 - Recover and gate contextual PK evidence
 
@@ -156,3 +173,11 @@ fails closed on active-run evidence and untrusted score sources, hashes every
 reference-null input, repairs only unambiguous output layouts, certifies one
 coherent holo artifact lineage, and corrects threshold-error and effective-Top-K
 diagnostic exports.
+
+## Atlasv0.0.20 - Enforce reviewed GitHub integration
+
+Defines `integration/atlas-main` as the single remote Atlas work branch,
+keeps parallel workers local, requires staged and draft-PR self-review, and
+forbids direct `main` pushes, auto-merge, force-push, or branch deletion without
+approval. Adds truthful process lifecycle diagnostics, restores production and
+ML-audit policy, and recovers missing ledger records without reordering history.

@@ -18,6 +18,8 @@ Env: direnv active. Ignore lockfile errors. Run micromamba activate docking-env 
 
 External tools: install third-party tools under `/stor/work/VDS_Beckham/atlas/tools` (or a user-specified external tools root), not inside this repo's source, data, or runtime output trees. For open-source tools, make the install reproducible through the existing tool installer bundle under `tools/installers/` so a fresh user can clone/download the repo and run one documented install command. Proprietary/BYOL tools must remain unbundled and be documented as explicit local path/config inputs.
 
+Production concurrency: Never launch more than one production Atlas run at once. Before any production launch or resume, run `atlas runs`; if another run has process, Slurm, or current manifest evidence, inspect it with `atlas status <RUN_ID> --errors --explain` and resume or finalize that run instead of starting a second production run. Resuming the same run ID is allowed only after confirming its prior local and Slurm workers are gone.
+
 Canonical Atlas workflows:
 
 - Fresh-clone/public smoke: `atlas smoke public` (installer path: `bash tools/installers/install_atlas_publication_stack.sh --public-smoke`).
@@ -38,8 +40,20 @@ Versioned commit/push handoff:
 - For each completed, verified Atlas patch, assign the next `AtlasvMAJOR.MINOR.PATCH` label and append a concise description to `docs/atlas_patch_versions.md`.
 - Commit only files changed for the current patch. Never stage `data/`, `outputs/`, caches, downloaded external archives, protected directories, backup files, or unrelated dirty-worktree changes.
 - Use the commit subject `AtlasvMAJOR.MINOR.PATCH: <concise description>`.
-- Push the current branch after verification when ongoing push was requested. Report the commit hash, branch, and push result.
+- When ongoing push was requested, the designated integrator pushes the verified patch to the single Atlas integration branch. Report the commit hash, branch, and push result.
 - Do not commit or push a patch whose required focused checks or smoke workflow failed; report the blocker instead.
+
+Branch and GitHub integration:
+
+- Treat `main` as release-only. Use `integration/atlas-main` as the single remote Atlas integration branch. `AtlasvMAJOR.MINOR.PATCH` values identify commits and ledger entries; never create a branch per Atlas version.
+- Only the designated integrator may assign Atlas versions, update the version and handoff ledgers, push the integration branch, or merge a pull request. Parallel agents may use local `worker/atlas-<task>` branches created from a recorded integration SHA, but must not push them unless explicitly requested.
+- “Commit and push often” means narrow, verified commits pushed by the integrator to the same integration branch. Do not create remote `agent/atlas-v*`, checkpoint, or version branches, and do not rebase or force-push shared branches.
+- Before integration, inspect the worktree, local and remote refs, linked worktrees, upstream configuration, and ancestry. Stop if a branch is unowned, actively checked out elsewhere, unexpectedly diverged, or contains unrelated dirty changes.
+- Never merge sibling branches based on their names or timestamps. Compare ancestry and patch content, omit patch-equivalent or superseded branches, and base integration on `origin/main`, not stale `origin/HEAD` or `master`.
+- Never delete a branch or worktree without explicit user approval.
+- Before pushing, review the complete staged diff, run required focused checks and smoke verification, and confirm only the intended patch files are staged.
+- Push only `integration/atlas-main` and open or update one draft GitHub pull request targeting `main`. Perform a self-review of the PR diff, commits, checks, and unresolved threads before marking it ready, but do not count the author’s self-review as independent approval.
+- Never push directly to `main`, enable auto-merge, or merge the pull request without explicit user approval. Keep the PR draft while checks fail or known blockers remain, and respect GitHub-required checks and non-author review before merge.
 
 Explore (Low-Token):
 
@@ -187,6 +201,58 @@ Useful refresh flags include:
 --drop-column <col> ...
 --dataset <csv> ...
 --in-place
+```
+
+Definition of an ML `data audit`: when the user asks for a "data audit", do not interpret that as a missing-value check alone. Refresh feature metadata first, then run and report all applicable checks below for every requested label. If a check cannot run, record exactly why it was skipped.
+
+- Population and schema: report table shape; positive, negative, and unknown label counts; per-column and selected-feature-set missingness; identifier and split-axis coverage; invalid/unresolved ligand and target identifiers; and duplicate drug-target, conformer, pose, and assay records. Explicitly distinguish a missing feature value from an unknown label, an all-negative group, and a sparsely positive group.
+- Split integrity: audit exact train/test overlap for drug, scaffold, chemical-cluster, target, target-family, temporal, and source holdouts when those axes exist. Report group counts, train/test prevalence, valid holdout-group counts, and applicability-domain or train-test chemical-similarity diagnostics where available. A populated group that lacks enough positives or negatives is not a missing-data group.
+- Shortcut and strata audit: run target/chemotype/scaffold/chemical-cluster-only baselines, group positive-rate tables, high-risk strata scans, and data-collection priorities. Compare shortcut PR-AUC with label prevalence so scaffold or target identity signal is not mistaken for mechanistic generalization.
+- Provenance, association, and drift: scan clean features for label-definition, post-label, source, and evidence leakage; run correlation/association and mutual-information summaries, permutation importance, schema validation, and split-specific drift checks. Treat high association in label-definition/provenance columns as expected but keep those columns audit-only or excluded from clean feature sets. Drift means distributions differ between train and test; it does not mean values are empty.
+- Positive-addition audit: for sparse target or target-family activity labels, run `analysis/ml/target_positive_addition_audit.py` through `analysis/cli/audit_target_positive_additions.py`. This ranks source-backed measured-positive candidates from available local activity sources, reports family/target positive gaps, and recommends additions. Candidate rows are not labels, missing source evidence is not negative evidence, existing pairs are excluded by default, and non-FDA/unverified candidates remain sensitivity/probe rows until reviewed.
+
+After reviewing the audit output, stage and prepare only the measured-positive additions needed to close documented family gaps with:
+
+```
+python -m analysis.cli.stage_target_positive_additions \
+  --candidates <audit_out_dir>/recommended_pair_additions.csv \
+  --out-dir data/<run_id>/target_positive_additions \
+  --library-name <run_id>_positive_addons \
+  --allow-non-fda
+```
+
+This command resolves missing PubChem CID structures through a local cache, selects chemically diverse target-pair additions, prepares PDBQTs, and emits per-PDB library maps. Non-FDA/unverified rows remain probe/sensitivity rows and must not be promoted to FDA-only or SPD exposure truth.
+- Audit conclusion: identify which failure mode is supported by evidence: actual missing inputs, incomplete label coverage, class imbalance, sparse positive strata, exact overlap, analog/scaffold-neighborhood shortcut leakage, source artifacts, or biological/covariate drift. Do not collapse these into the generic term "leakage".
+
+Use the modular audit suite plus the following focused audits as the standard workflow (adjust labels, groups, and unavailable split axes to the dataset):
+
+```
+python -m analysis.cli.run_ml_data_gap_report \
+  --dataset <model_ready.csv> \
+  --out-dir <audit_out_dir>/data_gap \
+  --labels <label_col> \
+  --group-cols target_family target_id pdb_id chemical_cluster butina_cluster scaffold_key ligand_chemotype label_source source_family
+
+python -m analysis.cli.audit_target_chemotype_bias \
+  --dataset <model_ready.csv> \
+  --label <label_col> \
+  --out-dir <audit_out_dir>/target_chemotype_bias \
+  --group-cols target_family target_id pdb_id chemical_cluster butina_cluster scaffold_key ligand_chemotype label_source source_family \
+  --splits random drug_holdout chemical_cluster_holdout target_holdout target_family_holdout
+
+python -m analysis.cli.run_ml_provenance_profile \
+  --dataset <model_ready.csv> \
+  --out-dir <audit_out_dir>/provenance_profile \
+  --labels <label_col> \
+  --group-cols target_family target_id pdb_id chemical_cluster butina_cluster scaffold_key ligand_chemotype label_source source_family \
+  --profile-label <label_col> \
+  --drift-splits chemical_cluster_holdout target_family_holdout
+
+python -m analysis.cli.audit_target_positive_additions \
+  --dataset <model_ready.csv> \
+  --label <label_col> \
+  --family <target_family> \
+  --out-dir <audit_out_dir>/target_positive_additions
 ```
 
 After every ML data ingestion, label-collapse, feature-table rebuild, metadata refresh, or model-training pass, run the modular leakage and performance audit suite before interpreting metrics:
