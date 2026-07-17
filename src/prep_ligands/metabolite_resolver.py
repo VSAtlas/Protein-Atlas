@@ -11,6 +11,10 @@ if TYPE_CHECKING:
     from typing import Mapping, Sequence
 
 from config.runtime_config import load_config, validate_config
+from prep_ligands.fda_mapping_identity import (
+    resolved_preferred_name,
+    suppresses_legacy_aliases,
+)
 
 Chem: Any
 Descriptors: Any
@@ -285,6 +289,9 @@ def _infer_synonym_fields(fieldnames: List[str], name_fields: List[str]) -> List
 def _select_preferred_name(
     row: Dict[str, Any], rdk_id: str, name_fields: List[str]
 ) -> str:
+    resolved = resolved_preferred_name(row)
+    if resolved:
+        return resolved
     name = _pick_first(row, *name_fields)
     if not name:
         return rdk_id or "unknown"
@@ -375,7 +382,10 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
 
             name = _select_preferred_name(row, rdk_id, name_fields)
             syn_fields = []
-            syn_fields.extend(_collect_values(row, *synonym_fields))
+            if suppresses_legacy_aliases(row):
+                syn_fields.extend(_collect_values(row, "resolved_preferred_name"))
+            else:
+                syn_fields.extend(_collect_values(row, *synonym_fields))
             path_val = _pick_first(row, "path")
             if path_val:
                 base = os.path.basename(str(path_val))
@@ -599,22 +609,31 @@ def resolve_corresponding_name_from_text(
 ) -> Optional[str]:
     """Map a free-text ligand name/code to a library drug name, if possible."""
     key = _norm(text)
-    if key in fda_index.name_index:
-        rid = fda_index.name_index[key][0]
+    exact_ids = fda_index.name_index.get(key, [])
+    if len(exact_ids) == 1:
+        rid = exact_ids[0]
         return fda_index.id_to_rec[rid].name
+    if len(exact_ids) > 1:
+        return None
     # try token subset
     toks = _tokenize(text)
     for t in toks:
         k = _norm(t)
-        if k in fda_index.name_index:
-            rid = fda_index.name_index[k][0]
+        token_ids = fda_index.name_index.get(k, [])
+        if len(token_ids) == 1:
+            rid = token_ids[0]
             return fda_index.id_to_rec[rid].name
+        if len(token_ids) > 1:
+            return None
     # last resort: known aliases
     if key in _KNOWN_PARENT_ALIASES:
         alias = _KNOWN_PARENT_ALIASES[key]
         alias_k = _norm(alias)
-        if alias_k in fda_index.name_index:
-            rid = fda_index.name_index[alias_k][0]
+        alias_ids = fda_index.name_index.get(alias_k, [])
+        if len(alias_ids) == 1:
+            rid = alias_ids[0]
             return fda_index.id_to_rec[rid].name
+        if len(alias_ids) > 1:
+            return None
         return alias
     return None

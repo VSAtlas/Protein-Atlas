@@ -138,3 +138,13 @@ pose-interaction provider whose Stage-1/model-1 mode is explicitly sensitivity-o
 The recommended binding ligand branch excludes topology, while exposure retains
 topology and fraction unbound as separately identified sensitivities. Exact RDK identifiers
 are resolved before potentially colliding medication names.
+
+## Atlasv0.0.18 - Promote terminal FDA identity mapping
+
+Adds non-destructive FDA identity audit, canonical-parent/delta materialization,
+legacy reconciliation, terminal structure-first resolution, independent bundle
+verification, and hash-bound promotion. Installs the 4,730-row terminal-v3 mapping
+with SHA-256 `4697ca38ed842cbc5d673b3e97c7c5fe91479eb3997091400a2a5d4d626ff483`.
+Resolved identities suppress stale legacy names and auxiliary identifiers, mapping
+consumers prefer authorized DrugCentral IDs, and exported mapping provenance is
+source-safe and content-hashed.

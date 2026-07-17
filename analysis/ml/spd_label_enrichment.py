@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from prep_ligands.fda_mapping_identity import authoritative_drugcentral_id
+
 from analysis.external.spd import SPD_LABEL_POLICY_VERSION
 
 
@@ -83,8 +85,15 @@ def _read_fda_ligand_map(path: Path) -> pd.DataFrame:
         "inchikey",
         "rxnorm_rxcui",
         "drugcentral_id",
+        "resolved_drugcentral_id",
+        "identity_resolution_status",
     }
-    raw = pd.read_csv(path, usecols=lambda col: col in wanted, low_memory=False)
+    raw = pd.read_csv(
+        path,
+        usecols=lambda col: col in wanted,
+        dtype=str,
+        low_memory=False,
+    )
     if "ligand_base" not in raw.columns:
         if "path" not in raw.columns:
             raise ValueError(f"FDA ligand map {path} lacks path/ligand_base columns")
@@ -92,6 +101,9 @@ def _read_fda_ligand_map(path: Path) -> pd.DataFrame:
     for col in wanted:
         if col not in raw.columns:
             raw[col] = pd.NA
+    raw["drugcentral_id"] = [
+        authoritative_drugcentral_id(row) for row in raw.to_dict("records")
+    ]
     raw["_mapped_drug_id"] = _first_nonempty_frame(raw, ["generic_name", "display_name", "ligand_base"])
     raw["_mapped_drug_key"] = raw["_mapped_drug_id"].map(_lower)
     raw = raw.sort_values(["_mapped_drug_key", "ligand_base"], na_position="last")
@@ -307,6 +319,9 @@ def enrich_spd_labels_for_run_master(
     if missing:
         summary.update({"reason": "missing_default_mapping_files", "missing_files": missing})
         return source, summary
+    assert panel_path is not None
+    assert target_path is not None
+    assert ligand_path is not None
 
     out = source.copy()
     if has_any_spd_labels:

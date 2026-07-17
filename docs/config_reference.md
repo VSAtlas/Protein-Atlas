@@ -53,6 +53,8 @@ Config values are read from `config.txt` with `config.example.txt` / `config.ful
 | `TEST_FIXTURE_PREPPED_LIGANDS_DIR` | `chemdb/tests/fixtures/prepped_ligands` | optional | path | `chemdb/tests/fixtures/prepped_ligands` | no |
 | `TOOL_VERIFY_ON_START` | `false` | optional | boolean | `false` | no |
 
+`chemdb/data/fda_mapping_from_pdbqt.csv` is the canonical runtime FDA mapping. It contains the independently verified terminal-v3 mapping; the immutable repair copy and verifier report remain under `outputs/data/fda_repair_20260712/terminal_reconciliation_v3/` for provenance.
+
 Ligand and receptor PDBQT preparation use Meeko in the open publication stack.
 
 Use `atlas ligands sources` to list built-in source downloads, `atlas ligands

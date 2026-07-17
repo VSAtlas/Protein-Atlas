@@ -14,6 +14,7 @@ import pandas as pd
 from analysis.external.papyrus_chembl import build_bioactivity_benchmark
 from analysis.ml.build_ml_dataset import build_ml_dataset
 from analysis.ml.splits import make_split, split_overlap_summary
+from prep_ligands.fda_mapping_identity import authoritative_drugcentral_id
 
 
 PAPYRUS_PLUS_URL = "https://zenodo.org/api/records/13987985/files/05.7++_combined_set_without_stereochemistry.tsv.xz/content"
@@ -105,6 +106,9 @@ def build_pilot_pair_table(
     master = pd.read_csv(master_rows_path)
     master = master[master.get("is_decoy", "").fillna("").astype(str).str.lower().isin({"", "0", "0.0", "false"})].copy()
     mapping = pd.read_csv(fda_mapping_path)
+    mapping["drugcentral_id"] = [
+        authoritative_drugcentral_id(row) for row in mapping.to_dict("records")
+    ]
     if "ligand_base" not in mapping.columns:
         mapping["ligand_base"] = mapping.apply(
             lambda row: f"{_text(row.get('scheme'))}_{int(float(row.get('file_num'))):07d}"
@@ -175,6 +179,7 @@ def build_pilot_pair_table(
             "variant",
             "ph_label",
             "ligand_base",
+            "drugcentral_id",
             "display_name",
             "generic_name",
             "inchikey",

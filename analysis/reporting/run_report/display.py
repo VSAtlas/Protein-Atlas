@@ -141,7 +141,6 @@ def _resolve_ligand_display_internal(
             has_ligand_display
             and not is_control
             and mapping_used
-            and original_unfriendly
             and final_display
             and final_display != display
         )
@@ -162,6 +161,13 @@ def _resolve_ligand_display_internal(
         fallback = clean_report_text(row.get("ligand"))
         final_display = fallback or base
         return final_display, build_meta(final_display)
+
+    authoritative_display = clean_report_text(
+        resolve_authoritative_ligand_display_name(base, lig_file, fda_index)
+    )
+    if authoritative_display:
+        mapping_used = authoritative_display != display
+        return authoritative_display, build_meta(authoritative_display)
 
     if display:
         if fda_index is not None and _is_unfriendly_display(display):
@@ -250,4 +256,3 @@ def _summarize_display_resolution(
             mapping_csv_value,
             mapping_loaded,
         )
-

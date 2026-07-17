@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
+from prep_ligands.fda_mapping_identity import is_resolved_identity_status
+
 try:
     from chemdb.tools.fill_fda_mapping_names import display_name_quality_reasons
 except Exception:
@@ -66,6 +68,7 @@ def extract_rdk_id(value: object) -> Optional[str]:
 @dataclass
 class MappingRow:
     path: str
+    rdk_id: str = ""
     display_name: str = ""
     generic_name: str = ""
     brand_names: str = ""
@@ -80,11 +83,14 @@ class MappingRow:
     remark_name: str = ""
     sdf_title: str = ""
     inchikey: str = ""
+    resolved_preferred_name: str = ""
+    identity_resolution_status: str = ""
 
     @classmethod
     def from_csv_row(cls, row: dict[str, object]) -> "MappingRow":
         return cls(
             path=_clean(row.get("path")),
+            rdk_id=extract_rdk_id(row.get("rdk_id")) or "",
             display_name=_clean(row.get("display_name")),
             generic_name=_clean(row.get("generic_name")),
             brand_names=_clean(row.get("brand_names")),
@@ -99,10 +105,18 @@ class MappingRow:
             remark_name=_clean(row.get("remark_name")),
             sdf_title=_clean(row.get("sdf_title")),
             inchikey=_clean(row.get("inchikey")),
+            resolved_preferred_name=_clean(row.get("resolved_preferred_name")),
+            identity_resolution_status=_clean(row.get("identity_resolution_status")),
         )
 
     def all_name_fields(self) -> list[tuple[str, str]]:
+        if (
+            is_resolved_identity_status(self.identity_resolution_status)
+            and self.resolved_preferred_name
+        ):
+            return [("resolved_preferred_name", self.resolved_preferred_name)]
         return [
+            ("resolved_preferred_name", self.resolved_preferred_name),
             ("rxnorm_generic_name", self.rxnorm_generic_name),
             ("drugcentral_generic_name", self.drugcentral_generic_name),
             ("pubchem_record_title", self.pubchem_record_title),
@@ -118,6 +132,11 @@ class MappingRow:
         ]
 
     def preferred_name(self) -> str:
+        if (
+            is_resolved_identity_status(self.identity_resolution_status)
+            and self.resolved_preferred_name
+        ):
+            return self.resolved_preferred_name
         display = _clean(self.display_name)
         if display and not self.display_quality_reasons() and not self._semantic_reasons():
             return display
@@ -131,6 +150,7 @@ class MappingRow:
     def _better_name_candidates(self) -> list[str]:
         candidates: list[str] = []
         for field in [
+            self.resolved_preferred_name,
             self.pubchem_record_title,
             self.generic_name,
             self.pubchem_name,
@@ -223,7 +243,12 @@ class MappingIndex:
         rid = (extract_rdk_id(rdk_id) or _clean(rdk_id)).lower()
         if not rid:
             return []
-        return [row for row in self.rows if rid in Path(row.path).stem.lower()]
+        return [
+            row
+            for row in self.rows
+            if (row.rdk_id or extract_rdk_id(Path(row.path).stem) or "").lower()
+            == rid
+        ]
 
     def resolve_name_for_rdk(self, rdk_id: str) -> Optional[str]:
         for row in self.rows_by_rdk_id(rdk_id):

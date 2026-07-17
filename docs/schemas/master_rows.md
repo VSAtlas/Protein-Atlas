@@ -9,6 +9,8 @@ They are the preferred long-form table for publication-facing side-effect/ADR an
 | `target_id` | string | yes | target identifier | `EGFR` | target table |
 | `uniprot_id` | string | no | UniProt accession | `P00533` | target mapping |
 | `pdb_id` | string | yes | structure ID | `1M17` | run outputs |
+| `fda_mapping_csv` | string | no | repo-relative mapping path or redacted `external/<basename>` | `chemdb/data/fda_mapping_from_pdbqt.csv` | mapping provenance |
+| `fda_mapping_sha256` | string | no | exact SHA-256 of the FDA identity mapping | `4697ca38...` | mapping provenance |
 | `atlas_score` | float | no | summary ranking signal | `2.41` | report scoring |
 | `z_selected` | float | yes | canonical selected score | `-1.73` | docking summaries |
 | `mmgbsa_score` | float | no | MM/GBSA evidence | `-31.2` | MM/GBSA outputs |

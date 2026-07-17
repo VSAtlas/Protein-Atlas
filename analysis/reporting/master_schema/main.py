@@ -3,7 +3,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from analysis.reporting.fda_name_map import resolve_mapping_csv_path, try_load_fda_index
+from analysis.reporting.fda_name_map import (
+    mapping_file_provenance_path,
+    mapping_file_sha256,
+    resolve_mapping_csv_path,
+    try_load_fda_index,
+)
 from analysis.reporting.manifest_utils import load_run_manifest
 from analysis.reporting.test_mode_tokens import resolve_test_mode_tokens
 from config.output_paths import output_root, run_output_dir
@@ -113,6 +118,12 @@ def main() -> int:
     if not master_rows:
         logger.warning("%s action=exit reason=no_rows_collected", COMPONENT)
         return 0
+
+    mapping_path_value = mapping_file_provenance_path(mapping_csv, repo_root)
+    mapping_sha256 = mapping_file_sha256(mapping_csv)
+    for row in master_rows:
+        row["fda_mapping_csv"] = mapping_path_value
+        row["fda_mapping_sha256"] = mapping_sha256
 
     master_rows, fdr_summary_rows, scorch_fdr_summary_rows = _apply_fdr_to_master_rows(
         master_rows=master_rows,

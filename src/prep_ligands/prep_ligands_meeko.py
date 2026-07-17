@@ -69,9 +69,11 @@ def _prepare_mol_for_meeko(mol: Chem.Mol, ligand_name: str) -> Chem.Mol:
     except Exception:
         prepared.UpdatePropertyCache(strict=False)
 
-    has_explicit_h = any(atom.GetAtomicNum() == 1 for atom in prepared.GetAtoms())
-    if not has_explicit_h:
-        prepared = Chem.AddHs(prepared, addCoords=_mol_has_3d(prepared))
+    # Add only missing implicit hydrogens even when explicit isotope H/D atoms
+    # are already present. RDKit preserves those existing atoms, isotopes, and
+    # conformer coordinates; skipping AddHs entirely would leave the remaining
+    # heavy atoms under-hydrogenated (for example, deutetrabenazine).
+    prepared = Chem.AddHs(prepared, addCoords=_mol_has_3d(prepared))
 
     if not _mol_has_3d(prepared):
         params = AllChem.ETKDGv3()  # type: ignore[attr-defined]

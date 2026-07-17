@@ -10,6 +10,10 @@ from typing import Dict, Optional
 
 from docking.pockets.active_site_runtime import norm
 from prep_ligands.library_index import LibraryIndex
+from prep_ligands.fda_mapping_identity import (
+    resolved_preferred_name,
+    suppresses_legacy_aliases,
+)
 from path_router import Paths
 
 _SINGLE_ALLOW_PREFIX = False
@@ -164,6 +168,14 @@ def _resolve_single_ligand(
                     if map_key.startswith(key):
                         basenames.extend(sorted(values))
         basenames = list(dict.fromkeys(basenames))
+        if len(basenames) > 1:
+            logger.error(
+                "[single.name.ambiguous] key=%s candidates=%s action=fail_closed",
+                key,
+                basenames,
+            )
+            fda_logged = True
+            return None
         probe_target: Path = fda_root if not basenames else fda_root / basenames[0]
         if not fda_logged:
             logger.info(
@@ -308,27 +320,33 @@ def _load_fda_name_map(cfg: Dict, logger: logging.Logger) -> dict[str, set[str]]
                 if not path.endswith(".pdbqt"):
                     continue
                 base = os.path.basename(path)
+                resolved_name = resolved_preferred_name(row)
 
                 # "single" name fields
-                singles = [
-                    row.get("display_name", ""),
-                    row.get("generic_name", ""),
-                    row.get("rxnorm_generic_name", ""),
-                    row.get("drugcentral_generic_name", ""),
-                    row.get("pubchem_name", ""),
-                    row.get("pubchem_record_title", ""),
-                ]
+                singles = [resolved_name, Path(base).stem]
+                if not suppresses_legacy_aliases(row):
+                    singles.extend(
+                        [
+                            row.get("display_name", ""),
+                            row.get("generic_name", ""),
+                            row.get("rxnorm_generic_name", ""),
+                            row.get("drugcentral_generic_name", ""),
+                            row.get("pubchem_name", ""),
+                            row.get("pubchem_record_title", ""),
+                        ]
+                    )
                 # multi-value fields (split)
                 multis = []
-                for col in (
-                    "brand_names",
-                    "rxnorm_brand_names",
-                    "drugcentral_brand_names",
-                    "pubchem_synonyms",
-                ):
-                    v = row.get(col, "")
-                    if v:
-                        multis.extend(_split_multi_names(v))
+                if not suppresses_legacy_aliases(row):
+                    for col in (
+                        "brand_names",
+                        "rxnorm_brand_names",
+                        "drugcentral_brand_names",
+                        "pubchem_synonyms",
+                    ):
+                        v = row.get(col, "")
+                        if v:
+                            multis.extend(_split_multi_names(v))
 
                 for nm in [*singles, *multis]:
                     key = _norm_name_key(nm)

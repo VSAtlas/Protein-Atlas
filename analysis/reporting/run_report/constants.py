@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from analysis.reporting.fda_name_map import (
+    resolve_authoritative_ligand_display_name,
     resolve_ligand_display_name,
     resolve_mapping_csv_path,
     try_load_fda_index,

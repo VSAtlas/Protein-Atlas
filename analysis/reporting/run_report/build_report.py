@@ -1,5 +1,9 @@
 # ruff: noqa: F403, F405
 from analysis.reporting.run_report.constants import *
+from analysis.reporting.fda_name_map import (
+    mapping_file_provenance_path,
+    mapping_file_sha256,
+)
 from analysis.reporting.run_report.config_resolve import _resolve_target_name_cfg
 from analysis.reporting.run_report.display import (
     _matches_query,
@@ -711,6 +715,11 @@ def build_report(
         "master_rows_csv": _safe_relpath(primary_master_csv, repo_root),
         "manifest_yaml": str(canonical_manifest_rel),
     }
+    if mapping_csv is not None:
+        sources["fda_mapping_csv"] = mapping_file_provenance_path(
+            mapping_csv, repo_root
+        )
+        sources["fda_mapping_sha256"] = mapping_file_sha256(mapping_csv)
     if len(master_csvs) > 1:
         sources["master_rows_csvs"] = [
             _safe_relpath(path, repo_root) for path in master_csvs
@@ -737,4 +746,3 @@ def build_report(
     }
 
     return report
-

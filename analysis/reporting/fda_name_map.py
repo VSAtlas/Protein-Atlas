@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import csv
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +12,11 @@ from analysis.reporting.report_config import (
     report_config_candidates,
 )
 from analysis.reporting.value_utils import strip_quotes
+from prep_ligands.fda_mapping_identity import (
+    has_resolved_identity,
+    resolved_preferred_name,
+    suppresses_legacy_aliases,
+)
 
 _PRIMARY_NAME_FIELDS = (
     "display_name",
@@ -46,20 +52,28 @@ _SYNONYM_FIELDS = (
 )
 
 _RDK_RE = re.compile(r"rdk[_-]?(\d+)", re.IGNORECASE)
-
-
 @dataclass
 class LibraryIndex:
     id_to_name: Dict[str, str] = field(default_factory=dict)
     name_index: Dict[str, List[str]] = field(default_factory=dict)
+    resolved_identity_ids: set[str] = field(default_factory=set)
 
-    def add(self, rdk_id: str, canonical_name: str, aliases: List[str]) -> None:
+    def add(
+        self,
+        rdk_id: str,
+        canonical_name: str,
+        aliases: List[str],
+        *,
+        resolved_identity: bool = False,
+    ) -> None:
         rid = _extract_rdk_id(rdk_id) or rdk_id
         rid = str(rid).strip()
         if not rid:
             return
         name = str(canonical_name or rid).strip() or rid
         self.id_to_name[rid] = name
+        if resolved_identity:
+            self.resolved_identity_ids.add(rid)
         tokens = [name, *aliases, rid]
         for token in tokens:
             key = _norm(token)
@@ -124,18 +138,19 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
             if not rdk_id:
                 continue
 
-            preferred_name = _pick_first(
-                lowered,
-                list(_PRIMARY_NAME_FIELDS + _FALLBACK_NAME_FIELDS),
+            resolved_name = resolved_preferred_name(lowered)
+            preferred_name = resolved_name or _pick_first(
+                lowered, list(_PRIMARY_NAME_FIELDS + _FALLBACK_NAME_FIELDS)
             )
             if not preferred_name:
                 preferred_name = rdk_id
 
-            synonyms_raw: List[str] = []
-            for key in _SYNONYM_FIELDS:
-                value = _clean_cell(lowered, key)
-                if value:
-                    synonyms_raw.append(value)
+            synonyms_raw: List[str] = [resolved_name] if resolved_name else []
+            if not suppresses_legacy_aliases(lowered):
+                for key in _SYNONYM_FIELDS:
+                    value = _clean_cell(lowered, key)
+                    if value:
+                        synonyms_raw.append(value)
 
             path_val = _clean_cell(lowered, "path")
             if path_val:
@@ -151,7 +166,12 @@ def load_library_index(mapping_csv: str) -> LibraryIndex:
                     if token.strip()
                 )
 
-            idx.add(rdk_id, preferred_name, synonyms)
+            idx.add(
+                rdk_id,
+                preferred_name,
+                synonyms,
+                resolved_identity=has_resolved_identity(lowered),
+            )
     return idx
 
 
@@ -168,21 +188,73 @@ def resolve_corresponding_name_from_text(
     text: str, fda_index: LibraryIndex
 ) -> Optional[str]:
     key = _norm(text)
-    if key in fda_index.name_index and fda_index.name_index[key]:
-        rid = fda_index.name_index[key][0]
+    exact_ids = fda_index.name_index.get(key, [])
+    if len(exact_ids) == 1:
+        rid = exact_ids[0]
         return fda_index.id_to_name.get(rid)
+    if len(exact_ids) > 1:
+        return None
 
     rdk_id = _extract_rdk_id(text)
     if rdk_id:
         return fda_index.id_to_name.get(rdk_id)
 
     for token in _tokenize(text):
-        if token in fda_index.name_index and fda_index.name_index[token]:
-            rid = fda_index.name_index[token][0]
+        token_ids = fda_index.name_index.get(token, [])
+        if len(token_ids) == 1:
+            rid = token_ids[0]
             name = fda_index.id_to_name.get(rid)
             if name:
                 return name
+        elif len(token_ids) > 1:
+            return None
     return None
+
+
+def mapping_file_sha256(mapping_csv: Optional[Path]) -> str:
+    if mapping_csv is None or not mapping_csv.is_file():
+        return ""
+    digest = hashlib.sha256()
+    with mapping_csv.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def mapping_file_provenance_path(
+    mapping_csv: Optional[Path],
+    repo_root: Path,
+) -> str:
+    """Return source-safe mapping provenance; the file hash remains authoritative."""
+
+    if mapping_csv is None:
+        return ""
+    mapping = Path(mapping_csv).expanduser().resolve()
+    root = Path(repo_root).expanduser().resolve()
+    try:
+        return mapping.relative_to(root).as_posix()
+    except ValueError:
+        return f"external/{mapping.name}"
+
+
+def resolve_authoritative_ligand_display_name(
+    ligand_base: str,
+    ligand_file: str,
+    fda_index: Optional[LibraryIndex],
+) -> Optional[str]:
+    if fda_index is None:
+        return None
+    exact_ids = {
+        f"rdk_{match.group(1).zfill(7)}"
+        for text in (ligand_base, ligand_file)
+        if (match := _RDK_RE.search(text or "")) is not None
+    }
+    if len(exact_ids) != 1:
+        return None
+    rdk_id = next(iter(exact_ids))
+    if rdk_id not in fda_index.resolved_identity_ids:
+        return None
+    return clean_text(resolve_corresponding_name_for_rdk(rdk_id, fda_index)) or None
 
 
 def _resolve_path(value: str, base_dir: Path) -> Path:
@@ -251,14 +323,18 @@ def resolve_ligand_display_name(
     if fda_index is None:
         return base
 
-    for text in (base, lig_file):
-        match = _RDK_RE.search(text or "")
-        if match:
-            digits = match.group(1)
-            rdk_id = f"rdk_{digits.zfill(7)}"
-            name = clean_text(resolve_corresponding_name_for_rdk(rdk_id, fda_index))
-            if name:
-                return name
+    exact_ids = {
+        f"rdk_{match.group(1).zfill(7)}"
+        for text in (base, lig_file)
+        if (match := _RDK_RE.search(text or "")) is not None
+    }
+    if len(exact_ids) > 1:
+        return base
+    if exact_ids:
+        rdk_id = next(iter(exact_ids))
+        name = clean_text(resolve_corresponding_name_for_rdk(rdk_id, fda_index))
+        if name:
+            return name
 
     for text in (base, Path(lig_file).stem if lig_file else ""):
         name = clean_text(resolve_corresponding_name_from_text(text, fda_index))

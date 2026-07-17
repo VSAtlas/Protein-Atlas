@@ -20,6 +20,10 @@ from analysis.reporting.fda_name_map import (
     try_load_fda_index,
 )
 from analysis.reporting.value_utils import normalize_side_effect_label
+from prep_ligands.fda_mapping_identity import (
+    resolved_preferred_name,
+    suppresses_legacy_aliases,
+)
 from analysis.reporting.target_safety_evidence import (
     SAFETY_DEFAULT,
     classify_safety_bucket_scores,
@@ -72,6 +76,7 @@ _NAME_FIELDS = (
     "remark_name",
 )
 _QUERY_NAME_FIELDS = (
+    "resolved_preferred_name",
     "rxnorm_generic_name",
     "drugcentral_generic_name",
     "generic_name",
@@ -356,7 +361,7 @@ def lookup_ligand_side_effect_entry(
 def load_fda_mapping_rows(mapping_csv: Optional[Path]) -> Dict[str, Dict[str, Any]]:
     if mapping_csv is None or not mapping_csv.exists():
         return {}
-    out: Dict[str, Dict[str, Any]] = {}
+    candidates: Dict[str, list[Dict[str, Any]]] = {}
     with mapping_csv.open("r", encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
             lowered = {str(k or "").strip().lower(): v for k, v in row.items()}
@@ -371,13 +376,21 @@ def load_fda_mapping_rows(mapping_csv: Optional[Path]) -> Dict[str, Dict[str, An
                     rdk_id = ""
             if rdk_id:
                 keys.append(rdk_id)
-            for field in (*_NAME_FIELDS, *_BRAND_FIELDS):
-                keys.extend(_split_values(lowered.get(field)))
-            for key in keys:
-                normalized = _normalize_key(key)
-                if normalized and normalized not in out:
-                    out[normalized] = lowered
-    return out
+            resolved = normalize_side_effect_label(resolved_preferred_name(lowered))
+            if resolved:
+                keys.append(resolved)
+            if not suppresses_legacy_aliases(lowered):
+                for field in (*_NAME_FIELDS, *_BRAND_FIELDS):
+                    keys.extend(_split_values(lowered.get(field)))
+            for normalized in {
+                _normalize_key(key) for key in keys if _normalize_key(key)
+            }:
+                candidates.setdefault(normalized, []).append(lowered)
+    return {
+        normalized: rows[0]
+        for normalized, rows in candidates.items()
+        if len(rows) == 1
+    }
 
 
 def mapping_row_for_ligand(
@@ -420,16 +433,21 @@ def build_ligand_query(
         rows_by_key, ligand_base=ligand_base, ligand_display=ligand_display
     )
     mapping_used = mapping_used or bool(mapping_row)
+    allow_legacy_metadata = not suppresses_legacy_aliases(mapping_row)
     names: list[str] = []
     if mapping_row:
-        for field in _QUERY_NAME_FIELDS:
-            names.extend(_split_values(mapping_row.get(field)))
+        if not allow_legacy_metadata:
+            names.extend(_split_values(mapping_row.get("resolved_preferred_name")))
+        else:
+            for field in _QUERY_NAME_FIELDS:
+                names.extend(_split_values(mapping_row.get(field)))
     else:
         names.extend([ligand_display, ligand_label])
     names = [name for name in names if _is_query_name(name)]
     brands: list[str] = []
-    for field in _BRAND_FIELDS:
-        brands.extend(_split_values(mapping_row.get(field)))
+    if allow_legacy_metadata:
+        for field in _BRAND_FIELDS:
+            brands.extend(_split_values(mapping_row.get(field)))
     return LigandQuery(
         ligand_label=ligand_label,
         ligand_base=ligand_base,
@@ -438,8 +456,16 @@ def build_ligand_query(
         brand_names=tuple(
             _dedupe([brand for brand in brands if _is_query_name(brand)], limit=10)
         ),
-        rxcuis=tuple(_dedupe(_split_values(mapping_row.get("rxnorm_rxcui")), limit=4)),
-        uniis=tuple(_dedupe(_split_values(mapping_row.get("pubchem_unii_list")), limit=4)),
+        rxcuis=(
+            tuple(_dedupe(_split_values(mapping_row.get("rxnorm_rxcui")), limit=4))
+            if allow_legacy_metadata
+            else ()
+        ),
+        uniis=(
+            tuple(_dedupe(_split_values(mapping_row.get("pubchem_unii_list")), limit=4))
+            if allow_legacy_metadata
+            else ()
+        ),
         molecular_weight=_molecular_weight_from_mapping(mapping_row),
         mapping_used=mapping_used,
     )

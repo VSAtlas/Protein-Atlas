@@ -33,7 +33,7 @@ PUBCHEM_BIOASSAY_COLUMNS = [
 
 def _cid_properties_url(cids: list[int]) -> str:
     joined = ",".join(str(int(cid)) for cid in cids)
-    return f"{PUG_REST}/compound/cid/{joined}/property/InChIKey,CanonicalSMILES/JSON"
+    return f"{PUG_REST}/compound/cid/{joined}/property/Title,InChIKey,CanonicalSMILES/JSON"
 
 
 def _json(url: str) -> dict[str, Any]:
@@ -65,7 +65,7 @@ def cids_for_aid(aid: int, cids_type: str) -> set[int]:
 
 def properties_for_cids(cids: list[int]) -> pd.DataFrame:
     if not cids:
-        return pd.DataFrame(columns=["pubchem_cid", "inchikey", "smiles"])
+        return pd.DataFrame(columns=["pubchem_cid", "pubchem_title", "inchikey", "smiles"])
     rows: list[dict[str, Any]] = []
     for start in range(0, len(cids), 100):
         chunk = sorted({int(cid) for cid in cids[start : start + 100]})
@@ -78,7 +78,10 @@ def properties_for_cids(cids: list[int]) -> pd.DataFrame:
                 {
                     "pubchem_cid": item.get("CID"),
                     "inchikey": item.get("InChIKey"),
-                    "smiles": item.get("CanonicalSMILES"),
+                    "pubchem_title": item.get("Title"),
+                    "smiles": item.get("CanonicalSMILES")
+                    or item.get("ConnectivitySMILES")
+                    or item.get("SMILES"),
                 }
             )
         time.sleep(0.1)
