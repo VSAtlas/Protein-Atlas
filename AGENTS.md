@@ -40,20 +40,21 @@ Versioned commit/push handoff:
 - For each completed, verified Atlas patch, assign the next `AtlasvMAJOR.MINOR.PATCH` label and append a concise description to `docs/atlas_patch_versions.md`.
 - Commit only files changed for the current patch. Never stage `data/`, `outputs/`, caches, downloaded external archives, protected directories, backup files, or unrelated dirty-worktree changes.
 - Use the commit subject `AtlasvMAJOR.MINOR.PATCH: <concise description>`.
-- When ongoing push was requested, the designated integrator pushes the verified patch to the single Atlas integration branch. Report the commit hash, branch, and push result.
+- When ongoing push was requested, the designated integrator pushes the verified patch directly to `main`. Report the commit hash, branch, and push result.
 - Do not commit or push a patch whose required focused checks or smoke workflow failed; report the blocker instead.
 
-Branch and GitHub integration:
+Guarded direct-main GitHub delivery:
 
-- Treat `main` as release-only. Use `integration/atlas-main` as the single remote Atlas integration branch. `AtlasvMAJOR.MINOR.PATCH` values identify commits and ledger entries; never create a branch per Atlas version.
-- Only the designated integrator may assign Atlas versions, update the version and handoff ledgers, push the integration branch, or merge a pull request. Parallel agents may use local `worker/atlas-<task>` branches created from a recorded integration SHA, but must not push them unless explicitly requested.
-- “Commit and push often” means narrow, verified commits pushed by the integrator to the same integration branch. Do not create remote `agent/atlas-v*`, checkpoint, or version branches, and do not rebase or force-push shared branches.
-- Before integration, inspect the worktree, local and remote refs, linked worktrees, upstream configuration, and ancestry. Stop if a branch is unowned, actively checked out elsewhere, unexpectedly diverged, or contains unrelated dirty changes.
-- Never merge sibling branches based on their names or timestamps. Compare ancestry and patch content, omit patch-equivalent or superseded branches, and base integration on `origin/main`, not stale `origin/HEAD` or `master`.
+- Treat `main` and `origin/main` as the canonical Atlas branch. Do not create or maintain a long-lived Atlas integration branch, a branch per Atlas version, or routine remote agent/checkpoint branches.
+- Only the designated integrator may assign Atlas versions, update the version and handoff ledgers, or push `main`. Parallel agents may use local `worker/atlas-<task>` branches created from a recorded `main` SHA, but must not push them unless explicitly requested.
+- “Commit and push often” means narrow, verified commits delivered directly to `main` by the integrator. Never rebase or force-push shared `main`.
+- Before delivery, fetch `origin/main` and inspect the worktree, local and remote refs, linked worktrees, upstream configuration, and ancestry. Local `main` must be clean and based on the fetched remote tip; update it only by fast-forward. Stop on unexpected divergence, ownership ambiguity, or unrelated dirty changes.
+- Never merge sibling branches based on their names or timestamps. Compare ancestry and patch content, omit patch-equivalent or superseded branches, and base delivery on `origin/main`, not stale `origin/HEAD` or `master`.
 - Never delete a branch or worktree without explicit user approval.
-- Before pushing, review the complete staged diff, run required focused checks and smoke verification, and confirm only the intended patch files are staged.
-- Push only `integration/atlas-main` and open or update one draft GitHub pull request targeting `main`. Perform a self-review of the PR diff, commits, checks, and unresolved threads before marking it ready, but do not count the author’s self-review as independent approval.
-- Never push directly to `main`, enable auto-merge, or merge the pull request without explicit user approval. Keep the PR draft while checks fail or known blockers remain, and respect GitHub-required checks and non-author review before merge.
+- Before committing or pushing, review the complete staged diff, run required focused checks and smoke verification, and confirm only the intended patch files are staged.
+- Before a direct push, assign a separate read-only review agent to inspect the exact `origin/main..HEAD` commit range, changed paths, checks, and likely regressions. Resolve every blocker it identifies or stop and report it.
+- Push only a clean, reviewed local `main` to `origin/main`, without force. Do not create a pull request unless the user explicitly requests one or repository protection requires it.
+- After pushing, inspect the GitHub Actions result for the pushed commit. If a required check fails, make a new verified follow-up patch or report the blocker; never rewrite published `main` history.
 
 Explore (Low-Token):
 

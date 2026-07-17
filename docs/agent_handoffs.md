@@ -3114,3 +3114,9 @@ Change: Restored `data/AtlasSPD_phase1.dvc` to the `main` reference after the dr
 Why: Atlas integration commits must not stage `data/`, and a generated dataset pointer is not required for the reviewed source and documentation changes.
 Impact: The PR no longer changes any `data/`, `outputs/`, protected-directory, backup, or runtime-artifact path. Existing DVC data and every rescued branch/worktree remain untouched.
 Next: Push the narrow correction to `integration/atlas-main`, recheck the GitHub diff and check state, and keep the PR draft until independent review and explicit user approval.
+
+Date: 2026-07-17 | Task: Atlasv0.0.22 guarded direct-main delivery | Owner: Codex
+Change: Replaced the long-lived integration-branch and routine draft-PR policy with fast-forward-only delivery from a clean, reviewed local `main` directly to `origin/main`, including a separate read-only agent review before push and GitHub Actions inspection afterward.
+Why: A permanent `integration/atlas-main` branch would duplicate the canonical line and create future branch-selection ambiguity; the user explicitly selected a simpler direct-main workflow.
+Impact: Atlas versions remain narrow commit and ledger labels, parallel workers remain local, published `main` history cannot be rebased or force-pushed, and direct delivery retains staged-diff, ancestry, focused-test, smoke, second-agent read-only review, and post-push CI gates.
+Next: Push the reviewed Atlas lineage plus this policy commit directly to `main` and verify the remote SHA and GitHub quality workflow. Then inspect PR #68's resulting state and ask for explicit approval before closing it or deleting the redundant remote integration branch; preserve every rescue branch and worktree.

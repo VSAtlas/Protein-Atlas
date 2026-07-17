@@ -188,3 +188,12 @@ Removes the AtlasSPD runtime-data DVC pointer update discovered during draft-PR
 self-review. The integration PR now contains source, tests, configuration,
 documentation, and the canonical tracked FDA mapping only; the large generated
 SPD dataset remains outside the patch and under its prior DVC reference.
+
+## Atlasv0.0.22 - Adopt guarded direct-main delivery
+
+Replaces the long-lived Atlas integration branch and routine draft-PR flow with
+narrow, reviewed, fast-forward-only delivery directly to `main`. Requires a
+fresh remote-ancestry check, exact staged-diff review, a separate read-only agent
+review, focused verification before push, and GitHub Actions inspection after
+push while continuing to forbid force-pushes and unrequested remote worker
+branches.
