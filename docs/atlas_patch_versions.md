@@ -116,3 +116,13 @@ bound to 1,327 validated Phase 1 ligand identities, inventories 838 exact-match
 endpoint observations, and keeps all 46 recovered context rows quarantined
 without original-source training rights. The SPD exposure label is unchanged,
 and primary dose remains tied to the selected Cmax study.
+
+## Atlasv0.0.16 - Audit ligand stereochemistry provenance
+
+Adds a non-mutating, reusable SDF/CSV stereochemistry audit with exact source,
+record, structure, prepared-artifact, method, and output hashes. SQLite schema 7
+stores library-scoped evidence, re-verifies exact source records and structures,
+fails closed on ambiguous duplicates or stale verified artifacts, accepts generated
+CSV or JSONL annotations, and exposes selected evidence on drug pages while keeping
+raw source rows private by default. Potential-but-unassigned observations remain scientific
+evidence only; the command never invents stereochemistry or changes qualification.

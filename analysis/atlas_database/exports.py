@@ -96,6 +96,45 @@ PAIR_COLUMNS = (
     "verified_artifact_count",
 )
 
+_LIGAND_STEREO_EVIDENCE_FIELDS = (
+    "library_name",
+    "parent_ligand_id",
+    "evidence_schema_version",
+    "source_kind",
+    "source_file_sha256",
+    "source_record_index",
+    "source_record_id",
+    "source_record_sha256",
+    "audited_structure_sha256",
+    "structure_column",
+    "id_column",
+    "structure_format",
+    "prepared_artifact_declared_sha256",
+    "prepared_artifact_computed_sha256",
+    "prepared_artifact_verification_status",
+    "source_record_evidence_json",
+    "parse_status",
+    "audit_status",
+    "potential_stereo_count",
+    "specified_stereo_count",
+    "unspecified_stereo_count",
+    "unknown_stereo_count",
+    "tetrahedral_count",
+    "double_bond_count",
+    "other_stereo_count",
+    "has_unspecified_potential_stereo",
+    "has_unresolved_potential_stereo",
+    "canonical_isomeric_smiles",
+    "canonical_smiles",
+    "inchikey",
+    "stereo_elements_json",
+    "rdkit_version",
+    "method",
+    "error",
+    "selection_method",
+    "annotation_source_sha256",
+)
+
 
 def _receptor_label(row: Mapping[str, Any]) -> str:
     return "|".join(
@@ -446,6 +485,69 @@ def _counts(rows: Iterable[Mapping[str, Any]], name: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _selected_ligand_stereo_projection(
+    connection: sqlite3.Connection,
+) -> dict[int, dict[str, Any]]:
+    """Project every library-selected stereo record without selecting globally."""
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(ligand_stereo_evidence)")
+    }
+    if not {"ligand_id", "selected_for_release"}.issubset(columns):
+        return {}
+    evidence_fields = [
+        name for name in _LIGAND_STEREO_EVIDENCE_FIELDS if name in columns
+    ]
+    ordering = [
+        name
+        for name in (
+            "library_name",
+            "source_file_sha256",
+            "source_record_index",
+            "source_record_sha256",
+            "ligand_stereo_evidence_id",
+        )
+        if name in columns
+    ]
+    selected_fields = ", ".join(["ligand_id", *evidence_fields])
+    order_sql = ", ".join(["ligand_id", *ordering])
+    query = (
+        f"SELECT {selected_fields} FROM ligand_stereo_evidence "
+        "WHERE selected_for_release=1 "
+        f"ORDER BY {order_sql}"
+    )
+    records_by_ligand: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for raw in connection.execute(query):
+        record = dict(raw)
+        ligand_id = int(record.pop("ligand_id"))
+        for field in ("source_record_evidence_json", "stereo_elements_json"):
+            value = record.pop(field, None)
+            output_name = field.removesuffix("_json")
+            if value in (None, ""):
+                record[output_name] = None
+                continue
+            try:
+                record[output_name] = json.loads(str(value))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid selected ligand stereo {field}: ligand_id={ligand_id}"
+                ) from exc
+        records_by_ligand[ligand_id].append(record)
+
+    projection: dict[int, dict[str, Any]] = {}
+    for ligand_id, records in records_by_ligand.items():
+        payload: dict[str, Any] = {
+            "selected_stereo_evidence_count": len(records),
+            "selected_stereo_evidence": records,
+        }
+        if len(records) == 1:
+            for name, value in records[0].items():
+                output_name = name if name.startswith("stereo_") else f"stereo_{name}"
+                payload[output_name] = value
+        projection[ligand_id] = payload
+    return projection
+
+
 def _browser_payload(
     connection: sqlite3.Connection, rows: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -557,6 +659,7 @@ def _browser_payload(
             FROM ligands ORDER BY canonical_id"""
         )
     ]
+    stereo_by_ligand = _selected_ligand_stereo_projection(connection)
     ligands: list[dict[str, Any]] = []
     for ligand in ligand_rows:
         ligand["id"] = ligand["canonical_id"]
@@ -567,6 +670,15 @@ def _browser_payload(
             int(row["primary_score_present"]) for row in ligand_pairs
         )
         ligand["status_counts"] = _counts(ligand_pairs, "final_status")
+        ligand.update(
+            stereo_by_ligand.get(
+                int(ligand["ligand_id"]),
+                {
+                    "selected_stereo_evidence_count": 0,
+                    "selected_stereo_evidence": [],
+                },
+            )
+        )
         ligands.append(ligand)
 
     artifacts = []

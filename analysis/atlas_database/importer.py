@@ -1099,6 +1099,7 @@ def _summary(
             "runs",
             "receptor_contexts",
             "ligands",
+            "ligand_stereo_evidence",
             "receptor_audits",
             "pair_cells",
             "completion_records",

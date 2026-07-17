@@ -19,6 +19,7 @@ from analysis.atlas_database.artifact_contract import (
 from analysis.atlas_database.exports import (
     PAIR_COLUMNS,
     _component_coverage,
+    _selected_ligand_stereo_projection,
     apo_exploratory_ranking_eligibility,
     ranking_eligibility,
 )
@@ -57,7 +58,7 @@ DEFAULT_COARSE_SHARD_ROWS = 2_000
 DEFAULT_MAX_PAIRS = 2_000_000
 MAX_ENTITY_COUNT = 100_000
 _PRIVATE_PATH_MARKERS = ("/stor/", "/home/", "/tmp/")
-_SUPPORTED_SCHEMA_VERSIONS = {2, 3, 4, 5, 6}
+_SUPPORTED_SCHEMA_VERSIONS = {2, 3, 4, 5, 6, 7}
 _WORK_NAME = ".atlas-edge-stream-work.sqlite"
 
 _INTEGER_COLUMNS = {
@@ -395,6 +396,7 @@ def _entities(
         target_routes[target_id] = route_id
         target_labels[target_id] = _display_label(target, target_id)
 
+    stereo_by_ligand = _selected_ligand_stereo_projection(connection)
     drugs: list[dict[str, Any]] = []
     drug_routes: dict[str, str] = {}
     drug_labels: dict[str, str] = {}
@@ -412,6 +414,15 @@ def _entities(
         drug["pair_count"] = 0
         drug["primary_score_count"] = 0
         drug["status_counts"] = {}
+        drug.update(
+            stereo_by_ligand.get(
+                int(drug["ligand_id"]),
+                {
+                    "selected_stereo_evidence_count": 0,
+                    "selected_stereo_evidence": [],
+                },
+            )
+        )
         _safe_value(drug, f"drug {drug_id}")
         drugs.append(drug)
         drug_routes[drug_id] = route_id

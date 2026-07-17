@@ -13,6 +13,10 @@ from analysis.atlas_database.image_plan import (
     build_release_image_plan,
     write_release_image_plan,
 )
+from analysis.atlas_database.ligand_stereo_evidence import (
+    LigandStereoEvidenceError,
+    ingest_ligand_stereo_evidence,
+)
 from analysis.atlas_database.manifest import (
     ReleaseManifestError,
     load_release_manifest,
@@ -35,6 +39,7 @@ __all__ = [
     "ReleaseManifestError",
     "ReceptorEvidenceError",
     "ScientificAnnotationError",
+    "LigandStereoEvidenceError",
     "audit_release_inputs",
     "audit_release_readiness",
     "audit_prepared_receptor_chemistry",
@@ -44,6 +49,7 @@ __all__ = [
     "export_release_database",
     "ingest_scientific_annotations",
     "load_release_manifest",
+    "ingest_ligand_stereo_evidence",
     "prepare_release_bundle",
     "validate_release_manifest",
     "verify_release_bundle",

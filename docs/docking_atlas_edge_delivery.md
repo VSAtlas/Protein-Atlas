@@ -51,9 +51,14 @@ atlas publish edge-bundle \
 
 `--batch-rows` and `--coarse-shard-rows` accept 100 through 10,000 rows. The
 default pair ceiling is 2,000,000 and can be lowered with `--max-pairs`. Source
-SQLite schema versions 2 through 5 are accepted; absent legacy validation or
+SQLite schema versions 2 through 7 are accepted; absent legacy validation or
 receptor-chemistry fields remain null and therefore cannot silently qualify a row
-for headline ranking. The existing browser-JSON command remains unchanged.
+for headline ranking. Schema 7 can project selected, hash-bound
+`ligand_stereo_evidence` into drug records. The table is optional for backward
+compatibility: older source databases produce an empty stereo-evidence projection,
+never inferred stereochemistry. Public projections retain stereo hashes and
+outcomes but replace raw source-record JSON with a private-ledger marker. The existing
+browser-JSON command remains unchanged.
 
 `--download-base-url` is a provider-neutral HTTPS object origin. Atlas validates
 every download declared by `site_manifest.json`, checks its SHA-256 against the

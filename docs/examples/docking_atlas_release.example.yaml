@@ -61,3 +61,5 @@ annotations:
   receptors:
     path: <RECEPTOR_ANNOTATION_CSV_OR_YAML>
   known_pairs: <FROZEN_KNOWN_PAIR_CSV_OR_YAML>
+  # library_id/library_name and ligand_canonical_id must exactly match imported pairs.
+  ligand_stereo: <HASH_BOUND_LIGAND_STEREO_CSV_OR_JSONL>

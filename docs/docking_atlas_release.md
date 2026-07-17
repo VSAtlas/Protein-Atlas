@@ -294,16 +294,18 @@ Overrides are integration locations, not scientific replacements.
 
 ### Explicit scientific annotation sources
 
-The optional `annotations` mapping accepts three independent CSV, JSON, or YAML
+The optional `annotations` mapping accepts four independent CSV, JSONL, JSON, or YAML
 sources. A value may be a path string or `{path: ...}`; relative paths resolve
 from the release manifest directory.
 
-For a first release, copy the three header-complete templates in `docs/examples/`:
+For a first release, copy the three header-complete reviewed templates in `docs/examples/`:
 `docking_atlas_proteins.example.csv`, `docking_atlas_receptors.example.csv`, and
 `docking_atlas_known_pairs.example.csv`. Replace every angle-bracket placeholder;
 the examples intentionally contain no biological mapping, classification, pass/fail
 outcome, threshold result, or known-pair choice. Use an empty CSV containing only
 the header when one annotation category is deliberately not yet supplied.
+The optional fourth `ligand_stereo` source should normally be the
+`ligand_stereo_audit.csv` produced by `atlas ligands audit stereo`.
 
 - `proteins` records require `protein_key` and at least one of `uniprot_id`,
   `gene_symbol`, or `display_name`.
@@ -316,6 +318,10 @@ the header when one annotation category is deliberately not yet supplied.
 - `known_pairs` records require the same exact receptor-context key plus
   `ligand_canonical_id`. Optional fields include `selection_label` and
   `evidence_reference`.
+- `ligand_stereo` records require an imported `library_id`/`library_name` and
+  `ligand_canonical_id` plus the audit schema, exact source-file/record/structure
+  hashes, method/version, stereo counts, and status fields. Prepared-artifact
+  hashes are checked when the audit declares them verified.
 
 YAML/JSON sources may be a list or a mapping containing `records: [...]`.
 Every stored row retains the source path, source SHA-256, one-based record index,
@@ -329,8 +335,16 @@ not fill an omitted variant or pH, infer a PDB-to-UniProt mapping, reinterpret A
 as HOLO, decide that a redock passed, or choose a known pair.
 
 The private and public databases store these records in `protein_identities`,
-`receptor_annotations`, and `known_pair_selections`. Public copies path-redact
-annotation provenance just like run provenance. A known-pair selection may name a
+`receptor_annotations`, `known_pair_selections`, and `ligand_stereo_evidence`.
+Stereo selection is library-scoped: a sole evidence record is selected
+deterministically, while multiple records for the same library/ligand require an
+explicit boolean on every candidate and exactly one selected row. Ambiguous or
+unmatched evidence aborts ingestion. Drug/browser projections expose only selected
+stereo evidence and never choose globally between different library contexts.
+Here `selected_for_release` selects one evidence record; it does not qualify a
+ligand, pair, rank, or native redock.
+Public copies path-redact annotation provenance and omit raw stereo source-record
+JSON by default while retaining content hashes. A known-pair selection may name a
 ligand absent from that receptor's matrix; it is retained with a null `pair_cell_id`
 so downstream image planning reports the gap rather than silently replacing it.
 

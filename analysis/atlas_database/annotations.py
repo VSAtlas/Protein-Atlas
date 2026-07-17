@@ -13,7 +13,11 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-ANNOTATION_SOURCE_NAMES = ("proteins", "receptors", "known_pairs")
+from analysis.atlas_database.ligand_stereo_evidence import (
+    ingest_ligand_stereo_evidence,
+)
+
+ANNOTATION_SOURCE_NAMES = ("proteins", "receptors", "known_pairs", "ligand_stereo")
 EXPLICIT_QUALIFIED_STATUSES = frozenset(
     {"qualified", "explicitly_qualified", "qualification_passed"}
 )
@@ -73,13 +77,16 @@ def _load_records(path: Path, name: str) -> list[dict[str, Any]]:
         if suffix == ".csv":
             with path.open("r", encoding="utf-8", newline="") as handle:
                 records: Any = list(csv.DictReader(handle))
+        elif suffix == ".jsonl":
+            with path.open("r", encoding="utf-8") as handle:
+                records = [json.loads(line) for line in handle if line.strip()]
         elif suffix == ".json":
             records = json.loads(path.read_text(encoding="utf-8"))
         elif suffix in {".yaml", ".yml"}:
             records = yaml.safe_load(path.read_text(encoding="utf-8"))
         else:
             raise ScientificAnnotationError(
-                f"annotations.{name} must use .csv, .json, .yaml, or .yml"
+                f"annotations.{name} must use .csv, .jsonl, .json, .yaml, or .yml"
             )
     except (OSError, csv.Error, json.JSONDecodeError, yaml.YAMLError) as exc:
         raise ScientificAnnotationError(
@@ -342,9 +349,7 @@ def _receptor_evidence_contract(
                 f"{label}.provenance.{source_name} must be a list"
             )
         for audit_index, audit_value in enumerate(audits_value, start=1):
-            audit_label = (
-                f"{label}.provenance.{source_name}[{audit_index}]"
-            )
+            audit_label = f"{label}.provenance.{source_name}[{audit_index}]"
             if not isinstance(audit_value, Mapping):
                 raise ScientificAnnotationError(f"{audit_label} must be a mapping")
             audit = dict(audit_value)
@@ -358,9 +363,7 @@ def _receptor_evidence_contract(
                     f"{audit_label}.source_sha256 is required"
                 )
             if rejected:
-                rejection_reason = _required(
-                    audit, "rejection_reason", audit_label
-                )
+                rejection_reason = _required(audit, "rejection_reason", audit_label)
                 parse_status = f"rejected:{rejection_reason}"
             else:
                 parse_status = _required(audit, "parse_status", audit_label)
@@ -445,10 +448,12 @@ def _ingest_receptors(
         receptor_classification, evidence_fields, receptor_audits = (
             _receptor_evidence_contract(record, label)
         )
-        has_legacy_field = any(
-            record.get(field) not in (None, "") for field in fields
-        )
-        if not has_legacy_field and not any(evidence_fields.values()) and not receptor_audits:
+        has_legacy_field = any(record.get(field) not in (None, "") for field in fields)
+        if (
+            not has_legacy_field
+            and not any(evidence_fields.values())
+            and not receptor_audits
+        ):
             raise ScientificAnnotationError(
                 f"{label} requires at least one explicit annotation field"
             )
@@ -571,7 +576,9 @@ def ingest_scientific_annotations(
 ) -> dict[str, int]:
     """Ingest only manifest-declared annotation records; never infer values."""
     specs = manifest.get("annotations")
-    counts = {name: 0 for name in ANNOTATION_SOURCE_NAMES}
+    counts = {
+        name: 0 for name in ANNOTATION_SOURCE_NAMES if name != "ligand_stereo"
+    }
     if specs in (None, {}):
         return counts
     if not isinstance(specs, Mapping):
@@ -592,6 +599,14 @@ def ingest_scientific_annotations(
     if "known_pairs" in loaded:
         records, path, digest = loaded["known_pairs"]
         counts["known_pairs"] = _ingest_known_pairs(connection, records, path, digest)
+    if "ligand_stereo" in loaded:
+        records, path, digest = loaded["ligand_stereo"]
+        counts["ligand_stereo"] = ingest_ligand_stereo_evidence(
+            connection,
+            records,
+            path,
+            digest,
+        )
     return counts
 
 

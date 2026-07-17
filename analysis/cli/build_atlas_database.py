@@ -37,6 +37,11 @@ _PUBLIC_PATH_COLUMNS = {
     "receptor_annotations": ("source_path",),
     "receptor_audits": ("source_path",),
     "known_pair_selections": ("source_path",),
+    "ligand_stereo_evidence": (
+        "ligand_source_path",
+        "prepared_artifact_path",
+        "annotation_source_path",
+    ),
 }
 _PUBLIC_JSON_COLUMNS = {
     "releases": ("manifest_json",),
@@ -69,9 +74,13 @@ _PUBLIC_JSON_COLUMNS = {
     "receptor_audits": ("audit_json",),
     "known_pair_selections": ("source_record_json", "provenance_json"),
 }
-_ABSOLUTE_PUBLIC_PATH = re.compile(
-    r"(?<![A-Za-z0-9._:/-])/(?!/)[^\s\"'\\,\]\}]+"
-)
+_PUBLIC_PRIVATE_JSON_COLUMNS = {
+    "ligand_stereo_evidence": (
+        "source_record_evidence_json",
+        "source_record_json",
+    ),
+}
+_ABSOLUTE_PUBLIC_PATH = re.compile(r"(?<![A-Za-z0-9._:/-])/(?!/)[^\s\"'\\,\]\}]+")
 _FORBIDDEN_PUBLIC_PREFIXES = (
     "/stor/",
     "/home/",
@@ -88,6 +97,14 @@ _OMITTED_COMPLETION_JSON = json.dumps(
     {
         "public_projection": "omitted",
         "reconstruct_with": "completion_sha256 and the private evidence ledger",
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+)
+_OMITTED_STEREO_SOURCE_JSON = json.dumps(
+    {
+        "public_projection": "omitted",
+        "reconstruct_with": "source hashes and the private evidence ledger",
     },
     sort_keys=True,
     separators=(",", ":"),
@@ -208,6 +225,23 @@ def _omit_disallowed_artifact_rows(
             )
 
 
+def _omit_private_stereo_json(
+    connection: sqlite3.Connection, counts: dict[str, int]
+) -> None:
+    for table, columns in _PUBLIC_PRIVATE_JSON_COLUMNS.items():
+        for column in columns:
+            omitted = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {column} IS NOT NULL"
+                ).fetchone()[0]
+            )
+            counts["stereo_source_json_omitted"] += omitted
+            connection.execute(
+                f"UPDATE {table} SET {column}=? WHERE {column} IS NOT NULL",
+                (_OMITTED_STEREO_SOURCE_JSON,),
+            )
+
+
 def _sanitize_public_database(database_path: Path, repo_root: Path) -> dict[str, int]:
     """Create a compact public projection while retaining the private ledger."""
     counts = {
@@ -217,6 +251,7 @@ def _sanitize_public_database(database_path: Path, repo_root: Path) -> dict[str,
         "pair_result_json_omitted": 0,
         "result_attempt_json_omitted": 0,
         "completion_json_omitted": 0,
+        "stereo_source_json_omitted": 0,
         "artifact_rows_examined": 0,
         "artifact_rows_retained": 0,
         "artifact_rows_omitted": 0,
@@ -272,6 +307,7 @@ def _sanitize_public_database(database_path: Path, repo_root: Path) -> dict[str,
             "UPDATE completion_records SET completion_json=?",
             (_OMITTED_COMPLETION_JSON,),
         )
+        _omit_private_stereo_json(connection, counts)
         for table, columns in _PUBLIC_PATH_COLUMNS.items():
             for column in columns:
                 rows = connection.execute(
@@ -360,9 +396,7 @@ def _assert_public_database_safe(database_path: Path) -> None:
                     if (
                         Path(text).is_absolute()
                         or _ABSOLUTE_PUBLIC_PATH.search(text)
-                        or any(
-                            prefix in text for prefix in _FORBIDDEN_PUBLIC_PREFIXES
-                        )
+                        or any(prefix in text for prefix in _FORBIDDEN_PUBLIC_PREFIXES)
                     ):
                         raise ValueError(
                             f"public database contains a machine-local path in {table}.{column}"

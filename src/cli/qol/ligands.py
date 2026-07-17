@@ -12,6 +12,12 @@ from cli.qol.utils import _display_path
 from cli.qol import _bindings
 
 def _cmd_ligands(argv: Sequence[str]) -> int:
+    tokens = list(argv)
+    if tokens[:2] == ["audit", "stereo"]:
+        from analysis.cli.audit_ligand_stereo import main as audit_stereo
+
+        return audit_stereo(tokens[2:])
+
     from prep_ligands.ligand_library_manager import known_sources, resolve_source
 
     source_choices = sorted(
@@ -28,6 +34,16 @@ def _cmd_ligands(argv: Sequence[str]) -> int:
     sub = parser.add_subparsers(dest="ligand_cmd", required=True)
 
     sub.add_parser("sources", help="List built-in ligand library sources.")
+    audit = sub.add_parser(
+        "audit",
+        help="Audit a local ligand library without installing or downloading data.",
+    )
+    audit_sub = audit.add_subparsers(dest="audit_source", required=True)
+    audit_sub.add_parser(
+        "stereo",
+        add_help=False,
+        help="Report source-defined and unresolved ligand stereochemistry.",
+    )
 
     for name in ("fetch", "prep", "install", "run"):
         cmd = sub.add_parser(name, help=f"{name} a ligand library source.")
@@ -41,7 +57,7 @@ def _cmd_ligands(argv: Sequence[str]) -> int:
         if name == "run":
             cmd.add_argument("--no-install", action="store_true")
 
-    args, pipeline_args = parser.parse_known_args(list(argv))
+    args, pipeline_args = parser.parse_known_args(tokens)
     if args.ligand_cmd != "run" and pipeline_args:
         parser.error("unrecognized arguments: " + " ".join(pipeline_args))
     if args.ligand_cmd == "sources":

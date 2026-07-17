@@ -114,6 +114,7 @@ Ligand library helpers:
 - List supported downloadable libraries: `atlas ligands sources`
 - Download and prepare a library: `atlas ligands install chembl`
 - Plan library install without fetching or preparing: `atlas ligands install chembl --dry-run`
+- Audit an SDF/CSV library's specified and potential-but-unassigned stereochemistry: `atlas ligands audit stereo --library-id <EXACT_LIBRARY_ID> --sdf <SOURCE.sdf> --out-dir <DIR>`. CSV inputs declare their ID and structure columns; optional prepared-path/checksum columns bind source records to prepared bytes. The command emits hash-bound CSV/JSONL/summary evidence, never assigns missing stereochemistry, and never treats PDBQT as stereochemical authority. Unresolved stereo does not automatically establish validity, ranking eligibility, or native-redock qualification.
 - Other built-in libraries: `chebi`, `coconut`, `fda`, `hmdb`
 - Prepare a manually downloaded HMDB archive: `atlas ligands install hmdb --source-sdf <path>`
 - One-command install-if-needed plus docking: `atlas chembl --pdb <ID> --fast`

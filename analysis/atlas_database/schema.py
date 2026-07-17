@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -66,6 +66,65 @@ CREATE TABLE IF NOT EXISTS ligands (
     display_name TEXT,
     source_path TEXT,
     prepared_state_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ligand_stereo_evidence (
+    ligand_stereo_evidence_id INTEGER PRIMARY KEY,
+    ligand_id INTEGER NOT NULL REFERENCES ligands(ligand_id) ON DELETE CASCADE,
+    library_name TEXT NOT NULL,
+    parent_ligand_id TEXT,
+    evidence_schema_version TEXT NOT NULL,
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('sdf', 'csv')),
+    ligand_source_path TEXT NOT NULL,
+    source_file_sha256 TEXT NOT NULL,
+    source_record_index INTEGER NOT NULL CHECK (source_record_index >= 1),
+    source_record_id TEXT NOT NULL,
+    source_record_sha256 TEXT NOT NULL,
+    audited_structure_sha256 TEXT NOT NULL,
+    structure_column TEXT,
+    id_column TEXT,
+    structure_format TEXT NOT NULL,
+    prepared_artifact_path TEXT,
+    prepared_artifact_declared_sha256 TEXT,
+    prepared_artifact_computed_sha256 TEXT,
+    prepared_artifact_verification_status TEXT NOT NULL,
+    source_record_evidence_json TEXT NOT NULL,
+    parse_status TEXT NOT NULL CHECK (parse_status IN ('parsed', 'parse_failed')),
+    audit_status TEXT NOT NULL CHECK (
+        audit_status IN (
+            'no_potential_stereo', 'fully_specified',
+            'partially_unspecified', 'all_unspecified', 'parse_failed'
+        )
+    ),
+    potential_stereo_count INTEGER NOT NULL CHECK (potential_stereo_count >= 0),
+    specified_stereo_count INTEGER NOT NULL CHECK (specified_stereo_count >= 0),
+    unspecified_stereo_count INTEGER NOT NULL CHECK (unspecified_stereo_count >= 0),
+    unknown_stereo_count INTEGER NOT NULL CHECK (unknown_stereo_count >= 0),
+    tetrahedral_count INTEGER NOT NULL CHECK (tetrahedral_count >= 0),
+    double_bond_count INTEGER NOT NULL CHECK (double_bond_count >= 0),
+    other_stereo_count INTEGER NOT NULL CHECK (other_stereo_count >= 0),
+    has_unspecified_potential_stereo INTEGER NOT NULL
+        CHECK (has_unspecified_potential_stereo IN (0, 1)),
+    has_unresolved_potential_stereo INTEGER NOT NULL
+        CHECK (has_unresolved_potential_stereo IN (0, 1)),
+    canonical_isomeric_smiles TEXT,
+    canonical_smiles TEXT,
+    inchikey TEXT,
+    stereo_elements_json TEXT NOT NULL,
+    rdkit_version TEXT NOT NULL,
+    method TEXT NOT NULL,
+    error TEXT,
+    selected_for_release INTEGER NOT NULL DEFAULT 0
+        CHECK (selected_for_release IN (0, 1)),
+    selection_method TEXT,
+    annotation_source_path TEXT NOT NULL,
+    annotation_source_sha256 TEXT NOT NULL,
+    annotation_record_index INTEGER NOT NULL CHECK (annotation_record_index >= 1),
+    source_record_json TEXT NOT NULL,
+    UNIQUE (
+        library_name, ligand_id, source_file_sha256, source_record_index,
+        source_record_sha256, audited_structure_sha256
+    )
 );
 
 CREATE TABLE IF NOT EXISTS pair_cells (
@@ -264,6 +323,11 @@ CREATE TABLE IF NOT EXISTS known_pair_selections (
     provenance_json TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_ligand_stereo_ligand
+    ON ligand_stereo_evidence(ligand_id, library_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ligand_stereo_selected
+    ON ligand_stereo_evidence(library_name, ligand_id)
+    WHERE selected_for_release = 1;
 CREATE INDEX IF NOT EXISTS idx_pair_cells_status ON pair_cells(final_status);
 CREATE INDEX IF NOT EXISTS idx_pair_cells_score ON pair_cells(atlas_score DESC);
 CREATE INDEX IF NOT EXISTS idx_pair_cells_ligand ON pair_cells(ligand_id, atlas_score DESC);
