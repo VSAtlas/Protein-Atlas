@@ -181,3 +181,10 @@ keeps parallel workers local, requires staged and draft-PR self-review, and
 forbids direct `main` pushes, auto-merge, force-push, or branch deletion without
 approval. Adds truthful process lifecycle diagnostics, restores production and
 ML-audit policy, and recovers missing ledger records without reordering history.
+
+## Atlasv0.0.21 - Exclude runtime data pointer from integration
+
+Removes the AtlasSPD runtime-data DVC pointer update discovered during draft-PR
+self-review. The integration PR now contains source, tests, configuration,
+documentation, and the canonical tracked FDA mapping only; the large generated
+SPD dataset remains outside the patch and under its prior DVC reference.

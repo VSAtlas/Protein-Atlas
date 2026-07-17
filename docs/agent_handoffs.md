@@ -3108,3 +3108,9 @@ Change: Defined one remote Atlas integration branch and one draft-PR review path
 Why: Per-version agent pushes created ambiguous sibling branches, intentional pipeline exits were initially mislabeled as unhandled exceptions, and the rescued documentation mixed genuine records with moved duplicates and deletions.
 Impact: `main` is release-only; workers remain local; Atlas version labels identify narrow commits; clean, failed, interrupted, and exceptional exits are distinct; 51 historical handoffs are appended with committed history preserved. No production or docking run was launched.
 Next: Run the final integration gate, push only `integration/atlas-main`, open and self-review one draft GitHub PR, and wait for explicit user approval plus required independent review before any merge or deletion.
+
+Date: 2026-07-17 | Task: Atlasv0.0.21 draft-PR scope correction | Owner: Codex
+Change: Restored `data/AtlasSPD_phase1.dvc` to the `main` reference after the draft-PR self-review identified an unintended 15 GB runtime-data pointer update.
+Why: Atlas integration commits must not stage `data/`, and a generated dataset pointer is not required for the reviewed source and documentation changes.
+Impact: The PR no longer changes any `data/`, `outputs/`, protected-directory, backup, or runtime-artifact path. Existing DVC data and every rescued branch/worktree remain untouched.
+Next: Push the narrow correction to `integration/atlas-main`, recheck the GitHub diff and check state, and keep the PR draft until independent review and explicit user approval.

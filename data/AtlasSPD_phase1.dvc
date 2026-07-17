@@ -1,6 +1,6 @@
 outs:
-- md5: cf6a9302eec4918162b5dae4775ba8f9.dir
-  size: 15007187335
-  nfiles: 10289
+- md5: 078dd37ddd915d27a5dc239137bd4e61.dir
+  size: 511179422
+  nfiles: 131
   hash: md5
   path: AtlasSPD_phase1
