@@ -215,8 +215,20 @@ Refresh structured exposure context and join it to the frozen Phase 1 table:
 
 ```bash
 python -m analysis.cli.refresh_phase1_pk_context \
-  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_15
+  --out-dir data/AtlasSPD_phase1/pk_context_v0_0_23
 ```
+
+Recover the public source lineage behind SPD Cmax values before a refresh with:
+
+```bash
+python -m analysis.cli.recover_spd_cmax_context \
+  --out-dir data/external/spd/cmax_source_recovery
+```
+
+This recovery is fail-closed: NIBR and PharmaPendium provider labels and
+Smit-derived aggregate observations remain contextual unless an exact original
+source record is explicitly adjudicated. See
+[`spd_cmax_source_recovery.md`](spd_cmax_source_recovery.md).
 
 The command writes `pk_context_long.csv`, `pk_context_representative.csv`,
 `AtlasSPD_phase1_pk_enriched.csv`, endpoint-specific clearance and absolute-

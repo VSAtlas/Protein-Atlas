@@ -127,9 +127,9 @@ def _clearance_specs(
         ),
     )
     training_candidates = (
-        *_plain(f"{endpoint}_clearance_training_allowed"),
+        Candidate(f"{endpoint}_clearance_training_allowed"),
+        Candidate(f"pk_context_{endpoint}_clearance_training_allowed"),
         Candidate(f"{joined_prefix}training_allowed"),
-        _contextual("training_allowed", "measurement_context", context),
         _contextual(
             "pk_context_training_allowed",
             "pk_context_measurement_context",
@@ -351,6 +351,31 @@ _CLEARANCE_FIELD_SPECS = (
         value_aliases=("systemic_clearance_value",),
         unit_aliases=("systemic_clearance_unit",),
     ),
+    *_clearance_specs(
+        "apparent_oral",
+        value_aliases=("apparent_oral_clearance_value",),
+        unit_aliases=("apparent_oral_clearance_unit",),
+    ),
+    *_clearance_specs(
+        "apparent_plasma",
+        value_aliases=("apparent_plasma_clearance_value",),
+        unit_aliases=("apparent_plasma_clearance_unit",),
+    ),
+    *_clearance_specs(
+        "plasma",
+        value_aliases=("plasma_clearance_value",),
+        unit_aliases=("plasma_clearance_unit",),
+    ),
+    *_clearance_specs(
+        "blood",
+        value_aliases=("blood_clearance_value",),
+        unit_aliases=("blood_clearance_unit",),
+    ),
+    *_clearance_specs(
+        "total_body",
+        value_aliases=("total_body_clearance_value",),
+        unit_aliases=("total_body_clearance_unit",),
+    ),
 )
 
 
@@ -430,9 +455,11 @@ _BIOAVAILABILITY_FIELD_SPECS = (
         "bioavailability_f_training_allowed",
         "boolean",
         (
-            *_plain("bioavailability_f_training_allowed"),
+            Candidate("bioavailability_f_training_allowed"),
+            Candidate("absolute_bioavailability_training_allowed"),
+            Candidate("pk_context_bioavailability_f_training_allowed"),
+            Candidate("pk_context_absolute_bioavailability_training_allowed"),
             Candidate("pk_bioavailability_absolute_training_allowed"),
-            _absolute_bioavailability_candidate("training_allowed"),
             _absolute_bioavailability_candidate(
                 "training_allowed",
                 prefix="pk_context_",
@@ -523,7 +550,14 @@ _TAIL_FIELD_SPECS = (
     _field("extraction_method", "text", _plain("extraction_method")),
     _field("source_confidence", "text", _plain("source_confidence")),
     _field("context_status", "text", _plain("context_status")),
-    _field("training_allowed", "boolean", _plain("training_allowed")),
+    _field(
+        "training_allowed",
+        "boolean",
+        (
+            Candidate("pk_source_training_allowed"),
+            Candidate("pk_context_training_allowed"),
+        ),
+    ),
     _field("license_note", "text", _plain("license_note")),
     _field("source_missing_reason", "text", _plain("missing_reason")),
 )
@@ -796,6 +830,22 @@ def _truthy_at(frame: pd.DataFrame, position: int, *columns: str) -> bool:
     return value in _TRUE_TEXT
 
 
+def _exact_pk_context_identity(frame: pd.DataFrame, position: int) -> bool:
+    model_inchikey = _text_at(
+        frame,
+        position,
+        "inchikey",
+        "drug_inchikey",
+        "ligand_inchikey",
+    ).upper()
+    context_inchikey = _text_at(frame, position, "pk_context_inchikey").upper()
+    return bool(
+        model_inchikey
+        and context_inchikey
+        and model_inchikey == context_inchikey
+    )
+
+
 def _value_present(frame: pd.DataFrame, position: int, column: str) -> bool:
     return column in frame and not _is_missing(frame[column].iloc[position])
 
@@ -807,6 +857,18 @@ def _target_provenance(
 ) -> tuple[str, str, str]:
     if target_endpoint == SPD_FREE_CMAX_TARGET:
         source = "SPD"
+        context_source = _text_at(frame, position, "pk_context_source_name")
+        if context_source.casefold() == "spd":
+            return (
+                source,
+                _text_at(frame, position, "pk_context_study_id"),
+                _text_at(
+                    frame,
+                    position,
+                    "pk_context_pk_context_id",
+                    "pk_context_context_id",
+                ),
+            )
         row_source = _text_at(frame, position, "source_name")
         scenario = ""
         study = ""
@@ -834,6 +896,7 @@ def _alignment(
     output_column: str,
     selected_source: str | None,
     target_endpoint: str,
+    require_exact_identity: bool = False,
 ) -> tuple[str, str, bool]:
     if not _value_present(frame, position, output_column):
         return (
@@ -854,10 +917,71 @@ def _alignment(
     from_pk_context = selected_source.startswith("pk_context_")
     if target_endpoint == SPD_FREE_CMAX_TARGET:
         if from_pk_context:
+            source = _text_at(frame, position, "pk_context_source_name")
+            scenario = _text_at(
+                frame,
+                position,
+                "pk_context_pk_context_id",
+                "pk_context_context_id",
+            )
+            record = _text_at(
+                frame,
+                position,
+                "pk_context_study_id",
+                "pk_context_source_record_id",
+            )
+            target_value = pd.to_numeric(
+                pd.Series([frame[target_column].iloc[position]]), errors="coerce"
+            ).iloc[0]
+            context_value = pd.to_numeric(
+                pd.Series([frame["pk_context_free_cmax_um"].iloc[position]]),
+                errors="coerce",
+            ).iloc[0]
+            same_value = (
+                pd.notna(target_value)
+                and pd.notna(context_value)
+                and abs(float(target_value) - float(context_value))
+                <= 1e-9 * max(abs(float(target_value)), 1.0)
+            )
+            if (
+                source.casefold() != "spd"
+                or not scenario
+                or not record
+                or not same_value
+            ):
+                return (
+                    "mismatched_external_context_for_spd_target",
+                    "pk_context source/scenario does not exactly match the SPD free-Cmax target",
+                    False,
+                )
+            if require_exact_identity and not _exact_pk_context_identity(
+                frame, position
+            ):
+                return (
+                    "non_exact_pk_context_join",
+                    "training requires a full-InChIKey PK context join",
+                    False,
+                )
+            dose_context = _text_at(
+                frame, position, "pk_context_dose_context_type"
+            ).casefold()
+            if field == "dose" and dose_context != "cmax_study_matched":
+                return (
+                    "dose_not_cmax_scenario_matched",
+                    "dose_context_type is not cmax_study_matched",
+                    False,
+                )
+            rights = _truthy_at(frame, position, "pk_context_training_allowed")
+            if not rights:
+                return (
+                    "aligned_same_cmax_scenario",
+                    "SPD endpoint context aligns, but source training_allowed is not affirmative",
+                    False,
+                )
             return (
-                "mismatched_external_context_for_spd_target",
-                "pk_context administration belongs to an external Cmax scenario, not the SPD free-Cmax target",
-                False,
+                "aligned_same_cmax_scenario",
+                "recovered SPD source, record, and Cmax scenario align",
+                True,
             )
         source = _text_at(frame, position, "source_name")
         scenario = _text_at(frame, position, "pk_context_id", "source_record_id")
@@ -870,6 +994,15 @@ def _alignment(
             return (
                 "source_study_or_cmax_scenario_unverified",
                 "SPD source and same-row Cmax scenario identity are not jointly verified",
+                False,
+            )
+        # Backward-compatible direct calls may identify an explicitly
+        # SPD-namespaced field. The production resolver does not emit these
+        # names, so ordinary dose/route columns cannot borrow generic rights.
+        if not selected_source.casefold().startswith("spd_"):
+            return (
+                "pk_specific_training_rights_missing",
+                "generic training_allowed cannot authorize an unnamespaced PK feature",
                 False,
             )
         rights = _truthy_at(frame, position, "training_allowed")
@@ -902,6 +1035,14 @@ def _alignment(
             return (
                 "source_study_or_cmax_scenario_unverified",
                 "pk_context source, study/record, and scenario identity are required",
+                False,
+            )
+        if require_exact_identity and not _exact_pk_context_identity(
+            frame, position
+        ):
+            return (
+                "non_exact_pk_context_join",
+                "training requires a full-InChIKey PK context join",
                 False,
             )
         if field == "dose" and dose_context != "cmax_study_matched":
@@ -964,6 +1105,7 @@ def _add_endpoint_alignment(
                 output_column=output_column,
                 selected_source=selected,
                 target_endpoint=target_endpoint,
+                require_exact_identity=True,
             )
             results[field]["status"].append(status)
             results[field]["reason"].append(reason)

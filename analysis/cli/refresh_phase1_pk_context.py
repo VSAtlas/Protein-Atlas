@@ -29,9 +29,16 @@ from analysis.external.source_tables import download_to_cache
 from analysis.external.spl_pk_adjudication import adjudicate_spl_pk_candidates
 from analysis.external.spl_pk_candidate_review import review_spl_pk_candidates
 from analysis.external.spl_pk_context import load_adjudicated_spl_pk_context
+from analysis.external.spd_cmax_context import (
+    SMIT_COMMIT,
+    SPD_WORKBOOK_SHA256,
+    recover_spd_cmax_context,
+    validate_spd_recovery_cache,
+    verify_spd_workbook,
+)
 
 
-VERSION = "Atlasv0.0.15"
+VERSION = "Atlasv0.0.23"
 NCATS_FRDB_URL = "https://drugs.ncats.io/downloads-public/frdb-v2024-12-30.zip"
 NCATS_FRDB_SOURCES = (
     ("2024-12-30", NCATS_FRDB_URL),
@@ -370,11 +377,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validated ligand-base identity mapping used for PK-DB matching.",
     )
     parser.add_argument("--spd-workbook", type=Path, default=DEFAULT_SPD)
+    parser.add_argument(
+        "--spd-workbook-sha256",
+        default=SPD_WORKBOOK_SHA256,
+        help="Expected SHA-256 for the exact SPD workbook release.",
+    )
+    parser.add_argument(
+        "--spd-cmax-recovery",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help=(
+            "Recover pinned original-source provenance for SPD Cmax rows. "
+            "Only verified single-source contexts can populate primary fields."
+        ),
+    )
+    parser.add_argument(
+        "--spd-cmax-administration-context",
+        type=Path,
+        default=None,
+        help="Explicit reviewed SPD Cmax administration-context CSV.",
+    )
     parser.add_argument("--external-root", type=Path, default=Path("data/external"))
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_15"),
+        default=Path("data/AtlasSPD_phase1/pk_context_v0_0_23"),
     )
     parser.add_argument(
         "--openfda", choices=("auto", "always", "never"), default="auto"
@@ -428,6 +455,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not args.model_table.exists():
         raise FileNotFoundError(f"Phase 1 model table not found: {args.model_table}")
+    if args.spd_workbook.is_file():
+        verify_spd_workbook(
+            args.spd_workbook,
+            expected_sha256=args.spd_workbook_sha256,
+        )
     model_table = pd.read_csv(args.model_table, low_memory=False)
     if not args.fda_mapping.is_file():
         raise FileNotFoundError(
@@ -452,8 +484,87 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
 
+    recovered_spd_context = args.spd_cmax_administration_context
+    default_spd_recovery = args.external_root / "spd" / "cmax_source_recovery"
+    default_spd_context = (
+        default_spd_recovery / "spd_cmax_administration_context.csv"
+    )
+    default_cache_compatible = validate_spd_recovery_cache(
+        default_spd_recovery,
+        expected_workbook_sha256=args.spd_workbook_sha256,
+    )
+    should_recover = (
+        recovered_spd_context is None
+        and (
+            args.spd_cmax_recovery == "always"
+            or (
+                args.spd_cmax_recovery == "auto"
+                and not default_cache_compatible
+            )
+        )
+    )
+    if should_recover:
+        if not args.spd_workbook.is_file():
+            error = FileNotFoundError(
+                f"SPD workbook required for source recovery: {args.spd_workbook}"
+            )
+            if args.spd_cmax_recovery == "always":
+                raise error
+            statuses.append(
+                {
+                    "source": "SPD_Cmax_source_recovery",
+                    "status": "unavailable",
+                    "path": str(default_spd_recovery),
+                    "rows": 0,
+                    "reason": f"FileNotFoundError: {error}",
+                }
+            )
+        else:
+            try:
+                recover_spd_cmax_context(
+                    workbook=args.spd_workbook,
+                    out_dir=default_spd_recovery,
+                    source_dir=(
+                        args.external_root
+                        / "spd"
+                        / f"smit_cmax_source_{SMIT_COMMIT[:12]}"
+                    ),
+                    download=not args.skip_download,
+                    expected_workbook_sha256=args.spd_workbook_sha256,
+                )
+                default_cache_compatible = validate_spd_recovery_cache(
+                    default_spd_recovery,
+                    expected_workbook_sha256=args.spd_workbook_sha256,
+                )
+                if not default_cache_compatible:
+                    raise RuntimeError(
+                        "regenerated SPD Cmax recovery cache failed validation"
+                    )
+                recovered_spd_context = default_spd_context
+            except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                if args.spd_cmax_recovery == "always":
+                    raise
+                statuses.append(
+                    {
+                        "source": "SPD_Cmax_source_recovery",
+                        "status": "unavailable",
+                        "path": str(default_spd_recovery),
+                        "rows": 0,
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+    if (
+        recovered_spd_context is None
+        and args.spd_cmax_recovery != "never"
+        and default_cache_compatible
+    ):
+        recovered_spd_context = default_spd_context
+
     if args.spd_workbook.exists():
-        spd = load_spd_pk_context(args.spd_workbook)
+        spd = load_spd_pk_context(
+            args.spd_workbook,
+            administration_context=recovered_spd_context,
+        )
         parts.append(spd)
         statuses.append(
             {
@@ -461,7 +572,11 @@ def main(argv: list[str] | None = None) -> int:
                 "status": "ingested",
                 "path": str(args.spd_workbook),
                 "rows": int(len(spd)),
-                "reason": "",
+                "reason": (
+                    f"administration context: {recovered_spd_context}"
+                    if recovered_spd_context is not None
+                    else "SPD workbook has no row-level administration context"
+                ),
             }
         )
     else:

@@ -197,3 +197,13 @@ fresh remote-ancestry check, exact staged-diff review, a separate read-only agen
 review, focused verification before push, and GitHub Actions inspection after
 push while continuing to forbid force-pushes and unrequested remote worker
 branches.
+
+## Atlasv0.0.23 - Recover SPD Cmax provenance and harden PK materialization
+
+Adds checksum-pinned recovery of the public SPD and Smit Cmax lineage, keeps
+aggregate or parser-derived administration context out of training until explicit
+source adjudication, and wires reviewed context into Phase 1 PK refreshes. PK
+materialization now uses PK-specific rights fields and preserves apparent plasma,
+plasma, and other clearance endpoints separately. A clean four-key rebuild merges
+v0.0.15 PK context into the 19,359-row mechanistic table without overwriting
+primary values; external-context administration remains a separate sensitivity.

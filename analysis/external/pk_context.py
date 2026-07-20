@@ -482,7 +482,11 @@ def finalize_context(frame: pd.DataFrame) -> pd.DataFrame:
     return out.drop_duplicates("pk_context_id", keep="first").reset_index(drop=True)
 
 
-def load_spd_pk_context(path: str | Path) -> pd.DataFrame:
+def load_spd_pk_context(
+    path: str | Path,
+    *,
+    administration_context: str | Path | pd.DataFrame | None = None,
+) -> pd.DataFrame:
     raw = pd.read_excel(path, sheet_name="S Data 2", header=2)
     out = _empty(raw.index)
     out["drug_id"] = _text(raw, "drugcentral struct id")
@@ -508,7 +512,17 @@ def load_spd_pk_context(path: str | Path) -> pd.DataFrame:
     out["license_note"] = (
         "CC-BY-4.0 article supplement; upstream source restrictions may apply"
     )
-    return finalize_context(out)
+    context = finalize_context(out)
+    if administration_context is None:
+        return context
+    from analysis.external.spd_cmax_context import (
+        merge_verified_spd_administration_context,
+    )
+
+    merged = merge_verified_spd_administration_context(
+        context, administration_context
+    ).drop(columns="pk_context_id", errors="ignore")
+    return finalize_context(merged)
 
 
 def load_existing_phase1_pk_context(model_table: pd.DataFrame) -> pd.DataFrame:
@@ -838,15 +852,15 @@ def select_representative_pk_context(context: pd.DataFrame) -> pd.DataFrame:
         index=ranked.index,
     )
     ranked["_context_rank"] = context_present.sum(axis=1) * -1
-    ranked["_drug_key"] = _text(ranked, "drug_name").map(normalize_key)
-    missing = ranked["_drug_key"].str.len().eq(0)
-    ranked.loc[missing, "_drug_key"] = _text(
-        ranked.loc[missing], "inchikey"
-    ).str.upper()
+    ranked["_drug_key"] = _text(ranked, "inchikey").str.upper()
     missing = ranked["_drug_key"].str.len().eq(0)
     ranked.loc[missing, "_drug_key"] = _text(ranked.loc[missing], "drug_id").map(
         normalize_key
     )
+    missing = ranked["_drug_key"].str.len().eq(0)
+    ranked.loc[missing, "_drug_key"] = _text(
+        ranked.loc[missing], "drug_name"
+    ).map(normalize_key)
     ranked = ranked.sort_values(
         [
             "_measurement_rank",
@@ -897,15 +911,15 @@ def select_endpoint_pk_context(
     ranked["_confidence_rank"] = (
         ranked["source_confidence"].map({"high": 0, "medium": 1, "low": 2}).fillna(3)
     )
-    ranked["_drug_key"] = _text(ranked, "drug_name").map(normalize_key)
-    missing = ranked["_drug_key"].str.len().eq(0)
-    ranked.loc[missing, "_drug_key"] = _text(
-        ranked.loc[missing], "inchikey"
-    ).str.upper()
+    ranked["_drug_key"] = _text(ranked, "inchikey").str.upper()
     missing = ranked["_drug_key"].str.len().eq(0)
     ranked.loc[missing, "_drug_key"] = _text(ranked.loc[missing], "drug_id").map(
         normalize_key
     )
+    missing = ranked["_drug_key"].str.len().eq(0)
+    ranked.loc[missing, "_drug_key"] = _text(
+        ranked.loc[missing], "drug_name"
+    ).map(normalize_key)
     ranked["_endpoint_group"] = (
         ranked["_drug_key"] + "|" + _text(ranked, "measurement_context").str.casefold()
     )
