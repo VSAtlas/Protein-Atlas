@@ -116,3 +116,19 @@ bound to 1,327 validated Phase 1 ligand identities, inventories 838 exact-match
 endpoint observations, and keeps all 46 recovered context rows quarantined
 without original-source training rights. The SPD exposure label is unchanged,
 and primary dose remains tied to the selected Cmax study.
+
+## Atlasv0.0.16 - Correct and gate SPD receptor-target identities
+
+Adds a versioned, fail-closed receptor-target mapping contract for 9I52, 6HUJ,
+and 8HCQ. Strict mode rebuilds the 388 9I52 rows from DRD1/P21728 source
+evidence, retains legacy output for comparison, and refuses to transfer three
+unmatched ADRB2 labels to DRD1. It preserves 6HUJ and 8HCQ legacy rows for
+diagnosis while excluding their 570 and 278 unresolved rows from strict
+model-ready tables without selecting a biological identity.
+
+The comparison CLI hashes all serialized inputs and mapping evidence, verifies
+the prepared 9I52 chain-R/site evidence, rejects row multiplication or unrelated
+PDB changes, and reports binary flips separately from known/unknown
+transitions. The validated Phase 1 rebuild kept 23,849 raw rows, marked 23,001
+strict-eligible and 848 strict-ineligible, and did not regenerate external
+four-state evidence, frozen Phase 1 tables, or models.

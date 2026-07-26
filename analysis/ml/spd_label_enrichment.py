@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from analysis.external.spd import SPD_LABEL_POLICY_VERSION
+from analysis.ml.spd_receptor_mapping import apply_receptor_target_contract
 
 
 DEFAULT_SPD_PANEL_CANDIDATES = [
@@ -30,6 +31,43 @@ DEFAULT_LIGAND_MAP_CANDIDATES = [
     Path("chemdb/data/fda_mapping_from_pdbqt.csv"),
     Path("data/fda_mapping_from_pdbqt.csv"),
 ]
+
+SPD_RECEPTOR_STRICT_ELIGIBLE_COL = "spd_receptor_mapping_strict_eligible"
+SPD_RECEPTOR_REVISED_IDENTITY_COLS = {
+    "target_id": "spd_receptor_mapping_revised_target_id",
+    "target_gene": "spd_receptor_mapping_revised_target_gene",
+    "target_uniprot": "spd_receptor_mapping_revised_target_uniprot",
+}
+SPD_LABEL_REFRESH_COLS = [
+    "spd_drug_id",
+    "spd_target_id",
+    "spd_ac50_uM",
+    "free_cmax_um",
+    "cmax_um",
+    "exposure_margin",
+    "spd_exposure_label",
+    "spd_exposure_relevant",
+    "spd_exposure_weak",
+    "spd_exposure_unlikely",
+    "spd_label_status",
+    "spd_missing_reason",
+    "spd_label_policy_version",
+    "spd_activity_relation",
+    "spd_target_protein_class",
+    "spd_drugcentral_struct_id",
+    "spd_inchikey",
+    "spd_assay_count",
+    "spd_assay_ids",
+    "spd_assay_name",
+    "spd_source",
+]
+SPD_STRICT_DIRECT_LABEL_REFRESH_COLS = [
+    "spd_binding_label",
+    "spd_activity_label",
+    "activity_label",
+    "ml_binary_label",
+]
+SPD_STRICT_TARGET_CONTEXT_COLS = ["protein_class", "target_family"]
 
 
 def _repo_root() -> Path:
@@ -61,6 +99,13 @@ def _lower(value: Any) -> str:
 
 def _upper(value: Any) -> str:
     return _clean(value).upper()
+
+
+def _bool_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    return normalized.isin({"1", "true", "yes"})
 
 
 def _first_nonempty_frame(df: pd.DataFrame, cols: list[str]) -> pd.Series:
@@ -274,6 +319,8 @@ def enrich_spd_labels_for_run_master(
     target_map_path: str | Path | None = None,
     ligand_map_path: str | Path | None = None,
     target_metadata_path: str | Path | None = None,
+    receptor_mapping_mode: str = "legacy",
+    receptor_mapping_contract_path: str | Path | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Join local SPD assay labels to an Atlas run master table when needed.
 
@@ -282,16 +329,50 @@ def enrich_spd_labels_for_run_master(
     rather than production negatives.
     """
 
+    contract_input = source.copy()
+    if "_spd_contract_input_order" in contract_input.columns:
+        raise ValueError("Reserved column _spd_contract_input_order already exists")
+    contract_input["_spd_contract_input_order"] = range(len(contract_input))
+    receptor_mapping_kwargs: dict[str, Any] = {"mode": receptor_mapping_mode}
+    if receptor_mapping_contract_path is not None:
+        receptor_mapping_kwargs["contract_path"] = receptor_mapping_contract_path
+    mapped_source, receptor_mapping_summary = apply_receptor_target_contract(
+        contract_input,
+        **receptor_mapping_kwargs,
+    )
+    expected_order = list(range(len(source)))
+    observed_order = mapped_source.get(
+        "_spd_contract_input_order", pd.Series(dtype="int64")
+    ).tolist()
+    if len(mapped_source) != len(source) or observed_order != expected_order:
+        raise ValueError(
+            "SPD receptor mapping contract changed source row count or order "
+            f"(input rows={len(source)}, output rows={len(mapped_source)})"
+        )
+    source = mapped_source.drop(columns=["_spd_contract_input_order"])
+    strict_mode = receptor_mapping_mode == "strict"
     summary: dict[str, Any] = {
         "status": "skipped",
         "reason": "not_needed",
         "input_rows": int(len(source)),
+        "receptor_mapping": receptor_mapping_summary,
     }
     has_current_spd_labels = _has_current_spd_label_data(source)
     has_any_spd_labels = _has_any_spd_label_data(source)
-    if has_current_spd_labels:
+    if has_current_spd_labels and not strict_mode:
         return source, summary
     if "pdb_id" not in source.columns or not ({"ligand_base", "ligand", "ligand_file"} & set(source.columns)):
+        requires_rebuild = _bool_series(
+            source.get(
+                "spd_receptor_mapping_requires_target_derived_rebuild",
+                pd.Series(False, index=source.index),
+            )
+        )
+        if strict_mode and requires_rebuild.any():
+            raise ValueError(
+                "Strict receptor mapping requires target-derived label rebuilding, "
+                "but the source lacks PDB or ligand join columns"
+            )
         summary.update({"reason": "missing_pdb_or_ligand_columns"})
         return source, summary
 
@@ -305,35 +386,71 @@ def enrich_spd_labels_for_run_master(
         if value is None
     ]
     if missing:
+        requires_rebuild = _bool_series(
+            source.get(
+                "spd_receptor_mapping_requires_target_derived_rebuild",
+                pd.Series(False, index=source.index),
+            )
+        )
+        if strict_mode and requires_rebuild.any():
+            raise ValueError(
+                "Strict receptor mapping requires target-derived label rebuilding, "
+                f"but mapping inputs are unavailable: {', '.join(missing)}"
+            )
         summary.update({"reason": "missing_default_mapping_files", "missing_files": missing})
         return source, summary
+    assert panel_path is not None
+    assert target_path is not None
+    assert ligand_path is not None
 
-    out = source.copy()
+    full_source = source.copy()
+    full_source["_spd_source_row_order"] = range(len(full_source))
+    strict_eligible = pd.Series(True, index=full_source.index, dtype=bool)
+    rebuild = pd.Series(False, index=full_source.index, dtype=bool)
+    if strict_mode:
+        if SPD_RECEPTOR_STRICT_ELIGIBLE_COL not in full_source.columns:
+            raise ValueError(
+                "Strict SPD receptor mapping did not produce "
+                f"{SPD_RECEPTOR_STRICT_ELIGIBLE_COL}"
+            )
+        strict_eligible = _bool_series(full_source[SPD_RECEPTOR_STRICT_ELIGIBLE_COL])
+        rebuild = full_source.get(
+            "spd_receptor_mapping_requires_target_derived_rebuild",
+            pd.Series(False, index=full_source.index),
+        )
+        rebuild = _bool_series(rebuild)
+    selective_strict_rebuild = (
+        strict_mode and has_current_spd_labels and rebuild.any()
+    )
+    unchanged = (
+        full_source.loc[~rebuild].copy()
+        if selective_strict_rebuild
+        else pd.DataFrame()
+    )
+    out = (
+        full_source.loc[rebuild].copy()
+        if selective_strict_rebuild
+        else full_source.copy()
+    )
+    if strict_mode:
+        for col in SPD_STRICT_TARGET_CONTEXT_COLS:
+            if col in out.columns:
+                out.loc[
+                    _bool_series(
+                        out[
+                            "spd_receptor_mapping_requires_target_derived_rebuild"
+                        ]
+                    ),
+                    col,
+                ] = pd.NA
     if has_any_spd_labels:
-        refresh_cols = [
-            "spd_drug_id",
-            "spd_target_id",
-            "spd_ac50_uM",
-            "free_cmax_um",
-            "cmax_um",
-            "exposure_margin",
-            "spd_exposure_label",
-            "spd_exposure_relevant",
-            "spd_exposure_weak",
-            "spd_exposure_unlikely",
-            "spd_label_status",
-            "spd_missing_reason",
-            "spd_label_policy_version",
-            "spd_activity_relation",
-            "spd_target_protein_class",
-            "spd_drugcentral_struct_id",
-            "spd_inchikey",
-            "spd_assay_count",
-            "spd_assay_ids",
-            "spd_assay_name",
-            "spd_source",
-        ]
-        out = out.drop(columns=[col for col in refresh_cols if col in out.columns], errors="ignore")
+        refresh_cols = list(SPD_LABEL_REFRESH_COLS)
+        if strict_mode:
+            refresh_cols.extend(SPD_STRICT_DIRECT_LABEL_REFRESH_COLS)
+        out = out.drop(
+            columns=[col for col in refresh_cols if col in out.columns],
+            errors="ignore",
+        )
     if "ligand_base" not in out.columns:
         for col in ["ligand_file", "ligand"]:
             if col in out.columns:
@@ -345,9 +462,39 @@ def enrich_spd_labels_for_run_master(
     ligand_map = _read_fda_ligand_map(ligand_path)
     target_map = _read_target_map(target_path, metadata_path)
     spd_panel = _read_spd_panel(panel_path)
+    if selective_strict_rebuild:
+        # Historical model-ready tables already carry columns emitted by these
+        # mapping joins. Refreshing only the revised rows must remove that stale
+        # projection first; otherwise pandas can create duplicate suffixed
+        # columns (for example ``protein_class_target_map``) whose selection
+        # yields a DataFrame instead of a Series.
+        ligand_projection_cols = set(ligand_map.columns) - {"ligand_base"}
+        target_projection_cols = set(target_map.columns) - {"pdb_id"}
+        stale_mapping_cols = (
+            ligand_projection_cols
+            | target_projection_cols
+            | {f"{col}_fda_map" for col in ligand_projection_cols}
+            | {f"{col}_target_map" for col in target_projection_cols}
+        )
+        out = out.drop(
+            columns=[col for col in stale_mapping_cols if col in out.columns],
+            errors="ignore",
+        )
 
-    out = out.merge(ligand_map, on="ligand_base", how="left", suffixes=("", "_fda_map"))
-    out = out.merge(target_map, on="pdb_id", how="left", suffixes=("", "_target_map"))
+    out = out.merge(
+        ligand_map,
+        on="ligand_base",
+        how="left",
+        suffixes=("", "_fda_map"),
+        validate="many_to_one",
+    )
+    out = out.merge(
+        target_map,
+        on="pdb_id",
+        how="left",
+        suffixes=("", "_target_map"),
+        validate="many_to_one",
+    )
 
     existing_drug = out["drug_id"] if "drug_id" in out.columns else pd.Series("", index=out.index)
     out["drug_id"] = _first_nonempty_series(existing_drug, out["_mapped_drug_id"])
@@ -364,10 +511,47 @@ def enrich_spd_labels_for_run_master(
             out[col] = out[mapped_col]
     if "protein_class_target_map" in out.columns:
         out["protein_class"] = _first_nonempty_series(out.get("protein_class", pd.Series("", index=out.index)), out["protein_class_target_map"])
+    if strict_mode:
+        for target_col, revised_col in SPD_RECEPTOR_REVISED_IDENTITY_COLS.items():
+            if revised_col in out.columns:
+                revised = out[revised_col]
+                has_revised_identity = revised.notna() & revised.map(_clean).ne("")
+                out.loc[has_revised_identity, target_col] = revised.loc[
+                    has_revised_identity
+                ]
+        rebuild = _bool_series(
+            out.get(
+                "spd_receptor_mapping_requires_target_derived_rebuild",
+                pd.Series(False, index=out.index),
+            )
+        )
+        if rebuild.any() and "protein_class" in out.columns:
+            revised_metadata = _read_target_metadata(metadata_path)
+            class_by_gene = (
+                revised_metadata.drop_duplicates("gene", keep="first")
+                .set_index("gene")["protein_class"]
+                if not revised_metadata.empty
+                else pd.Series(dtype="object")
+            )
+            revised_gene = out["target_gene"].map(_upper)
+            out.loc[rebuild, "protein_class"] = revised_gene.loc[rebuild].map(
+                class_by_gene
+            )
 
     out["_spd_drug_match_key"] = _first_nonempty_frame(out, ["drug_id", "generic_name", "display_name", "_mapped_drug_id"]).map(_lower)
     out["_spd_target_match_key"] = _first_nonempty_frame(out, ["target_gene", "target_id", "_mapped_target_id"]).map(_upper)
-    out = out.merge(spd_panel, on=["_spd_drug_match_key", "_spd_target_match_key"], how="left")
+    enriched_input_rows = len(out)
+    out = out.merge(
+        spd_panel,
+        on=["_spd_drug_match_key", "_spd_target_match_key"],
+        how="left",
+        validate="many_to_one",
+    )
+    if out["_spd_source_row_order"].duplicated().any() or len(out) != enriched_input_rows:
+        raise ValueError(
+            "SPD enrichment multiplied source rows; receptor and panel joins must be many-to-one"
+        )
+    out = out.sort_values("_spd_source_row_order", kind="stable")
 
     decoy = pd.to_numeric(out.get("is_decoy", pd.Series(0, index=out.index)), errors="coerce").fillna(0).eq(1)
     out["benchmark_only"] = decoy
@@ -379,12 +563,24 @@ def enrich_spd_labels_for_run_master(
     out["spd_join_available"] = out["spd_ac50_uM"].notna()
     out["spd_label_policy_version"] = out["spd_label_policy_version"].fillna(SPD_LABEL_POLICY_VERSION)
 
+    if selective_strict_rebuild:
+        out = pd.concat([unchanged, out], axis=0, ignore_index=False, sort=False)
+    out = out.sort_values("_spd_source_row_order", kind="stable").reset_index(drop=True)
+    if len(out) != len(source):
+        raise ValueError(
+            "Selective strict SPD enrichment changed source row count "
+            f"from {len(source)} to {len(out)}"
+        )
+    out = out.drop(columns=["_spd_source_row_order"])
     out = out.loc[:, ~out.columns.duplicated()].copy()
+    joined_mask = _bool_series(out["spd_join_available"])
     summary.update(
         {
             "status": "enriched",
             "reason": "joined_local_spd_panel",
             "replaced_existing_spd_labels": bool(has_any_spd_labels),
+            "selective_strict_rebuild": bool(selective_strict_rebuild),
+            "strict_target_derived_rebuilt_rows": int(rebuild.sum()),
             "spd_panel_path": str(panel_path),
             "target_map_path": str(target_path),
             "ligand_map_path": str(ligand_path),
@@ -392,13 +588,18 @@ def enrich_spd_labels_for_run_master(
             "rows": int(len(out)),
             "mapped_ligand_rows": int(out["_mapped_drug_key"].notna().sum()),
             "mapped_target_rows": int(out["_mapped_target_key"].notna().sum()),
-            "spd_joined_rows": int(out["spd_join_available"].sum()),
+            "spd_joined_rows": int(joined_mask.sum()),
             "unique_spd_joined_pairs": int(
-                out.loc[out["spd_join_available"], ["_spd_drug_match_key", "_spd_target_match_key"]]
+                out.loc[
+                    joined_mask,
+                    ["_spd_drug_match_key", "_spd_target_match_key"],
+                ]
                 .drop_duplicates()
                 .shape[0]
             ),
             "decoy_rows_kept_benchmark_only": int(decoy.sum()),
+            "strict_model_eligible_rows": int(strict_eligible.sum()) if strict_mode else int(len(out)),
+            "strict_model_ineligible_rows": int((~strict_eligible).sum()) if strict_mode else 0,
         }
     )
     return out, summary

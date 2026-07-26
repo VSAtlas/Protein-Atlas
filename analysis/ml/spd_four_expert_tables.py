@@ -109,8 +109,27 @@ MECHANISM_CONTEXT_COLS = [
     "projected_upstream_source",
     "projected_source_label_policy",
 ]
+RECEPTOR_MAPPING_COLS = [
+    "spd_receptor_mapping_policy_version",
+    "spd_receptor_mapping_status",
+    "spd_receptor_mapping_strict_eligible",
+    "spd_receptor_mapping_exclusion_reason",
+    "spd_receptor_mapping_contract_source",
+    "spd_receptor_mapping_contract_sha256",
+    "spd_receptor_mapping_changed",
+    "spd_receptor_mapping_requires_target_derived_rebuild",
+    "spd_receptor_mapping_legacy_target_id",
+    "spd_receptor_mapping_legacy_target_gene",
+    "spd_receptor_mapping_legacy_target_uniprot",
+    "spd_receptor_mapping_revised_target_id",
+    "spd_receptor_mapping_revised_target_gene",
+    "spd_receptor_mapping_revised_target_uniprot",
+    "spd_receptor_mapping_selected_chain",
+    "spd_receptor_mapping_site_chain",
+]
 RAW_KEEP_COLS = [
     *ID_COLS,
+    *RECEPTOR_MAPPING_COLS,
     *SCORE_FEATURE_COLS,
     *EXPOSURE_CONTEXT_COLS,
     *TISSUE_CONTEXT_COLS,
@@ -130,6 +149,7 @@ RAW_KEEP_COLS = [
 ]
 MODEL_READY_COLS = [
     *ID_COLS,
+    *RECEPTOR_MAPPING_COLS,
     "source_objective",
     *MODEL_READY_PROVENANCE_COLS,
     *SCORE_FEATURE_COLS,
@@ -138,11 +158,34 @@ MODEL_READY_COLS = [
     *MECHANISM_CONTEXT_COLS,
 ]
 
+STRICT_ELIGIBILITY_COL = "spd_receptor_mapping_strict_eligible"
+STRICT_REBUILD_COL = "spd_receptor_mapping_requires_target_derived_rebuild"
+STRICT_TARGET_DERIVED_CONTEXT_COLS = [
+    "target_family",
+    *TISSUE_CONTEXT_COLS,
+    *MECHANISM_CONTEXT_COLS,
+    "tissue_site_label",
+    "tissue_relevance_label",
+    "site_relevance_label",
+    "target_site_relevance_label",
+    "mechanism_ml_label",
+    "mechanism_label",
+    "four_state_ml_label",
+    "drug_target_adr_mechanism_label",
+]
+
 
 def _numeric(series: pd.Series | None, index: pd.Index) -> pd.Series:
     if series is None:
         return pd.Series(pd.NA, index=index, dtype="Float64")
     return pd.to_numeric(series, errors="coerce").astype("Float64")
+
+
+def _bool_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    return normalized.isin({"1", "true", "yes"})
 
 
 def _first_label(df: pd.DataFrame, columns: list[str]) -> pd.Series:
@@ -277,6 +320,7 @@ def _write_raw_and_model_ready(
     label_col: str,
     raw_path: Path,
     model_ready_path: Path,
+    enforce_strict_eligibility: bool = False,
 ) -> dict[str, Any]:
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(raw_path, index=False)
@@ -291,7 +335,17 @@ def _write_raw_and_model_ready(
         "negative_rows": int(label.eq(0).sum()),
         "unknown_rows": int(label.isna().sum()),
     }
-    supervised = table[label.notna()].copy()
+    eligible = pd.Series(True, index=table.index, dtype=bool)
+    if enforce_strict_eligibility:
+        if STRICT_ELIGIBILITY_COL not in table.columns:
+            raise ValueError(f"Strict output is missing {STRICT_ELIGIBILITY_COL}")
+        eligible = _bool_series(table[STRICT_ELIGIBILITY_COL])
+        summary["strict_eligible_rows"] = int(eligible.sum())
+        summary["strict_ineligible_rows"] = int((~eligible).sum())
+        summary["strict_ineligible_labelable_rows_excluded"] = int(
+            (label.notna() & ~eligible).sum()
+        )
+    supervised = table[label.notna() & eligible].copy()
     if supervised.empty:
         summary["status"] = "raw_only_no_labelable_rows"
         return summary
@@ -330,6 +384,8 @@ def build_spd_four_expert_tables(
     mechanism_label_path: str | Path | None = None,
     target_expression_path: str | Path | None = None,
     run_dir: str | Path | None = None,
+    receptor_mapping_mode: str = "legacy",
+    receptor_mapping_contract_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build objective-specific SPD tables for the four Atlas experts.
 
@@ -348,17 +404,49 @@ def build_spd_four_expert_tables(
         target_map_path=target_map_path,
         ligand_map_path=ligand_map_path,
         target_metadata_path=target_metadata_path,
+        receptor_mapping_mode=receptor_mapping_mode,
+        receptor_mapping_contract_path=receptor_mapping_contract_path,
     )
-    source, mechanism_projection_summary = project_mechanism_labels_for_run_master(
-        source,
-        mechanism_label_path=mechanism_label_path,
-        run_dir=run_dir,
-    )
+    rebuild_mask = pd.Series(False, index=source.index, dtype=bool)
+    if receptor_mapping_mode == "strict":
+        if STRICT_REBUILD_COL not in source.columns:
+            raise ValueError(f"Strict receptor mapping did not produce {STRICT_REBUILD_COL}")
+        rebuild_mask = _bool_series(source[STRICT_REBUILD_COL])
+        for col in STRICT_TARGET_DERIVED_CONTEXT_COLS:
+            if col in source.columns:
+                source.loc[rebuild_mask, col] = pd.NA
+    if rebuild_mask.any():
+        unchanged = source.loc[~rebuild_mask].copy()
+        to_rebuild = source.loc[rebuild_mask].copy()
+        to_rebuild["_strict_rebuild_row_id"] = to_rebuild.index
+        rebuilt, mechanism_projection_summary = project_mechanism_labels_for_run_master(
+            to_rebuild,
+            mechanism_label_path=mechanism_label_path,
+            run_dir=run_dir,
+        )
+        if len(rebuilt) != len(to_rebuild) or rebuilt["_strict_rebuild_row_id"].duplicated().any():
+            raise ValueError("Strict mechanism reprojection multiplied source rows")
+        rebuilt = rebuilt.set_index("_strict_rebuild_row_id")
+        source = pd.concat([unchanged, rebuilt], axis=0, sort=False).sort_index(kind="stable")
+        mechanism_projection_summary = {
+            **mechanism_projection_summary,
+            "strict_target_identity_rebuild": True,
+            "strict_rebuilt_rows": int(rebuild_mask.sum()),
+        }
+    else:
+        source, mechanism_projection_summary = project_mechanism_labels_for_run_master(
+            source,
+            mechanism_label_path=mechanism_label_path,
+            run_dir=run_dir,
+        )
+    rows_before_tissue = len(source)
     source, tissue_expression_summary = add_tissue_expression_context(
         source,
         target_expression_path=target_expression_path,
         run_dir=run_dir,
     )
+    if len(source) != rows_before_tissue:
+        raise ValueError("Tissue context projection multiplied source rows")
     base = _base_table(source)
     tables: dict[str, pd.DataFrame] = {}
 
@@ -420,6 +508,11 @@ def build_spd_four_expert_tables(
         "purpose": "Prepare objective-specific SPD tables for Atlas binding, exposure, tissue, and mechanism experts.",
         "active_um": active_um,
         "inactive_um": inactive_um,
+        "receptor_mapping_mode": receptor_mapping_mode,
+        "receptor_mapping_contract_path": (
+            str(receptor_mapping_contract_path) if receptor_mapping_contract_path else None
+        ),
+        "strict_target_derived_rebuild_rows": int(rebuild_mask.sum()),
         "spd_auto_enrichment": enrichment_summary,
         "mechanism_label_projection": mechanism_projection_summary,
         "tissue_expression_projection": tissue_expression_summary,
@@ -432,6 +525,7 @@ def build_spd_four_expert_tables(
             label_col=label_col,
             raw_path=out / f"ml_spd_{name}_table.csv",
             model_ready_path=out / "model_ready" / f"ml_spd_{name}_model_ready.csv",
+            enforce_strict_eligibility=receptor_mapping_mode == "strict",
         )
     manifest_path = out / "spd_four_expert_tables_manifest.json"
     manifest_path.write_text(json.dumps(summaries, indent=2, sort_keys=True), encoding="utf-8")

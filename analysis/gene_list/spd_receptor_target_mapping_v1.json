@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "policy_version": "spd_receptor_target_mapping_v1.0.0",
+  "evidence_retrieved_at_utc": "2026-07-26",
+  "mappings": [
+    {
+      "pdb_id": "9I52",
+      "status": "validated_revision",
+      "strict_eligible": true,
+      "exclusion_reason": "",
+      "changed": true,
+      "requires_target_derived_rebuild": true,
+      "legacy_target_id": "ADRB2",
+      "legacy_target_gene": "ADRB2",
+      "legacy_target_uniprot": "P07550",
+      "revised_target_id": "DRD1",
+      "revised_target_gene": "DRD1",
+      "revised_target_uniprot": "P21728",
+      "selected_chain": "R",
+      "site_chain": "R",
+      "prepared_chains": ["A", "B", "G", "R"],
+      "site_relevant_chains": ["R"],
+      "ligand_site_evidence": {
+        "ligand": "A1I",
+        "ligand_atom_count": 26,
+        "contact_cutoff_angstrom": 5.0,
+        "target_gene": "DRD1",
+        "target_uniprot": "P21728",
+        "chain": "R",
+        "ligand_atoms_within_cutoff": 26,
+        "atom_pairs_within_cutoff": 242,
+        "minimum_distance_angstrom": 2.9937418
+      },
+      "evidence": [
+        {
+          "kind": "audit_mapping_review",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/pdb_chain_mapping_review.csv",
+          "sha256": "ddda1ed9c144e7193525fb2712416be074068d96e45e39cf4aed315ac9400d9e"
+        },
+        {
+          "kind": "pdbe_sifts_snapshot",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/_api_cache/pdbe_sifts_snapshot.json",
+          "sha256": "05b10a7463aef4fbc9a0bfe48d05854665f6dcaf33a62b0bf43523fb20a95a8d"
+        },
+        {
+          "kind": "uniprot_snapshot",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/_api_cache/uniprot_snapshot.json",
+          "sha256": "f45b2585f5039839df60ca37e7acec340898b1e4eaee5c5548cf9e6c7ce63ec9"
+        },
+        {
+          "kind": "local_structure",
+          "path": "data/spd_full_panel_latest/spd_full_panel_relaxed/structures/9I52.pdb",
+          "sha256": "5ceadd1e531787d35ed7afd66a12824fb6f9cc3dfc855fec082464a40eab7337"
+        },
+        {
+          "kind": "prepared_receptor",
+          "path": "outputs/spd90_fda_fda_dud_spr10_40h_patchdist_20260525_161503/outputs/processed_pdbs/spd90_fda_fda_dud_spr10_40h_patchdist_20260525_161503/9I52/receptor/9I52.pdbqt",
+          "sha256": "75079e21aebb6e8b5c538ba45db8e00f1548475f796d7829266e005ff5711b72"
+        }
+      ]
+    },
+    {
+      "pdb_id": "6HUJ",
+      "status": "unresolved",
+      "strict_eligible": false,
+      "exclusion_reason": "mixed bovine/human GABRA1 construct; exact receptor identity unresolved",
+      "changed": false,
+      "requires_target_derived_rebuild": false,
+      "legacy_target_id": "GABRA1",
+      "legacy_target_gene": "GABRA1",
+      "legacy_target_uniprot": "P14867",
+      "revised_target_id": null,
+      "revised_target_gene": null,
+      "revised_target_uniprot": null,
+      "selected_chain": null,
+      "site_chain": null,
+      "prepared_chains": ["A", "B", "C", "D", "E", "G"],
+      "site_relevant_chains": ["A", "B", "C", "D", "E"],
+      "ligand_site_evidence": null,
+      "evidence": [
+        {
+          "kind": "audit_mapping_review",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/pdb_chain_mapping_review.csv",
+          "sha256": "ddda1ed9c144e7193525fb2712416be074068d96e45e39cf4aed315ac9400d9e"
+        },
+        {
+          "kind": "pdbe_sifts_snapshot",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/_api_cache/pdbe_sifts_snapshot.json",
+          "sha256": "05b10a7463aef4fbc9a0bfe48d05854665f6dcaf33a62b0bf43523fb20a95a8d"
+        },
+        {
+          "kind": "uniprot_snapshot",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/_api_cache/uniprot_snapshot.json",
+          "sha256": "f45b2585f5039839df60ca37e7acec340898b1e4eaee5c5548cf9e6c7ce63ec9"
+        },
+        {
+          "kind": "local_structure",
+          "path": "data/spd_full_panel_latest/spd_full_panel_relaxed/structures/6HUJ.pdb",
+          "sha256": "0a1a300b2a58145fa15d981bbdcaad541d093edb433d5a1e8e6ade626dcda330"
+        },
+        {
+          "kind": "prepared_receptor",
+          "path": "outputs/spd90_fda_fda_dud_spr10_40h_patchdist_20260525_161503/outputs/processed_pdbs/spd90_fda_fda_dud_spr10_40h_patchdist_20260525_161503/6HUJ/receptor/6HUJ.pdbqt",
+          "sha256": "f6c1a8ccca04f5f4669dec56caae08d020456af59329ed2db0c35bab9cba8bc8"
+        }
+      ]
+    },
+    {
+      "pdb_id": "8HCQ",
+      "status": "unresolved",
+      "strict_eligible": false,
+      "exclusion_reason": "EDNRA-luciferase construct conflicts with incomplete current SIFTS mapping",
+      "changed": false,
+      "requires_target_derived_rebuild": false,
+      "legacy_target_id": "EDNRA",
+      "legacy_target_gene": "EDNRA",
+      "legacy_target_uniprot": "P25101",
+      "revised_target_id": null,
+      "revised_target_gene": null,
+      "revised_target_uniprot": null,
+      "selected_chain": null,
+      "site_chain": null,
+      "prepared_chains": ["A", "B", "E", "G", "L", "R"],
+      "site_relevant_chains": ["L", "R"],
+      "ligand_site_evidence": null,
+      "evidence": [
+        {
+          "kind": "audit_mapping_review",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/pdb_chain_mapping_review.csv",
+          "sha256": "ddda1ed9c144e7193525fb2712416be074068d96e45e39cf4aed315ac9400d9e"
+        },
+        {
+          "kind": "pdbe_sifts_snapshot",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/_api_cache/pdbe_sifts_snapshot.json",
+          "sha256": "05b10a7463aef4fbc9a0bfe48d05854665f6dcaf33a62b0bf43523fb20a95a8d"
+        },
+        {
+          "kind": "uniprot_snapshot",
+          "path": "outputs/audits/spd_targeted_followup_0e8e518d_20260726T014635Z/_api_cache/uniprot_snapshot.json",
+          "sha256": "f45b2585f5039839df60ca37e7acec340898b1e4eaee5c5548cf9e6c7ce63ec9"
+        },
+        {
+          "kind": "local_structure",
+          "path": "data/spd_full_panel_latest/spd_full_panel_relaxed/structures/8HCQ.pdb",
+          "sha256": "2e1a7fc8ba0a7e437e1acd5b9d1212cf49d2fcd7549be6f109bbf043ec2da6b9"
+        },
+        {
+          "kind": "prepared_receptor",
+          "path": "outputs/spd90_fda_fda_dud_spr10_40h_patchdist_20260525_161503/outputs/processed_pdbs/spd90_fda_fda_dud_spr10_40h_patchdist_20260525_161503/8HCQ/receptor/8HCQ.pdbqt",
+          "sha256": "e5445e8eb36c04d3aa9252776741c1319c4856ddab99fc3560379219d0efb624"
+        }
+      ]
+    }
+  ]
+}

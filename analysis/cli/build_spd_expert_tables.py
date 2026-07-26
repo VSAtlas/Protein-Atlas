@@ -15,12 +15,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--active-um", type=float, default=1.0)
     parser.add_argument("--inactive-um", type=float, default=10.0)
+    parser.add_argument(
+        "--receptor-mapping-mode",
+        choices=["legacy", "strict"],
+        default="legacy",
+        help="Apply the SPD receptor mapping contract in legacy or strict mode.",
+    )
+    parser.add_argument("--receptor-mapping-contract", type=Path)
     args = parser.parse_args(argv)
     manifest = build_spd_four_expert_tables(
         args.spd_table,
         args.out_dir,
         active_um=args.active_um,
         inactive_um=args.inactive_um,
+        receptor_mapping_mode=args.receptor_mapping_mode,
+        receptor_mapping_contract_path=args.receptor_mapping_contract,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0
