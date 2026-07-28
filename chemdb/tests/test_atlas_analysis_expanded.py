@@ -130,6 +130,7 @@ def test_spd_margin_labels_and_multiple_assay_aggregation() -> None:
                 "ac50_nM": 500.0,
                 "free_cmax_nM": 10.0,
                 "total_cmax_nM": 100.0,
+                "activity_relation": "=",
                 "source": "SPD",
                 "assay_type": "cell",
             },
@@ -141,6 +142,7 @@ def test_spd_margin_labels_and_multiple_assay_aggregation() -> None:
                 "ac50_nM": 50.0,
                 "free_cmax_nM": 10.0,
                 "total_cmax_nM": 100.0,
+                "activity_relation": "=",
                 "source": "SPD",
                 "assay_type": "biochemical",
             },
@@ -173,6 +175,7 @@ def test_spd_and_toxcast_benchmarks_join_by_drug_target() -> None:
                 "ac50_nM": 50.0,
                 "free_cmax_nM": 10.0,
                 "total_cmax_nM": 100.0,
+                "activity_relation": "=",
                 "source": "SPD",
             }
         ]

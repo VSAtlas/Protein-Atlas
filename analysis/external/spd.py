@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from analysis.external.mapping import apply_pair_mapping, normalize_columns, read_optional_mapping
 from analysis.external.source_tables import read_source_table
+from analysis.spd_activity_policy import (
+    label_spd_exposure_observation,
+    parse_spd_activity_interval,
+)
 from analysis.statistics import ranked_binary_metrics
 
 
@@ -13,13 +19,13 @@ STATISTICAL_FORMULAS = (
     {
         "title": "SPD exposure relevance",
         "formula": "exposure_margin = AC50 / free_Cmax; spd_exposure_relevant = 1 if exposure_margin <= margin_strong, otherwise 0 when the measured/censored bound proves margin > margin_strong",
-        "notes": "The default strong margin is 10. Missing SPD assays, AC50, or free-Cmax remain unknown rather than negative. Censored AC50 > rows are negatives only when the bound is already above the strong margin.",
+        "notes": "The default strong margin is 10. Missing SPD assays, AC50, or free-Cmax remain unknown rather than negative. An open lower bound at 10 has feasible margins strictly above 10 and is negative; a closed lower bound at 10 remains unknown because equality is possible.",
         "source": "analysis.external.spd.aggregate_spd_assays",
     },
 )
 
 
-SPD_LABEL_POLICY_VERSION = "spd_censor_aware_v2"
+SPD_LABEL_POLICY_VERSION = "spd_interval_censor_aware_v3"
 
 
 SPD_ALIASES = {
@@ -116,29 +122,59 @@ def normalize_spd_table(spd_path: str | Path, mapping_path: str | Path | None = 
     return df
 
 
-def _spd_label_status(row: pd.Series, margin_strong: float, margin_weak: float) -> str:
-    raw_relation = row.get("activity_relation", "")
-    relation = "" if pd.isna(raw_relation) else str(raw_relation).strip()
+def _spd_label_status(
+    row: pd.Series | dict[str, Any],
+    margin_strong: float,
+    margin_weak: float,
+) -> str:
     ac50 = row.get("ac50_nM")
     free_cmax = row.get("free_cmax_nM")
-    margin = row.get("exposure_margin")
     if pd.isna(ac50):
         return "unknown_missing_ac50"
-    if pd.isna(free_cmax) or float(free_cmax) <= 0:
+    try:
+        free_cmax_numeric = Decimal(str(free_cmax))
+    except (InvalidOperation, TypeError, ValueError):
         return "unknown_missing_free_cmax"
-    if pd.isna(margin):
-        return "unknown_missing_margin"
-    if relation.startswith(">"):
-        if float(margin) > margin_weak:
-            return "labeled_censored_unlikely"
-        if float(margin) > margin_strong:
-            return "labeled_censored_not_relevant"
-        return "unknown_censored_ac50_gt_crosses_relevant_threshold"
-    if float(margin) <= margin_strong:
+    if not free_cmax_numeric.is_finite() or free_cmax_numeric <= 0:
+        return "unknown_missing_free_cmax"
+    free_cmax_um = free_cmax_numeric / Decimal("1000")
+
+    interval = parse_spd_activity_interval(
+        ac50,
+        row.get("activity_relation"),
+        "nM",
+    )
+    exposure = label_spd_exposure_observation(
+        interval,
+        free_cmax_um,
+        threshold=margin_strong,
+    )
+    if not interval.is_valid:
+        return f"unknown_invalid_activity_{interval.activity_parse_reason}"
+    if exposure.numeric_label == 1:
         return "labeled_relevant"
-    if float(margin) <= margin_weak:
-        return "labeled_weak"
-    return "labeled_unlikely"
+    if exposure.numeric_label is None:
+        if interval.normalized_relation in {">", ">="}:
+            return "unknown_censored_ac50_gt_crosses_relevant_threshold"
+        return "unknown_censored_activity_interval_crosses_relevant_threshold"
+
+    weak_exposure = label_spd_exposure_observation(
+        interval,
+        free_cmax_um,
+        threshold=margin_weak,
+    )
+    relation = interval.normalized_relation
+    if relation in {">", ">="}:
+        return (
+            "labeled_censored_unlikely"
+            if weak_exposure.numeric_label == 0
+            else "labeled_censored_not_relevant"
+        )
+    return (
+        "labeled_unlikely"
+        if weak_exposure.numeric_label == 0
+        else "labeled_weak"
+    )
 
 
 def aggregate_spd_assays(df: pd.DataFrame, margin_strong: float = 10.0, margin_weak: float = 100.0) -> pd.DataFrame:
@@ -155,15 +191,17 @@ def aggregate_spd_assays(df: pd.DataFrame, margin_strong: float = 10.0, margin_w
         label_row["exposure_margin"] = margin
         status = _spd_label_status(label_row, margin_strong, margin_weak)
         labelable = status.startswith("labeled_")
-        relevant = bool(margin <= margin_strong) if labelable and pd.notna(margin) else pd.NA
+        relevant = (
+            True if status == "labeled_relevant" else (False if labelable else pd.NA)
+        )
         weak = (
-            bool(margin > margin_strong and margin <= margin_weak)
-            if labelable and pd.notna(margin) and not str(status).startswith("labeled_censored_")
+            status == "labeled_weak"
+            if labelable and not status.startswith("labeled_censored_")
             else pd.NA
         )
         unlikely = (
-            bool(margin > margin_weak)
-            if labelable and pd.notna(margin) and status != "labeled_censored_not_relevant"
+            status in {"labeled_unlikely", "labeled_censored_unlikely"}
+            if labelable and status != "labeled_censored_not_relevant"
             else pd.NA
         )
         rows.append(

@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from analysis.ml.spd_four_expert_tables import BINDING_LABEL_POLICY_VERSION, _binding_label
+from analysis.spd_activity_policy import parse_spd_activity_interval
 
 
 def audit_binding_label_contract(
@@ -65,11 +66,19 @@ def audit_binding_label_contract(
         active_um=active_um,
         inactive_um=inactive_um,
     )
-    relation = frame["spd_activity_relation"].astype("string").str.strip().replace(
-        {"\u2264": "<=", "\u2265": ">=", "==": "=", "eq": "=", "lt": "<", "gt": ">"}
-    )
-    interpretable = in_scope & spd_measurement & relation.isin(
-        ["=", "<", "<=", ">", ">="]
+    interpretable = (
+        pd.Series(
+            [
+                parse_spd_activity_interval(value, relation, "uM").is_valid
+                for value, relation in zip(
+                    frame["spd_ac50_uM"],
+                    frame["spd_activity_relation"],
+                )
+            ],
+            index=frame.index,
+            dtype=bool,
+        )
+        & in_scope
     )
     contradiction = interpretable & (
         (expected.notna() & ~observed.eq(expected).fillna(False))

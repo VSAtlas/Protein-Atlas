@@ -167,6 +167,39 @@ def test_receptor_mapping_modes_preserve_or_selectively_rebuild(tmp_path: Path) 
     assert strict_summary["rows"] == len(source)
 
 
+def test_policy_version_refresh_removes_stale_mapping_projection_columns(
+    tmp_path: Path,
+) -> None:
+    source, _, paths = _write_synthetic_inputs(tmp_path)
+    source["spd_label_policy_version"] = "spd_censor_aware_v2"
+
+    refreshed, summary = enrich_spd_labels_for_run_master(
+        source,
+        spd_panel_path=paths["spd_panel_path"],
+        target_map_path=paths["target_map_path"],
+        ligand_map_path=paths["ligand_map_path"],
+        target_metadata_path=paths["target_metadata_path"],
+    )
+
+    assert len(refreshed) == len(source)
+    assert not refreshed.columns.duplicated().any()
+    assert refreshed["row_token"].tolist() == source["row_token"].tolist()
+    assert summary["rows"] == len(source)
+    assert summary["replaced_existing_spd_labels"] is True
+    assert set(refreshed["spd_label_policy_version"]) == {
+        SPD_LABEL_POLICY_VERSION
+    }
+    assert refreshed["protein_class"].tolist() == [
+        "beta",
+        "gaba",
+        "ednr",
+        "other",
+    ]
+    nine = refreshed.loc[refreshed["row_token"].eq("nine")].iloc[0]
+    assert nine["target_id"] == "ADRB2"
+    assert pd.isna(nine["spd_exposure_label"])
+
+
 def test_strict_excludes_unresolved_receptors_from_all_model_ready_outputs(
     tmp_path: Path,
 ) -> None:

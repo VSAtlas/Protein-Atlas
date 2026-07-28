@@ -12,8 +12,12 @@ from analysis.ml.mechanism_label_projection import project_mechanism_labels_for_
 from analysis.ml.spd_label_enrichment import enrich_spd_labels_for_run_master
 from analysis.ml.tissue_expression_projection import add_tissue_expression_context
 from analysis.ml.source_benchmark_tables import ID_COLS, MODEL_READY_PROVENANCE_COLS
+from analysis.spd_activity_policy import (
+    label_spd_binding_observation,
+    parse_spd_activity_interval,
+)
 
-BINDING_LABEL_POLICY_VERSION = "spd_binding_censor_aware_v1"
+BINDING_LABEL_POLICY_VERSION = "spd_binding_interval_aware_v2"
 
 SCORE_FEATURE_COLS = [
     "atlas_score",
@@ -262,26 +266,20 @@ def _binding_label(source: pd.DataFrame, *, active_um: float, inactive_um: float
             continue
         values = source[column].astype("string").str.strip()
         relation = relation.where(relation.ne(""), values)
-    relation = relation.replace(
-        {
-            "\u2264": "<=",
-            "\u2265": ">=",
-            "==": "=",
-            "eq": "=",
-            "lt": "<",
-            "gt": ">",
-        }
-    )
-
     derived = pd.Series(pd.NA, index=source.index, dtype="Int64")
-    exact = relation.eq("=")
-    upper_bound = relation.isin(["<", "<="])
-    lower_bound = relation.isin([">", ">="])
-    active = ((exact | upper_bound) & ac50.le(active_um)).fillna(False)
-    inactive = ((exact | lower_bound) & ac50.ge(inactive_um)).fillna(False)
-    derived = derived.mask(active, 1)
-    derived = derived.mask(inactive, 0)
-    interpretable_measurement = ac50.notna() & (exact | upper_bound | lower_bound)
+    interpretable_measurement = pd.Series(False, index=source.index, dtype=bool)
+    for position, (value, raw_relation) in enumerate(zip(ac50, relation)):
+        interval = parse_spd_activity_interval(value, raw_relation, "uM")
+        if not interval.is_valid:
+            continue
+        interpretable_measurement.iloc[position] = True
+        result = label_spd_binding_observation(
+            interval,
+            active_um=active_um,
+            inactive_um=inactive_um,
+        )
+        if result.numeric_label is not None:
+            derived.iloc[position] = result.numeric_label
     return direct.mask(interpretable_measurement, derived).astype("Int64")
 
 
@@ -459,7 +457,7 @@ def build_spd_four_expert_tables(
         label_col="spd_binding_label",
         endpoint_type="AC50_potency",
         policy=(
-            f"SPD censor-aware activity: exact or upper-bound AC50 <= {active_um:g} uM "
+            f"SPD interval-aware activity: exact or upper-bound AC50 <= {active_um:g} uM "
             f"positive; exact or lower-bound AC50 >= {inactive_um:g} uM negative; "
             "bounds that cross a threshold and the intermediate range remain unknown."
         ),
@@ -473,7 +471,13 @@ def build_spd_four_expert_tables(
         objective="spd_exposure_relevance",
         label_col="spd_exposure_label",
         endpoint_type="AC50/free_cmax_margin",
-        policy="SPD exposure relevance: AC50/free-Cmax <= 10 positive; missing margin unknown. AC50/free-Cmax fields are label-definition fields, not predictors for nonleaky models.",
+        policy=(
+            "SPD exposure relevance: the complete AC50/free-Cmax margin interval "
+            "must be <= 10 for positive or strictly > 10 for negative; intervals "
+            "that can equal 10 and extend above it remain unknown. Exact margins "
+            "in (10, 100] remain supervised weak negatives. AC50/free-Cmax fields "
+            "are label-definition fields, not predictors for nonleaky models."
+        ),
     )
     tables["exposure"] = exposure
 

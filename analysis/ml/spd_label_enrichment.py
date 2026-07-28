@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,10 @@ import pandas as pd
 
 from analysis.external.spd import SPD_LABEL_POLICY_VERSION
 from analysis.ml.spd_receptor_mapping import apply_receptor_target_contract
+from analysis.spd_activity_policy import (
+    label_spd_exposure_observation,
+    parse_spd_activity_interval,
+)
 
 
 DEFAULT_SPD_PANEL_CANDIDATES = [
@@ -266,8 +271,26 @@ def _read_spd_panel(path: Path) -> pd.DataFrame:
             exposure_label = 1
         elif flag_text in {"false", "0", "0.0", "no"} and status.startswith("labeled_"):
             exposure_label = 0
-        elif not status.startswith("unknown_") and pd.notna(margin):
-            exposure_label = int(float(margin) <= 10.0)
+        elif not status.startswith("unknown_"):
+            interval = parse_spd_activity_interval(
+                first.get("ac50_nM"),
+                first.get("spd_activity_relation"),
+                "nM",
+            )
+            canonical_exposure = label_spd_exposure_observation(
+                interval,
+                (Decimal(str(free_cmax)) / Decimal("1000"))
+                if pd.notna(free_cmax)
+                else pd.NA,
+            )
+            if canonical_exposure.numeric_label is not None:
+                exposure_label = canonical_exposure.numeric_label
+            elif (
+                canonical_exposure.exposure_status
+                != "unknown"
+                and pd.notna(margin)
+            ):
+                exposure_label = int(float(margin) <= 10.0)
         rows.append(
             {
                 "_spd_drug_match_key": drug_key,
@@ -462,9 +485,9 @@ def enrich_spd_labels_for_run_master(
     ligand_map = _read_fda_ligand_map(ligand_path)
     target_map = _read_target_map(target_path, metadata_path)
     spd_panel = _read_spd_panel(panel_path)
-    if selective_strict_rebuild:
+    if has_any_spd_labels:
         # Historical model-ready tables already carry columns emitted by these
-        # mapping joins. Refreshing only the revised rows must remove that stale
+        # mapping joins. Any policy-version refresh must remove that stale
         # projection first; otherwise pandas can create duplicate suffixed
         # columns (for example ``protein_class_target_map``) whose selection
         # yields a DataFrame instead of a Series.

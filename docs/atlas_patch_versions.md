@@ -132,3 +132,33 @@ PDB changes, and reports binary flips separately from known/unknown
 transitions. The validated Phase 1 rebuild kept 23,849 raw rows, marked 23,001
 strict-eligible and 848 strict-ineligible, and did not regenerate external
 four-state evidence, frozen Phase 1 tables, or models.
+
+## Atlasv0.0.17 - Centralize interval-aware SPD activity labels
+
+Adds a fail-closed canonical interval parser for explicit `=`, `>`, `>=`, `<`,
+and `<=` activity relations and connects it to the primary SPD Binding and
+Exposure derivation adapters. Binding thresholds and labels are unchanged.
+Exposure retains the frozen binary policy—margin intervals wholly at or below
+10 are positive and intervals wholly above 10 are negative—while correcting
+the legacy open-boundary defect for `>10`, whose feasible interval is
+`(10, +infinity)`.
+
+Exact workbook-cell and Decimal verification covers all 77 corrected source
+rows. None uses a PPB bound, an explicit free-Cmax interval, a formula, or
+display-only rounding; 46 production-selected drug-target pairs change from
+unknown to negative. Pair Exposure counts therefore move from
+1,397/37,638/56,477 to 1,397/37,684/56,431
+positive/negative/unknown, while Binding remains
+2,484/88,345/4,683. The audit keeps upstream PK precision and source-record
+provenance explicitly unresolved, preserves receptor mappings, selection,
+aggregation, weak-margin, direct-label, and deduplication behavior, and does not
+regenerate frozen Phase 1 or external four-state tables or train models.
+Version-triggered refreshes also clear stale ligand/target projection columns
+before rejoining the same mapping inputs, preventing duplicate suffixed columns
+without changing receptor identity or strict eligibility.
+Threshold adjudication uses exact source-preserving base-10 values and compares
+activity bounds directly with threshold-scaled free Cmax; reported margins
+remain floats, but no quotient rounding participates in label assignment. This
+numerical hardening advances only the parser implementation to
+`spd_activity_interval_v3`; the Binding and Exposure scientific-policy versions
+remain unchanged.
