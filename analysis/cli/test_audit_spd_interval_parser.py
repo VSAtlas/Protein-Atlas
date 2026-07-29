@@ -251,7 +251,7 @@ def test_production_decimal_weak_boundary_statuses_are_exact() -> None:
     assert exact_pair["spd_label_status"] == "labeled_weak"
 
 
-def test_materialized_panel_fallback_uses_exact_interval_threshold(
+def test_materialized_panel_definitive_open_interval_is_negative(
     tmp_path: Path,
 ) -> None:
     panel_path = tmp_path / "panel.csv"
@@ -262,7 +262,7 @@ def test_materialized_panel_fallback_uses_exact_interval_threshold(
             "ac50_nM": [0.7],
             "free_cmax_nM": [0.07],
             "spd_activity_relation": [">"],
-            "spd_label_status": ["labeled_legacy_other"],
+            "spd_label_status": [""],
         }
     ).to_csv(panel_path, index=False)
 
@@ -292,13 +292,76 @@ def test_materialized_panel_canonical_unknown_does_not_fall_back_to_margin(
             "free_cmax_nM": [0.07],
             "exposure_margin": [5.0],
             "spd_activity_relation": [relation],
-            "spd_label_status": ["labeled_legacy_other"],
+            "spd_label_status": [""],
         }
     ).to_csv(panel_path, index=False)
 
     panel = _read_spd_panel(panel_path)
 
     assert pd.isna(panel.loc[0, "spd_exposure_label"])
+
+
+@pytest.mark.parametrize("relation", ["", "approximately"])
+def test_materialized_panel_invalid_relation_cannot_use_scalar_margin(
+    tmp_path: Path,
+    relation: str,
+) -> None:
+    panel_path = tmp_path / "invalid_relation_panel.csv"
+    pd.DataFrame(
+        {
+            "drug_id": ["drug"],
+            "target_id": ["TARGET"],
+            "ac50_nM": [0.7],
+            "free_cmax_nM": [0.07],
+            "exposure_margin": [5.0],
+            "spd_activity_relation": [relation],
+            "spd_label_status": [""],
+        }
+    ).to_csv(panel_path, index=False)
+
+    panel = _read_spd_panel(panel_path)
+
+    assert pd.isna(panel.loc[0, "spd_exposure_label"])
+
+
+@pytest.mark.parametrize(
+    ("status", "relation", "free_cmax_nm", "expected"),
+    [
+        ("", "=", None, None),
+        ("", "=", 0.0, None),
+        ("", "=", -0.07, None),
+        ("", "=", 0.07, 1),
+        ("labeled_relevant", "", 0.07, 1),
+        ("labeled_censored_not_relevant", "", 0.07, 0),
+    ],
+)
+def test_materialized_panel_fail_closed_and_direct_status_precedence(
+    tmp_path: Path,
+    status: str,
+    relation: str,
+    free_cmax_nm: float | None,
+    expected: int | None,
+) -> None:
+    panel_path = tmp_path / "panel_precedence.csv"
+    pd.DataFrame(
+        {
+            "drug_id": ["drug"],
+            "target_id": ["TARGET"],
+            "ac50_nM": [0.7],
+            "free_cmax_nM": [free_cmax_nm],
+            "exposure_margin": [5.0],
+            "spd_activity_relation": [relation],
+            "spd_label_status": [status],
+        }
+    ).to_csv(panel_path, index=False)
+
+    panel = _read_spd_panel(panel_path)
+    label = panel.loc[0, "spd_exposure_label"]
+
+    if expected is None:
+        assert pd.isna(label)
+    else:
+        assert label == expected
 
 
 def test_binding_adapter_preserves_direct_precedence_contract() -> None:

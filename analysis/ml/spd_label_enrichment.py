@@ -285,12 +285,6 @@ def _read_spd_panel(path: Path) -> pd.DataFrame:
             )
             if canonical_exposure.numeric_label is not None:
                 exposure_label = canonical_exposure.numeric_label
-            elif (
-                canonical_exposure.exposure_status
-                != "unknown"
-                and pd.notna(margin)
-            ):
-                exposure_label = int(float(margin) <= 10.0)
         rows.append(
             {
                 "_spd_drug_match_key": drug_key,
